@@ -30,6 +30,7 @@
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.1" />
     <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.12.23" />
     <PackageReference Include="Velopack" Version="0.0.1298" />
+    <PackageReference Include="WPF-UI" Version="4.2.0" />
   </ItemGroup>
 
   <ItemGroup>

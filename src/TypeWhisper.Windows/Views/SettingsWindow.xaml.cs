@@ -1,10 +1,10 @@
-using System.Windows;
 using TypeWhisper.Windows.ViewModels;
 using TypeWhisper.Windows.Views.Sections;
+using Wpf.Ui.Controls;
 
 namespace TypeWhisper.Windows.Views;
 
-public partial class SettingsWindow : Window
+public partial class SettingsWindow : FluentWindow
 {
     public SettingsWindow(SettingsWindowViewModel viewModel)
     {
@@ -24,15 +24,5 @@ public partial class SettingsWindow : Window
         viewModel.RegisterSection("Info", () => new InfoSection { DataContext = viewModel });
 
         viewModel.NavigateToDefault();
-    }
-
-    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
-    {
-        WindowState = WindowState.Minimized;
-    }
-
-    private void CloseButton_Click(object sender, RoutedEventArgs e)
-    {
-        Close();
     }
 }
