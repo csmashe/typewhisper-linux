@@ -10,6 +10,7 @@
             </ResourceDictionary.MergedDictionaries>
             <BooleanToVisibilityConverter x:Key="BoolToVis"/>
             <conv:NonEmptyToVisibilityConverter x:Key="NonEmptyToVis"/>
+            <conv:InstallStateToVisibilityConverter x:Key="InstallStateToVis"/>
         </ResourceDictionary>
     </UserControl.Resources>
 
@@ -27,91 +28,181 @@
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    Visibility="Collapsed"/>
 
-        <!-- Plugin list -->
+        <!-- Plugin list + Marketplace in scrollable area -->
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Plugins.Plugins}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate DataType="{x:Type vm:PluginItemViewModel}">
-                        <Border Background="{StaticResource InputBackgroundBrush}"
-                                BorderBrush="{StaticResource BorderBrush}"
-                                BorderThickness="1" CornerRadius="8"
-                                Padding="16,12" Margin="0,0,0,8">
-                            <StackPanel>
-                                <!-- Top row: name, badges, toggle -->
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
+            <StackPanel>
+                <!-- Installed plugins -->
+                <ItemsControl ItemsSource="{Binding Plugins.Plugins}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:PluginItemViewModel}">
+                            <Border Background="{StaticResource InputBackgroundBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1" CornerRadius="8"
+                                    Padding="16,12" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <!-- Top row: name, badges, toggle -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
 
-                                    <!-- Name + version + author -->
-                                    <StackPanel Grid.Column="0" Orientation="Vertical">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="{Binding Name}"
-                                                       Foreground="{StaticResource TextBrush}"
-                                                       FontSize="14" FontWeight="SemiBold"
-                                                       VerticalAlignment="Center"/>
-                                            <TextBlock Text="{Binding Version, StringFormat='  v{0}'}"
+                                        <!-- Name + version + author -->
+                                        <StackPanel Grid.Column="0" Orientation="Vertical">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}"
+                                                           Foreground="{StaticResource TextBrush}"
+                                                           FontSize="14" FontWeight="SemiBold"
+                                                           VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Version, StringFormat='  v{0}'}"
+                                                           Foreground="{StaticResource HintBrush}"
+                                                           FontSize="12" VerticalAlignment="Center"
+                                                           Margin="4,0,0,0"/>
+                                            </StackPanel>
+
+                                            <!-- Author -->
+                                            <TextBlock Text="{Binding Author}"
                                                        Foreground="{StaticResource HintBrush}"
-                                                       FontSize="12" VerticalAlignment="Center"
-                                                       Margin="4,0,0,0"/>
+                                                       FontSize="11" Margin="0,2,0,0"
+                                                       Visibility="{Binding Author, Converter={StaticResource NonEmptyToVis}}"/>
+
+                                            <!-- Capability badges -->
+                                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                                <Border Style="{StaticResource BadgeStyle}"
+                                                        Visibility="{Binding IsTranscriptionProvider, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="Transkription" Foreground="#CCCCCC" FontSize="10"/>
+                                                </Border>
+                                                <Border Style="{StaticResource BadgeStyle}"
+                                                        Visibility="{Binding IsLlmProvider, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="LLM" Foreground="#CCCCCC" FontSize="10"/>
+                                                </Border>
+                                                <Border Style="{StaticResource BadgeStyle}"
+                                                        Visibility="{Binding IsPostProcessor, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="Post-Processing" Foreground="#CCCCCC" FontSize="10"/>
+                                                </Border>
+                                                <Border Style="{StaticResource BadgeStyle}"
+                                                        Visibility="{Binding IsActionProvider, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="Aktion" Foreground="#CCCCCC" FontSize="10"/>
+                                                </Border>
+                                            </StackPanel>
                                         </StackPanel>
 
-                                        <!-- Author -->
-                                        <TextBlock Text="{Binding Author}"
-                                                   Foreground="{StaticResource HintBrush}"
-                                                   FontSize="11" Margin="0,2,0,0"
-                                                   Visibility="{Binding Author, Converter={StaticResource NonEmptyToVis}}"/>
+                                        <!-- Enable/Disable toggle -->
+                                        <CheckBox Grid.Column="1"
+                                                  IsChecked="{Binding IsEnabled}"
+                                                  Style="{StaticResource InputCheckBoxStyle}"
+                                                  VerticalAlignment="Top" Margin="12,0,0,0"/>
+                                    </Grid>
 
-                                        <!-- Capability badges -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                            <Border Style="{StaticResource BadgeStyle}"
-                                                    Visibility="{Binding IsTranscriptionProvider, Converter={StaticResource BoolToVis}}">
-                                                <TextBlock Text="Transkription" Foreground="#CCCCCC" FontSize="10"/>
-                                            </Border>
-                                            <Border Style="{StaticResource BadgeStyle}"
-                                                    Visibility="{Binding IsLlmProvider, Converter={StaticResource BoolToVis}}">
-                                                <TextBlock Text="LLM" Foreground="#CCCCCC" FontSize="10"/>
-                                            </Border>
-                                            <Border Style="{StaticResource BadgeStyle}"
-                                                    Visibility="{Binding IsPostProcessor, Converter={StaticResource BoolToVis}}">
-                                                <TextBlock Text="Post-Processing" Foreground="#CCCCCC" FontSize="10"/>
-                                            </Border>
-                                        </StackPanel>
+                                    <!-- Description -->
+                                    <TextBlock Text="{Binding Description}"
+                                               Foreground="{StaticResource HintBrush}"
+                                               FontSize="12" TextWrapping="Wrap"
+                                               Margin="0,8,0,0"
+                                               Visibility="{Binding Description, Converter={StaticResource NonEmptyToVis}}"/>
+
+                                    <!-- Expand/Collapse for settings -->
+                                    <StackPanel Visibility="{Binding IsEnabled, Converter={StaticResource BoolToVis}}"
+                                                Margin="0,8,0,0">
+                                        <Button Content="{Binding ExpandButtonText}"
+                                                Style="{StaticResource LinkButtonStyle}"
+                                                Click="ToggleExpanded_Click"
+                                                HorizontalAlignment="Left"/>
+
+                                        <!-- Plugin settings view -->
+                                        <ContentControl Content="{Binding SettingsView}"
+                                                        Margin="0,8,0,0"
+                                                        Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
-
-                                    <!-- Enable/Disable toggle -->
-                                    <CheckBox Grid.Column="1"
-                                              IsChecked="{Binding IsEnabled}"
-                                              Style="{StaticResource InputCheckBoxStyle}"
-                                              VerticalAlignment="Top" Margin="12,0,0,0"/>
-                                </Grid>
-
-                                <!-- Description -->
-                                <TextBlock Text="{Binding Description}"
-                                           Foreground="{StaticResource HintBrush}"
-                                           FontSize="12" TextWrapping="Wrap"
-                                           Margin="0,8,0,0"
-                                           Visibility="{Binding Description, Converter={StaticResource NonEmptyToVis}}"/>
-
-                                <!-- Expand/Collapse for settings -->
-                                <StackPanel Visibility="{Binding IsEnabled, Converter={StaticResource BoolToVis}}"
-                                            Margin="0,8,0,0">
-                                    <Button Content="{Binding ExpandButtonText}"
-                                            Style="{StaticResource LinkButtonStyle}"
-                                            Click="ToggleExpanded_Click"
-                                            HorizontalAlignment="Left"/>
-
-                                    <!-- Plugin settings view -->
-                                    <ContentControl Content="{Binding SettingsView}"
-                                                    Margin="0,8,0,0"
-                                                    Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVis}}"/>
                                 </StackPanel>
-                            </StackPanel>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Marketplace section -->
+                <StackPanel Margin="0,24,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Marketplace" Style="{StaticResource SectionHeaderStyle}"/>
+                        <Button Grid.Column="1" Content="Aktualisieren"
+                                Style="{StaticResource LinkButtonStyle}"
+                                Command="{Binding Plugins.RefreshRegistryCommand}"
+                                VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBlock Text="Verfuegbare Erweiterungen zum Herunterladen und Installieren."
+                               Style="{StaticResource HintStyle}" Margin="0,0,0,12"/>
+
+                    <!-- Loading indicator -->
+                    <TextBlock Text="Lade Marketplace..."
+                               Foreground="#808080" FontSize="13"
+                               Visibility="{Binding Plugins.IsLoadingRegistry, Converter={StaticResource BoolToVis}}"
+                               Margin="0,0,0,8"/>
+
+                    <ItemsControl ItemsSource="{Binding Plugins.RegistryPlugins}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:RegistryPluginItemViewModel}">
+                                <Border Background="{StaticResource InputBackgroundBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}"
+                                        BorderThickness="1" CornerRadius="8"
+                                        Padding="16,12" Margin="0,0,0,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}"
+                                                           Foreground="{StaticResource TextBrush}"
+                                                           FontSize="14" FontWeight="SemiBold"
+                                                           VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Version, StringFormat='  v{0}'}"
+                                                           Foreground="{StaticResource HintBrush}"
+                                                           FontSize="12" VerticalAlignment="Center"
+                                                           Margin="4,0,0,0"/>
+                                                <TextBlock Text="{Binding SizeDisplay, StringFormat='  ({0})'}"
+                                                           Foreground="{StaticResource HintBrush}"
+                                                           FontSize="11" VerticalAlignment="Center"
+                                                           Margin="4,0,0,0"/>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Author}"
+                                                       Foreground="{StaticResource HintBrush}"
+                                                       FontSize="11" Margin="0,2,0,0"/>
+                                            <TextBlock Text="{Binding Description}"
+                                                       Foreground="{StaticResource HintBrush}"
+                                                       FontSize="12" TextWrapping="Wrap"
+                                                       Margin="0,4,0,0"/>
+                                        </StackPanel>
+
+                                        <!-- Install/Update/Uninstall buttons -->
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0,0,0">
+                                            <Button Content="Installieren"
+                                                    Style="{StaticResource LinkButtonStyle}"
+                                                    Command="{Binding InstallCommand}"
+                                                    Visibility="{Binding InstallState, Converter={StaticResource InstallStateToVis}, ConverterParameter=NotInstalled}"/>
+                                            <Button Content="Aktualisieren"
+                                                    Style="{StaticResource LinkButtonStyle}"
+                                                    Command="{Binding UpdateCommand}"
+                                                    Visibility="{Binding InstallState, Converter={StaticResource InstallStateToVis}, ConverterParameter=UpdateAvailable}"/>
+                                            <Button Content="Deinstallieren"
+                                                    Style="{StaticResource LinkButtonStyle}"
+                                                    Command="{Binding UninstallCommand}"
+                                                    Visibility="{Binding InstallState, Converter={StaticResource InstallStateToVis}, ConverterParameter=Installed}"/>
+                                            <TextBlock Text="Integriert" Foreground="{StaticResource HintBrush}" FontSize="11"
+                                                       Visibility="{Binding InstallState, Converter={StaticResource InstallStateToVis}, ConverterParameter=Bundled}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </StackPanel>
         </ScrollViewer>
     </DockPanel>
 </UserControl>

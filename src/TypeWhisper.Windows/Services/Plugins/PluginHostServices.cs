@@ -25,6 +25,8 @@ public sealed class PluginHostServices : IPluginHostServices
     private readonly IActiveWindowService _activeWindow;
     private readonly IPluginEventBus _eventBus;
     private readonly IProfileService _profiles;
+    private readonly Action? _onCapabilitiesChanged;
+    private readonly PluginLocalization _localization;
     private readonly string _settingsFilePath;
     private readonly string _pluginDataDirectory;
     private readonly object _settingsLock = new();
@@ -33,14 +35,18 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public PluginHostServices(
         string pluginId,
+        string pluginDirectory,
         IActiveWindowService activeWindow,
         IPluginEventBus eventBus,
-        IProfileService profiles)
+        IProfileService profiles,
+        Action? onCapabilitiesChanged = null)
     {
         _pluginId = pluginId;
         _activeWindow = activeWindow;
         _eventBus = eventBus;
         _profiles = profiles;
+        _onCapabilitiesChanged = onCapabilitiesChanged;
+        _localization = new PluginLocalization(pluginDirectory);
         _pluginDataDirectory = Path.Combine(Core.TypeWhisperEnvironment.PluginDataPath, pluginId);
         _settingsFilePath = Path.Combine(_pluginDataDirectory, "settings.json");
     }
@@ -59,12 +65,20 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public IPluginEventBus EventBus => _eventBus;
 
+    public IPluginLocalization Localization => _localization;
+
     public IReadOnlyList<string> AvailableProfileNames =>
         _profiles.Profiles.Select(p => p.Name).ToList();
 
     public void Log(PluginLogLevel level, string message)
     {
         Debug.WriteLine($"[Plugin:{_pluginId}] [{level}] {message}");
+    }
+
+    public void NotifyCapabilitiesChanged()
+    {
+        Debug.WriteLine($"[Plugin:{_pluginId}] Capabilities changed, notifying host");
+        _onCapabilitiesChanged?.Invoke();
     }
 
     #region Secrets (DPAPI-backed)

@@ -135,6 +135,28 @@ public class PluginManagerTests : IDisposable
         Assert.Empty(manager.LlmProviders);
         Assert.Empty(manager.TranscriptionEngines);
         Assert.Empty(manager.PostProcessors);
+        Assert.Empty(manager.ActionPlugins);
+    }
+
+    [Fact]
+    public async Task ActionPlugins_EmptyAfterInit_WithNoPlugins()
+    {
+        var manager = CreateManager();
+        await manager.InitializeAsync();
+
+        Assert.Empty(manager.ActionPlugins);
+    }
+
+    [Fact]
+    public async Task PluginStateChanged_FiredOnInitialize()
+    {
+        var manager = CreateManager();
+        var eventFired = false;
+        manager.PluginStateChanged += (_, _) => eventFired = true;
+
+        await manager.InitializeAsync();
+
+        Assert.True(eventFired);
     }
 
     public void Dispose()

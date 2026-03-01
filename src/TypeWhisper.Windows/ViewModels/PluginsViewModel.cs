@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows.Controls;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Windows.Services.Plugins;
 
 namespace TypeWhisper.Windows.ViewModels;
@@ -8,13 +9,19 @@ namespace TypeWhisper.Windows.ViewModels;
 public partial class PluginsViewModel : ObservableObject
 {
     private readonly PluginManager _pluginManager;
+    private readonly PluginRegistryService _registryService;
 
     public ObservableCollection<PluginItemViewModel> Plugins { get; } = [];
+    public ObservableCollection<RegistryPluginItemViewModel> RegistryPlugins { get; } = [];
 
-    public PluginsViewModel(PluginManager pluginManager)
+    [ObservableProperty] private bool _isLoadingRegistry;
+
+    public PluginsViewModel(PluginManager pluginManager, PluginRegistryService registryService)
     {
         _pluginManager = pluginManager;
+        _registryService = registryService;
         RefreshPlugins();
+        _ = RefreshRegistryAsync();
     }
 
     private void RefreshPlugins()
@@ -24,6 +31,27 @@ public partial class PluginsViewModel : ObservableObject
         {
             var isEnabled = _pluginManager.IsEnabled(plugin.Manifest.Id);
             Plugins.Add(new PluginItemViewModel(plugin, isEnabled, _pluginManager));
+        }
+    }
+
+    [RelayCommand]
+    private async Task RefreshRegistryAsync()
+    {
+        IsLoadingRegistry = true;
+
+        try
+        {
+            var registry = await _registryService.FetchRegistryAsync();
+
+            RegistryPlugins.Clear();
+            foreach (var plugin in registry)
+            {
+                RegistryPlugins.Add(new RegistryPluginItemViewModel(plugin, _registryService));
+            }
+        }
+        finally
+        {
+            IsLoadingRegistry = false;
         }
     }
 }
@@ -49,6 +77,7 @@ public partial class PluginItemViewModel : ObservableObject
     public bool IsTranscriptionProvider => _plugin.Instance is TypeWhisper.PluginSDK.ITranscriptionEnginePlugin;
     public bool IsLlmProvider => _plugin.Instance is TypeWhisper.PluginSDK.ILlmProviderPlugin;
     public bool IsPostProcessor => _plugin.Instance is TypeWhisper.PluginSDK.IPostProcessorPlugin;
+    public bool IsActionProvider => _plugin.Instance is TypeWhisper.PluginSDK.IActionPlugin;
 
     public PluginItemViewModel(LoadedPlugin plugin, bool isEnabled, PluginManager pluginManager)
     {

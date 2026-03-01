@@ -27,6 +27,7 @@ public sealed class PluginManager : IDisposable
     private List<ILlmProviderPlugin> _llmProviders = [];
     private List<ITranscriptionEnginePlugin> _transcriptionEngines = [];
     private List<IPostProcessorPlugin> _postProcessors = [];
+    private List<IActionPlugin> _actionPlugins = [];
 
     public PluginManager(
         PluginLoader loader,
@@ -66,18 +67,26 @@ public sealed class PluginManager : IDisposable
         get { lock (_lock) return [.. _postProcessors]; }
     }
 
+    /// <summary>Active action plugins.</summary>
+    public IReadOnlyList<IActionPlugin> ActionPlugins
+    {
+        get { lock (_lock) return [.. _actionPlugins]; }
+    }
+
+    /// <summary>Raised when plugin capabilities change (plugins enabled/disabled, capabilities updated).</summary>
+    public event EventHandler? PluginStateChanged;
+
     /// <summary>The shared event bus for plugin communication.</summary>
     public PluginEventBus EventBus => _eventBus;
 
     /// <summary>
-    /// Discovers plugins from built-in and user directories, restores enabled state
+    /// Discovers plugins from the user plugins directory, restores enabled state
     /// from settings, and activates all enabled plugins.
     /// </summary>
     public async Task InitializeAsync()
     {
         var searchDirs = new string[]
         {
-            Path.Combine(AppContext.BaseDirectory, "Plugins"),
             TypeWhisperEnvironment.PluginsPath
         };
 
@@ -95,9 +104,8 @@ public sealed class PluginManager : IDisposable
 
         foreach (var plugin in discovered)
         {
-            var isEnabled = enabledState.TryGetValue(plugin.Manifest.Id, out var state)
-                ? state
-                : IsBuiltInPlugin(plugin);
+            // Default to enabled for marketplace-installed plugins
+            var isEnabled = !enabledState.TryGetValue(plugin.Manifest.Id, out var state) || state;
 
             if (isEnabled)
             {
@@ -168,7 +176,13 @@ public sealed class PluginManager : IDisposable
         try
         {
             var hostServices = new PluginHostServices(
-                plugin.Manifest.Id, _activeWindow, _eventBus, _profiles);
+                plugin.Manifest.Id, plugin.PluginDirectory,
+                _activeWindow, _eventBus, _profiles,
+                onCapabilitiesChanged: () =>
+                {
+                    RebuildCapabilityIndices();
+                    PluginStateChanged?.Invoke(this, EventArgs.Empty);
+                });
 
             await plugin.Instance.ActivateAsync(hostServices);
 
@@ -220,13 +234,74 @@ public sealed class PluginManager : IDisposable
             _postProcessors = activePlugins.OfType<IPostProcessorPlugin>()
                 .OrderBy(p => p.Priority)
                 .ToList();
+            _actionPlugins = activePlugins.OfType<IActionPlugin>().ToList();
         }
+
+        PluginStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private static bool IsBuiltInPlugin(LoadedPlugin plugin)
+    /// <summary>
+    /// Fully unloads a plugin: deactivates, disposes, unloads the assembly context,
+    /// and removes it from the registry.
+    /// </summary>
+    public async Task UnloadPluginAsync(string pluginId)
     {
-        var builtInDir = Path.Combine(AppContext.BaseDirectory, "Plugins");
-        return plugin.PluginDirectory.StartsWith(builtInDir, StringComparison.OrdinalIgnoreCase);
+        LoadedPlugin? plugin;
+        lock (_lock)
+        {
+            plugin = _allPlugins.FirstOrDefault(p => p.Manifest.Id == pluginId);
+        }
+
+        if (plugin is null)
+            return;
+
+        if (_activatedPlugins.Contains(pluginId))
+            await DeactivatePluginAsync(plugin);
+
+        try
+        {
+            plugin.Instance.Dispose();
+            plugin.LoadContext.Unload();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[PluginManager] Error unloading plugin {pluginId}: {ex.Message}");
+        }
+
+        lock (_lock)
+        {
+            _allPlugins.RemoveAll(p => p.Manifest.Id == pluginId);
+        }
+
+        RebuildCapabilityIndices();
+    }
+
+    /// <summary>
+    /// Loads a plugin from a specific directory and optionally activates it.
+    /// </summary>
+    public async Task LoadPluginFromDirectoryAsync(string pluginDirectory, bool activate)
+    {
+        var plugin = _loader.LoadPlugin(pluginDirectory);
+        if (plugin is null)
+        {
+            Debug.WriteLine($"[PluginManager] Failed to load plugin from {pluginDirectory}");
+            return;
+        }
+
+        lock (_lock)
+        {
+            // Remove existing plugin with same ID if present
+            _allPlugins.RemoveAll(p => p.Manifest.Id == plugin.Manifest.Id);
+            _allPlugins.Add(plugin);
+        }
+
+        if (activate)
+        {
+            await ActivatePluginAsync(plugin);
+            PersistEnabledState(plugin.Manifest.Id, true);
+        }
+
+        RebuildCapabilityIndices();
     }
 
     private void PersistEnabledState(string pluginId, bool enabled)
@@ -331,6 +406,7 @@ public sealed class PluginManager : IDisposable
             _llmProviders.Clear();
             _transcriptionEngines.Clear();
             _postProcessors.Clear();
+            _actionPlugins.Clear();
         }
     }
 }

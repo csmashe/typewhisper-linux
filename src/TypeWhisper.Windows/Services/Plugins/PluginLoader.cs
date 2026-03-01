@@ -86,7 +86,7 @@ public sealed partial class PluginLoader
         return loaded;
     }
 
-    private LoadedPlugin? LoadPlugin(string pluginDir)
+    internal LoadedPlugin? LoadPlugin(string pluginDir)
     {
         var manifestPath = Path.Combine(pluginDir, "manifest.json");
         if (!File.Exists(manifestPath))
@@ -146,11 +146,11 @@ public sealed partial class PluginLoader
     /// Removes the Zone.Identifier alternate data stream (Mark of the Web) from all
     /// DLL and JSON files in a directory, preventing Windows SmartScreen from blocking them.
     /// </summary>
-    private static void UnblockDirectory(string directory)
+    internal static void UnblockDirectory(string directory)
     {
         try
         {
-            foreach (var file in Directory.EnumerateFiles(directory, "*.*"))
+            foreach (var file in Directory.EnumerateFiles(directory, "*.*", SearchOption.AllDirectories))
             {
                 var ext = Path.GetExtension(file);
                 if (ext is ".dll" or ".json")

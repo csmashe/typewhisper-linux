@@ -39,4 +39,16 @@ public interface IPluginHostServices
 
     /// <summary>Logs a message through the host logging system.</summary>
     void Log(PluginLogLevel level, string message);
+
+    /// <summary>
+    /// Notifies the host that the plugin's capabilities have changed (e.g. new models available).
+    /// The host will rebuild its capability indices and update the UI accordingly.
+    /// </summary>
+    void NotifyCapabilitiesChanged();
+
+    /// <summary>
+    /// Localization service for the plugin. Loads strings from JSON files in the
+    /// plugin's Localization/ subdirectory (e.g. Localization/en.json, Localization/de.json).
+    /// </summary>
+    IPluginLocalization Localization { get; }
 }

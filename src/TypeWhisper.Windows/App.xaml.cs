@@ -74,6 +74,16 @@ public partial class App : Application
         var pluginManager = _serviceProvider.GetRequiredService<PluginManager>();
         pluginManager.InitializeAsync().GetAwaiter().GetResult();
 
+        // Plugin registry: first-run auto-install + update check (non-blocking)
+        var pluginRegistry = _serviceProvider.GetRequiredService<PluginRegistryService>();
+        _ = pluginRegistry.FirstRunAutoInstallAsync()
+            .ContinueWith(_ => pluginRegistry.CheckForUpdatesAsync(), TaskScheduler.Default)
+            .ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                    System.Diagnostics.Debug.WriteLine($"Plugin registry check failed: {t.Exception?.Message}");
+            });
+
         // Setup sound service
         var soundService = _serviceProvider.GetRequiredService<SoundService>();
         soundService.IsEnabled = settings.Current.SoundFeedbackEnabled;
@@ -197,6 +207,7 @@ public partial class App : Application
         services.AddSingleton<PluginLoader>();
         services.AddSingleton<PluginEventBus>();
         services.AddSingleton<PluginManager>();
+        services.AddSingleton<PluginRegistryService>();
 
         // Model manager (consumes local providers and plugin manager)
         services.AddSingleton<ModelManagerService>(sp =>

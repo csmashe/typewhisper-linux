@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
 using TypeWhisper.Windows.Services;
+using TypeWhisper.Windows.Services.Plugins;
 
 namespace TypeWhisper.Windows.Converters;
 
@@ -188,6 +189,25 @@ public sealed class ZeroToVisibilityConverter : IValueConverter
         bool isZero = value is int i && i == 0;
         if (parameter is string s && s == "invert") isZero = !isZero;
         return isZero ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+/// <summary>
+/// Shows an element only when the PluginInstallState matches the ConverterParameter string.
+/// Usage: Visibility="{Binding InstallState, Converter={StaticResource InstallStateToVis}, ConverterParameter=NotInstalled}"
+/// </summary>
+public sealed class InstallStateToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (value is PluginInstallState state && parameter is string expected)
+        {
+            return state.ToString() == expected ? Visibility.Visible : Visibility.Collapsed;
+        }
+        return Visibility.Collapsed;
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

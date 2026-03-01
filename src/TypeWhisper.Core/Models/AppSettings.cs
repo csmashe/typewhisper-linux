@@ -55,6 +55,7 @@ public record AppSettings
 
     // Plugin state
     public Dictionary<string, bool> PluginEnabledState { get; init; } = new();
+    public bool PluginFirstRunCompleted { get; init; }
 
     public static AppSettings Default => new();
 }

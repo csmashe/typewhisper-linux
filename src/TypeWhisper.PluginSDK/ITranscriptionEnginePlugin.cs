@@ -31,4 +31,24 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     /// <summary>Transcribes WAV audio data and returns the result.</summary>
     Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct);
+
+    /// <summary>Whether this engine supports real-time streaming transcription.</summary>
+    bool SupportsStreaming => false;
+
+    /// <summary>ISO language codes supported by this engine, or empty for all.</summary>
+    IReadOnlyList<string> SupportedLanguages => [];
+
+    /// <summary>
+    /// Transcribes audio with streaming progress updates. Default delegates to <see cref="TranscribeAsync"/>.
+    /// </summary>
+    /// <param name="wavAudio">WAV audio data to transcribe.</param>
+    /// <param name="language">Target language code, or null for auto-detect.</param>
+    /// <param name="translate">Whether to translate the result to English.</param>
+    /// <param name="prompt">Optional prompt/context hint for the engine.</param>
+    /// <param name="onProgress">Callback invoked with partial transcription text. Return false to cancel.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<PluginTranscriptionResult> TranscribeStreamingAsync(
+        byte[] wavAudio, string? language, bool translate, string? prompt,
+        Func<string, bool> onProgress, CancellationToken ct)
+        => TranscribeAsync(wavAudio, language, translate, prompt, ct);
 }
