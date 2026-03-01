@@ -1,0 +1,179 @@
+name: Build and Release Plugin
+
+on:
+  push:
+    tags:
+      - 'plugin-*-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    concurrency:
+      group: plugin-release-${{ github.ref_name }}
+      cancel-in-progress: true
+    steps:
+      - name: Parse tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          # Extract plugin name and version from tag: plugin-sherpa-onnx-v1.0.0
+          if ($tag -match '^plugin-(.+)-v(.+)$') {
+            $pluginName = $Matches[1]
+            $pluginVersion = $Matches[2]
+          } else {
+            throw "Invalid tag format: $tag"
+          }
+          echo "PLUGIN_NAME=$pluginName" >> $env:GITHUB_ENV
+          echo "PLUGIN_VERSION=$pluginVersion" >> $env:GITHUB_ENV
+          echo "Plugin: $pluginName, Version: $pluginVersion"
+
+      - name: Resolve project path
+        shell: pwsh
+        run: |
+          # Map plugin name to project directory
+          $map = @{
+            'sherpa-onnx' = 'TypeWhisper.Plugin.SherpaOnnx'
+            'openai'      = 'TypeWhisper.Plugin.OpenAI'
+            'groq'        = 'TypeWhisper.Plugin.Groq'
+            'webhook'     = 'TypeWhisper.Plugin.Webhook'
+          }
+          $projectName = $map[$env:PLUGIN_NAME]
+          if (-not $projectName) {
+            throw "Unknown plugin: $env:PLUGIN_NAME"
+          }
+          echo "PROJECT_NAME=$projectName" >> $env:GITHUB_ENV
+          echo "Project: $projectName"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Patch manifest version
+        shell: pwsh
+        run: |
+          $manifestPath = "plugins/$env:PROJECT_NAME/manifest.json"
+          $manifest = Get-Content $manifestPath | ConvertFrom-Json
+          $manifest.version = $env:PLUGIN_VERSION
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content $manifestPath
+          echo "Patched $manifestPath to version $env:PLUGIN_VERSION"
+          Get-Content $manifestPath
+
+      - name: Build Plugin
+        shell: pwsh
+        run: |
+          dotnet build "plugins/$env:PROJECT_NAME/$env:PROJECT_NAME.csproj" -c Release
+          if ($LASTEXITCODE -ne 0) { throw "Build failed" }
+
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          $outputDir = "plugins/$env:PROJECT_NAME/bin/Release/net10.0-windows"
+          $manifestPath = "plugins/$env:PROJECT_NAME/manifest.json"
+          $manifest = Get-Content $manifestPath | ConvertFrom-Json
+          $pluginId = $manifest.id
+          $assemblyName = $manifest.assemblyName -replace '\.dll$',''
+
+          # Create staging directory
+          $stagingDir = "plugin-staging/$pluginId"
+          New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+
+          # Copy essential files
+          Copy-Item (Join-Path $outputDir "$assemblyName.dll") $stagingDir
+          $depsFile = Join-Path $outputDir "$assemblyName.deps.json"
+          if (Test-Path $depsFile) { Copy-Item $depsFile $stagingDir }
+          Copy-Item $manifestPath $stagingDir
+
+          # Copy Localization folder if present
+          $locDir = "plugins/$env:PROJECT_NAME/Localization"
+          if (Test-Path $locDir) {
+            Copy-Item -Path $locDir -Destination "$stagingDir/Localization" -Recurse
+          }
+
+          # Create ZIP
+          $zipName = "$pluginId-$env:PLUGIN_VERSION.zip"
+          Compress-Archive -Path "$stagingDir/*" -DestinationPath $zipName -Force
+          $zipSize = (Get-Item $zipName).Length
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+          echo "ZIP_SIZE=$zipSize" >> $env:GITHUB_ENV
+          echo "PLUGIN_ID=$pluginId" >> $env:GITHUB_ENV
+          echo "Created $zipName ($zipSize bytes)"
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release create $tag $env:ZIP_NAME `
+            --title "$env:PROJECT_NAME v$env:PLUGIN_VERSION" `
+            --notes ""
+
+      - name: Update plugins.json on gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $downloadUrl = "https://github.com/TypeWhisper/typewhisper-win/releases/download/$tag/$env:ZIP_NAME"
+
+          git fetch origin gh-pages
+          git worktree add -B gh-pages gh-pages-work origin/gh-pages
+
+          $maxRetries = 5
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            try {
+              Push-Location gh-pages-work
+              git fetch origin gh-pages
+              git reset --hard origin/gh-pages
+
+              $registry = Get-Content plugins.json | ConvertFrom-Json
+              $updated = $false
+
+              for ($j = 0; $j -lt $registry.Count; $j++) {
+                if ($registry[$j].id -eq $env:PLUGIN_ID) {
+                  $registry[$j].version = $env:PLUGIN_VERSION
+                  $registry[$j].size = [long]$env:ZIP_SIZE
+                  $registry[$j].downloadUrl = $downloadUrl
+                  $updated = $true
+                  Write-Host "Updated $($registry[$j].id) to v$env:PLUGIN_VERSION"
+                  break
+                }
+              }
+
+              if (-not $updated) {
+                Write-Host "Warning: Plugin $env:PLUGIN_ID not found in registry, skipping update"
+              }
+
+              $registry | ConvertTo-Json -Depth 4 | Set-Content plugins.json
+
+              # Also copy the ZIP to plugins/ directory on gh-pages
+              New-Item -ItemType Directory -Path "plugins" -Force | Out-Null
+              Copy-Item (Join-Path .. $env:ZIP_NAME) "plugins/$env:ZIP_NAME" -Force
+
+              git add -A
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+
+              $diff = git diff --cached --quiet 2>&1; $hasChanges = $LASTEXITCODE -ne 0
+              if ($hasChanges) {
+                git commit -m "Update $env:PROJECT_NAME to v$env:PLUGIN_VERSION"
+                git push origin gh-pages
+                Write-Host "Successfully updated plugins.json (attempt $i)"
+              } else {
+                Write-Host "No changes to deploy"
+              }
+
+              Pop-Location
+              break
+            } catch {
+              Pop-Location
+              if ($i -eq $maxRetries) { throw }
+              Write-Host "Push failed (attempt $i), retrying in ${i}s..."
+              Start-Sleep -Seconds $i
+            }
+          }

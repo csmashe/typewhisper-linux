@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.PluginSDK;
@@ -85,12 +84,7 @@ public sealed class PluginManager : IDisposable
     /// </summary>
     public async Task InitializeAsync()
     {
-        var searchDirs = new string[]
-        {
-            TypeWhisperEnvironment.PluginsPath
-        };
-
-        var discovered = _loader.DiscoverAndLoad(searchDirs);
+        var discovered = _loader.DiscoverAndLoad([TypeWhisperEnvironment.PluginsPath]);
 
         lock (_lock)
         {

@@ -32,6 +32,19 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct);
 
+    /// <summary>Whether this engine supports downloading and managing local model files.</summary>
+    bool SupportsModelDownload => false;
+
+    /// <summary>Whether the given model's files are downloaded and ready to use.</summary>
+    bool IsModelDownloaded(string modelId) => true;
+
+    /// <summary>Downloads model files for the given model ID, reporting progress 0.0–1.0.</summary>
+    Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+        => Task.CompletedTask;
+
+    /// <summary>Loads a downloaded model into memory, preparing it for transcription.</summary>
+    Task LoadModelAsync(string modelId, CancellationToken ct) => Task.CompletedTask;
+
     /// <summary>Whether this engine supports real-time streaming transcription.</summary>
     bool SupportsStreaming => false;
 

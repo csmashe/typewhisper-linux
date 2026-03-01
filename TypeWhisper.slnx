@@ -4,12 +4,6 @@
     <Project Path="src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" />
     <Project Path="src/TypeWhisper.Windows/TypeWhisper.Windows.csproj" />
   </Folder>
-  <Folder Name="/plugins/">
-    <!-- Plugins are no longer bundled with the app.
-         They are built separately and distributed via the marketplace.
-         To build a plugin for the marketplace, use:
-         dotnet build plugins/TypeWhisper.Plugin.OpenAi/TypeWhisper.Plugin.OpenAi.csproj -->
-  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj" />
     <Project Path="tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj" />

@@ -13,88 +13,8 @@
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel MaxWidth="600" Margin="24">
-            <!-- Local Models Section -->
-            <TextBlock Text="Lokale Modelle" Style="{StaticResource SectionHeaderStyle}"/>
-            <TextBlock Text="Offline-Spracherkennung via sherpa-onnx (NVIDIA NeMo)"
-                       Style="{StaticResource HintStyle}" Margin="0,0,0,12"/>
-
-            <ItemsControl ItemsSource="{Binding ModelManager.LocalModels}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Border Background="{StaticResource InputBackgroundBrush}"
-                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                CornerRadius="8" Padding="12,8" Margin="0,0,0,6">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource TextBrush}"/>
-                                        <TextBlock Text=" (Empfohlen)" Foreground="{StaticResource ActiveIndicatorBrush}"
-                                                   Visibility="{Binding IsRecommended, Converter={StaticResource BoolToVis}}"/>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                                        <TextBlock Text="{Binding Size}" Foreground="{StaticResource HintBrush}" FontSize="11"/>
-                                        <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11"
-                                                   Text="{Binding LanguageCount, StringFormat=' · {0} Sprachen'}"/>
-                                        <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11"
-                                                   Visibility="{Binding SupportsTranslation, Converter={StaticResource BoolToVis}}"
-                                                   Text=" · Übersetzung"/>
-                                    </StackPanel>
-                                    <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource HintBrush}" FontSize="11"/>
-                                </StackPanel>
-                                <Button Grid.Column="1"
-                                        Command="{Binding DataContext.ModelManager.DownloadAndLoadModelCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                        CommandParameter="{Binding Id}"
-                                        VerticalAlignment="Center" Margin="8,0">
-                                    <Button.Style>
-                                        <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
-                                            <Setter Property="Content" Value="Herunterladen"/>
-                                            <Setter Property="Padding" Value="12,6"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                    <Setter Property="Content" Value="Aktiv"/>
-                                                    <Setter Property="IsEnabled" Value="False"/>
-                                                </DataTrigger>
-                                                <MultiDataTrigger>
-                                                    <MultiDataTrigger.Conditions>
-                                                        <Condition Binding="{Binding IsDownloaded}" Value="True"/>
-                                                        <Condition Binding="{Binding IsActive}" Value="False"/>
-                                                    </MultiDataTrigger.Conditions>
-                                                    <Setter Property="Content" Value="Laden"/>
-                                                </MultiDataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
-                                </Button>
-                                <Ellipse Grid.Column="2" Width="8" Height="8" Margin="0,0,4,0">
-                                    <Ellipse.Style>
-                                        <Style TargetType="Ellipse">
-                                            <Setter Property="Fill" Value="{StaticResource HintBrush}"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                    <Setter Property="Fill" Value="{StaticResource ActiveIndicatorBrush}"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Ellipse.Style>
-                                </Ellipse>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-
-            <!-- Separator -->
-            <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,20,0,20"/>
-
-            <!-- Cloud Provider Section -->
-            <TextBlock Text="Cloud-Provider" Style="{StaticResource SectionHeaderStyle}"/>
-            <TextBlock Text="Externe APIs — Transkription + LLM-Übersetzung"
+            <TextBlock Text="Transkriptions-Provider" Style="{StaticResource SectionHeaderStyle}"/>
+            <TextBlock Text="Lokale und Cloud-basierte Spracherkennung"
                        Style="{StaticResource HintStyle}" Margin="0,0,0,16"/>
 
             <!-- Status message -->
@@ -103,9 +23,9 @@
                        Margin="0,0,0,8"
                        Visibility="{Binding ModelManager.IsBusy, Converter={StaticResource BoolToVis}}"/>
 
-            <ItemsControl ItemsSource="{Binding ModelManager.CloudProviders}">
+            <ItemsControl ItemsSource="{Binding ModelManager.Providers}">
                 <ItemsControl.ItemTemplate>
-                    <DataTemplate DataType="{x:Type vm:CloudProviderViewModel}">
+                    <DataTemplate DataType="{x:Type vm:ProviderViewModel}">
                         <Border Background="{StaticResource InputBackgroundBrush}"
                                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                 CornerRadius="8" Padding="12" Margin="0,0,0,12">
@@ -130,22 +50,31 @@
                                     </TextBlock.Style>
                                 </TextBlock>
 
-                                <!-- API Key hint -->
+                                <!-- API Key hint (only for cloud providers that need configuration) -->
                                 <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11" Margin="0,0,0,8"
                                            FontStyle="Italic"
-                                           Text="API-Key konfigurieren unter Erweiterungen"/>
+                                           Text="API-Key konfigurieren unter Erweiterungen">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SupportsDownload}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsConfigured}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
 
-                                <!-- Transcription Models List (only visible when API key is set) -->
-                                <TextBlock Text="Transkriptions-Modelle:" Foreground="{StaticResource LabelBrush}"
-                                           FontSize="11" Margin="0,4,0,2"
-                                           Visibility="{Binding HasApiKey, Converter={StaticResource BoolToVis}}"/>
-                                <ItemsControl ItemsSource="{Binding Models}"
-                                              Visibility="{Binding HasApiKey, Converter={StaticResource BoolToVis}}">
+                                <!-- Models List -->
+                                <ItemsControl ItemsSource="{Binding Models}">
                                     <ItemsControl.ItemTemplate>
-                                        <DataTemplate DataType="{x:Type vm:CloudModelItemViewModel}">
+                                        <DataTemplate DataType="{x:Type vm:ModelItemViewModel}">
                                             <Border Padding="8,6" Margin="0,2"
                                                     CornerRadius="4" Cursor="Hand"
-                                                    MouseLeftButtonUp="CloudModel_Click">
+                                                    MouseLeftButtonUp="Model_Click">
                                                 <Border.Style>
                                                     <Style TargetType="Border">
                                                         <Setter Property="Background" Value="Transparent"/>
@@ -166,28 +95,27 @@
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel>
-                                                        <TextBlock Text="{Binding DisplayName}"
-                                                                   Foreground="{StaticResource TextBrush}" FontSize="13"
-                                                                   VerticalAlignment="Center"/>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding DisplayName}"
+                                                                       Foreground="{StaticResource TextBrush}" FontSize="13"/>
+                                                            <TextBlock Text=" (Empfohlen)" Foreground="{StaticResource ActiveIndicatorBrush}"
+                                                                       FontSize="13"
+                                                                       Visibility="{Binding IsRecommended, Converter={StaticResource BoolToVis}}"/>
+                                                        </StackPanel>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0"
+                                                                   Visibility="{Binding SupportsDownload, Converter={StaticResource BoolToVis}}">
+                                                            <TextBlock Text="{Binding SizeDescription}" Foreground="{StaticResource HintBrush}" FontSize="11"/>
+                                                            <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11"
+                                                                       Text="{Binding LanguageCount, StringFormat=' · {0} Sprachen'}"/>
+                                                            <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11"
+                                                                       Visibility="{Binding SupportsTranslation, Converter={StaticResource BoolToVis}}"
+                                                                       Text=" · Übersetzung"/>
+                                                        </StackPanel>
+                                                        <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource HintBrush}" FontSize="11"/>
                                                     </StackPanel>
-                                                    <!-- Whisper translation indicator -->
-                                                    <TextBlock Grid.Column="1" VerticalAlignment="Center"
-                                                               FontSize="10" Margin="8,0"
-                                                               Foreground="{StaticResource HintBrush}">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <Setter Property="Text" Value="Nur Transkription"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding SupportsWhisperTranslation}" Value="True">
-                                                                        <Setter Property="Text" Value="+ Whisper-Übersetzung"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
                                                     <!-- Active indicator -->
                                                     <TextBlock Grid.Column="2" VerticalAlignment="Center"
-                                                               FontSize="11">
+                                                               FontSize="11" Margin="8,0,0,0">
                                                         <TextBlock.Style>
                                                             <Style TargetType="TextBlock">
                                                                 <Setter Property="Text" Value=""/>

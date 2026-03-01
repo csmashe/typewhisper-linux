@@ -54,8 +54,6 @@ public partial class ProfilesViewModel : ObservableObject
 
         // Build model options for profile override dropdown
         var options = new List<ModelOption> { new(null, "Global (Standard)") };
-        foreach (var provider in modelManager.LocalProviders)
-            options.Add(new(provider.Id, provider.DisplayName));
         foreach (var engine in modelManager.PluginManager.TranscriptionEngines)
             foreach (var model in engine.TranscriptionModels)
                 options.Add(new(ModelManagerService.GetPluginModelId(engine.PluginId, model.Id),

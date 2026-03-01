@@ -19,7 +19,7 @@ public partial class WelcomeViewModel : ObservableObject
     [ObservableProperty] private bool _isDownloading;
     [ObservableProperty] private double _downloadProgress;
     [ObservableProperty] private string _downloadStatus = "";
-    [ObservableProperty] private string _selectedModelId = "parakeet-tdt-0.6b";
+    [ObservableProperty] private string _selectedModelId = "plugin:com.typewhisper.sherpa-onnx:parakeet-tdt-0.6b";
     [ObservableProperty] private float _micLevel;
     [ObservableProperty] private bool _micWorking;
     [ObservableProperty] private string _toggleHotkey;

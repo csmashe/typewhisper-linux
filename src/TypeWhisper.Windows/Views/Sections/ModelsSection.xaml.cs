@@ -9,16 +9,15 @@ public partial class ModelsSection : UserControl
 {
     public ModelsSection() => InitializeComponent();
 
-    private void CloudModel_Click(object sender, MouseButtonEventArgs e)
+    private void Model_Click(object sender, MouseButtonEventArgs e)
     {
         if (sender is not FrameworkElement fe) return;
-        if (fe.DataContext is not CloudModelItemViewModel model) return;
-        if (!model.IsAvailable) return;
+        if (fe.DataContext is not ModelItemViewModel model) return;
 
         var window = Window.GetWindow(this);
         if (window?.DataContext is not SettingsWindowViewModel vm) return;
 
-        if (vm.ModelManager.SelectCloudModelCommand.CanExecute(model.FullId))
-            vm.ModelManager.SelectCloudModelCommand.Execute(model.FullId);
+        if (vm.ModelManager.ActivateModelCommand.CanExecute(model.FullId))
+            vm.ModelManager.ActivateModelCommand.Execute(model.FullId);
     }
 }

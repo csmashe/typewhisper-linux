@@ -116,27 +116,20 @@ public sealed class HttpApiService : IDisposable
 
     private (int, string) HandleModels()
     {
-        var localModels = _modelManager.LocalProviders.Select(p => new
-        {
-            id = p.Id,
-            name = p.DisplayName,
-            size = p.Model.SizeDescription,
-            engine = "local",
-            downloaded = _modelManager.IsDownloaded(p.Id),
-            active = _modelManager.ActiveModelId == p.Id
-        });
-        var cloudModels = _modelManager.PluginManager.TranscriptionEngines
-            .Where(e => e.IsConfigured)
-            .SelectMany(e => e.TranscriptionModels.Select(m => new
+        var models = _modelManager.PluginManager.TranscriptionEngines
+            .SelectMany(e => e.TranscriptionModels.Select(m =>
             {
-                id = ModelManagerService.GetPluginModelId(e.PluginId, m.Id),
-                name = $"{e.ProviderDisplayName}: {m.DisplayName}",
-                size = "Cloud",
-                engine = e.PluginId,
-                downloaded = true,
-                active = _modelManager.ActiveModelId == ModelManagerService.GetPluginModelId(e.PluginId, m.Id)
+                var fullId = ModelManagerService.GetPluginModelId(e.PluginId, m.Id);
+                return new
+                {
+                    id = fullId,
+                    name = $"{e.ProviderDisplayName}: {m.DisplayName}",
+                    size = m.SizeDescription ?? (e.SupportsModelDownload ? "Local" : "Cloud"),
+                    engine = e.PluginId,
+                    downloaded = _modelManager.IsDownloaded(fullId),
+                    active = _modelManager.ActiveModelId == fullId
+                };
             }));
-        var models = localModels.Concat(cloudModels);
         return (200, JsonSerializer.Serialize(new { models }));
     }
 

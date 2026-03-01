@@ -6,7 +6,6 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Windows.Services;
 using TypeWhisper.Windows.Services.Plugins;
-using TypeWhisper.Windows.Services.Providers;
 using TypeWhisper.Windows.ViewModels;
 using TypeWhisper.Windows.Views;
 
@@ -142,10 +141,14 @@ public partial class App : Application
             _welcomeWindow.Show();
         }
 
+        // Migrate old local model IDs to plugin-prefixed format
+        var modelManager = _serviceProvider.GetRequiredService<ModelManagerService>();
+        modelManager.MigrateSettings();
+        MigrateProfileModelOverrides(_serviceProvider);
+
         // Auto-load previously selected model (after plugin initialization)
         if (!string.IsNullOrEmpty(settings.Current.SelectedModelId))
         {
-            var modelManager = _serviceProvider.GetRequiredService<ModelManagerService>();
             if (modelManager.IsDownloaded(settings.Current.SelectedModelId))
             {
                 _ = modelManager.LoadModelAsync(settings.Current.SelectedModelId)
@@ -197,24 +200,14 @@ public partial class App : Application
         services.AddSingleton<ISettingsService>(
             new SettingsService(TypeWhisperEnvironment.SettingsFilePath));
 
-        // Local providers
-        services.AddSingleton<ParakeetProvider>();
-        services.AddSingleton<CanaryProvider>();
-        services.AddSingleton<LocalProviderBase>(sp => sp.GetRequiredService<ParakeetProvider>());
-        services.AddSingleton<LocalProviderBase>(sp => sp.GetRequiredService<CanaryProvider>());
-
         // Plugin infrastructure
         services.AddSingleton<PluginLoader>();
         services.AddSingleton<PluginEventBus>();
         services.AddSingleton<PluginManager>();
         services.AddSingleton<PluginRegistryService>();
 
-        // Model manager (consumes local providers and plugin manager)
-        services.AddSingleton<ModelManagerService>(sp =>
-            new ModelManagerService(
-                sp.GetServices<LocalProviderBase>(),
-                sp.GetRequiredService<PluginManager>(),
-                sp.GetRequiredService<ISettingsService>()));
+        // Model manager (plugin-based)
+        services.AddSingleton<ModelManagerService>();
 
         // Audio
         services.AddSingleton<AudioRecordingService>();
@@ -271,6 +264,24 @@ public partial class App : Application
         _trayIcon?.Dispose();
         _serviceProvider?.Dispose();
         base.OnExit(e);
+    }
+
+    private static void MigrateProfileModelOverrides(ServiceProvider sp)
+    {
+        try
+        {
+            var profileService = sp.GetRequiredService<IProfileService>();
+            foreach (var profile in profileService.Profiles)
+            {
+                var migrated = ModelManagerService.MigrateModelId(profile.TranscriptionModelOverride);
+                if (migrated != profile.TranscriptionModelOverride)
+                    profileService.UpdateProfile(profile with { TranscriptionModelOverride = migrated });
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Profile model migration failed: {ex.Message}");
+        }
     }
 
     private static void LogCrash(Exception ex)
