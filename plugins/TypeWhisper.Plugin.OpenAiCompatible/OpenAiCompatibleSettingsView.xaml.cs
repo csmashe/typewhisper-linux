@@ -28,12 +28,18 @@ public partial class OpenAiCompatibleSettingsView : UserControl
         if (_plugin.IsConfigured)
         {
             ModelsSection.Visibility = Visibility.Visible;
-            PopulateModels(_plugin.FetchedModels.ToList());
+            var models = _plugin.FetchedModels.ToList();
+            PopulateModels(models);
+
+            if (models.Count > 0)
+                ShowConnectionSuccess(models.Count, _plugin.BaseUrl ?? "");
         }
     }
 
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
+        e.Handled = true;
+
         var url = UrlBox.Text.Trim();
         if (string.IsNullOrEmpty(url))
             return;
@@ -45,52 +51,97 @@ public partial class OpenAiCompatibleSettingsView : UserControl
             await _plugin.SetApiKeyAsync(key);
 
         ConnectButton.IsEnabled = false;
-        ConnectionStatus.Text = "Verbinde...";
-        ConnectionStatus.Foreground = Brushes.Gray;
+        ConnectButton.Content = "Verbinde...";
+        ShowConnectionStatus("\u23F3", "Verbinde...", $"Versuche Verbindung zu {url}...", Brushes.Gray);
 
         try
         {
-            var models = await _plugin.FetchModelsAsync();
-            var connected = models.Count > 0 || await _plugin.ValidateConnectionAsync();
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var models = await _plugin.FetchModelsAsync(cts.Token);
+            var connected = models.Count > 0;
+
+            if (!connected)
+            {
+                using var cts2 = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+                connected = await _plugin.ValidateConnectionAsync(cts2.Token);
+            }
 
             if (connected)
             {
-                ConnectionStatus.Text = $"Verbunden ({models.Count} Modelle)";
-                ConnectionStatus.Foreground = Brushes.Green;
                 _plugin.SetFetchedModels(models);
                 ModelsSection.Visibility = Visibility.Visible;
                 PopulateModels(models);
+                ShowConnectionSuccess(models.Count, url);
             }
             else
             {
-                ConnectionStatus.Text = "Verbindung fehlgeschlagen";
-                ConnectionStatus.Foreground = Brushes.Red;
+                ShowConnectionStatus("\u274C", "Verbindung fehlgeschlagen",
+                    $"Server {url} antwortet nicht oder der /v1/models Endpunkt ist nicht verfügbar.",
+                    Brushes.Red);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            ShowConnectionStatus("\u274C", "Zeitüberschreitung",
+                $"Server {url} hat nicht innerhalb von 10 Sekunden geantwortet.",
+                Brushes.Red);
         }
         catch (Exception ex)
         {
-            ConnectionStatus.Text = $"Fehler: {ex.Message}";
-            ConnectionStatus.Foreground = Brushes.Red;
+            var detail = ex.Message;
+            if (ex.InnerException is not null)
+                detail += $" ({ex.InnerException.Message})";
+
+            ShowConnectionStatus("\u274C", "Verbindungsfehler", detail, Brushes.Red);
         }
         finally
         {
             ConnectButton.IsEnabled = true;
+            ConnectButton.Content = "Verbinden";
         }
+    }
+
+    private void ShowConnectionSuccess(int modelCount, string url)
+    {
+        var transcriptionCount = 0;
+        var llmCount = 0;
+
+        // All models could be used for either purpose
+        transcriptionCount = modelCount;
+        llmCount = modelCount;
+
+        var detail = $"Server: {url}\n{modelCount} Modell(e) verfügbar";
+        ShowConnectionStatus("\u2705", $"Verbunden — {modelCount} Modelle", detail,
+            new SolidColorBrush(Color.FromRgb(0x4C, 0xAF, 0x50)));
+    }
+
+    private void ShowConnectionStatus(string icon, string status, string detail, Brush color)
+    {
+        ConnectionStatusPanel.Visibility = Visibility.Visible;
+        ConnectionStatusIcon.Text = icon;
+        ConnectionStatus.Text = status;
+        ConnectionStatus.Foreground = color;
+        ConnectionDetail.Text = detail;
     }
 
     private void OnApiKeyChanged(object sender, RoutedEventArgs e)
     {
+        e.Handled = true;
         _ = _plugin.SetApiKeyAsync(ApiKeyBox.Password);
     }
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
+        e.Handled = true;
         RefreshButton.IsEnabled = false;
         try
         {
             var models = await _plugin.FetchModelsAsync();
             _plugin.SetFetchedModels(models);
             PopulateModels(models);
+
+            if (models.Count > 0)
+                ShowConnectionSuccess(models.Count, _plugin.BaseUrl ?? "");
         }
         finally
         {
@@ -123,18 +174,21 @@ public partial class OpenAiCompatibleSettingsView : UserControl
 
     private void OnTranscriptionModelChanged(object sender, SelectionChangedEventArgs e)
     {
+        e.Handled = true;
         if (TranscriptionModelPicker.SelectedItem is FetchedModel model)
             _plugin.SelectModel(model.Id);
     }
 
     private void OnLlmModelChanged(object sender, SelectionChangedEventArgs e)
     {
+        e.Handled = true;
         if (LlmModelPicker.SelectedItem is FetchedModel model)
             _plugin.SelectLlmModel(model.Id);
     }
 
     private void OnSaveManualTranscription(object sender, RoutedEventArgs e)
     {
+        e.Handled = true;
         var id = ManualTranscriptionBox.Text.Trim();
         if (!string.IsNullOrEmpty(id))
             _plugin.SelectModel(id);
@@ -142,6 +196,7 @@ public partial class OpenAiCompatibleSettingsView : UserControl
 
     private void OnSaveManualLlm(object sender, RoutedEventArgs e)
     {
+        e.Handled = true;
         var id = ManualLlmBox.Text.Trim();
         if (!string.IsNullOrEmpty(id))
             _plugin.SelectLlmModel(id);

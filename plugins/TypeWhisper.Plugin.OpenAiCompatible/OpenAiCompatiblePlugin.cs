@@ -205,6 +205,7 @@ public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmPro
                 .OrderBy(m => m.Id)
                 .ToList();
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return [];
@@ -225,6 +226,7 @@ public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmPro
             using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return false;
