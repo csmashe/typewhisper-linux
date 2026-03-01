@@ -44,27 +44,38 @@ public partial class ProfilesViewModel : ObservableObject
     public ObservableCollection<string> UrlPatternChips { get; } = [];
     public ObservableCollection<Profile> Profiles { get; } = [];
     public ObservableCollection<string> RunningApps { get; } = [];
-    public IReadOnlyList<ModelOption> AvailableModelOptions { get; }
+    public ObservableCollection<ModelOption> AvailableModelOptions { get; } = [];
+
+    private readonly ModelManagerService _modelManager;
 
     public ProfilesViewModel(IProfileService profiles, IActiveWindowService activeWindow, ISettingsService settings, ModelManagerService modelManager)
     {
         _profiles = profiles;
         _activeWindow = activeWindow;
         _settings = settings;
+        _modelManager = modelManager;
 
-        // Build model options for profile override dropdown
-        var options = new List<ModelOption> { new(null, "Global (Standard)") };
-        foreach (var engine in modelManager.PluginManager.TranscriptionEngines)
-            foreach (var model in engine.TranscriptionModels)
-                options.Add(new(ModelManagerService.GetPluginModelId(engine.PluginId, model.Id),
-                    $"{engine.ProviderDisplayName}: {model.DisplayName}"));
-        AvailableModelOptions = options;
+        RebuildModelOptions();
+        modelManager.PluginManager.PluginStateChanged += (_, _) =>
+            System.Windows.Application.Current?.Dispatcher.Invoke(RebuildModelOptions);
         _profiles.ProfilesChanged += RefreshProfiles;
         RefreshProfiles();
 
         _windowTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _windowTimer.Tick += (_, _) => UpdateCurrentWindow();
         _windowTimer.Start();
+    }
+
+    private void RebuildModelOptions()
+    {
+        var selected = EditTranscriptionModelOverride;
+        AvailableModelOptions.Clear();
+        AvailableModelOptions.Add(new(null, "Global (Standard)"));
+        foreach (var engine in _modelManager.PluginManager.TranscriptionEngines)
+            foreach (var model in engine.TranscriptionModels)
+                AvailableModelOptions.Add(new(ModelManagerService.GetPluginModelId(engine.PluginId, model.Id),
+                    $"{engine.ProviderDisplayName}: {model.DisplayName}"));
+        EditTranscriptionModelOverride = selected;
     }
 
     private void UpdateCurrentWindow()
