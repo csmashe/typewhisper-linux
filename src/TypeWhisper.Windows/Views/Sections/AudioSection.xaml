@@ -1,6 +1,7 @@
 <UserControl x:Class="TypeWhisper.Windows.Views.Sections.AudioSection"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -21,20 +22,18 @@
                           DisplayMemberPath="Name"
                           SelectedValuePath="DeviceNumber"
                           SelectedValue="{Binding Settings.SelectedMicrophoneDevice}"
-                          Style="{StaticResource InputComboBoxStyle}"
-                          ItemContainerStyle="{StaticResource InputComboBoxItemStyle}"
                           HorizontalAlignment="Stretch"/>
-                <Button Content="Aktualisieren" Command="{Binding Settings.RefreshMicrophonesCommand}"
-                        Style="{StaticResource SecondaryButtonStyle}"
-                        HorizontalAlignment="Left" Margin="0,8,0,0"/>
+                <ui:Button Appearance="Secondary" Content="Aktualisieren"
+                           Command="{Binding Settings.RefreshMicrophonesCommand}"
+                           HorizontalAlignment="Left" Margin="0,8,0,0"/>
             </StackPanel>
 
             <!-- Silence Detection -->
             <TextBlock Text="Stille-Erkennung" Style="{StaticResource SectionHeaderStyle}"/>
             <StackPanel Margin="0,0,0,8">
-                <CheckBox Style="{StaticResource InputCheckBoxStyle}"
-                          Content="Automatisch stoppen bei Stille"
-                          IsChecked="{Binding Settings.SilenceAutoStopEnabled}"/>
+                <ui:ToggleSwitch IsChecked="{Binding Settings.SilenceAutoStopEnabled}"
+                                  OffContent="Automatisch stoppen bei Stille"
+                                  OnContent="Automatisch stoppen bei Stille"/>
             </StackPanel>
             <StackPanel Margin="0,0,0,20">
                 <TextBlock Text="Sekunden" Style="{StaticResource LabelStyle}"/>
@@ -46,9 +45,9 @@
             <!-- Audio Ducking -->
             <TextBlock Text="Audio Ducking" Style="{StaticResource SectionHeaderStyle}"/>
             <StackPanel Margin="0,0,0,8">
-                <CheckBox Style="{StaticResource InputCheckBoxStyle}"
-                          Content="Systemlautstärke während Aufnahme reduzieren"
-                          IsChecked="{Binding Settings.AudioDuckingEnabled}"/>
+                <ui:ToggleSwitch IsChecked="{Binding Settings.AudioDuckingEnabled}"
+                                  OffContent="Systemlautstärke während Aufnahme reduzieren"
+                                  OnContent="Systemlautstärke während Aufnahme reduzieren"/>
             </StackPanel>
             <StackPanel Margin="0,0,0,8"
                         Visibility="{Binding Settings.AudioDuckingEnabled, Converter={StaticResource BoolToVis}}">
@@ -65,9 +64,9 @@
             <!-- Media Pause -->
             <TextBlock Text="Medienwiedergabe" Style="{StaticResource SectionHeaderStyle}"/>
             <StackPanel Margin="0,0,0,8">
-                <CheckBox Style="{StaticResource InputCheckBoxStyle}"
-                          Content="Wiedergabe während Aufnahme pausieren"
-                          IsChecked="{Binding Settings.PauseMediaDuringRecording}"/>
+                <ui:ToggleSwitch IsChecked="{Binding Settings.PauseMediaDuringRecording}"
+                                  OffContent="Wiedergabe während Aufnahme pausieren"
+                                  OnContent="Wiedergabe während Aufnahme pausieren"/>
                 <TextBlock Text="Pausiert laufende Player (Spotify, YouTube, etc.)"
                            Style="{StaticResource HintStyle}"/>
             </StackPanel>

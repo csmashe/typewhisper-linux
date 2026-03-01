@@ -59,7 +59,7 @@ public partial class SnippetsSection : UserControl
 
     private void ToggleEnabled_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is CheckBox { DataContext: Snippet snippet })
+        if (sender is FrameworkElement { DataContext: Snippet snippet })
             GetViewModel()?.ToggleEnabledItemCommand.Execute(snippet);
     }
 

@@ -1,6 +1,7 @@
 <UserControl x:Class="TypeWhisper.Windows.Views.Sections.GeneralSection"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              xmlns:controls="clr-namespace:TypeWhisper.Windows.Controls"
              xmlns:conv="clr-namespace:TypeWhisper.Windows.Converters"
              xmlns:models="clr-namespace:TypeWhisper.Core.Models;assembly=TypeWhisper.Core"
@@ -62,8 +63,6 @@
             <StackPanel Margin="0,0,0,20">
                 <TextBlock Text="Sprache" Style="{StaticResource LabelStyle}"/>
                 <ComboBox SelectedValue="{Binding Settings.Language}" SelectedValuePath="Tag"
-                          Style="{StaticResource InputComboBoxStyle}"
-                          ItemContainerStyle="{StaticResource InputComboBoxItemStyle}"
                           Width="280" HorizontalAlignment="Left">
                     <ComboBoxItem Content="Auto (Automatisch erkennen)" Tag="auto"/>
                     <ComboBoxItem Content="Deutsch" Tag="de"/>
@@ -84,16 +83,19 @@
             <!-- Behavior -->
             <TextBlock Text="Verhalten" Style="{StaticResource SectionHeaderStyle}"/>
             <StackPanel Margin="0,0,0,8">
-                <CheckBox Style="{StaticResource InputCheckBoxStyle}"
-                          Content="Automatisch einfügen (Ctrl+V)" IsChecked="{Binding Settings.AutoPaste}"/>
+                <ui:ToggleSwitch IsChecked="{Binding Settings.AutoPaste}"
+                                 OnContent="Automatisch einfügen (Ctrl+V)"
+                                 OffContent="Automatisch einfügen (Ctrl+V)"/>
             </StackPanel>
             <StackPanel Margin="0,0,0,8">
-                <CheckBox Style="{StaticResource InputCheckBoxStyle}"
-                          Content="Whisper-Modus (AGC)" IsChecked="{Binding Settings.WhisperModeEnabled}"/>
+                <ui:ToggleSwitch IsChecked="{Binding Settings.WhisperModeEnabled}"
+                                 OnContent="Whisper-Modus (AGC)"
+                                 OffContent="Whisper-Modus (AGC)"/>
             </StackPanel>
             <StackPanel Margin="0,0,0,8">
-                <CheckBox Style="{StaticResource InputCheckBoxStyle}"
-                          Content="Sound-Feedback" IsChecked="{Binding Settings.SoundFeedbackEnabled}"/>
+                <ui:ToggleSwitch IsChecked="{Binding Settings.SoundFeedbackEnabled}"
+                                 OnContent="Sound-Feedback"
+                                 OffContent="Sound-Feedback"/>
             </StackPanel>
 
             <!-- Translation -->
@@ -104,8 +106,6 @@
                           SelectedValue="{Binding Settings.TranslationTargetLanguage}"
                           SelectedValuePath="Code"
                           IsTextSearchEnabled="True" TextSearch.TextPath="DisplayName"
-                          Style="{StaticResource InputComboBoxStyle}"
-                          ItemContainerStyle="{StaticResource InputComboBoxItemStyle}"
                           Width="280" HorizontalAlignment="Left">
                     <ComboBox.ItemTemplate>
                         <DataTemplate>
@@ -140,9 +140,7 @@
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="Position" Style="{StaticResource LabelStyle}"/>
                     <ComboBox SelectedValue="{Binding Settings.OverlayPosition}"
-                              SelectedValuePath="Tag"
-                              Style="{StaticResource InputComboBoxStyle}"
-                              ItemContainerStyle="{StaticResource InputComboBoxItemStyle}">
+                              SelectedValuePath="Tag">
                         <ComboBoxItem Content="Oben" Tag="{x:Static models:OverlayPosition.Top}"/>
                         <ComboBoxItem Content="Unten" Tag="{x:Static models:OverlayPosition.Bottom}"/>
                     </ComboBox>
@@ -153,9 +151,7 @@
                     <ComboBox ItemsSource="{x:Static vms:SettingsViewModel.WidgetOptions}"
                               SelectedValue="{Binding Settings.OverlayLeftWidget}"
                               SelectedValuePath="Value"
-                              DisplayMemberPath="DisplayName"
-                              Style="{StaticResource InputComboBoxStyle}"
-                              ItemContainerStyle="{StaticResource InputComboBoxItemStyle}"/>
+                              DisplayMemberPath="DisplayName"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="4">
@@ -163,24 +159,24 @@
                     <ComboBox ItemsSource="{x:Static vms:SettingsViewModel.WidgetOptions}"
                               SelectedValue="{Binding Settings.OverlayRightWidget}"
                               SelectedValuePath="Value"
-                              DisplayMemberPath="DisplayName"
-                              Style="{StaticResource InputComboBoxStyle}"
-                              ItemContainerStyle="{StaticResource InputComboBoxItemStyle}"/>
+                              DisplayMemberPath="DisplayName"/>
                 </StackPanel>
             </Grid>
 
             <!-- System -->
             <TextBlock Text="System" Style="{StaticResource SectionHeaderStyle}"/>
             <StackPanel Margin="0,0,0,8">
-                <CheckBox Style="{StaticResource InputCheckBoxStyle}"
-                          Content="Beim Systemstart automatisch starten" IsChecked="{Binding Settings.AutostartEnabled}"/>
+                <ui:ToggleSwitch IsChecked="{Binding Settings.AutostartEnabled}"
+                                 OnContent="Beim Systemstart automatisch starten"
+                                 OffContent="Beim Systemstart automatisch starten"/>
             </StackPanel>
 
             <!-- API Server -->
             <TextBlock Text="API-Server" Style="{StaticResource SectionHeaderStyle}" Margin="0,16,0,16"/>
             <StackPanel Margin="0,0,0,8">
-                <CheckBox Style="{StaticResource InputCheckBoxStyle}"
-                          Content="REST-API aktivieren" IsChecked="{Binding Settings.ApiServerEnabled}"/>
+                <ui:ToggleSwitch IsChecked="{Binding Settings.ApiServerEnabled}"
+                                 OnContent="REST-API aktivieren"
+                                 OffContent="REST-API aktivieren"/>
             </StackPanel>
             <StackPanel Margin="0,0,0,20">
                 <TextBlock Text="Port" Style="{StaticResource LabelStyle}"/>

@@ -82,7 +82,7 @@ public partial class PromptsSection : UserControl
 
     private void ToggleEnabled_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is CheckBox { DataContext: PromptAction action })
+        if (sender is FrameworkElement { DataContext: PromptAction action })
             GetViewModel()?.ToggleEnabledCommand.Execute(action);
     }
 
