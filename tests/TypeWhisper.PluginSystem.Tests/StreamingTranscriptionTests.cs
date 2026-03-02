@@ -17,8 +17,8 @@ public class StreamingTranscriptionTests
     [Fact]
     public void SupportedLanguages_DefaultIsEmpty()
     {
-        var mock = new Mock<ITranscriptionEnginePlugin>();
-        // DIMs return default values — SupportedLanguages defaults to empty
+        var mock = new Mock<ITranscriptionEnginePlugin> { CallBase = true };
+        // CallBase invokes the DIM — SupportedLanguages defaults to empty
         var languages = mock.Object.SupportedLanguages;
         Assert.Empty(languages);
     }
