@@ -92,11 +92,19 @@ public sealed partial class SettingsWindowViewModel : ObservableObject
 
     public void NavigateToDefault()
     {
-        Navigate("Dashboard");
+        NavigateSync("Dashboard");
     }
 
     [RelayCommand]
-    private void Navigate(string? sectionName)
+    private async Task Navigate(string? sectionName)
+    {
+        NavigateSync(sectionName);
+
+        if (sectionName == "Verlauf")
+            await History.LoadAsync();
+    }
+
+    private void NavigateSync(string? sectionName)
     {
         if (string.IsNullOrEmpty(sectionName)) return;
         if (!_sectionFactories.ContainsKey(sectionName)) return;

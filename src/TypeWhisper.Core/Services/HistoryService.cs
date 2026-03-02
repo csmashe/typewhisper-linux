@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using TypeWhisper.Core.Data;
 using TypeWhisper.Core.Interfaces;
@@ -12,6 +11,13 @@ public sealed class HistoryService : IHistoryService
     private readonly ITypeWhisperDatabase _db;
     private List<TranscriptionRecord> _cache = [];
     private bool _cacheLoaded;
+    private readonly SemaphoreSlim _loadLock = new(1, 1);
+
+    // Cached stats
+    private int _totalRecords;
+    private int _totalWords;
+    private double _totalDuration;
+    private List<string> _distinctApps = [];
 
     public IReadOnlyList<TranscriptionRecord> Records
     {
@@ -24,13 +30,38 @@ public sealed class HistoryService : IHistoryService
 
     public event Action? RecordsChanged;
 
-    public int TotalRecords => Records.Count;
-    public int TotalWords => Records.Sum(r => r.WordCount);
-    public double TotalDuration => Records.Sum(r => r.DurationSeconds);
+    public int TotalRecords => _cacheLoaded ? _totalRecords : Records.Count;
+    public int TotalWords => _cacheLoaded ? _totalWords : Records.Sum(r => r.WordCount);
+    public double TotalDuration => _cacheLoaded ? _totalDuration : Records.Sum(r => r.DurationSeconds);
 
     public HistoryService(ITypeWhisperDatabase db)
     {
         _db = db;
+    }
+
+    public async Task EnsureLoadedAsync()
+    {
+        if (_cacheLoaded) return;
+
+        await _loadLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_cacheLoaded) return;
+            var records = await Task.Run(LoadFromDatabase).ConfigureAwait(false);
+            _cache = records;
+            RebuildStats();
+            _cacheLoaded = true;
+        }
+        finally
+        {
+            _loadLock.Release();
+        }
+    }
+
+    public IReadOnlyList<string> GetDistinctApps()
+    {
+        EnsureCacheLoaded();
+        return _distinctApps;
     }
 
     public void AddRecord(TranscriptionRecord record)
@@ -59,6 +90,18 @@ public sealed class HistoryService : IHistoryService
         cmd.ExecuteNonQuery();
 
         _cache.Insert(0, record);
+
+        // Incremental stats update
+        _totalRecords++;
+        _totalWords += record.WordCount;
+        _totalDuration += record.DurationSeconds;
+        if (!string.IsNullOrEmpty(record.AppProcessName) &&
+            !_distinctApps.Contains(record.AppProcessName, StringComparer.OrdinalIgnoreCase))
+        {
+            _distinctApps.Add(record.AppProcessName);
+            _distinctApps.Sort(StringComparer.OrdinalIgnoreCase);
+        }
+
         RecordsChanged?.Invoke();
     }
 
@@ -74,7 +117,12 @@ public sealed class HistoryService : IHistoryService
 
         var idx = _cache.FindIndex(r => r.Id == id);
         if (idx >= 0)
-            _cache[idx] = _cache[idx] with { FinalText = finalText };
+        {
+            var old = _cache[idx];
+            var updated = old with { FinalText = finalText };
+            _cache[idx] = updated;
+            _totalWords += updated.WordCount - old.WordCount;
+        }
         RecordsChanged?.Invoke();
     }
 
@@ -87,7 +135,17 @@ public sealed class HistoryService : IHistoryService
         cmd.Parameters.AddWithValue("@id", id);
         cmd.ExecuteNonQuery();
 
-        _cache.RemoveAll(r => r.Id == id);
+        var idx = _cache.FindIndex(r => r.Id == id);
+        if (idx >= 0)
+        {
+            var removed = _cache[idx];
+            _cache.RemoveAt(idx);
+            _totalRecords--;
+            _totalWords -= removed.WordCount;
+            _totalDuration -= removed.DurationSeconds;
+        }
+
+        RebuildDistinctApps();
         RecordsChanged?.Invoke();
     }
 
@@ -100,6 +158,10 @@ public sealed class HistoryService : IHistoryService
         cmd.ExecuteNonQuery();
 
         _cache.Clear();
+        _totalRecords = 0;
+        _totalWords = 0;
+        _totalDuration = 0;
+        _distinctApps.Clear();
         RecordsChanged?.Invoke();
     }
 
@@ -169,6 +231,22 @@ public sealed class HistoryService : IHistoryService
     {
         if (_cacheLoaded) return;
 
+        _loadLock.Wait();
+        try
+        {
+            if (_cacheLoaded) return;
+            _cache = LoadFromDatabase();
+            RebuildStats();
+            _cacheLoaded = true;
+        }
+        finally
+        {
+            _loadLock.Release();
+        }
+    }
+
+    private List<TranscriptionRecord> LoadFromDatabase()
+    {
         using var conn = _db.GetConnection();
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -178,11 +256,11 @@ public sealed class HistoryService : IHistoryService
             FROM transcription_history ORDER BY timestamp DESC
             """;
 
-        _cache = [];
+        var records = new List<TranscriptionRecord>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            _cache.Add(new TranscriptionRecord
+            records.Add(new TranscriptionRecord
             {
                 Id = reader.GetString(0),
                 Timestamp = DateTime.Parse(reader.GetString(1)),
@@ -198,6 +276,24 @@ public sealed class HistoryService : IHistoryService
                 ProfileName = reader.IsDBNull(11) ? null : reader.GetString(11)
             });
         }
-        _cacheLoaded = true;
+        return records;
+    }
+
+    private void RebuildStats()
+    {
+        _totalRecords = _cache.Count;
+        _totalWords = _cache.Sum(r => r.WordCount);
+        _totalDuration = _cache.Sum(r => r.DurationSeconds);
+        RebuildDistinctApps();
+    }
+
+    private void RebuildDistinctApps()
+    {
+        _distinctApps = _cache
+            .Select(r => r.AppProcessName)
+            .Where(a => !string.IsNullOrEmpty(a))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order()
+            .ToList()!;
     }
 }

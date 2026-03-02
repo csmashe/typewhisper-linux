@@ -59,6 +59,14 @@
             <Run Text="{Binding History.TotalWords, Mode=OneWay}"/> Wörter
         </TextBlock>
 
+        <!-- Loading indicator -->
+        <StackPanel DockPanel.Dock="Top" HorizontalAlignment="Center" Margin="0,40,0,0"
+                    Visibility="{Binding History.IsLoading, Converter={StaticResource BoolToVis}}">
+            <ui:ProgressRing IsIndeterminate="True" Width="32" Height="32"/>
+            <TextBlock Text="Verlauf wird geladen…" Foreground="{StaticResource HintBrush}"
+                       FontSize="13" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+        </StackPanel>
+
         <!-- Empty state -->
         <TextBlock DockPanel.Dock="Top" Text="Noch keine Aufnahmen"
                    Foreground="{StaticResource HintBrush}" FontSize="14"
@@ -67,213 +75,238 @@
                 <Style TargetType="TextBlock">
                     <Setter Property="Visibility" Value="Collapsed"/>
                     <Style.Triggers>
-                        <DataTrigger Binding="{Binding History.TotalRecords}" Value="0">
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding History.TotalRecords}" Value="0"/>
+                                <Condition Binding="{Binding History.IsLoading}" Value="False"/>
+                            </MultiDataTrigger.Conditions>
                             <Setter Property="Visibility" Value="Visible"/>
-                        </DataTrigger>
+                        </MultiDataTrigger>
                     </Style.Triggers>
                 </Style>
             </TextBlock.Style>
         </TextBlock>
 
-        <!-- Timeline -->
-        <ScrollViewer VerticalScrollBarVisibility="Auto" Style="{x:Null}">
-            <ScrollViewer.Resources>
+        <!-- Timeline (ListBox for real UI virtualization) -->
+        <ListBox ItemsSource="{Binding History.GroupedEntries}"
+                 Visibility="{Binding History.IsLoading, Converter={StaticResource InverseBoolToVis}}"
+                 VirtualizingPanel.IsVirtualizing="True"
+                 VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                 VirtualizingPanel.VirtualizationMode="Recycling"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 ScrollViewer.CanContentScroll="True"
+                 BorderThickness="0" Background="Transparent"
+                 HorizontalContentAlignment="Stretch">
+
+            <ListBox.Resources>
                 <Style TargetType="ScrollBar" BasedOn="{StaticResource SettingsScrollBarStyle}"/>
-            </ScrollViewer.Resources>
+            </ListBox.Resources>
 
-            <ItemsControl ItemsSource="{Binding History.GroupedEntries}"
-                          VirtualizingPanel.IsVirtualizing="True"
-                          VirtualizingPanel.IsVirtualizingWhenGrouping="True"
-                          VirtualizingPanel.VirtualizationMode="Recycling">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <VirtualizingStackPanel/>
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
+            <!-- Remove selection styling -->
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Focusable" Value="False"/>
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    <Setter Property="Padding" Value="0"/>
+                    <Setter Property="Margin" Value="0"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListBoxItem">
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </ListBox.ItemContainerStyle>
 
-                <!-- Group header: "Heute" / "Gestern" / etc. with line -->
-                <ItemsControl.GroupStyle>
-                    <GroupStyle>
-                        <GroupStyle.HeaderTemplate>
-                            <DataTemplate>
-                                <Grid Margin="42,16,0,8">
+            <ListBox.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <VirtualizingStackPanel/>
+                </ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+
+            <!-- Group header: "Heute" / "Gestern" / etc. with line -->
+            <ListBox.GroupStyle>
+                <GroupStyle>
+                    <GroupStyle.HeaderTemplate>
+                        <DataTemplate>
+                            <Grid Margin="42,16,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Name}"
+                                           Style="{StaticResource TimelineGroupHeaderStyle}"
+                                           Margin="0,0,12,0"/>
+                                <Rectangle Grid.Column="1" Height="1"
+                                           Fill="{StaticResource BorderBrush}"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+                        </DataTemplate>
+                    </GroupStyle.HeaderTemplate>
+                </GroupStyle>
+            </ListBox.GroupStyle>
+
+            <!-- Timeline entry -->
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <Grid Margin="0,0,0,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="42"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Left: vertical line + dot -->
+                        <Grid Grid.Column="0">
+                            <Rectangle Width="2" Fill="{StaticResource BorderBrush}"
+                                       HorizontalAlignment="Center"/>
+                            <Ellipse Style="{StaticResource TimelineDotStyle}"
+                                     VerticalAlignment="Top" HorizontalAlignment="Center"
+                                     Margin="0,14,0,0"/>
+                        </Grid>
+
+                        <!-- Right: card -->
+                        <Border Grid.Column="1" Style="{StaticResource TimelineCardStyle}"
+                                Margin="0,4,8,4">
+                            <Border.InputBindings>
+                                <MouseBinding MouseAction="LeftClick"
+                                              Command="{Binding ToggleExpandCommand}"/>
+                            </Border.InputBindings>
+
+                            <StackPanel>
+                                <!-- Collapsed: time + preview + badges -->
+                                <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding Name}"
-                                               Style="{StaticResource TimelineGroupHeaderStyle}"
-                                               Margin="0,0,12,0"/>
-                                    <Rectangle Grid.Column="1" Height="1"
-                                               Fill="{StaticResource BorderBrush}"
-                                               VerticalAlignment="Center"/>
-                                </Grid>
-                            </DataTemplate>
-                        </GroupStyle.HeaderTemplate>
-                    </GroupStyle>
-                </ItemsControl.GroupStyle>
 
-                <!-- Timeline entry -->
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Grid Margin="0,0,0,2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="42"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding TimeLabel}"
+                                               Foreground="{StaticResource HintBrush}" FontSize="12"
+                                               VerticalAlignment="Top" Margin="0,0,10,0"/>
 
-                            <!-- Left: vertical line + dot -->
-                            <Grid Grid.Column="0">
-                                <Rectangle Width="2" Fill="{StaticResource BorderBrush}"
-                                           HorizontalAlignment="Center"/>
-                                <Ellipse Style="{StaticResource TimelineDotStyle}"
-                                         VerticalAlignment="Top" HorizontalAlignment="Center"
-                                         Margin="0,14,0,0"/>
-                            </Grid>
+                                    <TextBlock Grid.Column="1" Text="{Binding Record.Preview}"
+                                               Foreground="{StaticResource TextBrush}" FontSize="13"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Top"/>
 
-                            <!-- Right: card -->
-                            <Border Grid.Column="1" Style="{StaticResource TimelineCardStyle}"
-                                    Margin="0,4,8,4">
-                                <Border.InputBindings>
-                                    <MouseBinding MouseAction="LeftClick"
-                                                  Command="{Binding ToggleExpandCommand}"/>
-                                </Border.InputBindings>
-
-                                <StackPanel>
-                                    <!-- Collapsed: time + preview + badges -->
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-
-                                        <TextBlock Grid.Column="0" Text="{Binding TimeLabel}"
-                                                   Foreground="{StaticResource HintBrush}" FontSize="12"
-                                                   VerticalAlignment="Top" Margin="0,0,10,0"/>
-
-                                        <TextBlock Grid.Column="1" Text="{Binding Record.Preview}"
-                                                   Foreground="{StaticResource TextBrush}" FontSize="13"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Top"/>
-
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
-                                            <Border Style="{StaticResource BadgeStyle}"
-                                                    Background="#2A3A5A"
-                                                    Visibility="{Binding Record.ProfileName, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
-                                                <TextBlock Text="{Binding Record.ProfileName}"
-                                                           Foreground="{StaticResource AccentBrush}" FontSize="11"/>
-                                            </Border>
-                                            <Border Style="{StaticResource BadgeStyle}"
-                                                    Visibility="{Binding Record.AppProcessName, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
-                                                <TextBlock Text="{Binding Record.AppProcessName}"
-                                                           Foreground="{StaticResource HintBrush}" FontSize="11"/>
-                                            </Border>
-                                            <Border Style="{StaticResource BadgeStyle}">
-                                                <TextBlock Text="{Binding DurationLabel}"
-                                                           Foreground="{StaticResource HintBrush}" FontSize="11"/>
-                                            </Border>
-                                        </StackPanel>
-                                    </Grid>
-
-                                    <!-- Expanded -->
-                                    <StackPanel Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVis}}">
-                                        <Rectangle Height="1" Fill="{StaticResource BorderBrush}" Margin="0,8,0,8"/>
-
-                                        <!-- Full text (read-only) -->
-                                        <TextBlock Text="{Binding Record.FinalText}" TextWrapping="Wrap"
-                                                   Foreground="{StaticResource TextBrush}" FontSize="13"
-                                                   Margin="0,0,0,8"
-                                                   Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVis}}"/>
-
-                                        <!-- Edit mode -->
-                                        <StackPanel Visibility="{Binding IsEditing, Converter={StaticResource BoolToVis}}">
-                                            <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
-                                                     Style="{StaticResource InputTextBoxStyle}"
-                                                     TextWrapping="Wrap" AcceptsReturn="True"
-                                                     MinHeight="60" MaxHeight="200" Margin="0,0,0,8"/>
-                                            <StackPanel Orientation="Horizontal">
-                                                <ui:Button Content="Speichern" Command="{Binding SaveEditCommand}"
-                                                        Appearance="Primary"
-                                                        Padding="12,6" Margin="0,0,6,0"/>
-                                                <ui:Button Content="Abbrechen" Command="{Binding CancelEditCommand}"
-                                                        Appearance="Secondary"
-                                                        Padding="12,6"/>
-                                            </StackPanel>
-                                        </StackPanel>
-
-                                        <!-- Correction Suggestions Banner -->
-                                        <Border CornerRadius="6" Padding="12,8" Margin="0,8,0,4"
-                                                Visibility="{Binding HasSuggestions, Converter={StaticResource BoolToVis}}">
-                                            <Border.Background>
-                                                <SolidColorBrush Color="#3A2A1A"/>
-                                            </Border.Background>
-                                            <Border.BorderBrush>
-                                                <SolidColorBrush Color="#D4915B"/>
-                                            </Border.BorderBrush>
-                                            <Border.BorderThickness>1</Border.BorderThickness>
-                                            <StackPanel>
-                                                <TextBlock Foreground="#D4915B" FontSize="12" FontWeight="Medium"
-                                                           Margin="0,0,0,4">
-                                                    Korrekturen erkannt
-                                                </TextBlock>
-                                                <ItemsControl ItemsSource="{Binding CorrectionSuggestions}">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <TextBlock Foreground="{StaticResource TextBrush}" FontSize="12" Margin="0,1,0,1">
-                                                                <Run Text="{Binding Original, Mode=OneWay}" Foreground="{StaticResource HintBrush}" TextDecorations="Strikethrough"/>
-                                                                <Run Text=" → "/>
-                                                                <Run Text="{Binding Replacement, Mode=OneWay}" FontWeight="Medium"/>
-                                                            </TextBlock>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                                    <ui:Button Content="Ins Wörterbuch" Command="{Binding AcceptSuggestionsCommand}"
-                                                            Appearance="Primary"
-                                                            Padding="10,5" FontSize="12" Margin="0,0,6,0"/>
-                                                    <ui:Button Content="Verwerfen" Command="{Binding DismissSuggestionsCommand}"
-                                                            Appearance="Secondary"
-                                                            Padding="10,5" FontSize="12"/>
-                                                </StackPanel>
-                                            </StackPanel>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
+                                        <Border Style="{StaticResource BadgeStyle}"
+                                                Background="#2A3A5A"
+                                                Visibility="{Binding Record.ProfileName, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
+                                            <TextBlock Text="{Binding Record.ProfileName}"
+                                                       Foreground="{StaticResource AccentBrush}" FontSize="11"/>
                                         </Border>
+                                        <Border Style="{StaticResource BadgeStyle}"
+                                                Visibility="{Binding Record.AppProcessName, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
+                                            <TextBlock Text="{Binding Record.AppProcessName}"
+                                                       Foreground="{StaticResource HintBrush}" FontSize="11"/>
+                                        </Border>
+                                        <Border Style="{StaticResource BadgeStyle}">
+                                            <TextBlock Text="{Binding DurationLabel}"
+                                                       Foreground="{StaticResource HintBrush}" FontSize="11"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
 
-                                        <!-- Meta -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,4"
-                                                    Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVis}}">
-                                            <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11">
-                                                <Run Text="{Binding Record.Timestamp, StringFormat='{}{0:dd.MM.yyyy HH:mm}', Mode=OneWay}"/>
-                                                <Run Text=" · "/>
-                                                <Run Text="{Binding Record.WordCount, StringFormat='{}{0} Wörter', Mode=OneWay}"/>
-                                            </TextBlock>
-                                            <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11"
-                                                       Margin="8,0,0,0"
-                                                       Visibility="{Binding Record.Language, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
-                                                <Run Text="· "/>
-                                                <Run Text="{Binding Record.Language, Mode=OneWay}"/>
-                                            </TextBlock>
-                                        </StackPanel>
+                                <!-- Expanded -->
+                                <StackPanel Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVis}}">
+                                    <Rectangle Height="1" Fill="{StaticResource BorderBrush}" Margin="0,8,0,8"/>
 
-                                        <!-- Action buttons -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0"
-                                                    Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVis}}">
-                                            <Button Content="Bearbeiten" Command="{Binding StartEditCommand}"
-                                                    Style="{StaticResource LinkButtonStyle}" Margin="0,0,12,0"/>
-                                            <Button Content="Kopieren" Command="{Binding CopyCommand}"
-                                                    Style="{StaticResource LinkButtonStyle}" Margin="0,0,12,0"/>
-                                            <Button Content="Löschen" Command="{Binding DeleteCommand}"
-                                                    Style="{StaticResource LinkButtonStyle}"
-                                                    Foreground="{StaticResource DangerBrush}"/>
+                                    <!-- Full text (read-only) -->
+                                    <TextBlock Text="{Binding Record.FinalText}" TextWrapping="Wrap"
+                                               Foreground="{StaticResource TextBrush}" FontSize="13"
+                                               Margin="0,0,0,8"
+                                               Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVis}}"/>
+
+                                    <!-- Edit mode -->
+                                    <StackPanel Visibility="{Binding IsEditing, Converter={StaticResource BoolToVis}}">
+                                        <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
+                                                 Style="{StaticResource InputTextBoxStyle}"
+                                                 TextWrapping="Wrap" AcceptsReturn="True"
+                                                 MinHeight="60" MaxHeight="200" Margin="0,0,0,8"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:Button Content="Speichern" Command="{Binding SaveEditCommand}"
+                                                    Appearance="Primary"
+                                                    Padding="12,6" Margin="0,0,6,0"/>
+                                            <ui:Button Content="Abbrechen" Command="{Binding CancelEditCommand}"
+                                                    Appearance="Secondary"
+                                                    Padding="12,6"/>
                                         </StackPanel>
                                     </StackPanel>
 
+                                    <!-- Correction Suggestions Banner -->
+                                    <Border CornerRadius="6" Padding="12,8" Margin="0,8,0,4"
+                                            Visibility="{Binding HasSuggestions, Converter={StaticResource BoolToVis}}">
+                                        <Border.Background>
+                                            <SolidColorBrush Color="#3A2A1A"/>
+                                        </Border.Background>
+                                        <Border.BorderBrush>
+                                            <SolidColorBrush Color="#D4915B"/>
+                                        </Border.BorderBrush>
+                                        <Border.BorderThickness>1</Border.BorderThickness>
+                                        <StackPanel>
+                                            <TextBlock Foreground="#D4915B" FontSize="12" FontWeight="Medium"
+                                                       Margin="0,0,0,4">
+                                                Korrekturen erkannt
+                                            </TextBlock>
+                                            <ItemsControl ItemsSource="{Binding CorrectionSuggestions}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Foreground="{StaticResource TextBrush}" FontSize="12" Margin="0,1,0,1">
+                                                            <Run Text="{Binding Original, Mode=OneWay}" Foreground="{StaticResource HintBrush}" TextDecorations="Strikethrough"/>
+                                                            <Run Text=" → "/>
+                                                            <Run Text="{Binding Replacement, Mode=OneWay}" FontWeight="Medium"/>
+                                                        </TextBlock>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                                <ui:Button Content="Ins Wörterbuch" Command="{Binding AcceptSuggestionsCommand}"
+                                                        Appearance="Primary"
+                                                        Padding="10,5" FontSize="12" Margin="0,0,6,0"/>
+                                                <ui:Button Content="Verwerfen" Command="{Binding DismissSuggestionsCommand}"
+                                                        Appearance="Secondary"
+                                                        Padding="10,5" FontSize="12"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Meta -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,4"
+                                                Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVis}}">
+                                        <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11">
+                                            <Run Text="{Binding Record.Timestamp, StringFormat='{}{0:dd.MM.yyyy HH:mm}', Mode=OneWay}"/>
+                                            <Run Text=" · "/>
+                                            <Run Text="{Binding Record.WordCount, StringFormat='{}{0} Wörter', Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Foreground="{StaticResource HintBrush}" FontSize="11"
+                                                   Margin="8,0,0,0"
+                                                   Visibility="{Binding Record.Language, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
+                                            <Run Text="· "/>
+                                            <Run Text="{Binding Record.Language, Mode=OneWay}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+
+                                    <!-- Action buttons -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0"
+                                                Visibility="{Binding IsEditing, Converter={StaticResource InverseBoolToVis}}">
+                                        <Button Content="Bearbeiten" Command="{Binding StartEditCommand}"
+                                                Style="{StaticResource LinkButtonStyle}" Margin="0,0,12,0"/>
+                                        <Button Content="Kopieren" Command="{Binding CopyCommand}"
+                                                Style="{StaticResource LinkButtonStyle}" Margin="0,0,12,0"/>
+                                        <Button Content="Löschen" Command="{Binding DeleteCommand}"
+                                                Style="{StaticResource LinkButtonStyle}"
+                                                Foreground="{StaticResource DangerBrush}"/>
+                                    </StackPanel>
                                 </StackPanel>
-                            </Border>
-                        </Grid>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </ScrollViewer>
+
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
     </DockPanel>
 </UserControl>

@@ -17,9 +17,11 @@ public partial class HistoryViewModel : ObservableObject
     private readonly IHistoryService _history;
     private readonly IDictionaryService _dictionary;
     private bool _suppressRefresh;
+    private bool _hasLoaded;
 
     [ObservableProperty] private string _searchQuery = "";
     [ObservableProperty] private string? _selectedAppFilter;
+    [ObservableProperty] private bool _isLoading;
 
     public ObservableCollection<HistoryEntryViewModel> Entries { get; } = [];
     public ObservableCollection<string> AvailableApps { get; } = [];
@@ -48,7 +50,28 @@ public partial class HistoryViewModel : ObservableObject
                 OnPropertyChanged(nameof(TotalWords));
             });
         };
-        RefreshRecords();
+    }
+
+    public async Task LoadAsync()
+    {
+        if (_hasLoaded) return;
+
+        IsLoading = true;
+        try
+        {
+            await _history.EnsureLoadedAsync().ConfigureAwait(false);
+            await Application.Current!.Dispatcher.InvokeAsync(() =>
+            {
+                _hasLoaded = true;
+                RefreshRecords();
+                OnPropertyChanged(nameof(TotalRecords));
+                OnPropertyChanged(nameof(TotalWords));
+            });
+        }
+        finally
+        {
+            Application.Current?.Dispatcher.Invoke(() => IsLoading = false);
+        }
     }
 
     partial void OnSearchQueryChanged(string value) => GroupedEntries.Refresh();
@@ -85,12 +108,8 @@ public partial class HistoryViewModel : ObservableObject
     {
         var current = SelectedAppFilter;
         AvailableApps.Clear();
-        foreach (var app in _history.Records
-                     .Select(r => r.AppProcessName)
-                     .Where(a => !string.IsNullOrEmpty(a))
-                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                     .Order())
-            AvailableApps.Add(app!);
+        foreach (var app in _history.GetDistinctApps())
+            AvailableApps.Add(app);
         SelectedAppFilter = current is not null && AvailableApps.Contains(current) ? current : null;
     }
 

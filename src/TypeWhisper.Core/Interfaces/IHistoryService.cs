@@ -18,6 +18,9 @@ public interface IHistoryService
     int TotalWords { get; }
     double TotalDuration { get; }
 
+    Task EnsureLoadedAsync();
+    IReadOnlyList<string> GetDistinctApps();
+
     string ExportToText(IReadOnlyList<TranscriptionRecord> records);
     string ExportToCsv(IReadOnlyList<TranscriptionRecord> records);
 }

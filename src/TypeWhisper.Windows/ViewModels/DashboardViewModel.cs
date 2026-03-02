@@ -26,7 +26,13 @@ public partial class DashboardViewModel : ObservableObject
         _history = history;
         _history.RecordsChanged += () =>
             Application.Current?.Dispatcher.Invoke(Refresh);
-        Refresh();
+        _ = InitAsync();
+    }
+
+    private async Task InitAsync()
+    {
+        await _history.EnsureLoadedAsync().ConfigureAwait(false);
+        Application.Current?.Dispatcher.Invoke(Refresh);
     }
 
     partial void OnIsMonthViewChanged(bool value) => Refresh();
