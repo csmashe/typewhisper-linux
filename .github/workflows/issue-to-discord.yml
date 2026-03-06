@@ -1,4 +1,4 @@
-name: Issue Scout to Discord Thread
+name: Issue Link Relay
 
 on:
   issues:
@@ -8,77 +8,16 @@ permissions:
   contents: read
 
 jobs:
-  scout:
+  relay:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository (for lightweight scan)
-        uses: actions/checkout@v4
-
-      - name: Build scout context + proposal
-        id: scout
-        env:
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_URL: ${{ github.event.issue.html_url }}
-          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-        run: |
-          set -euo pipefail
-
-          BODY_PREVIEW=$(printf "%s" "${ISSUE_BODY:-}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-220)
-
-          # Very lightweight repo scan: suggest likely files by keyword match
-          KEYWORDS=$(printf "%s %s" "$ISSUE_TITLE" "${ISSUE_BODY:-}" \
-            | tr '[:upper:]' '[:lower:]' \
-            | tr -cs '[:alnum:]' '\n' \
-            | awk 'length>=4' \
-            | sort -u \
-            | head -n 12)
-
-          MATCHES_FILE=$(mktemp)
-          : > "$MATCHES_FILE"
-
-          while IFS= read -r kw; do
-            [ -n "$kw" ] || continue
-            git ls-files | grep -i "$kw" >> "$MATCHES_FILE" || true
-          done <<< "$KEYWORDS"
-
-          UNIQUE_MATCHES=$(sort -u "$MATCHES_FILE" | head -n 3)
-
-          if [ -z "$UNIQUE_MATCHES" ]; then
-            UNIQUE_MATCHES="(keine klaren Dateitreffer aus Keyword-Scan)"
-          fi
-
-          {
-            echo 'scout_message<<EOF'
-            echo "[SCOUT] ${REPO} #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
-            echo "${ISSUE_URL}"
-            echo "Author: ${ISSUE_AUTHOR}"
-            echo "Preview: ${BODY_PREVIEW}"
-            echo 'EOF'
-
-            echo 'proposal_message<<EOF'
-            echo "Vorschlag (Scout)"
-            echo
-            echo "1) Repro-Schritte aus dem Issue als kurze Checkliste festhalten."
-            echo "2) Wahrscheinlich betroffene Stellen (Light-Scan):"
-            echo "$UNIQUE_MATCHES" | sed 's/^/   - /'
-            echo "3) Kleinstmöglichen Fix als Patch planen + genau 1 Testfall für den gemeldeten Case."
-            echo
-            echo "Hinweis: Das ist ein Lightweight-Scan (Datei-/Keyword-Ebene), kein vollständiges Deep-Debugging."
-            echo 'EOF'
-
-            echo "thread_name=scout-${REPO//\//-}-#${ISSUE_NUMBER}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Create Discord message + thread + one proposal
+      - name: Post only issue link to Discord #issues
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_ISSUES_CHANNEL_ID }}
-          SCOUT_MESSAGE: ${{ steps.scout.outputs.scout_message }}
-          PROPOSAL_MESSAGE: ${{ steps.scout.outputs.proposal_message }}
-          THREAD_NAME: ${{ steps.scout.outputs.thread_name }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
         run: |
           set -euo pipefail
 
@@ -87,33 +26,10 @@ jobs:
             exit 1
           fi
 
-          jq -n --arg content "$SCOUT_MESSAGE" '{content:$content}' > msg.json
+          CONTENT="[GH-ISSUE] ${REPO} #${ISSUE_NUMBER}\n${ISSUE_URL}"
+          jq -n --arg content "$CONTENT" '{content:$content}' > payload.json
 
           curl -sS -X POST "https://discord.com/api/v10/channels/${DISCORD_CHANNEL_ID}/messages" \
             -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data @msg.json > message_out.json
-
-          MESSAGE_ID=$(jq -r '.id' message_out.json)
-          if [ -z "$MESSAGE_ID" ] || [ "$MESSAGE_ID" = "null" ]; then
-            echo "Failed to create message"; cat message_out.json; exit 1
-          fi
-
-          jq -n --arg name "$THREAD_NAME" '{name:$name,auto_archive_duration:1440}' > thread.json
-
-          curl -sS -X POST "https://discord.com/api/v10/channels/${DISCORD_CHANNEL_ID}/messages/${MESSAGE_ID}/threads" \
-            -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data @thread.json > thread_out.json
-
-          THREAD_ID=$(jq -r '.id' thread_out.json)
-          if [ -z "$THREAD_ID" ] || [ "$THREAD_ID" = "null" ]; then
-            echo "Failed to create thread"; cat thread_out.json; exit 1
-          fi
-
-          jq -n --arg content "$PROPOSAL_MESSAGE" '{content:$content}' > proposal.json
-
-          curl -sS -X POST "https://discord.com/api/v10/channels/${THREAD_ID}/messages" \
-            -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data @proposal.json > /dev/null
+            --data @payload.json > /dev/null
