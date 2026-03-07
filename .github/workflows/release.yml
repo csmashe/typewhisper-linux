@@ -62,7 +62,7 @@ jobs:
           path: releases/*
 
   trigger-website:
-    needs: build
+    needs: release
     runs-on: ubuntu-latest
     steps:
       - name: Trigger website rebuild
