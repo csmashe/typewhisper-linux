@@ -235,7 +235,12 @@ public sealed class StreamingHandler : IDisposable
         }
 
         if (matchEnd > confirmed.Length / 2)
-            return confirmed + newText[matchEnd..];
+        {
+            var tail = newText[matchEnd..];
+            if (tail.Length > 0 && !confirmed.EndsWith(' ') && !tail.StartsWith(' '))
+                return confirmed + " " + tail;
+            return confirmed + tail;
+        }
 
         var minOverlap = Math.Min(20, confirmed.Length / 4);
         var maxShift = Math.Min(confirmed.Length - minOverlap, 150);
