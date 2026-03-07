@@ -27,7 +27,7 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin
 
     public string PluginId => "com.typewhisper.assemblyai";
     public string PluginName => "AssemblyAI";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => "1.1.0";
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
