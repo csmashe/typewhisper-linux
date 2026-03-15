@@ -117,7 +117,10 @@ public partial class DictationViewModel : ObservableObject, IDisposable
 
         _streamingHandler = new StreamingHandler(modelManager, audio, dictionary);
         _streamingHandler.OnPartialTextUpdate = text =>
+        {
             Application.Current?.Dispatcher.InvokeAsync(() => PartialText = text);
+            _eventBus.Publish(new PartialTranscriptionUpdateEvent { PartialText = text });
+        };
 
         _consumerTask = Task.Run(() => ProcessJobsAsync(_consumerCts.Token));
 

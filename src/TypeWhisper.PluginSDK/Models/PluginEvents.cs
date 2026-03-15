@@ -57,3 +57,13 @@ public sealed record TextInsertedEvent : PluginEvent
     /// <summary>Name of the target application, or null.</summary>
     public string? TargetApp { get; init; }
 }
+
+/// <summary>Raised when partial transcription text is updated during recording.</summary>
+public sealed record PartialTranscriptionUpdateEvent : PluginEvent
+{
+    /// <summary>The current partial transcription text.</summary>
+    public required string PartialText { get; init; }
+
+    /// <summary>Whether recording is still in progress.</summary>
+    public bool IsRecording { get; init; } = true;
+}

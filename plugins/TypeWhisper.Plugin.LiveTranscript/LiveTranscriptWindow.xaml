@@ -1,0 +1,38 @@
+<Window x:Class="TypeWhisper.Plugin.LiveTranscript.LiveTranscriptWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        SizeToContent="Height"
+        Width="500"
+        ResizeMode="NoResize"
+        Loaded="Window_Loaded">
+    <Border CornerRadius="12"
+            Margin="8"
+            Padding="16,12"
+            x:Name="RootBorder">
+        <Border.Background>
+            <SolidColorBrush Color="#1E1E2E" />
+        </Border.Background>
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="16"
+                              ShadowDepth="2"
+                              Opacity="0.5"
+                              Color="Black" />
+        </Border.Effect>
+        <ScrollViewer x:Name="TranscriptScroller"
+                      VerticalScrollBarVisibility="Auto"
+                      MaxHeight="200"
+                      HorizontalScrollBarVisibility="Disabled">
+            <TextBlock x:Name="TranscriptText"
+                       Foreground="#CCDDDDDD"
+                       FontSize="16"
+                       TextWrapping="Wrap"
+                       FontFamily="Segoe UI"
+                       Text="Listening..." />
+        </ScrollViewer>
+    </Border>
+</Window>
