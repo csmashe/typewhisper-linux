@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
@@ -10,75 +11,113 @@ using TypeWhisper.Windows.Services.Plugins;
 
 namespace TypeWhisper.Windows.ViewModels;
 
+public record WelcomeModelItem(string FullModelId, string DisplayName, string? SizeDescription, bool IsRecommended);
+
 public partial class WelcomeViewModel : ObservableObject
 {
     private readonly ModelManagerService _modelManager;
     private readonly ISettingsService _settings;
     private readonly AudioRecordingService _audio;
+    private readonly PluginRegistryService _registry;
 
-    [ObservableProperty] private int _currentStep; // 0=Model, 1=Cloud, 2=Mic, 3=Hotkey, 4=Done
+    [ObservableProperty] private int _currentStep; // 0=Extensions+Model, 1=Mic, 2=Hotkey, 3=Done
     [ObservableProperty] private bool _isDownloading;
     [ObservableProperty] private double _downloadProgress;
     [ObservableProperty] private string _downloadStatus = "";
-    [ObservableProperty] private string _selectedModelId = "plugin:com.typewhisper.sherpa-onnx:parakeet-tdt-0.6b";
+    [ObservableProperty] private string? _selectedModelId;
     [ObservableProperty] private float _micLevel;
     [ObservableProperty] private bool _micWorking;
     [ObservableProperty] private string _toggleHotkey;
     [ObservableProperty] private string _pushToTalkHotkey;
+    [ObservableProperty] private bool _isLoadingPlugins;
 
-    // Cloud provider properties
-    [ObservableProperty] private string? _cloudTestResult;
-    [ObservableProperty] private bool _isTestingKey;
-
+    public ObservableCollection<RegistryPluginItemViewModel> Plugins { get; } = [];
+    public ObservableCollection<WelcomeModelItem> AvailableModels { get; } = [];
     public ObservableCollection<MicrophoneItem> Microphones { get; } = [];
-    public IReadOnlyList<ITranscriptionEnginePlugin> CloudProviders { get; }
     public event EventHandler? Completed;
 
     public WelcomeViewModel(
         ModelManagerService modelManager,
         ISettingsService settings,
-        AudioRecordingService audio)
+        AudioRecordingService audio,
+        PluginRegistryService registry)
     {
         _modelManager = modelManager;
         _settings = settings;
         _audio = audio;
+        _registry = registry;
 
         _toggleHotkey = settings.Current.ToggleHotkey;
         _pushToTalkHotkey = settings.Current.PushToTalkHotkey;
-        CloudProviders = [.. modelManager.PluginManager.TranscriptionEngines];
+
+        _modelManager.PluginManager.PluginStateChanged += (_, _) =>
+            Application.Current?.Dispatcher.Invoke(RefreshModels);
 
         RefreshMicrophones();
+        _ = LoadPluginsAsync();
+    }
+
+    private async Task LoadPluginsAsync()
+    {
+        IsLoadingPlugins = true;
+
+        try
+        {
+            var registryPlugins = await _registry.FetchRegistryAsync();
+
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                Plugins.Clear();
+                foreach (var rp in registryPlugins)
+                    Plugins.Add(new RegistryPluginItemViewModel(rp, _registry));
+            });
+        }
+        finally
+        {
+            IsLoadingPlugins = false;
+        }
+
+        RefreshModels();
+    }
+
+    private void RefreshModels()
+    {
+        AvailableModels.Clear();
+
+        foreach (var engine in _modelManager.PluginManager.TranscriptionEngines)
+        {
+            foreach (var model in engine.TranscriptionModels)
+            {
+                var fullId = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
+                var name = $"{model.DisplayName} ({model.SizeDescription})";
+                if (model.IsRecommended)
+                    name += $" — {Loc.Instance["Welcome.Recommended"]}";
+                AvailableModels.Add(new WelcomeModelItem(fullId, name, model.SizeDescription, model.IsRecommended));
+            }
+        }
+
+        // Auto-select recommended or first
+        if (SelectedModelId is null || !AvailableModels.Any(m => m.FullModelId == SelectedModelId))
+        {
+            SelectedModelId = AvailableModels.FirstOrDefault(m => m.IsRecommended)?.FullModelId
+                              ?? AvailableModels.FirstOrDefault()?.FullModelId;
+        }
     }
 
     [RelayCommand]
     private async Task DownloadModel()
     {
+        if (string.IsNullOrEmpty(SelectedModelId)) return;
+
         IsDownloading = true;
         DownloadStatus = Loc.Instance["Welcome.DownloadProgress"];
 
-        _modelManager.PropertyChanged += (_, args) =>
-        {
-            if (args.PropertyName == nameof(ModelManagerService.GetStatus))
-            {
-                var status = _modelManager.GetStatus(SelectedModelId);
-                if (status.Type == ModelStatusType.Downloading)
-                {
-                    DownloadProgress = status.Progress;
-                    DownloadStatus = $"Download: {status.Progress:P0}";
-                }
-                else if (status.Type == ModelStatusType.Loading)
-                {
-                    DownloadStatus = Loc.Instance["Welcome.LoadingModel"];
-                }
-            }
-        };
+        _modelManager.PropertyChanged += OnModelManagerPropertyChanged;
 
         try
         {
             await _modelManager.DownloadAndLoadModelAsync(SelectedModelId);
             DownloadStatus = Loc.Instance["Welcome.Done"];
-
-            // Save selected model
             _settings.Save(_settings.Current with { SelectedModelId = SelectedModelId });
         }
         catch (Exception ex)
@@ -89,18 +128,36 @@ public partial class WelcomeViewModel : ObservableObject
         finally
         {
             IsDownloading = false;
+            _modelManager.PropertyChanged -= OnModelManagerPropertyChanged;
+        }
+    }
+
+    private void OnModelManagerPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName != nameof(ModelManagerService.GetStatus) || SelectedModelId is null)
+            return;
+
+        var status = _modelManager.GetStatus(SelectedModelId);
+        if (status.Type == ModelStatusType.Downloading)
+        {
+            DownloadProgress = status.Progress;
+            DownloadStatus = $"Download: {status.Progress:P0}";
+        }
+        else if (status.Type == ModelStatusType.Loading)
+        {
+            DownloadStatus = Loc.Instance["Welcome.LoadingModel"];
         }
     }
 
     [RelayCommand]
     private void NextStep()
     {
-        if (CurrentStep < 4)
+        if (CurrentStep < 3)
             CurrentStep++;
 
-        if (CurrentStep == 2)
+        if (CurrentStep == 1)
             StartMicTest();
-        else if (CurrentStep == 4)
+        else if (CurrentStep == 3)
             Finish();
     }
 
@@ -109,7 +166,7 @@ public partial class WelcomeViewModel : ObservableObject
     {
         if (CurrentStep > 0)
         {
-            if (CurrentStep == 2)
+            if (CurrentStep == 1)
                 StopMicTest();
             CurrentStep--;
         }
@@ -153,7 +210,6 @@ public partial class WelcomeViewModel : ObservableObject
     {
         StopMicTest();
 
-        // Save hotkey settings
         _settings.Save(_settings.Current with
         {
             ToggleHotkey = ToggleHotkey,

@@ -1,9 +1,9 @@
-using System.Windows;
 using TypeWhisper.Windows.ViewModels;
+using Wpf.Ui.Controls;
 
 namespace TypeWhisper.Windows.Views;
 
-public partial class WelcomeWindow : Window
+public partial class WelcomeWindow : FluentWindow
 {
     public WelcomeWindow(WelcomeViewModel viewModel)
     {

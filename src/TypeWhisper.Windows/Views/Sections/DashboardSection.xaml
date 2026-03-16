@@ -130,6 +130,24 @@
                 </ItemsControl>
             </Border>
 
+            <!-- Setup Wizard shortcut -->
+            <Border Background="{StaticResource InputBackgroundBrush}"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="16" Margin="0,24,0,0">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="{loc:Str Dashboard.RunWizard}"
+                            Command="{Binding OpenSetupWizardCommand}"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Padding="12,6" VerticalAlignment="Center"/>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{loc:Str Dashboard.WizardTitle}" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}"/>
+                        <TextBlock Text="{loc:Str Dashboard.WizardDesc}"
+                                   Foreground="{StaticResource HintBrush}" FontSize="12" Margin="0,2,0,0"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
         </StackPanel>
     </ScrollViewer>
 </UserControl>

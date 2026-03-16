@@ -1,8 +1,10 @@
 using System.Windows.Controls;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Windows.Services;
 using TypeWhisper.Windows.Services.Localization;
+using TypeWhisper.Windows.Views;
 
 namespace TypeWhisper.Windows.ViewModels;
 
@@ -84,6 +86,13 @@ public sealed partial class SettingsWindowViewModel : ObservableObject
         UpdateStatusText = Loc.Instance["Update.Downloading"];
         await _updateService.DownloadAndApplyAsync();
         UpdateStatusText = Loc.Instance["Update.Failed"];
+    }
+
+    [RelayCommand]
+    private void OpenSetupWizard()
+    {
+        var window = App.Services.GetRequiredService<WelcomeWindow>();
+        window.Show();
     }
 
     public void RegisterSection(string name, Func<UserControl> factory)
