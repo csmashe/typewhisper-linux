@@ -251,6 +251,8 @@
   "Status.Done": "Done",
   "Status.ActionFormat": "Running {0}...",
   "Status.Cancelled": "Cancelled",
+  "Status.NoMicrophone": "No microphone connected",
+  "Status.MicrophoneRestored": "Microphone connected",
   "Status.ErrorFormat": "Error: {0}",
   "Status.ModelErrorFormat": "Model error: {0}",
   "Status.NoModelLoaded": "No model loaded",

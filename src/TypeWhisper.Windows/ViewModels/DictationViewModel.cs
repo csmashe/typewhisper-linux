@@ -126,6 +126,28 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         _consumerTask = Task.Run(() => ProcessJobsAsync(_consumerCts.Token));
 
         _audio.AudioLevelChanged += OnAudioLevelChanged;
+        _audio.DeviceLost += (_, _) => Application.Current?.Dispatcher.InvokeAsync(async () =>
+        {
+            if (_isRecording)
+            {
+                _isRecording = false;
+                _durationTimer?.Stop();
+                _audio.StopRecording();
+                _audioDucking.RestoreAudio();
+                _mediaPause.ResumeMedia();
+                State = DictationState.Idle;
+                IsOverlayVisible = false;
+            }
+            FeedbackText = Loc.Instance["Status.NoMicrophone"];
+            FeedbackIsError = true;
+            ShowFeedback = true;
+        });
+        _audio.DeviceAvailable += (_, _) => Application.Current?.Dispatcher.InvokeAsync(() =>
+        {
+            FeedbackText = Loc.Instance["Status.MicrophoneRestored"];
+            FeedbackIsError = false;
+            ShowFeedback = true;
+        });
         _settings.SettingsChanged += _ =>
         {
             OnPropertyChanged(nameof(LeftWidget));
@@ -247,6 +269,16 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         if (!_modelManager.Engine.IsModelLoaded)
         {
             StatusText = Loc.Instance["Status.NoModelLoaded"];
+            _isRecording = false;
+            return;
+        }
+
+        if (!_audio.HasDevice)
+        {
+            StatusText = Loc.Instance["Status.NoMicrophone"];
+            FeedbackText = StatusText;
+            FeedbackIsError = true;
+            ShowFeedback = true;
             _isRecording = false;
             return;
         }

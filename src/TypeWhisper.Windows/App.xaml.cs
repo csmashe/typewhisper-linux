@@ -124,7 +124,8 @@ public partial class App : Application
         var audio = _serviceProvider.GetRequiredService<AudioRecordingService>();
         var mic = settings.Current.SelectedMicrophoneDevice;
         if (mic.HasValue) audio.SetMicrophoneDevice(mic);
-        audio.WarmUp();
+        if (!audio.WarmUp())
+            System.Diagnostics.Debug.WriteLine("No audio input device available at startup. Polling for device...");
 
         // Start API server if enabled
         if (settings.Current.ApiServerEnabled)

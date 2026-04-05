@@ -251,6 +251,8 @@
   "Status.Done": "Fertig",
   "Status.ActionFormat": "{0} wird ausgeführt...",
   "Status.Cancelled": "Abgebrochen",
+  "Status.NoMicrophone": "Kein Mikrofon angeschlossen",
+  "Status.MicrophoneRestored": "Mikrofon verbunden",
   "Status.ErrorFormat": "Fehler: {0}",
   "Status.ModelErrorFormat": "Modell-Fehler: {0}",
   "Status.NoModelLoaded": "Kein Modell geladen",

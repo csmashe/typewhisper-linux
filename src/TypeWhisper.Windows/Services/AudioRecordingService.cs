@@ -34,7 +34,9 @@ public sealed class AudioRecordingService : IDisposable
     public event EventHandler<SamplesAvailableEventArgs>? SamplesAvailable;
     public event EventHandler? DevicesChanged;
     public event EventHandler? DeviceLost;
+    public event EventHandler? DeviceAvailable;
 
+    public bool HasDevice => WaveInEvent.DeviceCount > 0;
     public bool WhisperModeEnabled { get; set; }
     public bool NormalizationEnabled { get; set; } = true;
     public bool IsRecording => _isRecording;
@@ -54,25 +56,47 @@ public sealed class AudioRecordingService : IDisposable
         _activeDeviceNumber = newDevice;
     }
 
-    public void WarmUp()
+    public bool WarmUp()
     {
-        if (_isWarmedUp || _disposed) return;
+        if (_isWarmedUp || _disposed) return _isWarmedUp;
+
+        if (WaveInEvent.DeviceCount == 0)
+        {
+            System.Diagnostics.Debug.WriteLine("WarmUp: No audio input devices available.");
+            StartDevicePolling();
+            return false;
+        }
 
         _activeDeviceNumber = _configuredDeviceNumber ?? FindBestMicrophoneDevice();
-
-        _waveIn = new WaveInEvent
+        if (_activeDeviceNumber < 0)
         {
-            DeviceNumber = _activeDeviceNumber,
-            WaveFormat = new WaveFormat(SampleRate, BitsPerSample, Channels),
-            BufferMilliseconds = 30
-        };
+            StartDevicePolling();
+            return false;
+        }
 
-        _waveIn.DataAvailable += OnDataAvailable;
-        _waveIn.RecordingStopped += OnRecordingStopped;
-        _waveIn.StartRecording();
+        try
+        {
+            _waveIn = new WaveInEvent
+            {
+                DeviceNumber = _activeDeviceNumber,
+                WaveFormat = new WaveFormat(SampleRate, BitsPerSample, Channels),
+                BufferMilliseconds = 30
+            };
 
-        _isWarmedUp = true;
+            _waveIn.DataAvailable += OnDataAvailable;
+            _waveIn.RecordingStopped += OnRecordingStopped;
+            _waveIn.StartRecording();
+
+            _isWarmedUp = true;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"WarmUp failed: {ex.Message}");
+            DisposeWaveIn();
+        }
+
         StartDevicePolling();
+        return _isWarmedUp;
     }
 
     public static IReadOnlyList<(int DeviceNumber, string Name)> GetAvailableDevices()
@@ -90,8 +114,8 @@ public sealed class AudioRecordingService : IDisposable
     {
         if (_isRecording) return;
 
-        if (!_isWarmedUp)
-            WarmUp();
+        if (!_isWarmedUp && !WarmUp())
+            return;
 
         if (_waveIn is null) return;
 
@@ -225,7 +249,7 @@ public sealed class AudioRecordingService : IDisposable
                 return i;
         }
 
-        return 0;
+        return deviceCount > 0 ? 0 : -1;
     }
 
     private void StartDevicePolling()
@@ -243,18 +267,29 @@ public sealed class AudioRecordingService : IDisposable
         try
         {
             var currentCount = WaveInEvent.DeviceCount;
-            if (currentCount != _lastKnownDeviceCount)
-            {
-                _lastKnownDeviceCount = currentCount;
-                DevicesChanged?.Invoke(this, EventArgs.Empty);
+            if (currentCount == _lastKnownDeviceCount) return;
 
-                if (_isWarmedUp && _activeDeviceNumber >= currentCount)
-                {
-                    DeviceLost?.Invoke(this, EventArgs.Empty);
-                    DisposeWaveIn();
-                    _configuredDeviceNumber = null;
-                    WarmUp();
-                }
+            var previousCount = _lastKnownDeviceCount;
+            _lastKnownDeviceCount = currentCount;
+            DevicesChanged?.Invoke(this, EventArgs.Empty);
+
+            if (currentCount == 0 && _isWarmedUp)
+            {
+                DeviceLost?.Invoke(this, EventArgs.Empty);
+                DisposeWaveIn();
+                _configuredDeviceNumber = null;
+            }
+            else if (currentCount > 0 && previousCount == 0)
+            {
+                DeviceAvailable?.Invoke(this, EventArgs.Empty);
+                WarmUp();
+            }
+            else if (_isWarmedUp && _activeDeviceNumber >= currentCount)
+            {
+                DeviceLost?.Invoke(this, EventArgs.Empty);
+                DisposeWaveIn();
+                _configuredDeviceNumber = null;
+                WarmUp();
             }
         }
         catch { }
@@ -263,18 +298,28 @@ public sealed class AudioRecordingService : IDisposable
     public void StartPreview(int? deviceNumber)
     {
         StopPreview();
-        if (_disposed) return;
+        if (_disposed || WaveInEvent.DeviceCount == 0) return;
 
         var deviceIndex = deviceNumber ?? FindBestMicrophoneDevice();
-        _previewWaveIn = new WaveInEvent
+        if (deviceIndex < 0) return;
+
+        try
         {
-            DeviceNumber = deviceIndex,
-            WaveFormat = new WaveFormat(SampleRate, BitsPerSample, Channels),
-            BufferMilliseconds = 50
-        };
-        _previewWaveIn.DataAvailable += OnPreviewDataAvailable;
-        _previewWaveIn.StartRecording();
-        _isPreviewing = true;
+            _previewWaveIn = new WaveInEvent
+            {
+                DeviceNumber = deviceIndex,
+                WaveFormat = new WaveFormat(SampleRate, BitsPerSample, Channels),
+                BufferMilliseconds = 50
+            };
+            _previewWaveIn.DataAvailable += OnPreviewDataAvailable;
+            _previewWaveIn.StartRecording();
+            _isPreviewing = true;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"StartPreview failed: {ex.Message}");
+            StopPreview();
+        }
     }
 
     public void StopPreview()

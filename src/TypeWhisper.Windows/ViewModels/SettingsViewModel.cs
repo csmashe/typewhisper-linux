@@ -109,6 +109,7 @@ public partial class SettingsViewModel : ObservableObject
     public void StartMicrophonePreview()
     {
         _audio.PreviewLevelChanged -= OnPreviewLevelChanged;
+        if (!_audio.HasDevice) return;
         _audio.StartPreview(SelectedMicrophoneDevice);
         _audio.PreviewLevelChanged += OnPreviewLevelChanged;
     }

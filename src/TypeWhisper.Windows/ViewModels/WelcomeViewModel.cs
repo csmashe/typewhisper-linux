@@ -181,6 +181,7 @@ public partial class WelcomeViewModel : ObservableObject
     private void StartMicTest()
     {
         _audio.AudioLevelChanged += OnMicLevel;
+        if (!_audio.HasDevice) return;
         _audio.WarmUp();
         _audio.StartRecording();
     }
