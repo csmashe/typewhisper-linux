@@ -9,8 +9,5 @@
     <AssemblyName>TypeWhisper.Core</AssemblyName>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.2" />
-  </ItemGroup>
 
 </Project>
