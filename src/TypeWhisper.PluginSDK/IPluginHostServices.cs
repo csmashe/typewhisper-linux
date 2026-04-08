@@ -51,4 +51,10 @@ public interface IPluginHostServices
     /// plugin's Localization/ subdirectory (e.g. Localization/en.json, Localization/de.json).
     /// </summary>
     IPluginLocalization Localization { get; }
+
+    /// <summary>
+    /// Sets whether the plugin is handling streaming text display itself.
+    /// When active, the host suppresses its own streaming text overlay.
+    /// </summary>
+    void SetStreamingDisplayActive(bool active) { }
 }
