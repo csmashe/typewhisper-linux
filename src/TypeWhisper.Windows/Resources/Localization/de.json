@@ -38,6 +38,7 @@
   "General.PositionBottom": "Unten",
   "General.LeftWidget": "Links-Widget",
   "General.RightWidget": "Rechts-Widget",
+  "General.Preview": "Vorschau",
   "General.System": "System",
   "General.Autostart": "Beim Systemstart automatisch starten",
   "General.ApiServer": "API-Server",

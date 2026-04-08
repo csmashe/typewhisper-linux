@@ -164,6 +164,40 @@
                 </StackPanel>
             </Grid>
 
+            <!-- Overlay Preview -->
+            <TextBlock Text="{loc:Str General.Preview}" Style="{StaticResource LabelStyle}" Margin="0,0,0,8"/>
+            <Border Background="#20000000" CornerRadius="8" Padding="24,20" Margin="0,0,0,20"
+                    HorizontalAlignment="Center" MinWidth="400">
+                <Border Background="#F0181818" CornerRadius="22" Padding="14,10"
+                        HorizontalAlignment="Center" MinWidth="280"
+                        BorderBrush="#25FFFFFF" BorderThickness="1">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Left widget placeholder -->
+                        <Border Grid.Column="0" Width="14" Height="14" CornerRadius="7"
+                                Background="#FF4CAF50" Margin="0,0,10,0"
+                                VerticalAlignment="Center"
+                                ToolTip="{Binding Settings.OverlayLeftWidget}"/>
+
+                        <!-- Status text -->
+                        <TextBlock Grid.Column="1" Text="Recording..."
+                                   Foreground="#CCFFFFFF" FontSize="13"
+                                   VerticalAlignment="Center" HorizontalAlignment="Center"/>
+
+                        <!-- Right widget placeholder -->
+                        <TextBlock Grid.Column="2" Text="0:03" FontSize="12"
+                                   Foreground="#99FFFFFF" VerticalAlignment="Center"
+                                   Margin="10,0,0,0"
+                                   ToolTip="{Binding Settings.OverlayRightWidget}"/>
+                    </Grid>
+                </Border>
+            </Border>
+
             <!-- System -->
             <TextBlock Text="{loc:Str General.System}" Style="{StaticResource SectionHeaderStyle}"/>
 
