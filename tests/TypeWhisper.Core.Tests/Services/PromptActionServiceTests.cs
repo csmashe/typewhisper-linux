@@ -1,4 +1,3 @@
-using TypeWhisper.Core.Data;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -6,16 +5,13 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public class PromptActionServiceTests : IDisposable
 {
-    private readonly string _dbPath;
-    private readonly TypeWhisperDatabase _db;
+    private readonly string _filePath;
     private readonly PromptActionService _sut;
 
     public PromptActionServiceTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"tw_test_{Guid.NewGuid():N}.db");
-        _db = new TypeWhisperDatabase(_dbPath);
-        _db.Initialize();
-        _sut = new PromptActionService(_db);
+        _filePath = Path.GetTempFileName();
+        _sut = new PromptActionService(_filePath);
     }
 
     [Fact]
@@ -29,7 +25,7 @@ public class PromptActionServiceTests : IDisposable
             Icon = "\U0001F680"
         });
 
-        var freshService = new PromptActionService(_db);
+        var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
         Assert.Equal("Test Prompt", action.Name);
         Assert.Equal("Do something", action.SystemPrompt);
@@ -53,21 +49,21 @@ public class PromptActionServiceTests : IDisposable
             SystemPrompt = "Updated prompt"
         });
 
-        var freshService = new PromptActionService(_db);
+        var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
         Assert.Equal("Updated", action.Name);
         Assert.Equal("Updated prompt", action.SystemPrompt);
     }
 
     [Fact]
-    public void DeleteAction_RemovesFromDb()
+    public void DeleteAction_RemovesFromStorage()
     {
         _sut.AddAction(new PromptAction { Id = "1", Name = "A", SystemPrompt = "a" });
         _sut.AddAction(new PromptAction { Id = "2", Name = "B", SystemPrompt = "b" });
 
         _sut.DeleteAction("1");
 
-        var freshService = new PromptActionService(_db);
+        var freshService = new PromptActionService(_filePath);
         Assert.Single(freshService.Actions);
         Assert.Equal("B", freshService.Actions[0].Name);
     }
@@ -117,7 +113,7 @@ public class PromptActionServiceTests : IDisposable
 
         _sut.Reorder(["3", "1", "2"]);
 
-        var freshService = new PromptActionService(_db);
+        var freshService = new PromptActionService(_filePath);
         var ordered = freshService.EnabledActions;
         Assert.Equal("Third", ordered[0].Name);
         Assert.Equal("First", ordered[1].Name);
@@ -147,92 +143,10 @@ public class PromptActionServiceTests : IDisposable
             ModelOverride = "model-1"
         });
 
-        var freshService = new PromptActionService(_db);
+        var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
         Assert.Equal("plugin:com.test:model-1", action.ProviderOverride);
         Assert.Equal("model-1", action.ModelOverride);
-    }
-
-    [Fact]
-    public void SchemaV5_CreatesPromptActionsTable()
-    {
-        var conn = _db.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA table_info(prompt_actions)";
-        using var reader = cmd.ExecuteReader();
-
-        var columns = new List<string>();
-        while (reader.Read())
-            columns.Add(reader.GetString(1));
-
-        Assert.Contains("id", columns);
-        Assert.Contains("name", columns);
-        Assert.Contains("system_prompt", columns);
-        Assert.Contains("icon", columns);
-        Assert.Contains("is_preset", columns);
-        Assert.Contains("sort_order", columns);
-        Assert.Contains("provider_override", columns);
-    }
-
-    [Fact]
-    public void SchemaV5_AddsPromptActionIdToProfiles()
-    {
-        var conn = _db.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA table_info(profiles)";
-        using var reader = cmd.ExecuteReader();
-
-        var columns = new List<string>();
-        while (reader.Read())
-            columns.Add(reader.GetString(1));
-
-        Assert.Contains("prompt_action_id", columns);
-    }
-
-    [Fact]
-    public void SchemaV6_AddsNewColumnsToPromptActions()
-    {
-        var conn = _db.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA table_info(prompt_actions)";
-        using var reader = cmd.ExecuteReader();
-
-        var columns = new List<string>();
-        while (reader.Read())
-            columns.Add(reader.GetString(1));
-
-        Assert.Contains("target_action_plugin_id", columns);
-        Assert.Contains("hotkey_key", columns);
-    }
-
-    [Fact]
-    public void SchemaV6_AddsModelUsedToHistory()
-    {
-        var conn = _db.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA table_info(transcription_history)";
-        using var reader = cmd.ExecuteReader();
-
-        var columns = new List<string>();
-        while (reader.Read())
-            columns.Add(reader.GetString(1));
-
-        Assert.Contains("model_used", columns);
-    }
-
-    [Fact]
-    public void SchemaV6_AddsHotkeyDataToProfiles()
-    {
-        var conn = _db.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA table_info(profiles)";
-        using var reader = cmd.ExecuteReader();
-
-        var columns = new List<string>();
-        while (reader.Read())
-            columns.Add(reader.GetString(1));
-
-        Assert.Contains("hotkey_data", columns);
     }
 
     [Fact]
@@ -247,7 +161,7 @@ public class PromptActionServiceTests : IDisposable
             HotkeyKey = "Ctrl+Shift+L"
         });
 
-        var freshService = new PromptActionService(_db);
+        var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
         Assert.Equal("com.test.linear", action.TargetActionPluginId);
         Assert.Equal("Ctrl+Shift+L", action.HotkeyKey);
@@ -263,7 +177,7 @@ public class PromptActionServiceTests : IDisposable
             SystemPrompt = "test"
         });
 
-        var freshService = new PromptActionService(_db);
+        var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
         Assert.Null(action.TargetActionPluginId);
         Assert.Null(action.HotkeyKey);
@@ -271,7 +185,6 @@ public class PromptActionServiceTests : IDisposable
 
     public void Dispose()
     {
-        _db.Dispose();
-        try { File.Delete(_dbPath); } catch { }
+        if (File.Exists(_filePath)) File.Delete(_filePath);
     }
 }

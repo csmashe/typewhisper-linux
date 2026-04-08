@@ -1,8 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using Microsoft.Data.Sqlite;
-using TypeWhisper.Core.Data;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -10,7 +8,7 @@ namespace TypeWhisper.Core.Services;
 
 public sealed partial class SnippetService : ISnippetService
 {
-    private readonly ITypeWhisperDatabase _db;
+    private readonly string _filePath;
     private List<Snippet> _cache = [];
     private bool _cacheLoaded;
 
@@ -38,69 +36,33 @@ public sealed partial class SnippetService : ISnippetService
 
     public event Action? SnippetsChanged;
 
-    public SnippetService(ITypeWhisperDatabase db)
+    public SnippetService(string filePath)
     {
-        _db = db;
+        _filePath = filePath;
     }
 
     public void AddSnippet(Snippet snippet)
     {
-        var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO snippets (id, trigger, replacement, case_sensitive, is_enabled, usage_count, tags, created_at)
-            VALUES (@id, @trigger, @repl, @cs, @enabled, @usage, @tags, @created)
-            """;
-        cmd.Parameters.AddWithValue("@id", snippet.Id);
-        cmd.Parameters.AddWithValue("@trigger", snippet.Trigger);
-        cmd.Parameters.AddWithValue("@repl", snippet.Replacement);
-        cmd.Parameters.AddWithValue("@cs", snippet.CaseSensitive ? 1 : 0);
-        cmd.Parameters.AddWithValue("@enabled", snippet.IsEnabled ? 1 : 0);
-        cmd.Parameters.AddWithValue("@usage", snippet.UsageCount);
-        cmd.Parameters.AddWithValue("@tags", snippet.Tags);
-        cmd.Parameters.AddWithValue("@created", snippet.CreatedAt.ToString("o"));
-        cmd.ExecuteNonQuery();
-
+        EnsureCacheLoaded();
         _cache.Add(snippet);
+        SaveToDisk();
         SnippetsChanged?.Invoke();
     }
 
     public void UpdateSnippet(Snippet snippet)
     {
-        var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            UPDATE snippets
-            SET trigger = @trigger, replacement = @repl,
-                case_sensitive = @cs, is_enabled = @enabled, usage_count = @usage, tags = @tags
-            WHERE id = @id
-            """;
-        cmd.Parameters.AddWithValue("@id", snippet.Id);
-        cmd.Parameters.AddWithValue("@trigger", snippet.Trigger);
-        cmd.Parameters.AddWithValue("@repl", snippet.Replacement);
-        cmd.Parameters.AddWithValue("@cs", snippet.CaseSensitive ? 1 : 0);
-        cmd.Parameters.AddWithValue("@enabled", snippet.IsEnabled ? 1 : 0);
-        cmd.Parameters.AddWithValue("@usage", snippet.UsageCount);
-        cmd.Parameters.AddWithValue("@tags", snippet.Tags);
-        cmd.ExecuteNonQuery();
-
+        EnsureCacheLoaded();
         var idx = _cache.FindIndex(s => s.Id == snippet.Id);
         if (idx >= 0) _cache[idx] = snippet;
+        SaveToDisk();
         SnippetsChanged?.Invoke();
     }
 
     public void DeleteSnippet(string id)
     {
-        var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM snippets WHERE id = @id";
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.ExecuteNonQuery();
-
+        EnsureCacheLoaded();
         _cache.RemoveAll(s => s.Id == id);
+        SaveToDisk();
         SnippetsChanged?.Invoke();
     }
 
@@ -121,7 +83,6 @@ public sealed partial class SnippetService : ISnippetService
 
             var expanded = ExpandPlaceholders(snippet.Replacement, clipboardProvider);
 
-            // Consume optional trailing punctuation added by transcription engine
             var pattern = Regex.Escape(snippet.Trigger) + @"[.!?]?";
             var options = snippet.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
             text = Regex.Replace(text, pattern, expanded.Replace("$", "$$"), options);
@@ -135,12 +96,12 @@ public sealed partial class SnippetService : ISnippetService
     public string ExportToJson()
     {
         EnsureCacheLoaded();
-        return JsonSerializer.Serialize(_cache, JsonContext.Default.ListSnippet);
+        return JsonSerializer.Serialize(_cache, SnippetJsonContext.Default.ListSnippet);
     }
 
     public int ImportFromJson(string json)
     {
-        var imported = JsonSerializer.Deserialize(json, JsonContext.Default.ListSnippet);
+        var imported = JsonSerializer.Deserialize(json, SnippetJsonContext.Default.ListSnippet);
         if (imported is null or { Count: 0 }) return 0;
 
         EnsureCacheLoaded();
@@ -152,9 +113,15 @@ public sealed partial class SnippetService : ISnippetService
             if (existingTriggers.Contains(snippet.Trigger)) continue;
 
             var newSnippet = snippet with { Id = Guid.NewGuid().ToString() };
-            AddSnippet(newSnippet);
+            _cache.Add(newSnippet);
             existingTriggers.Add(newSnippet.Trigger);
             count++;
+        }
+
+        if (count > 0)
+        {
+            SaveToDisk();
+            SnippetsChanged?.Invoke();
         }
 
         return count;
@@ -164,12 +131,10 @@ public sealed partial class SnippetService : ISnippetService
     {
         var now = DateTime.Now;
 
-        // Simple placeholders first (backward compat)
         template = template
             .Replace("{day}", now.ToString("dddd"))
             .Replace("{year}", now.Year.ToString());
 
-        // Regex-based placeholders with optional format: {date:FORMAT}, {time:FORMAT}, {datetime:FORMAT}, {clipboard}
         template = PlaceholderRegex().Replace(template, match =>
         {
             var name = match.Groups[1].Value;
@@ -193,48 +158,48 @@ public sealed partial class SnippetService : ISnippetService
 
     private void IncrementUsageCount(string id)
     {
-        var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE snippets SET usage_count = usage_count + 1 WHERE id = @id";
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.ExecuteNonQuery();
-
         var idx = _cache.FindIndex(s => s.Id == id);
-        if (idx >= 0) _cache[idx] = _cache[idx] with { UsageCount = _cache[idx].UsageCount + 1 };
+        if (idx >= 0)
+        {
+            _cache[idx] = _cache[idx] with { UsageCount = _cache[idx].UsageCount + 1 };
+            SaveToDisk();
+        }
     }
 
     private void EnsureCacheLoaded()
     {
         if (_cacheLoaded) return;
 
-        var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, trigger, replacement, case_sensitive, is_enabled, usage_count, tags, created_at
-            FROM snippets ORDER BY trigger
-            """;
-
-        _cache = [];
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        try
         {
-            _cache.Add(new Snippet
+            if (File.Exists(_filePath))
             {
-                Id = reader.GetString(0),
-                Trigger = reader.GetString(1),
-                Replacement = reader.GetString(2),
-                CaseSensitive = reader.GetInt32(3) != 0,
-                IsEnabled = reader.GetInt32(4) != 0,
-                UsageCount = reader.GetInt32(5),
-                Tags = reader.GetString(6),
-                CreatedAt = DateTime.Parse(reader.GetString(7))
-            });
+                var json = File.ReadAllText(_filePath);
+                _cache = JsonSerializer.Deserialize<List<Snippet>>(json) ?? [];
+            }
         }
+        catch
+        {
+            _cache = [];
+        }
+
         _cacheLoaded = true;
+    }
+
+    private void SaveToDisk()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(_filePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            var json = JsonSerializer.Serialize(_cache, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(_filePath, json);
+        }
+        catch { }
     }
 }
 
 [JsonSerializable(typeof(List<Snippet>))]
-internal partial class JsonContext : JsonSerializerContext;
+internal partial class SnippetJsonContext : JsonSerializerContext;

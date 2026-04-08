@@ -1,4 +1,3 @@
-using TypeWhisper.Core.Data;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -6,16 +5,13 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public class SnippetServiceTests : IDisposable
 {
-    private readonly string _dbPath;
-    private readonly TypeWhisperDatabase _db;
+    private readonly string _filePath;
     private readonly SnippetService _sut;
 
     public SnippetServiceTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"tw_test_{Guid.NewGuid():N}.db");
-        _db = new TypeWhisperDatabase(_dbPath);
-        _db.Initialize();
-        _sut = new SnippetService(_db);
+        _filePath = Path.GetTempFileName();
+        _sut = new SnippetService(_filePath);
     }
 
     [Fact]
@@ -29,8 +25,8 @@ public class SnippetServiceTests : IDisposable
             Tags = "E-Mail,Gruß"
         });
 
-        // Force reload from DB
-        var freshService = new SnippetService(_db);
+        // Force reload from file
+        var freshService = new SnippetService(_filePath);
         var snippet = Assert.Single(freshService.Snippets);
         Assert.Equal("E-Mail,Gruß", snippet.Tags);
     }
@@ -190,21 +186,6 @@ public class SnippetServiceTests : IDisposable
     }
 
     [Fact]
-    public void SchemaIncludesTagsColumn()
-    {
-        var conn = _db.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA table_info(snippets)";
-        using var reader = cmd.ExecuteReader();
-
-        var columns = new List<string>();
-        while (reader.Read())
-            columns.Add(reader.GetString(1));
-
-        Assert.Contains("tags", columns);
-    }
-
-    [Fact]
     public void ApplySnippets_MultilineReplacement_Works()
     {
         _sut.AddSnippet(new Snippet
@@ -243,13 +224,12 @@ public class SnippetServiceTests : IDisposable
         _sut.AddSnippet(new Snippet { Id = "1", Trigger = "mfg", Replacement = "Grüße", Tags = "Alt" });
         _sut.UpdateSnippet(new Snippet { Id = "1", Trigger = "mfg", Replacement = "Grüße", Tags = "Neu" });
 
-        var freshService = new SnippetService(_db);
+        var freshService = new SnippetService(_filePath);
         Assert.Equal("Neu", freshService.Snippets[0].Tags);
     }
 
     public void Dispose()
     {
-        _db.Dispose();
-        try { File.Delete(_dbPath); } catch { }
+        if (File.Exists(_filePath)) File.Delete(_filePath);
     }
 }

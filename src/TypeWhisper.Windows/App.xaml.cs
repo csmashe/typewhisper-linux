@@ -1,8 +1,9 @@
+using System.IO;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
-using TypeWhisper.Core.Data;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Windows.Services;
 using TypeWhisper.Windows.Services.Localization;
@@ -57,10 +58,6 @@ public partial class App : Application
         ConfigureServices(services);
         _serviceProvider = services.BuildServiceProvider();
         Services = _serviceProvider;
-
-        // Initialize database
-        var db = _serviceProvider.GetRequiredService<ITypeWhisperDatabase>();
-        db.Initialize();
 
         // Seed prompt presets
         var promptActions = _serviceProvider.GetRequiredService<IPromptActionService>();
@@ -202,8 +199,6 @@ public partial class App : Application
     private static void ConfigureServices(IServiceCollection services)
     {
         // Core
-        services.AddSingleton<ITypeWhisperDatabase>(
-            new TypeWhisperDatabase(TypeWhisperEnvironment.DatabasePath));
         services.AddSingleton<ISettingsService>(
             new SettingsService(TypeWhisperEnvironment.SettingsFilePath));
 
@@ -222,12 +217,20 @@ public partial class App : Application
         services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
 
-        // Data services
-        services.AddSingleton<IHistoryService, HistoryService>();
-        services.AddSingleton<IDictionaryService, DictionaryService>();
-        services.AddSingleton<ISnippetService, SnippetService>();
-        services.AddSingleton<IProfileService, ProfileService>();
-        services.AddSingleton<IPromptActionService, PromptActionService>();
+        // Data services (JSON file-based)
+        var dataPath = TypeWhisperEnvironment.DataPath;
+        services.AddSingleton<IErrorLogService>(
+            new ErrorLogService(dataPath));
+        services.AddSingleton<IHistoryService>(
+            new HistoryService(Path.Combine(dataPath, "history.json")));
+        services.AddSingleton<IDictionaryService>(
+            new DictionaryService(Path.Combine(dataPath, "dictionary.json")));
+        services.AddSingleton<ISnippetService>(
+            new SnippetService(Path.Combine(dataPath, "snippets.json")));
+        services.AddSingleton<IProfileService>(
+            new ProfileService(Path.Combine(dataPath, "profiles.json")));
+        services.AddSingleton<IPromptActionService>(
+            new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
 
         // Post-processing pipeline
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
@@ -298,6 +301,11 @@ public partial class App : Application
     {
         try
         {
+            // Structured error log (if DI is ready)
+            if (Services?.GetService<IErrorLogService>() is { } errorLog)
+                errorLog.AddEntry(ex.Message, ErrorCategory.General);
+
+            // Also keep crash.log as safety net
             var logPath = System.IO.Path.Combine(TypeWhisperEnvironment.LogsPath, "crash.log");
             var entry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n";
             System.IO.File.AppendAllText(logPath, entry);

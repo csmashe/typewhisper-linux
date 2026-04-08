@@ -1,7 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
-using TypeWhisper.Core.Data;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -9,12 +7,11 @@ namespace TypeWhisper.Core.Services;
 
 public sealed class HistoryService : IHistoryService
 {
-    private readonly ITypeWhisperDatabase _db;
+    private readonly string _filePath;
     private List<TranscriptionRecord> _cache = [];
     private bool _cacheLoaded;
     private readonly SemaphoreSlim _loadLock = new(1, 1);
 
-    // Cached stats
     private int _totalRecords;
     private int _totalWords;
     private double _totalDuration;
@@ -35,9 +32,9 @@ public sealed class HistoryService : IHistoryService
     public int TotalWords => _cacheLoaded ? _totalWords : Records.Sum(r => r.WordCount);
     public double TotalDuration => _cacheLoaded ? _totalDuration : Records.Sum(r => r.DurationSeconds);
 
-    public HistoryService(ITypeWhisperDatabase db)
+    public HistoryService(string filePath)
     {
-        _db = db;
+        _filePath = filePath;
     }
 
     public async Task EnsureLoadedAsync()
@@ -48,7 +45,7 @@ public sealed class HistoryService : IHistoryService
         try
         {
             if (_cacheLoaded) return;
-            var records = await Task.Run(LoadFromDatabase).ConfigureAwait(false);
+            var records = await Task.Run(LoadFromDisk).ConfigureAwait(false);
             _cache = records;
             RebuildStats();
             _cacheLoaded = true;
@@ -67,33 +64,9 @@ public sealed class HistoryService : IHistoryService
 
     public void AddRecord(TranscriptionRecord record)
     {
-        using var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO transcription_history
-            (id, timestamp, raw_text, final_text, app_name, app_process_name, app_url,
-             duration_seconds, language, engine_used, profile_name, model_used, created_at)
-            VALUES (@id, @ts, @raw, @final, @app, @proc, @url, @dur, @lang, @engine, @profile, @model_used, @created)
-            """;
-        cmd.Parameters.AddWithValue("@id", record.Id);
-        cmd.Parameters.AddWithValue("@ts", record.Timestamp.ToString("o"));
-        cmd.Parameters.AddWithValue("@raw", record.RawText);
-        cmd.Parameters.AddWithValue("@final", record.FinalText);
-        cmd.Parameters.AddWithValue("@app", (object?)record.AppName ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@proc", (object?)record.AppProcessName ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@url", (object?)record.AppUrl ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@dur", record.DurationSeconds);
-        cmd.Parameters.AddWithValue("@lang", (object?)record.Language ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@engine", record.EngineUsed);
-        cmd.Parameters.AddWithValue("@profile", (object?)record.ProfileName ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@model_used", (object?)record.ModelUsed ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@created", record.CreatedAt.ToString("o"));
-        cmd.ExecuteNonQuery();
-
+        EnsureCacheLoaded();
         _cache.Insert(0, record);
 
-        // Incremental stats update
         _totalRecords++;
         _totalWords += record.WordCount;
         _totalDuration += record.DurationSeconds;
@@ -104,19 +77,13 @@ public sealed class HistoryService : IHistoryService
             _distinctApps.Sort(StringComparer.OrdinalIgnoreCase);
         }
 
+        SaveToDisk();
         RecordsChanged?.Invoke();
     }
 
     public void UpdateRecord(string id, string finalText)
     {
-        using var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE transcription_history SET final_text = @final WHERE id = @id";
-        cmd.Parameters.AddWithValue("@final", finalText);
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.ExecuteNonQuery();
-
+        EnsureCacheLoaded();
         var idx = _cache.FindIndex(r => r.Id == id);
         if (idx >= 0)
         {
@@ -125,18 +92,14 @@ public sealed class HistoryService : IHistoryService
             _cache[idx] = updated;
             _totalWords += updated.WordCount - old.WordCount;
         }
+
+        SaveToDisk();
         RecordsChanged?.Invoke();
     }
 
     public void DeleteRecord(string id)
     {
-        using var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM transcription_history WHERE id = @id";
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.ExecuteNonQuery();
-
+        EnsureCacheLoaded();
         var idx = _cache.FindIndex(r => r.Id == id);
         if (idx >= 0)
         {
@@ -148,22 +111,18 @@ public sealed class HistoryService : IHistoryService
         }
 
         RebuildDistinctApps();
+        SaveToDisk();
         RecordsChanged?.Invoke();
     }
 
     public void ClearAll()
     {
-        using var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM transcription_history";
-        cmd.ExecuteNonQuery();
-
         _cache.Clear();
         _totalRecords = 0;
         _totalWords = 0;
         _totalDuration = 0;
         _distinctApps.Clear();
+        SaveToDisk();
         RecordsChanged?.Invoke();
     }
 
@@ -181,19 +140,16 @@ public sealed class HistoryService : IHistoryService
 
     public void PurgeOldRecords(int retentionDays)
     {
-        var cutoff = DateTime.UtcNow.AddDays(-retentionDays).ToString("o");
-
-        using var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM transcription_history WHERE created_at < @cutoff";
-        cmd.Parameters.AddWithValue("@cutoff", cutoff);
-        cmd.ExecuteNonQuery();
-
-        _cacheLoaded = false;
-        _cache.Clear();
         EnsureCacheLoaded();
-        RecordsChanged?.Invoke();
+        var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
+        var removed = _cache.RemoveAll(r => r.CreatedAt < cutoff);
+
+        if (removed > 0)
+        {
+            RebuildStats();
+            SaveToDisk();
+            RecordsChanged?.Invoke();
+        }
     }
 
     public string ExportToText(IReadOnlyList<TranscriptionRecord> records, ExportLabels? labels = null)
@@ -288,7 +244,7 @@ public sealed class HistoryService : IHistoryService
         try
         {
             if (_cacheLoaded) return;
-            _cache = LoadFromDatabase();
+            _cache = LoadFromDisk();
             RebuildStats();
             _cacheLoaded = true;
         }
@@ -298,39 +254,33 @@ public sealed class HistoryService : IHistoryService
         }
     }
 
-    private List<TranscriptionRecord> LoadFromDatabase()
+    private List<TranscriptionRecord> LoadFromDisk()
     {
-        using var conn = _db.GetConnection();
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, timestamp, raw_text, final_text, app_name, app_process_name, app_url,
-                   duration_seconds, language, engine_used, created_at, profile_name, model_used
-            FROM transcription_history ORDER BY timestamp DESC
-            """;
-
-        var records = new List<TranscriptionRecord>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        try
         {
-            records.Add(new TranscriptionRecord
-            {
-                Id = reader.GetString(0),
-                Timestamp = DateTime.Parse(reader.GetString(1)),
-                RawText = reader.GetString(2),
-                FinalText = reader.GetString(3),
-                AppName = reader.IsDBNull(4) ? null : reader.GetString(4),
-                AppProcessName = reader.IsDBNull(5) ? null : reader.GetString(5),
-                AppUrl = reader.IsDBNull(6) ? null : reader.GetString(6),
-                DurationSeconds = reader.GetDouble(7),
-                Language = reader.IsDBNull(8) ? null : reader.GetString(8),
-                EngineUsed = reader.GetString(9),
-                CreatedAt = DateTime.Parse(reader.GetString(10)),
-                ProfileName = reader.IsDBNull(11) ? null : reader.GetString(11),
-                ModelUsed = reader.IsDBNull(12) ? null : reader.GetString(12)
-            });
+            if (!File.Exists(_filePath)) return [];
+
+            var json = File.ReadAllText(_filePath);
+            return JsonSerializer.Deserialize<List<TranscriptionRecord>>(json) ?? [];
         }
-        return records;
+        catch
+        {
+            return [];
+        }
+    }
+
+    private void SaveToDisk()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(_filePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            var json = JsonSerializer.Serialize(_cache, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(_filePath, json);
+        }
+        catch { }
     }
 
     private void RebuildStats()

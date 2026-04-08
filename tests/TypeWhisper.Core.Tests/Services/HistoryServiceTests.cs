@@ -1,4 +1,3 @@
-using TypeWhisper.Core.Data;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -6,16 +5,13 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public class HistoryServiceTests : IDisposable
 {
-    private readonly string _dbPath;
-    private readonly TypeWhisperDatabase _db;
+    private readonly string _filePath;
     private readonly HistoryService _sut;
 
     public HistoryServiceTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"tw_test_{Guid.NewGuid():N}.db");
-        _db = new TypeWhisperDatabase(_dbPath);
-        _db.Initialize();
-        _sut = new HistoryService(_db);
+        _filePath = Path.GetTempFileName();
+        _sut = new HistoryService(_filePath);
     }
 
     [Fact]
@@ -33,7 +29,7 @@ public class HistoryServiceTests : IDisposable
 
         _sut.AddRecord(record);
 
-        var freshService = new HistoryService(_db);
+        var freshService = new HistoryService(_filePath);
         var loaded = freshService.Records.First(r => r.Id == record.Id);
         Assert.Equal("plugin:com.test:model-1", loaded.ModelUsed);
     }
@@ -51,7 +47,7 @@ public class HistoryServiceTests : IDisposable
 
         _sut.AddRecord(record);
 
-        var freshService = new HistoryService(_db);
+        var freshService = new HistoryService(_filePath);
         var loaded = freshService.Records.First(r => r.Id == record.Id);
         Assert.Null(loaded.ModelUsed);
     }
@@ -108,7 +104,6 @@ public class HistoryServiceTests : IDisposable
 
     public void Dispose()
     {
-        _db.Dispose();
-        try { File.Delete(_dbPath); } catch { }
+        if (File.Exists(_filePath)) File.Delete(_filePath);
     }
 }

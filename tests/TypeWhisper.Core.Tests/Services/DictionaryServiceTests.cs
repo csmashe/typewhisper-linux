@@ -1,4 +1,3 @@
-using TypeWhisper.Core.Data;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -6,16 +5,13 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public class DictionaryServiceTests : IDisposable
 {
-    private readonly string _dbPath;
-    private readonly TypeWhisperDatabase _db;
+    private readonly string _filePath;
     private readonly DictionaryService _sut;
 
     public DictionaryServiceTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"tw_test_{Guid.NewGuid():N}.db");
-        _db = new TypeWhisperDatabase(_dbPath);
-        _db.Initialize();
-        _sut = new DictionaryService(_db);
+        _filePath = Path.GetTempFileName();
+        _sut = new DictionaryService(_filePath);
     }
 
     [Fact]
@@ -192,7 +188,6 @@ public class DictionaryServiceTests : IDisposable
 
     public void Dispose()
     {
-        _db.Dispose();
-        try { File.Delete(_dbPath); } catch { }
+        if (File.Exists(_filePath)) File.Delete(_filePath);
     }
 }
