@@ -37,6 +37,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
     private readonly PromptProcessingService _promptProcessing;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly IErrorLogService _errorLog;
+    private readonly SpeechFeedbackService _speechFeedback;
 
     private CancellationTokenSource _consumerCts = new();
     private Task? _consumerTask;
@@ -98,7 +99,8 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         PromptProcessingService promptProcessing,
         PromptPaletteViewModel promptPalette,
         IPostProcessingPipeline pipeline,
-        IErrorLogService errorLog)
+        IErrorLogService errorLog,
+        SpeechFeedbackService speechFeedback)
     {
         _settings = settings;
         _modelManager = modelManager;
@@ -120,6 +122,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         _promptProcessing = promptProcessing;
         _pipeline = pipeline;
         _errorLog = errorLog;
+        _speechFeedback = speechFeedback;
 
         _streamingHandler = new StreamingHandler(modelManager, audio, dictionary);
         _streamingHandler.OnPartialTextUpdate = text =>
@@ -695,6 +698,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
             });
 
             _sound.PlaySuccessSound();
+            _speechFeedback.AnnounceTranscriptionComplete(finalText);
             _modelManager.ScheduleAutoUnload();
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {

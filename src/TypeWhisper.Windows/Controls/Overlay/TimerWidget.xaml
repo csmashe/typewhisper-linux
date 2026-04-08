@@ -5,7 +5,7 @@
     <UserControl.Resources>
         <conv:SecondsToTimerConverter x:Key="SecondsToTimer"/>
     </UserControl.Resources>
-    <TextBlock Text="{Binding RecordingSeconds, Converter={StaticResource SecondsToTimer}}"
+    <TextBlock Text="{Binding RecordingSeconds, Converter={StaticResource SecondsToTimer}, FallbackValue='0:00', TargetNullValue='0:00'}"
                Foreground="#999" FontSize="11" FontFamily="Consolas"
                VerticalAlignment="Center"/>
 </UserControl>

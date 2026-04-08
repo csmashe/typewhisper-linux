@@ -63,6 +63,12 @@ public record AppSettings
     // Model auto-unload (0 = disabled)
     public int ModelAutoUnloadSeconds { get; init; }
 
+    // Spoken feedback (TTS readback after transcription)
+    public bool SpokenFeedbackEnabled { get; init; }
+
+    // Memory extraction
+    public bool MemoryEnabled { get; init; }
+
     // UI Language (null = auto-detect from system)
     public string? UiLanguage { get; init; }
 

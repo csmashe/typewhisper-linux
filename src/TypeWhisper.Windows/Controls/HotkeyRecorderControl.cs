@@ -89,6 +89,14 @@ public sealed class HotkeyRecorderControl : Control
             return;
         }
 
+        // Delete/Backspace clears the hotkey
+        if (e.Key is Key.Delete or Key.Back)
+        {
+            Hotkey = "";
+            IsRecording = false;
+            return;
+        }
+
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
 
         // Ignore standalone modifier presses — wait for the full combo

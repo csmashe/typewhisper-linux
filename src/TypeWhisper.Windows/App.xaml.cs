@@ -91,6 +91,11 @@ public partial class App : Application
         soundService.IsEnabled = settings.Current.SoundFeedbackEnabled;
         settings.SettingsChanged += s => soundService.IsEnabled = s.SoundFeedbackEnabled;
 
+        // Setup spoken feedback service
+        var speechFeedback = _serviceProvider.GetRequiredService<SpeechFeedbackService>();
+        speechFeedback.IsEnabled = settings.Current.SpokenFeedbackEnabled;
+        settings.SettingsChanged += s => speechFeedback.IsEnabled = s.SpokenFeedbackEnabled;
+
         // Setup tray icon
         _trayIcon = _serviceProvider.GetRequiredService<TrayIconService>();
         _trayIcon.Initialize();
@@ -240,6 +245,7 @@ public partial class App : Application
             new TranslationService(sp.GetRequiredService<PluginManager>()));
 
         // Services
+        services.AddSingleton<SpeechFeedbackService>();
         services.AddSingleton<HotkeyService>();
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<IActiveWindowService, ActiveWindowService>();
