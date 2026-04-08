@@ -144,9 +144,17 @@ public sealed class HotkeyService : IDisposable
 
     // --- Hybrid: short press = toggle, long hold = PTT ---
 
+    private DateTime _lastActionTime;
+    private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(300);
+
     private void OnHybridKeyDown(object? sender, EventArgs e)
     {
         if (!IsEnabled) return;
+
+        // Debounce rapid key presses
+        var now = DateTime.UtcNow;
+        if (now - _lastActionTime < DebounceInterval) return;
+        _lastActionTime = now;
 
         if (_isActive)
         {
@@ -183,6 +191,10 @@ public sealed class HotkeyService : IDisposable
     private void OnToggleOnlyKeyDown(object? sender, EventArgs e)
     {
         if (!IsEnabled) return;
+
+        var now = DateTime.UtcNow;
+        if (now - _lastActionTime < DebounceInterval) return;
+        _lastActionTime = now;
 
         if (_isActive)
         {
