@@ -249,7 +249,11 @@ public partial class App : Application
         services.AddSingleton<UpdateService>();
         services.AddSingleton<PromptProcessingService>();
 
+        // License
+        services.AddSingleton<LicenseService>();
+
         // ViewModels
+        services.AddSingleton<AudioRecorderViewModel>();
         services.AddSingleton<DictationViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<ModelManagerViewModel>();

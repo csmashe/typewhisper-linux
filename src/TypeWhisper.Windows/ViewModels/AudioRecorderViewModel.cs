@@ -25,6 +25,7 @@ public partial class AudioRecorderViewModel : ObservableObject, IDisposable
     [ObservableProperty] private bool _isTranscribing;
 
     public ObservableCollection<RecordingItem> Recordings { get; } = [];
+    public bool HasRecordings => Recordings.Count > 0;
 
     public AudioRecorderViewModel(AudioRecordingService audio, ModelManagerService modelManager)
     {

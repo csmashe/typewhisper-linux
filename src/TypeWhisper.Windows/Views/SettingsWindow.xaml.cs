@@ -20,7 +20,10 @@ public partial class SettingsWindow : FluentWindow
         viewModel.RegisterSection("Snippets", () => new SnippetsSection { DataContext = viewModel });
         viewModel.RegisterSection("Profiles", () => new ProfilesSection { DataContext = viewModel });
         viewModel.RegisterSection("Prompts", () => new PromptsSection { DataContext = viewModel });
+        viewModel.RegisterSection("Recorder", () => new RecorderSection { DataContext = viewModel });
         viewModel.RegisterSection("Plugins", () => new PluginsSection { DataContext = viewModel });
+        viewModel.RegisterSection("Advanced", () => new AdvancedSection { DataContext = viewModel });
+        viewModel.RegisterSection("License", () => new LicenseSection { DataContext = viewModel });
         viewModel.RegisterSection("About", () => new InfoSection { DataContext = viewModel });
 
         viewModel.NavigateToDefault();

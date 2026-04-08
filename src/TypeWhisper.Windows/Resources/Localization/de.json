@@ -8,8 +8,11 @@
   "Nav.Dictionary": "W\u00f6rterbuch",
   "Nav.Snippets": "Snippets",
   "Nav.Prompts": "Prompts",
-  "Nav.Plugins": "Erweiterungen",
+  "Nav.Plugins": "Integrationen",
   "Nav.History": "Verlauf",
+  "Nav.Recorder": "Recorder",
+  "Nav.Advanced": "Erweitert",
+  "Nav.License": "Lizenz",
   "Nav.Info": "Info",
   "Nav.About": "\u00dcber",
 

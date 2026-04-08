@@ -25,6 +25,7 @@ public sealed partial class SettingsWindowViewModel : ObservableObject
     public DashboardViewModel Dashboard { get; }
     public PluginsViewModel Plugins { get; }
     public PromptsViewModel Prompts { get; }
+    public AudioRecorderViewModel Recorder { get; }
 
     private readonly UpdateService _updateService;
     private readonly IErrorLogService _errorLog;
@@ -53,6 +54,7 @@ public sealed partial class SettingsWindowViewModel : ObservableObject
         DashboardViewModel dashboard,
         PluginsViewModel plugins,
         PromptsViewModel prompts,
+        AudioRecorderViewModel recorder,
         UpdateService updateService,
         IErrorLogService errorLog)
     {
@@ -65,6 +67,7 @@ public sealed partial class SettingsWindowViewModel : ObservableObject
         Dashboard = dashboard;
         Plugins = plugins;
         Prompts = prompts;
+        Recorder = recorder;
         _updateService = updateService;
         _errorLog = errorLog;
 
