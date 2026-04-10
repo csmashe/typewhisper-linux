@@ -29,6 +29,9 @@ public sealed record PipelineOptions
     /// <summary>Applies dictionary corrections to text.</summary>
     public Func<string, string>? DictionaryCorrector { get; init; }
 
+    /// <summary>Applies vocabulary boosting to text.</summary>
+    public Func<string, string>? VocabularyBooster { get; init; }
+
     /// <summary>Applies snippet expansion to text.</summary>
     public Func<string, string>? SnippetExpander { get; init; }
 

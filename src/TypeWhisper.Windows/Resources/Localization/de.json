@@ -155,6 +155,10 @@
   "Plugins.UninstallTitle": "Plugin deinstallieren",
 
   "Dictionary.Title": "W\u00f6rterbuch",
+  "Dictionary.BoostingToggle": "Vokabel-Boosting aktivieren",
+  "Dictionary.BoostingHint": "Verbessert die Erkennung aktiver Begriffe aus W\u00f6rterbuch und Packs bei lokalen Transkriptionen",
+  "Dictionary.BoostingNoTerms": "Keine aktiven Begriffe f\u00fcr Boosting",
+  "Dictionary.BoostingReadyFormat": "Bereit - {0} aktive Begriffe",
   "Dictionary.TabAll": "Alle",
   "Dictionary.TabTerms": "Begriffe",
   "Dictionary.TabCorrections": "Korrekturen",

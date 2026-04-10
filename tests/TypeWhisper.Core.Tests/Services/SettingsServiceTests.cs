@@ -34,13 +34,19 @@ public class SettingsServiceTests : IDisposable
     public void SaveAndLoad_RoundTrips()
     {
         var sut = new SettingsService(_filePath);
-        var settings = AppSettings.Default with { Language = "de", HasCompletedOnboarding = true };
+        var settings = AppSettings.Default with
+        {
+            Language = "de",
+            HasCompletedOnboarding = true,
+            VocabularyBoostingEnabled = true
+        };
 
         sut.Save(settings);
 
         var sut2 = new SettingsService(_filePath);
         Assert.Equal("de", sut2.Current.Language);
         Assert.True(sut2.Current.HasCompletedOnboarding);
+        Assert.True(sut2.Current.VocabularyBoostingEnabled);
     }
 
     [Fact]

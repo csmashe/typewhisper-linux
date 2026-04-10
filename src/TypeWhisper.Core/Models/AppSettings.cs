@@ -48,6 +48,7 @@ public record AppSettings
 
     // Dictionary
     public string[] EnabledPackIds { get; init; } = [];
+    public bool VocabularyBoostingEnabled { get; init; }
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
