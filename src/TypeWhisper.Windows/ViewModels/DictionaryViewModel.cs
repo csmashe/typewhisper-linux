@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Windows.Services.Localization;
 
 namespace TypeWhisper.Windows.ViewModels;
 
@@ -18,6 +19,7 @@ public partial class DictionaryViewModel : ObservableObject
 
     // Search
     [ObservableProperty] private string _searchText = "";
+    [ObservableProperty] private bool _vocabularyBoostingEnabled;
 
     public bool HasSearchText => !string.IsNullOrWhiteSpace(SearchText);
 
@@ -49,6 +51,11 @@ public partial class DictionaryViewModel : ObservableObject
 
     // Entry count for display
     public int EntryCount => FilteredEntries.Cast<object>().Count();
+    public int ActiveBoostingTermCount => _dictionary.Entries.Count(entry =>
+        entry.IsEnabled && entry.EntryType == DictionaryEntryType.Term);
+    public string VocabularyBoostingStatusText => ActiveBoostingTermCount == 0
+        ? Loc.Instance["Dictionary.BoostingNoTerms"]
+        : Loc.Instance.GetString("Dictionary.BoostingReadyFormat", ActiveBoostingTermCount);
 
     public ObservableCollection<DictionaryEntry> Entries { get; } = [];
     public ICollectionView FilteredEntries { get; }
@@ -58,6 +65,7 @@ public partial class DictionaryViewModel : ObservableObject
     {
         _dictionary = dictionary;
         _settings = settings;
+        _vocabularyBoostingEnabled = _settings.Current.VocabularyBoostingEnabled;
 
         FilteredEntries = CollectionViewSource.GetDefaultView(Entries);
         FilteredEntries.Filter = FilterByTab;
@@ -78,6 +86,14 @@ public partial class DictionaryViewModel : ObservableObject
         OnPropertyChanged(nameof(HasSearchText));
         FilteredEntries.Refresh();
         OnPropertyChanged(nameof(EntryCount));
+    }
+
+    partial void OnVocabularyBoostingEnabledChanged(bool value)
+    {
+        if (_settings.Current.VocabularyBoostingEnabled == value)
+            return;
+
+        _settings.Save(_settings.Current with { VocabularyBoostingEnabled = value });
     }
 
     partial void OnNewEntryTypeChanged(DictionaryEntryType value)
@@ -222,6 +238,8 @@ public partial class DictionaryViewModel : ObservableObject
             Entries.Add(e);
         FilteredEntries.Refresh();
         OnPropertyChanged(nameof(EntryCount));
+        OnPropertyChanged(nameof(ActiveBoostingTermCount));
+        OnPropertyChanged(nameof(VocabularyBoostingStatusText));
     }
 }
 

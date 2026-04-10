@@ -118,6 +118,11 @@ public class PostProcessingPipelineTests
                 executionOrder.Add("Snippets");
                 return text + "+SNP";
             },
+            VocabularyBooster = text =>
+            {
+                executionOrder.Add("Boosting");
+                return text + "+BOOST";
+            },
             DictionaryCorrector = text =>
             {
                 executionOrder.Add("Dictionary");
@@ -127,9 +132,9 @@ public class PostProcessingPipelineTests
 
         var result = await _sut.ProcessAsync("start", options);
 
-        // Priority order: Plugin(100) → LLM(300) → Snippets(500) → Dictionary(600)
-        Assert.Equal(["Plugin100", "LLM", "Snippets", "Dictionary"], executionOrder);
-        Assert.Equal("start+P100+LLM+SNP+DICT", result.Text);
+        // Priority order: Plugin(100) → LLM(300) → Snippets(500) → Boosting(550) → Dictionary(600)
+        Assert.Equal(["Plugin100", "LLM", "Snippets", "Boosting", "Dictionary"], executionOrder);
+        Assert.Equal("start+P100+LLM+SNP+BOOST+DICT", result.Text);
     }
 
     [Fact]
@@ -282,5 +287,43 @@ public class PostProcessingPipelineTests
 
         Assert.Equal("Dictionary", executionOrder[0]);
         Assert.Equal("Translation", executionOrder[1]);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_VocabularyBoosting_RunsBeforeDictionary()
+    {
+        var executionOrder = new List<string>();
+
+        var options = new PipelineOptions
+        {
+            VocabularyBooster = text =>
+            {
+                executionOrder.Add("Boosting");
+                return text.Replace("type whisper", "TypeWhisper");
+            },
+            DictionaryCorrector = text =>
+            {
+                executionOrder.Add("Dictionary");
+                return text.Replace("TypeWhisper", "TYPEWHISPER");
+            }
+        };
+
+        var result = await _sut.ProcessAsync("type whisper", options);
+
+        Assert.Equal(["Boosting", "Dictionary"], executionOrder);
+        Assert.Equal("TYPEWHISPER", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_VocabularyBoostingDisabled_LeavesTextUnchanged()
+    {
+        var options = new PipelineOptions
+        {
+            DictionaryCorrector = text => text
+        };
+
+        var result = await _sut.ProcessAsync("type whisper", options);
+
+        Assert.Equal("type whisper", result.Text);
     }
 }

@@ -27,6 +27,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
     private readonly SoundService _sound;
     private readonly IHistoryService _history;
     private readonly IDictionaryService _dictionary;
+    private readonly IVocabularyBoostingService _vocabularyBoosting;
     private readonly ISnippetService _snippets;
     private readonly IProfileService _profiles;
     private readonly ITranslationService _translation;
@@ -90,6 +91,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         SoundService sound,
         IHistoryService history,
         IDictionaryService dictionary,
+        IVocabularyBoostingService vocabularyBoosting,
         ISnippetService snippets,
         IProfileService profiles,
         ITranslationService translation,
@@ -111,6 +113,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         _sound = sound;
         _history = history;
         _dictionary = dictionary;
+        _vocabularyBoosting = vocabularyBoosting;
         _snippets = snippets;
         _profiles = profiles;
         _translation = translation;
@@ -558,6 +561,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
             {
                 AppFormatter = AppFormatterService.Format,
                 TargetProcessName = job.CapturedProcessName,
+                VocabularyBooster = GetVocabularyBooster(),
                 DictionaryCorrector = _dictionary.ApplyCorrections,
                 SnippetExpander = text => _snippets.ApplySnippets(text, () =>
                 {
@@ -857,6 +861,9 @@ public partial class DictationViewModel : ObservableObject, IDisposable
     {
         AudioLevel = e.RmsLevel;
     }
+
+    private Func<string, string>? GetVocabularyBooster() =>
+        _settings.Current.VocabularyBoostingEnabled ? _vocabularyBoosting.Apply : null;
 
     public void Dispose()
     {

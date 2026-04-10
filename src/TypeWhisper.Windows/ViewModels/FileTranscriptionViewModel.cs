@@ -14,6 +14,9 @@ public partial class FileTranscriptionViewModel : ObservableObject
     private readonly ModelManagerService _modelManager;
     private readonly ISettingsService _settings;
     private readonly AudioFileService _audioFile;
+    private readonly IDictionaryService _dictionary;
+    private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly IPostProcessingPipeline _pipeline;
 
     private CancellationTokenSource? _cts;
     private TranscriptionResult? _lastResult;
@@ -30,11 +33,17 @@ public partial class FileTranscriptionViewModel : ObservableObject
     public FileTranscriptionViewModel(
         ModelManagerService modelManager,
         ISettingsService settings,
-        AudioFileService audioFile)
+        AudioFileService audioFile,
+        IDictionaryService dictionary,
+        IVocabularyBoostingService vocabularyBoosting,
+        IPostProcessingPipeline pipeline)
     {
         _modelManager = modelManager;
         _settings = settings;
         _audioFile = audioFile;
+        _dictionary = dictionary;
+        _vocabularyBoosting = vocabularyBoosting;
+        _pipeline = pipeline;
     }
 
     [RelayCommand]
@@ -77,9 +86,15 @@ public partial class FileTranscriptionViewModel : ObservableObject
                 : TranscriptionTask.Transcribe;
 
             var result = await _modelManager.Engine.TranscribeAsync(samples, language, task, _cts.Token);
+            var pipelineResult = await _pipeline.ProcessAsync(result.Text, new PipelineOptions
+            {
+                VocabularyBooster = GetVocabularyBooster(),
+                DictionaryCorrector = _dictionary.ApplyCorrections
+            }, _cts.Token);
+
             _lastResult = result;
 
-            ResultText = result.Text;
+            ResultText = pipelineResult.Text;
             DetectedLanguage = result.DetectedLanguage;
             ProcessingTime = result.ProcessingTime;
             AudioDuration = result.Duration;
@@ -157,4 +172,7 @@ public partial class FileTranscriptionViewModel : ObservableObject
             TranscribeFileCommand.Execute(files[0]);
         }
     }
+
+    private Func<string, string>? GetVocabularyBooster() =>
+        _settings.Current.VocabularyBoostingEnabled ? _vocabularyBoosting.Apply : null;
 }

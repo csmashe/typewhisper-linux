@@ -155,6 +155,10 @@
   "Plugins.UninstallTitle": "Uninstall Plugin",
 
   "Dictionary.Title": "Dictionary",
+  "Dictionary.BoostingToggle": "Enable vocabulary boosting",
+  "Dictionary.BoostingHint": "Improves recognition of active dictionary terms and packs for local transcriptions",
+  "Dictionary.BoostingNoTerms": "No active terms available for boosting",
+  "Dictionary.BoostingReadyFormat": "Ready - {0} active terms",
   "Dictionary.TabAll": "All",
   "Dictionary.TabTerms": "Terms",
   "Dictionary.TabCorrections": "Corrections",

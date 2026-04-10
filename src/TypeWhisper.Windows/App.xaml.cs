@@ -67,6 +67,12 @@ public partial class App : Application
         var settings = _serviceProvider.GetRequiredService<ISettingsService>();
         settings.Load();
 
+        // Restore enabled term packs into the dictionary on startup.
+        var dictionary = _serviceProvider.GetRequiredService<IDictionaryService>();
+        var enabledPackIds = settings.Current.EnabledPackIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var pack in TermPack.AllPacks.Where(pack => enabledPackIds.Contains(pack.Id)))
+            dictionary.ActivatePack(pack);
+
         // Initialize localization
         Loc.Instance.Initialize();
         Loc.Instance.CurrentLanguage = settings.Current.UiLanguage
@@ -230,6 +236,7 @@ public partial class App : Application
             new HistoryService(Path.Combine(dataPath, "history.json"), TypeWhisperEnvironment.AudioPath));
         services.AddSingleton<IDictionaryService>(
             new DictionaryService(Path.Combine(dataPath, "dictionary.json")));
+        services.AddSingleton<IVocabularyBoostingService, VocabularyBoostingService>();
         services.AddSingleton<ISnippetService>(
             new SnippetService(Path.Combine(dataPath, "snippets.json")));
         services.AddSingleton<IProfileService>(

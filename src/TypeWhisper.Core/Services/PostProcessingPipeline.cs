@@ -8,6 +8,7 @@ namespace TypeWhisper.Core.Services;
 ///   Plugin PostProcessors: their own Priority value
 ///   LLM Prompt Action: 300
 ///   Snippet Expansion: 500
+///   Vocabulary Boosting: 550
 ///   Dictionary Corrections: 600
 ///   Translation: 900 (always last)
 /// </summary>
@@ -16,6 +17,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
     private const int FormattingPriority = 150;
     private const int LlmPriority = 300;
     private const int SnippetPriority = 500;
+    private const int VocabularyBoostingPriority = 550;
     private const int DictionaryPriority = 600;
     private const int TranslationPriority = 900;
 
@@ -89,6 +91,13 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
         {
             steps.Add((SnippetPriority, "Snippets",
                 (text, _) => Task.FromResult(options.SnippetExpander(text))));
+        }
+
+        // Vocabulary boosting at priority 550
+        if (options.VocabularyBooster is not null)
+        {
+            steps.Add((VocabularyBoostingPriority, "VocabularyBoosting",
+                (text, _) => Task.FromResult(options.VocabularyBooster(text))));
         }
 
         // Dictionary corrections at priority 600

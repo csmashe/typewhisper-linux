@@ -15,6 +15,9 @@ public sealed class HttpApiService : IDisposable
     private readonly AudioFileService _audioFile;
     private readonly IHistoryService _history;
     private readonly IProfileService _profiles;
+    private readonly IDictionaryService _dictionary;
+    private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly IPostProcessingPipeline _pipeline;
     private readonly DictationViewModel _dictation;
 
     private HttpListener? _listener;
@@ -36,6 +39,9 @@ public sealed class HttpApiService : IDisposable
         AudioFileService audioFile,
         IHistoryService history,
         IProfileService profiles,
+        IDictionaryService dictionary,
+        IVocabularyBoostingService vocabularyBoosting,
+        IPostProcessingPipeline pipeline,
         DictationViewModel dictation)
     {
         _modelManager = modelManager;
@@ -43,6 +49,9 @@ public sealed class HttpApiService : IDisposable
         _audioFile = audioFile;
         _history = history;
         _profiles = profiles;
+        _dictionary = dictionary;
+        _vocabularyBoosting = vocabularyBoosting;
+        _pipeline = pipeline;
         _dictation = dictation;
     }
 
@@ -182,10 +191,15 @@ public sealed class HttpApiService : IDisposable
             var responseFormat = request.QueryString["response_format"] ?? "json";
 
             var result = await _modelManager.Engine.TranscribeAsync(samples, language, task, ct);
+            var pipelineResult = await _pipeline.ProcessAsync(result.Text, new PipelineOptions
+            {
+                VocabularyBooster = GetVocabularyBooster(),
+                DictionaryCorrector = _dictionary.ApplyCorrections
+            }, ct);
 
             var response = new
             {
-                text = result.Text,
+                text = pipelineResult.Text,
                 language = result.DetectedLanguage,
                 duration = result.Duration,
                 processing_time = result.ProcessingTime,
@@ -335,4 +349,7 @@ public sealed class HttpApiService : IDisposable
             _disposed = true;
         }
     }
+
+    private Func<string, string>? GetVocabularyBooster() =>
+        _settings.Current.VocabularyBoostingEnabled ? _vocabularyBoosting.Apply : null;
 }
