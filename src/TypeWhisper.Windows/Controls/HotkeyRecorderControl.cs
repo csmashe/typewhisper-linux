@@ -7,6 +7,8 @@ namespace TypeWhisper.Windows.Controls;
 
 public sealed class HotkeyRecorderControl : Control
 {
+    private readonly HotkeyRecorderSession _recordingSession = new();
+
     public static readonly DependencyProperty HotkeyProperty =
         DependencyProperty.Register(nameof(Hotkey), typeof(string), typeof(HotkeyRecorderControl),
             new FrameworkPropertyMetadata("", FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
@@ -60,6 +62,7 @@ public sealed class HotkeyRecorderControl : Control
         }
         else
         {
+            _recordingSession.Reset();
             IsRecording = true;
         }
 
@@ -87,21 +90,25 @@ public sealed class HotkeyRecorderControl : Control
         if (e.Key is Key.Escape or Key.Delete or Key.Back)
         {
             Hotkey = "";
+            _recordingSession.Reset();
             IsRecording = false;
             return;
         }
 
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
 
-        // Ignore standalone modifier presses — wait for the full combo
         if (IsModifierKey(key))
+        {
+            _recordingSession.NoteModifierDown(key);
             return;
+        }
 
-        var hotkey = FormatHotkey(Keyboard.Modifiers, key);
+        var hotkey = _recordingSession.TryRecordHotkey(key);
         if (!string.IsNullOrEmpty(hotkey))
         {
             Hotkey = hotkey;
             IsRecording = false;
+            _recordingSession.Reset();
         }
     }
 
@@ -113,44 +120,31 @@ public sealed class HotkeyRecorderControl : Control
             return;
         }
 
-        // For modifier-only mode: if a modifier was released and we still have modifiers held,
-        // check if the released key completes a modifier combo
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         if (!IsModifierKey(key))
             return;
 
-        // Build the modifier combo from what WAS pressed (including the just-released key)
-        var mods = Keyboard.Modifiers;
-        // Add back the just-released modifier
-        mods |= key switch
-        {
-            Key.LeftCtrl or Key.RightCtrl => ModifierKeys.Control,
-            Key.LeftShift or Key.RightShift => ModifierKeys.Shift,
-            Key.LeftAlt or Key.RightAlt => ModifierKeys.Alt,
-            Key.LWin or Key.RWin => ModifierKeys.Windows,
-            _ => ModifierKeys.None
-        };
+        var hotkey = AllowModifierOnly
+            ? _recordingSession.TryRecordModifierOnlyOnRelease(key)
+            : "";
 
-        // Need at least 2 modifiers for a modifier-only combo
-        var count = CountModifiers(mods);
-        if (count >= 2)
+        if (!string.IsNullOrEmpty(hotkey))
         {
-            var hotkey = FormatModifierOnly(mods);
-            if (!string.IsNullOrEmpty(hotkey))
-            {
-                Hotkey = hotkey;
-                IsRecording = false;
-                e.Handled = true;
-            }
+            Hotkey = hotkey;
+            IsRecording = false;
+            _recordingSession.Reset();
         }
+
+        e.Handled = true;
     }
 
     private void CancelRecording()
     {
+        _recordingSession.Reset();
         IsRecording = false;
     }
 
-    private static string FormatHotkey(ModifierKeys modifiers, Key key)
+    internal static string FormatHotkey(ModifierKeys modifiers, Key key)
     {
         var parts = new List<string>();
 
@@ -167,7 +161,7 @@ public sealed class HotkeyRecorderControl : Control
         return string.Join("+", parts);
     }
 
-    private static string FormatModifierOnly(ModifierKeys modifiers)
+    internal static string FormatModifierOnly(ModifierKeys modifiers)
     {
         var parts = new List<string>();
         if (modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
@@ -177,7 +171,7 @@ public sealed class HotkeyRecorderControl : Control
         return string.Join("+", parts);
     }
 
-    private static string FormatKeyName(Key key) => key switch
+    internal static string FormatKeyName(Key key) => key switch
     {
         Key.Space => "Space",
         >= Key.F1 and <= Key.F12 => key.ToString(),
@@ -214,13 +208,13 @@ public sealed class HotkeyRecorderControl : Control
         _ => ""
     };
 
-    private static bool IsModifierKey(Key key) => key
+    internal static bool IsModifierKey(Key key) => key
         is Key.LeftCtrl or Key.RightCtrl
         or Key.LeftShift or Key.RightShift
         or Key.LeftAlt or Key.RightAlt
         or Key.LWin or Key.RWin;
 
-    private static int CountModifiers(ModifierKeys mods)
+    internal static int CountModifiers(ModifierKeys mods)
     {
         var count = 0;
         if (mods.HasFlag(ModifierKeys.Control)) count++;
@@ -228,5 +222,62 @@ public sealed class HotkeyRecorderControl : Control
         if (mods.HasFlag(ModifierKeys.Alt)) count++;
         if (mods.HasFlag(ModifierKeys.Windows)) count++;
         return count;
+    }
+}
+
+internal sealed class HotkeyRecorderSession
+{
+    private readonly HashSet<Key> _pressedModifiers = [];
+
+    public void Reset() => _pressedModifiers.Clear();
+
+    public void NoteModifierDown(Key key)
+    {
+        if (HotkeyRecorderControl.IsModifierKey(key))
+            _pressedModifiers.Add(key);
+    }
+
+    public string TryRecordHotkey(Key key)
+    {
+        if (HotkeyRecorderControl.IsModifierKey(key))
+        {
+            NoteModifierDown(key);
+            return "";
+        }
+
+        return HotkeyRecorderControl.FormatHotkey(GetCurrentModifiers(), key);
+    }
+
+    public string TryRecordModifierOnlyOnRelease(Key key)
+    {
+        if (!HotkeyRecorderControl.IsModifierKey(key))
+            return "";
+
+        var modifiers = GetCurrentModifiers();
+        var hotkey = HotkeyRecorderControl.CountModifiers(modifiers) >= 2
+            ? HotkeyRecorderControl.FormatModifierOnly(modifiers)
+            : "";
+
+        _pressedModifiers.Remove(key);
+        return hotkey;
+    }
+
+    internal ModifierKeys GetCurrentModifiers()
+    {
+        var modifiers = ModifierKeys.None;
+
+        foreach (var key in _pressedModifiers)
+        {
+            modifiers |= key switch
+            {
+                Key.LeftCtrl or Key.RightCtrl => ModifierKeys.Control,
+                Key.LeftShift or Key.RightShift => ModifierKeys.Shift,
+                Key.LeftAlt or Key.RightAlt => ModifierKeys.Alt,
+                Key.LWin or Key.RWin => ModifierKeys.Windows,
+                _ => ModifierKeys.None
+            };
+        }
+
+        return modifiers;
     }
 }
