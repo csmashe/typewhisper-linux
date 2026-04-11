@@ -149,6 +149,39 @@
         <Setter Property="Margin" Value="0,0,0,18"/>
     </Style>
 
+    <Style x:Key="SettingsSummaryBarStyle" TargetType="Border" BasedOn="{StaticResource SettingsGroupPanelStyle}">
+        <Setter Property="Padding" Value="18,16"/>
+        <Setter Property="Margin" Value="0,0,0,16"/>
+    </Style>
+
+    <Style x:Key="SettingsActionBarStyle" TargetType="Border" BasedOn="{StaticResource SettingsGroupPanelStyle}">
+        <Setter Property="Padding" Value="16,12"/>
+        <Setter Property="Margin" Value="0,0,0,14"/>
+    </Style>
+
+    <Style x:Key="SettingsFilterRowStyle" TargetType="Border" BasedOn="{StaticResource SettingsGroupPanelStyle}">
+        <Setter Property="Padding" Value="16,12"/>
+        <Setter Property="Margin" Value="0,0,0,16"/>
+    </Style>
+
+    <Style x:Key="SettingsSectionFormStyle" TargetType="Border" BasedOn="{StaticResource SettingsGroupPanelStyle}">
+        <Setter Property="Margin" Value="0,0,0,16"/>
+    </Style>
+
+    <Style x:Key="SettingsCollectionRowStyle" TargetType="Border">
+        <Setter Property="Padding" Value="18,14"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="#16FFFFFF"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    </Style>
+
+    <Style x:Key="SettingsStickyFooterStyle" TargetType="Border">
+        <Setter Property="Background" Value="#101722"/>
+        <Setter Property="BorderBrush" Value="#22FFFFFF"/>
+        <Setter Property="BorderThickness" Value="0,1,0,0"/>
+        <Setter Property="Padding" Value="24,14"/>
+    </Style>
+
     <Style x:Key="SettingsRowBorderStyle" TargetType="Border">
         <Setter Property="Padding" Value="18,12"/>
     </Style>

@@ -55,6 +55,16 @@ public partial class ProfilesViewModel : ObservableObject
     public ObservableCollection<Profile> Profiles { get; } = [];
     public ObservableCollection<string> RunningApps { get; } = [];
     public ObservableCollection<ModelOption> AvailableModelOptions { get; } = [];
+    public int ProfileCount => Profiles.Count;
+    public int EnabledProfileCount => Profiles.Count(static profile => profile.IsEnabled);
+    public bool HasSelectedProfile => SelectedProfile is not null;
+    public string ProfileSummary => Loc.Instance.GetString("Profiles.SummaryFormat", ProfileCount, EnabledProfileCount);
+    public string SelectedProfileSummary => SelectedProfile is null
+        ? Loc.Instance["Profiles.SelectProfileHint"]
+        : Loc.Instance.GetString("Profiles.SelectedSummaryFormat", ProcessNameChips.Count, UrlPatternChips.Count);
+    public string MatchStatusText => HasMatchedProfile
+        ? Loc.Instance.GetString("Profiles.MatchFoundFormat", MatchedProfileName)
+        : Loc.Instance["Profiles.MatchNone"];
 
     private readonly ModelManagerService _modelManager;
 
@@ -103,6 +113,7 @@ public partial class ProfilesViewModel : ObservableObject
         MatchedProfileName = matched?.Name ?? Loc.Instance["Profiles.NoProfile"];
 
         RefreshRunningApps();
+        NotifyStateChanged();
     }
 
     private void RefreshRunningApps()
@@ -139,6 +150,7 @@ public partial class ProfilesViewModel : ObservableObject
             EditPriority = 0;
             EditIsEnabled = true;
             EditHotkey = null;
+            NotifyStateChanged();
             return;
         }
 
@@ -154,6 +166,7 @@ public partial class ProfilesViewModel : ObservableObject
 
         foreach (var p in value.ProcessNames) ProcessNameChips.Add(p);
         foreach (var u in value.UrlPatterns) UrlPatternChips.Add(u);
+        NotifyStateChanged();
     }
 
     [RelayCommand]
@@ -165,6 +178,7 @@ public partial class ProfilesViewModel : ObservableObject
             ProcessNameChips.Add(name);
         ProcessNameInput = "";
         RefreshRunningApps();
+        OnPropertyChanged(nameof(SelectedProfileSummary));
     }
 
     [RelayCommand]
@@ -173,6 +187,7 @@ public partial class ProfilesViewModel : ObservableObject
         if (!ProcessNameChips.Contains(processName, StringComparer.OrdinalIgnoreCase))
             ProcessNameChips.Add(processName);
         RunningApps.Remove(processName);
+        OnPropertyChanged(nameof(SelectedProfileSummary));
     }
 
     [RelayCommand]
@@ -180,6 +195,7 @@ public partial class ProfilesViewModel : ObservableObject
     {
         ProcessNameChips.Remove(chip);
         RefreshRunningApps();
+        OnPropertyChanged(nameof(SelectedProfileSummary));
     }
 
     [RelayCommand]
@@ -190,12 +206,14 @@ public partial class ProfilesViewModel : ObservableObject
         if (!UrlPatternChips.Contains(pattern, StringComparer.OrdinalIgnoreCase))
             UrlPatternChips.Add(pattern);
         UrlPatternInput = "";
+        OnPropertyChanged(nameof(SelectedProfileSummary));
     }
 
     [RelayCommand]
     private void RemoveUrlPatternChip(string chip)
     {
         UrlPatternChips.Remove(chip);
+        OnPropertyChanged(nameof(SelectedProfileSummary));
     }
 
     [RelayCommand]
@@ -288,6 +306,42 @@ public partial class ProfilesViewModel : ObservableObject
             }
         }
         SelectedProfile = null;
+        NotifyStateChanged();
+    }
+
+    [RelayCommand]
+    private void DuplicateProfile()
+    {
+        if (SelectedProfile is null)
+            return;
+
+        var duplicate = SelectedProfile with
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = Loc.Instance.GetString("Profiles.DuplicateNameFormat", SelectedProfile.Name),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        _profiles.AddProfile(duplicate);
+        foreach (var profile in Profiles)
+        {
+            if (profile.Id == duplicate.Id)
+            {
+                SelectedProfile = profile;
+                break;
+            }
+        }
+    }
+
+    private void NotifyStateChanged()
+    {
+        OnPropertyChanged(nameof(ProfileCount));
+        OnPropertyChanged(nameof(EnabledProfileCount));
+        OnPropertyChanged(nameof(ProfileSummary));
+        OnPropertyChanged(nameof(HasSelectedProfile));
+        OnPropertyChanged(nameof(SelectedProfileSummary));
+        OnPropertyChanged(nameof(MatchStatusText));
     }
 }
 

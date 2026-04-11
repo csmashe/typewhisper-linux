@@ -32,6 +32,19 @@ public enum SettingsGroup
     System
 }
 
+public enum SettingsPageKind
+{
+    PreferencePage,
+    CollectionPage,
+    GuidedEditorPage
+}
+
+public sealed record SettingsPageMetadata(
+    SettingsPageKind Kind,
+    double ContentWidth = 980,
+    bool ShowsSummaryRow = true,
+    bool UsesStickyActions = false);
+
 public sealed partial class SettingsNavigationItem : ObservableObject
 {
     public SettingsNavigationItem(SettingsRoute route, string title, string iconGlyph, string? badgeText = null)

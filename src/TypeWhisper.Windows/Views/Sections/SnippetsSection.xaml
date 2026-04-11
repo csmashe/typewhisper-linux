@@ -22,7 +22,8 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Margin="0,0,0,16">
+        <Border Grid.Row="0" Style="{StaticResource SettingsSummaryBarStyle}">
+            <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
@@ -31,10 +32,12 @@
             </Grid.ColumnDefinitions>
 
             <StackPanel Margin="0,0,18,0">
-                <TextBlock Text="{Binding Snippets.SummaryText}"
+                <TextBlock Text="{loc:Str Snippets.Title}"
                            Style="{StaticResource SettingsGroupTitleStyle}" Margin="0,0,0,4"/>
-                <TextBlock Text="{loc:Str Snippets.Subtitle}"
+                <TextBlock Text="{Binding Snippets.SummaryText}"
                            Style="{StaticResource PageSubtitleStyle}" Margin="0,0,0,4"/>
+                <TextBlock Text="{loc:Str Snippets.Subtitle}"
+                           Style="{StaticResource HintStyle}" Margin="0,0,0,4"/>
                 <TextBlock Text="{loc:Str Snippets.Hint}"
                            Style="{StaticResource HintStyle}" Margin="0"/>
             </StackPanel>
@@ -51,9 +54,10 @@
                     Style="{StaticResource PrimaryButtonStyle}"
                     Command="{Binding Snippets.StartCreateCommand}"
                     Padding="14,7" FontSize="12"/>
-        </Grid>
+            </Grid>
+        </Border>
 
-        <Border Grid.Row="1" Style="{StaticResource SettingsGroupPanelStyle}" Margin="0,0,0,18">
+        <Border Grid.Row="1" Style="{StaticResource SettingsFilterRowStyle}">
             <Grid Margin="16,12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -115,13 +119,11 @@
                     <ItemsControl ItemsSource="{Binding Snippets.Snippets}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Padding="18,14"
-                                        BorderBrush="#16FFFFFF"
-                                        BorderThickness="0,0,0,1"
+                                <Border
                                         MouseLeftButtonDown="Card_MouseLeftButtonDown"
                                         Cursor="Hand">
                                     <Border.Style>
-                                        <Style TargetType="Border">
+                                        <Style TargetType="Border" BasedOn="{StaticResource SettingsCollectionRowStyle}">
                                             <Setter Property="Opacity" Value="1"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsEnabled}" Value="False">

@@ -37,12 +37,16 @@ public sealed partial class SettingsWindowViewModel : ObservableObject
     [ObservableProperty] private SettingsRoute _currentRoute = _lastOpenedRoute;
     [ObservableProperty] private string _currentPageTitle = "";
     [ObservableProperty] private string _currentPageSubtitle = "";
+    [ObservableProperty] private SettingsPageMetadata _currentPageMetadata = new(SettingsPageKind.PreferencePage);
     [ObservableProperty] private string _updateStatusText = "";
     [ObservableProperty] private bool _isCheckingForUpdates;
     [ObservableProperty] private bool _isUpdateAvailable;
     [ObservableProperty] private int _pendingFileImporterRequestId;
 
     public string CurrentAppVersion => _updateService.CurrentVersion;
+    public double CurrentPageContentWidth => CurrentPageMetadata.ContentWidth;
+    public bool CurrentPageShowsSummaryRow => CurrentPageMetadata.ShowsSummaryRow;
+    public bool CurrentPageUsesStickyActions => CurrentPageMetadata.UsesStickyActions;
     public ObservableCollection<ErrorLogEntry> ErrorLogEntries { get; } = [];
     public bool HasErrorLogEntries => ErrorLogEntries.Count > 0;
     public ObservableCollection<SettingsNavigationGroup> NavigationGroups { get; } = [];
@@ -299,6 +303,16 @@ public sealed partial class SettingsWindowViewModel : ObservableObject
 
     private void SyncRouteMetadata(SettingsRoute route)
     {
+        CurrentPageMetadata = route switch
+        {
+            SettingsRoute.Profiles => new SettingsPageMetadata(SettingsPageKind.GuidedEditorPage, 1180, true, true),
+            SettingsRoute.Prompts => new SettingsPageMetadata(SettingsPageKind.CollectionPage, 1040),
+            SettingsRoute.Snippets => new SettingsPageMetadata(SettingsPageKind.CollectionPage, 1040),
+            SettingsRoute.Integrations => new SettingsPageMetadata(SettingsPageKind.CollectionPage, 1120),
+            SettingsRoute.History => new SettingsPageMetadata(SettingsPageKind.CollectionPage, 1100),
+            _ => new SettingsPageMetadata(SettingsPageKind.PreferencePage, 980)
+        };
+
         CurrentPageTitle = route switch
         {
             SettingsRoute.Dashboard => "Dashboard",
@@ -342,5 +356,12 @@ public sealed partial class SettingsWindowViewModel : ObservableObject
             SettingsRoute.About => "Versioning, diagnostics, and project credits.",
             _ => string.Empty
         };
+    }
+
+    partial void OnCurrentPageMetadataChanged(SettingsPageMetadata value)
+    {
+        OnPropertyChanged(nameof(CurrentPageContentWidth));
+        OnPropertyChanged(nameof(CurrentPageShowsSummaryRow));
+        OnPropertyChanged(nameof(CurrentPageUsesStickyActions));
     }
 }
