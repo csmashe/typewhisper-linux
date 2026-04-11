@@ -8,10 +8,7 @@ public sealed class KeyboardHook : IDisposable
     private IntPtr _hookId = IntPtr.Zero;
     private readonly NativeMethods.LowLevelKeyboardProc _proc;
     private bool _disposed;
-
-    private uint _targetModifiers;
-    private uint _targetVk;
-    private bool _isPressed;
+    private readonly HotkeyMatchStateMachine _stateMachine = new();
 
     public event EventHandler? KeyDown;
     public event EventHandler? KeyUp;
@@ -26,8 +23,7 @@ public sealed class KeyboardHook : IDisposable
     {
         if (HotkeyParser.Parse(hotkeyString, out var modifiers, out var vk))
         {
-            _targetModifiers = modifiers;
-            _targetVk = vk;
+            _stateMachine.SetHotkey(modifiers, vk);
         }
     }
 
@@ -55,114 +51,87 @@ public sealed class KeyboardHook : IDisposable
             NativeMethods.UnhookWindowsHookEx(_hookId);
             _hookId = IntPtr.Zero;
         }
-        _isPressed = false;
+        _stateMachine.Reset();
     }
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && IsEnabled && (_targetVk != 0 || _targetModifiers != 0))
+        if (nCode >= 0 && IsEnabled && _stateMachine.HasHotkey)
         {
             var hookStruct = Marshal.PtrToStructure<NativeMethods.KBDLLHOOKSTRUCT>(lParam);
+            if ((hookStruct.flags & NativeMethods.LLKHF_INJECTED) != 0)
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+
             var vkCode = hookStruct.vkCode;
 
             var isKeyDown = wParam == NativeMethods.WM_KEYDOWN || wParam == NativeMethods.WM_SYSKEYDOWN;
             var isKeyUp = wParam == NativeMethods.WM_KEYUP || wParam == NativeMethods.WM_SYSKEYUP;
 
-            var winRequired = (_targetModifiers & NativeMethods.MOD_WIN) != 0;
-            var isWinKeyEvent = IsWinKey(vkCode);
-
-            // Suppress Windows key immediately if other modifiers are held
-            if (winRequired && isWinKeyEvent && isKeyDown && !_isPressed)
-            {
-                if (AreOtherModifiersPressed())
-                {
-                    _isPressed = true;
-                    KeyDown?.Invoke(this, EventArgs.Empty);
-                    return (IntPtr)1;
-                }
-            }
-
-            if (winRequired && isWinKeyEvent && isKeyUp && _isPressed)
-            {
-                _isPressed = false;
+            var result = _stateMachine.ProcessKeyEvent(vkCode, isKeyDown, isKeyUp);
+            if (result.SyntheticKeyTapVk != 0)
+                SendSyntheticKeyTap((ushort)result.SyntheticKeyTapVk);
+            if (result.SyntheticKeyUpVk != 0)
+                SendSyntheticKeyUp((ushort)result.SyntheticKeyUpVk);
+            if (result.RaiseKeyDown)
+                KeyDown?.Invoke(this, EventArgs.Empty);
+            if (result.RaiseKeyUp)
                 KeyUp?.Invoke(this, EventArgs.Empty);
+            if (result.Swallow)
                 return (IntPtr)1;
-            }
-
-            if (winRequired && isWinKeyEvent && _isPressed)
-                return (IntPtr)1;
-
-            if (isKeyDown && !_isPressed)
-            {
-                if (_targetVk != 0)
-                {
-                    if (vkCode == _targetVk && AreModifiersPressed())
-                    {
-                        _isPressed = true;
-                        KeyDown?.Invoke(this, EventArgs.Empty);
-                        return (IntPtr)1; // Swallow the key event
-                    }
-                }
-                else if (!winRequired && IsModifierKey(vkCode) && AreAllModifiersPressed())
-                {
-                    _isPressed = true;
-                    KeyDown?.Invoke(this, EventArgs.Empty);
-                    return (IntPtr)1; // Swallow the key event
-                }
-            }
-            else if (isKeyUp && _isPressed && ShouldRelease(vkCode))
-            {
-                _isPressed = false;
-                KeyUp?.Invoke(this, EventArgs.Empty);
-                return (IntPtr)1; // Swallow the key-up too
-            }
         }
 
         return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
     }
 
-    private bool AreOtherModifiersPressed()
+    private static void SendSyntheticKeyTap(ushort vk)
     {
-        var ctrlOk = (_targetModifiers & NativeMethods.MOD_CONTROL) == 0 || IsKeyPressed(NativeMethods.VK_CONTROL);
-        var shiftOk = (_targetModifiers & NativeMethods.MOD_SHIFT) == 0 || IsKeyPressed(NativeMethods.VK_SHIFT);
-        var altOk = (_targetModifiers & NativeMethods.MOD_ALT) == 0 || IsKeyPressed(NativeMethods.VK_MENU);
-        return ctrlOk && shiftOk && altOk;
+        var inputs = new[]
+        {
+            new NativeMethods.INPUT
+            {
+                type = NativeMethods.INPUT_KEYBOARD,
+                u = new NativeMethods.INPUTUNION
+                {
+                    ki = new NativeMethods.KEYBDINPUT
+                    {
+                        wVk = vk
+                    }
+                }
+            },
+            new NativeMethods.INPUT
+            {
+                type = NativeMethods.INPUT_KEYBOARD,
+                u = new NativeMethods.INPUTUNION
+                {
+                    ki = new NativeMethods.KEYBDINPUT
+                    {
+                        wVk = vk,
+                        dwFlags = NativeMethods.KEYEVENTF_KEYUP
+                    }
+                }
+            }
+        };
+
+        NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
     }
 
-    private bool AreModifiersPressed()
+    private static void SendSyntheticKeyUp(ushort vk)
     {
-        var ctrlOk = (_targetModifiers & NativeMethods.MOD_CONTROL) == 0 || IsKeyPressed(NativeMethods.VK_CONTROL);
-        var shiftOk = (_targetModifiers & NativeMethods.MOD_SHIFT) == 0 || IsKeyPressed(NativeMethods.VK_SHIFT);
-        var altOk = (_targetModifiers & NativeMethods.MOD_ALT) == 0 || IsKeyPressed(NativeMethods.VK_MENU);
-        var winOk = (_targetModifiers & NativeMethods.MOD_WIN) == 0 ||
-                    IsKeyPressed(NativeMethods.VK_LWIN) || IsKeyPressed(NativeMethods.VK_RWIN);
-        return ctrlOk && shiftOk && altOk && winOk;
+        var input = new NativeMethods.INPUT
+        {
+            type = NativeMethods.INPUT_KEYBOARD,
+            u = new NativeMethods.INPUTUNION
+            {
+                ki = new NativeMethods.KEYBDINPUT
+                {
+                    wVk = vk,
+                    dwFlags = NativeMethods.KEYEVENTF_KEYUP
+                }
+            }
+        };
+
+        NativeMethods.SendInput(1, [input], Marshal.SizeOf<NativeMethods.INPUT>());
     }
-
-    private bool AreAllModifiersPressed() => AreModifiersPressed();
-
-    private bool ShouldRelease(uint vkCode)
-    {
-        if (vkCode == _targetVk) return true;
-        if ((_targetModifiers & NativeMethods.MOD_CONTROL) != 0 && IsCtrlKey(vkCode)) return true;
-        if ((_targetModifiers & NativeMethods.MOD_SHIFT) != 0 && IsShiftKey(vkCode)) return true;
-        if ((_targetModifiers & NativeMethods.MOD_ALT) != 0 && IsAltKey(vkCode)) return true;
-        if ((_targetModifiers & NativeMethods.MOD_WIN) != 0 && IsWinKey(vkCode)) return true;
-        return false;
-    }
-
-    private static bool IsKeyPressed(int vk) => (NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0;
-
-    private static bool IsCtrlKey(uint vk) =>
-        vk is NativeMethods.VK_CONTROL or NativeMethods.VK_LCONTROL or NativeMethods.VK_RCONTROL;
-    private static bool IsShiftKey(uint vk) =>
-        vk is NativeMethods.VK_SHIFT or NativeMethods.VK_LSHIFT or NativeMethods.VK_RSHIFT;
-    private static bool IsAltKey(uint vk) =>
-        vk is NativeMethods.VK_MENU or NativeMethods.VK_LMENU or NativeMethods.VK_RMENU;
-    private static bool IsWinKey(uint vk) =>
-        vk is NativeMethods.VK_LWIN or NativeMethods.VK_RWIN;
-    private static bool IsModifierKey(uint vk) =>
-        IsCtrlKey(vk) || IsShiftKey(vk) || IsAltKey(vk) || IsWinKey(vk);
 
     public void Dispose()
     {
@@ -173,6 +142,283 @@ public sealed class KeyboardHook : IDisposable
         }
         GC.SuppressFinalize(this);
     }
+}
+
+internal readonly record struct HotkeyProcessResult(
+    bool RaiseKeyDown,
+    bool RaiseKeyUp,
+    bool Swallow,
+    uint SyntheticKeyTapVk = 0,
+    uint SyntheticKeyUpVk = 0);
+
+internal sealed class HotkeyMatchStateMachine
+{
+    private readonly HashSet<uint> _pressedKeys = [];
+    private readonly HashSet<uint> _pendingSuppressedKeyUps = [];
+    private readonly HashSet<uint> _suppressedKeyDowns = [];
+    private uint _pendingSuppressedWinKey;
+
+    private uint _targetModifiers;
+    private uint _targetVk;
+    private bool _isPressed;
+
+    public bool HasHotkey => _targetVk != 0 || _targetModifiers != 0;
+
+    public void SetHotkey(uint modifiers, uint vk)
+    {
+        _targetModifiers = modifiers;
+        _targetVk = vk;
+        ResetRuntimeState();
+    }
+
+    public void Reset()
+    {
+        _targetModifiers = 0;
+        _targetVk = 0;
+        ResetRuntimeState();
+    }
+
+    public HotkeyProcessResult ProcessKeyEvent(uint vkCode, bool isKeyDown, bool isKeyUp)
+    {
+        if (!HasHotkey || (!isKeyDown && !isKeyUp))
+            return default;
+
+        var swallow = false;
+        var raiseKeyDown = false;
+        var raiseKeyUp = false;
+
+        if (isKeyUp && _pendingSuppressedKeyUps.Remove(vkCode))
+            swallow = true;
+
+        if (isKeyDown)
+        {
+            var firstPress = _pressedKeys.Add(vkCode);
+            var preSuppressedWinDown = false;
+
+            if (!_isPressed && firstPress && ShouldPreSuppressWinKeyDown(vkCode))
+            {
+                swallow = true;
+                preSuppressedWinDown = true;
+                _pendingSuppressedWinKey = vkCode;
+                _suppressedKeyDowns.Add(vkCode);
+            }
+
+            if (!_isPressed)
+            {
+                if (ShouldActivate(vkCode))
+                {
+                    _isPressed = true;
+                    raiseKeyDown = true;
+                    swallow = true;
+                    _suppressedKeyDowns.Add(vkCode);
+                    CaptureWinKeyUpsForSuppression();
+
+                    if ((_targetModifiers & NativeMethods.MOD_WIN) != 0
+                        && !HotkeyKeyClassifier.IsWinKey(vkCode)
+                        && TryGetUnsuppressedPressedWinKey(out var unsuppressedWinKey))
+                    {
+                        _pendingSuppressedKeyUps.Add(unsuppressedWinKey);
+                        _suppressedKeyDowns.Add(unsuppressedWinKey);
+                        return new HotkeyProcessResult(raiseKeyDown, raiseKeyUp, swallow, unsuppressedWinKey);
+                    }
+
+                    if (preSuppressedWinDown)
+                        _pendingSuppressedWinKey = 0;
+                }
+            }
+            else if (!firstPress && ShouldSuppressWhilePressed(vkCode))
+            {
+                swallow = true;
+            }
+
+            if (swallow)
+                _suppressedKeyDowns.Add(vkCode);
+        }
+        else if (isKeyUp)
+        {
+            if (!_isPressed && _pendingSuppressedWinKey == vkCode)
+            {
+                _pendingSuppressedWinKey = 0;
+                _pressedKeys.Remove(vkCode);
+                _suppressedKeyDowns.Remove(vkCode);
+                return new HotkeyProcessResult(raiseKeyDown, raiseKeyUp, true, vkCode);
+            }
+
+            if (_isPressed && ShouldRelease(vkCode))
+            {
+                _isPressed = false;
+                raiseKeyUp = true;
+
+                if (_targetVk == vkCode || HotkeyKeyClassifier.IsWinKey(vkCode))
+                    swallow = true;
+            }
+
+            _pressedKeys.Remove(vkCode);
+            _suppressedKeyDowns.Remove(vkCode);
+            if (_pendingSuppressedWinKey == vkCode)
+                _pendingSuppressedWinKey = 0;
+        }
+
+        return new HotkeyProcessResult(raiseKeyDown, raiseKeyUp, swallow);
+    }
+
+    private void ResetRuntimeState()
+    {
+        _pressedKeys.Clear();
+        _pendingSuppressedKeyUps.Clear();
+        _suppressedKeyDowns.Clear();
+        _pendingSuppressedWinKey = 0;
+        _isPressed = false;
+    }
+
+    private bool ShouldActivate(uint vkCode)
+    {
+        if (_targetVk != 0)
+            return vkCode == _targetVk && AreRequiredModifiersPressed();
+
+        return HotkeyKeyClassifier.IsModifierKey(vkCode)
+            && IsRequiredModifier(vkCode)
+            && AreRequiredModifiersPressed();
+    }
+
+    private bool ShouldRelease(uint vkCode)
+    {
+        if (_targetVk != 0 && vkCode == _targetVk)
+            return true;
+
+        return RequiredModifierReleased(vkCode);
+    }
+
+    private bool RequiredModifierReleased(uint vkCode)
+    {
+        if ((_targetModifiers & NativeMethods.MOD_CONTROL) != 0
+            && HotkeyKeyClassifier.IsCtrlKey(vkCode)
+            && !WouldModifierRemainPressedAfterRelease(HotkeyModifier.Control, vkCode))
+        {
+            return true;
+        }
+
+        if ((_targetModifiers & NativeMethods.MOD_SHIFT) != 0
+            && HotkeyKeyClassifier.IsShiftKey(vkCode)
+            && !WouldModifierRemainPressedAfterRelease(HotkeyModifier.Shift, vkCode))
+        {
+            return true;
+        }
+
+        if ((_targetModifiers & NativeMethods.MOD_ALT) != 0
+            && HotkeyKeyClassifier.IsAltKey(vkCode)
+            && !WouldModifierRemainPressedAfterRelease(HotkeyModifier.Alt, vkCode))
+        {
+            return true;
+        }
+
+        if ((_targetModifiers & NativeMethods.MOD_WIN) != 0
+            && HotkeyKeyClassifier.IsWinKey(vkCode)
+            && !WouldModifierRemainPressedAfterRelease(HotkeyModifier.Win, vkCode))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool AreRequiredModifiersPressed()
+    {
+        var ctrlOk = (_targetModifiers & NativeMethods.MOD_CONTROL) == 0 || AnyPressed(HotkeyModifier.Control);
+        var shiftOk = (_targetModifiers & NativeMethods.MOD_SHIFT) == 0 || AnyPressed(HotkeyModifier.Shift);
+        var altOk = (_targetModifiers & NativeMethods.MOD_ALT) == 0 || AnyPressed(HotkeyModifier.Alt);
+        var winOk = (_targetModifiers & NativeMethods.MOD_WIN) == 0 || AnyPressed(HotkeyModifier.Win);
+        return ctrlOk && shiftOk && altOk && winOk;
+    }
+
+    private bool IsRequiredModifier(uint vkCode) =>
+        ((_targetModifiers & NativeMethods.MOD_CONTROL) != 0 && HotkeyKeyClassifier.IsCtrlKey(vkCode))
+        || ((_targetModifiers & NativeMethods.MOD_SHIFT) != 0 && HotkeyKeyClassifier.IsShiftKey(vkCode))
+        || ((_targetModifiers & NativeMethods.MOD_ALT) != 0 && HotkeyKeyClassifier.IsAltKey(vkCode))
+        || ((_targetModifiers & NativeMethods.MOD_WIN) != 0 && HotkeyKeyClassifier.IsWinKey(vkCode));
+
+    private bool ShouldSuppressWhilePressed(uint vkCode) =>
+        vkCode == _targetVk
+        || ((_targetModifiers & NativeMethods.MOD_WIN) != 0 && HotkeyKeyClassifier.IsWinKey(vkCode));
+
+    private bool ShouldPreSuppressWinKeyDown(uint vkCode)
+    {
+        if (!HotkeyKeyClassifier.IsWinKey(vkCode))
+            return false;
+
+        if ((_targetModifiers & NativeMethods.MOD_WIN) == 0)
+            return false;
+
+        return _targetVk != 0 || (_targetModifiers & ~NativeMethods.MOD_WIN) != 0;
+    }
+
+    private void CaptureWinKeyUpsForSuppression()
+    {
+        if ((_targetModifiers & NativeMethods.MOD_WIN) == 0)
+            return;
+
+        foreach (var pressedKey in _pressedKeys)
+        {
+            if (HotkeyKeyClassifier.IsWinKey(pressedKey))
+                _pendingSuppressedKeyUps.Add(pressedKey);
+        }
+    }
+
+    private bool TryGetUnsuppressedPressedWinKey(out uint winVkCode)
+    {
+        foreach (var pressedKey in _pressedKeys)
+        {
+            if (HotkeyKeyClassifier.IsWinKey(pressedKey) && !_suppressedKeyDowns.Contains(pressedKey))
+            {
+                winVkCode = pressedKey;
+                return true;
+            }
+        }
+
+        winVkCode = 0;
+        return false;
+    }
+
+    private bool AnyPressed(HotkeyModifier modifier) =>
+        _pressedKeys.Any(vkCode => HotkeyKeyClassifier.MatchesModifier(vkCode, modifier));
+
+    private bool WouldModifierRemainPressedAfterRelease(HotkeyModifier modifier, uint releasedVkCode) =>
+        _pressedKeys.Any(vkCode => vkCode != releasedVkCode && HotkeyKeyClassifier.MatchesModifier(vkCode, modifier));
+}
+
+internal enum HotkeyModifier
+{
+    Control,
+    Shift,
+    Alt,
+    Win
+}
+
+internal static class HotkeyKeyClassifier
+{
+    public static bool IsCtrlKey(uint vk) =>
+        vk is NativeMethods.VK_CONTROL or NativeMethods.VK_LCONTROL or NativeMethods.VK_RCONTROL;
+
+    public static bool IsShiftKey(uint vk) =>
+        vk is NativeMethods.VK_SHIFT or NativeMethods.VK_LSHIFT or NativeMethods.VK_RSHIFT;
+
+    public static bool IsAltKey(uint vk) =>
+        vk is NativeMethods.VK_MENU or NativeMethods.VK_LMENU or NativeMethods.VK_RMENU;
+
+    public static bool IsWinKey(uint vk) =>
+        vk is NativeMethods.VK_LWIN or NativeMethods.VK_RWIN;
+
+    public static bool IsModifierKey(uint vk) =>
+        IsCtrlKey(vk) || IsShiftKey(vk) || IsAltKey(vk) || IsWinKey(vk);
+
+    public static bool MatchesModifier(uint vkCode, HotkeyModifier modifier) => modifier switch
+    {
+        HotkeyModifier.Control => IsCtrlKey(vkCode),
+        HotkeyModifier.Shift => IsShiftKey(vkCode),
+        HotkeyModifier.Alt => IsAltKey(vkCode),
+        HotkeyModifier.Win => IsWinKey(vkCode),
+        _ => false
+    };
 }
 
 internal static class HotkeyParser
