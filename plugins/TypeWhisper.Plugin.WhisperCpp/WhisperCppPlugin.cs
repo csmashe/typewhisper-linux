@@ -1,0 +1,286 @@
+using System.IO;
+using System.Text;
+using System.Windows.Controls;
+using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
+using Whisper.net;
+using Whisper.net.Ggml;
+
+namespace TypeWhisper.Plugin.WhisperCpp;
+
+public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEnginePlugin
+{
+    private static readonly IReadOnlyList<ModelDefinition> Models =
+    [
+        new("tiny", "Tiny", GgmlType.Tiny, QuantizationType.NoQuantization, "ggml-tiny.bin", "~75 MB", 75, 99, false),
+        new("tiny.en", "Tiny (English)", GgmlType.TinyEn, QuantizationType.NoQuantization, "ggml-tiny.en.bin", "~75 MB", 75, 1, false),
+        new("tiny-q5_0", "Tiny (Q5_0)", GgmlType.Tiny, QuantizationType.Q5_0, "ggml-tiny-q5_0.bin", "~31 MB", 31, 99, false),
+        new("base", "Base", GgmlType.Base, QuantizationType.NoQuantization, "ggml-base.bin", "~142 MB", 142, 99, true),
+        new("base.en", "Base (English)", GgmlType.BaseEn, QuantizationType.NoQuantization, "ggml-base.en.bin", "~142 MB", 142, 1, false),
+        new("base-q5_0", "Base (Q5_0)", GgmlType.Base, QuantizationType.Q5_0, "ggml-base-q5_0.bin", "~57 MB", 57, 99, true),
+        new("small", "Small", GgmlType.Small, QuantizationType.NoQuantization, "ggml-small.bin", "~466 MB", 466, 99, false),
+        new("small.en", "Small (English)", GgmlType.SmallEn, QuantizationType.NoQuantization, "ggml-small.en.bin", "~466 MB", 466, 1, false),
+        new("small-q5_0", "Small (Q5_0)", GgmlType.Small, QuantizationType.Q5_0, "ggml-small-q5_0.bin", "~182 MB", 182, 99, false),
+        new("medium", "Medium", GgmlType.Medium, QuantizationType.NoQuantization, "ggml-medium.bin", "~1.5 GB", 1530, 99, false),
+        new("medium.en", "Medium (English)", GgmlType.MediumEn, QuantizationType.NoQuantization, "ggml-medium.en.bin", "~1.5 GB", 1530, 1, false),
+        new("medium-q5_0", "Medium (Q5_0)", GgmlType.Medium, QuantizationType.Q5_0, "ggml-medium-q5_0.bin", "~601 MB", 601, 99, false),
+        new("large-v3-turbo", "Large V3 Turbo", GgmlType.LargeV3Turbo, QuantizationType.NoQuantization, "ggml-large-v3-turbo.bin", "~1.6 GB", 1620, 99, false),
+        new("large-v3-turbo-q5_0", "Large V3 Turbo (Q5_0)", GgmlType.LargeV3Turbo, QuantizationType.Q5_0, "ggml-large-v3-turbo-q5_0.bin", "~684 MB", 684, 99, false),
+    ];
+
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private IPluginHostServices? _host;
+    private WhisperFactory? _factory;
+    private string? _selectedModelId;
+    private string? _loadedModelId;
+
+    public string PluginId => "com.typewhisper.whisper-cpp";
+    public string PluginName => "whisper.cpp (Local)";
+    public string PluginVersion => "1.0.0";
+
+    public string ProviderId => "whisper-cpp";
+    public string ProviderDisplayName => "Local (whisper.cpp)";
+    public bool IsConfigured => true;
+    public string? SelectedModelId => _selectedModelId;
+    public bool SupportsTranslation => true;
+    public bool SupportsModelDownload => true;
+    public IReadOnlyList<string> SupportedLanguages => [];
+
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } = Models.Select(model =>
+        new PluginModelInfo(model.Id, model.DisplayName)
+        {
+            SizeDescription = model.SizeDescription,
+            EstimatedSizeMB = model.EstimatedSizeMB,
+            IsRecommended = model.IsRecommended,
+            LanguageCount = model.LanguageCount,
+        }).ToList();
+
+    public Task ActivateAsync(IPluginHostServices host)
+    {
+        _host = host;
+        _selectedModelId = host.GetSetting<string>("selectedModel");
+        host.Log(PluginLogLevel.Info, "Activated");
+        return Task.CompletedTask;
+    }
+
+    public async Task DeactivateAsync()
+    {
+        await UnloadModelAsync();
+        _host = null;
+    }
+
+    public UserControl? CreateSettingsView() => null;
+
+    public void SelectModel(string modelId)
+    {
+        _ = GetModel(modelId);
+        _selectedModelId = modelId;
+        _host?.SetSetting("selectedModel", modelId);
+    }
+
+    public bool IsModelDownloaded(string modelId) => File.Exists(GetModelPath(modelId));
+
+    public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var model = GetModel(modelId);
+            var modelPath = GetModelPath(modelId);
+            var modelDirectory = Path.GetDirectoryName(modelPath)!;
+            Directory.CreateDirectory(modelDirectory);
+
+            if (File.Exists(modelPath))
+            {
+                progress?.Report(1.0);
+                return;
+            }
+
+            var tempPath = Path.Combine(modelDirectory, $"{Path.GetFileName(modelPath)}.{Guid.NewGuid():N}.tmp");
+
+            try
+            {
+                await using var modelStream = await WhisperGgmlDownloader.Default
+                    .GetGgmlModelAsync(model.Type, model.Quantization, ct);
+
+                var buffer = new byte[81920];
+                long bytesCopied = 0;
+                var totalBytes = modelStream.CanSeek ? modelStream.Length : 0;
+
+                await using (var fileStream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+                {
+                    while (true)
+                    {
+                        var read = await modelStream.ReadAsync(buffer, ct);
+                        if (read == 0)
+                            break;
+
+                        await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                        bytesCopied += read;
+
+                        if (totalBytes > 0)
+                            progress?.Report((double)bytesCopied / totalBytes);
+                    }
+
+                    await fileStream.FlushAsync(ct);
+                }
+
+                if (File.Exists(modelPath))
+                    File.Delete(modelPath);
+
+                File.Move(tempPath, modelPath);
+                progress?.Report(1.0);
+            }
+            catch
+            {
+                TryDeleteFile(tempPath);
+                throw;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task LoadModelAsync(string modelId, CancellationToken ct)
+    {
+        var modelPath = GetModelPath(modelId);
+        if (!File.Exists(modelPath))
+            throw new FileNotFoundException($"Model files not found for: {modelId}", modelPath);
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            DisposeFactoryUnsafe();
+            _factory = WhisperFactory.FromPath(modelPath);
+            _loadedModelId = modelId;
+            _selectedModelId = modelId;
+            _host?.SetSetting("selectedModel", modelId);
+            _host?.Log(PluginLogLevel.Info, $"Loaded model {modelId}");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<PluginTranscriptionResult> TranscribeAsync(
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_factory is null || _loadedModelId is null)
+                throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
+
+            var builder = _factory.CreateBuilder()
+                .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language);
+
+            if (!string.IsNullOrWhiteSpace(prompt))
+                builder.WithPrompt(prompt);
+
+            if (translate)
+                builder.WithTranslate();
+
+            using var processor = builder.Build();
+            await using var audioStream = new MemoryStream(wavAudio, writable: false);
+
+            var text = new StringBuilder();
+            string? detectedLanguage = null;
+            double durationSeconds = 0;
+            float? noSpeechProbability = null;
+
+            await foreach (var segment in processor.ProcessAsync(audioStream, ct))
+            {
+                var segmentText = segment.Text.Trim();
+                if (segmentText.Length > 0)
+                {
+                    if (text.Length > 0)
+                        text.Append(' ');
+
+                    text.Append(segmentText);
+                }
+
+                if (string.IsNullOrWhiteSpace(detectedLanguage) && !string.IsNullOrWhiteSpace(segment.Language))
+                    detectedLanguage = segment.Language;
+
+                durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
+                noSpeechProbability = segment.NoSpeechProbability;
+            }
+
+            return new PluginTranscriptionResult(
+                text.ToString().Trim(),
+                detectedLanguage,
+                durationSeconds,
+                noSpeechProbability);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task UnloadModelAsync()
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            DisposeFactoryUnsafe();
+            _loadedModelId = null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public void Dispose()
+    {
+        DisposeFactoryUnsafe();
+        _gate.Dispose();
+    }
+
+    private ModelDefinition GetModel(string modelId) => Models.FirstOrDefault(model => model.Id == modelId)
+        ?? throw new ArgumentException($"Unknown model: {modelId}");
+
+    private string GetModelPath(string modelId)
+    {
+        var host = _host ?? throw new InvalidOperationException("Plugin is not activated.");
+        var model = GetModel(modelId);
+        return Path.Combine(host.PluginDataDirectory, "Models", model.FileName);
+    }
+
+    private void DisposeFactoryUnsafe()
+    {
+        _factory?.Dispose();
+        _factory = null;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+        }
+    }
+
+    private sealed record ModelDefinition(
+        string Id,
+        string DisplayName,
+        GgmlType Type,
+        QuantizationType Quantization,
+        string FileName,
+        string SizeDescription,
+        long EstimatedSizeMB,
+        int LanguageCount,
+        bool IsRecommended);
+}

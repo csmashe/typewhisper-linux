@@ -36,6 +36,12 @@ public sealed class PluginAssemblyLoadContext : AssemblyLoadContext
         var path = _resolver.ResolveAssemblyToPath(assemblyName);
         return path is not null ? LoadFromAssemblyPath(path) : null;
     }
+
+    protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
+    {
+        var path = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
+        return path is not null ? LoadUnmanagedDllFromPath(path) : IntPtr.Zero;
+    }
 }
 
 /// <summary>
