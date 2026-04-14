@@ -58,7 +58,7 @@ public sealed partial class LicenseSectionViewModel : ObservableObject
         ConnectDiscordCommand = new AsyncRelayCommand(ConnectDiscordAsync, CanConnectDiscord);
         ReconnectDiscordCommand = new AsyncRelayCommand(ReconnectDiscordAsync, CanReconnectDiscord);
         RefreshDiscordStatusCommand = new AsyncRelayCommand(RefreshDiscordStatusAsync, CanRefreshDiscord);
-        OpenClaimOnWebCommand = new RelayCommand(() => OpenUrl(Discord.GitHubSponsorsUrl));
+        OpenGitHubSponsorsClaimCommand = new RelayCommand(() => OpenUrl(Discord.GitHubSponsorsUrl));
 
         License.PropertyChanged += OnServicePropertyChanged;
         Discord.PropertyChanged += OnServicePropertyChanged;
@@ -84,9 +84,8 @@ public sealed partial class LicenseSectionViewModel : ObservableObject
     public bool ShowSupporterManage => License.HasSupporterLicense;
     public bool ShowDiscordSection => License.HasSupporterLicense;
     public bool ShowDiscordConnect => ShowDiscordSection && Discord.ClaimState is SupporterDiscordClaimState.Unavailable or SupporterDiscordClaimState.Unlinked;
-    public bool ShowDiscordRefresh => ShowDiscordSection && Discord.ClaimState is SupporterDiscordClaimState.Pending or SupporterDiscordClaimState.Linked or SupporterDiscordClaimState.Failed;
-    public bool ShowDiscordReconnect => ShowDiscordSection && Discord.ClaimState is SupporterDiscordClaimState.Pending or SupporterDiscordClaimState.Linked or SupporterDiscordClaimState.Failed;
-
+    public bool ShowDiscordRefresh => ShowDiscordSection && (Discord.IsHelperUnavailable || Discord.ClaimState is SupporterDiscordClaimState.Pending or SupporterDiscordClaimState.Linked or SupporterDiscordClaimState.Failed);
+    public bool ShowDiscordReconnect => ShowDiscordSection && !Discord.IsHelperUnavailable && Discord.ClaimState is SupporterDiscordClaimState.Pending or SupporterDiscordClaimState.Linked or SupporterDiscordClaimState.Failed;
     public string CommercialStatusTitle => License.CommercialStatus switch
     {
         LicenseStatus.Active => Loc.Instance["License.CommercialActiveTitle"],
@@ -121,6 +120,7 @@ public sealed partial class LicenseSectionViewModel : ObservableObject
 
     public string DiscordStatusTitle => Discord.ClaimState switch
     {
+        _ when Discord.IsHelperUnavailable => Loc.Instance["License.DiscordServiceUnavailableTitle"],
         SupporterDiscordClaimState.Linked => Loc.Instance["License.DiscordLinkedTitle"],
         SupporterDiscordClaimState.Pending => Loc.Instance["License.DiscordPendingTitle"],
         SupporterDiscordClaimState.Failed => Loc.Instance["License.DiscordFailedTitle"],
@@ -131,6 +131,9 @@ public sealed partial class LicenseSectionViewModel : ObservableObject
     {
         get
         {
+            if (Discord.IsHelperUnavailable)
+                return Loc.Instance["License.DiscordServiceUnavailableDetail"];
+
             return Discord.ClaimState switch
             {
                 SupporterDiscordClaimState.Linked when !string.IsNullOrWhiteSpace(Discord.DiscordUsername) && Discord.HasLinkedRoles
@@ -152,7 +155,7 @@ public sealed partial class LicenseSectionViewModel : ObservableObject
     public RelayCommand SelectBusinessUserCommand { get; }
     public RelayCommand<string> OpenUrlCommand { get; }
     public RelayCommand OpenCustomerPortalCommand { get; }
-    public RelayCommand OpenClaimOnWebCommand { get; }
+    public RelayCommand OpenGitHubSponsorsClaimCommand { get; }
     public AsyncRelayCommand ActivateCommercialLicenseCommand { get; }
     public AsyncRelayCommand ActivateSupporterLicenseCommand { get; }
     public AsyncRelayCommand DeactivateCommercialLicenseCommand { get; }

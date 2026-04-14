@@ -256,9 +256,9 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <Button Content="{loc:Str License.ClaimOnWeb}"
+                        <Button Content="{loc:Str License.ClaimGitHubSponsorsOnWeb}"
                                 Style="{StaticResource LinkButtonStyle}"
-                                Command="{Binding OpenClaimOnWebCommand}"
+                                Command="{Binding OpenGitHubSponsorsClaimCommand}"
                                 Margin="0,12,0,0"
                                 HorizontalAlignment="Left"/>
                     </StackPanel>

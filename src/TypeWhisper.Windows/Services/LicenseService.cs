@@ -98,9 +98,9 @@ public sealed partial class LicenseService : ObservableObject
     public bool IsBusinessUser => UserType == LicenseUserType.Business;
     public bool HasCommercialLicense => CommercialStatus == LicenseStatus.Active;
     public bool HasSupporterLicense => SupporterStatus == LicenseStatus.Active;
-    public bool IsSupporter => SupporterStatus == LicenseStatus.Active && SupporterTier is not null;
+    public bool IsSupporter => SupporterStatus == LicenseStatus.Active && EffectiveSupporterTier is not null;
     public bool ShouldShowReminder => IsBusinessUser && !HasCommercialLicense;
-    public SupporterTier SupporterBadgeTier => this.SupporterTier ?? global::TypeWhisper.Windows.Services.SupporterTier.None;
+    public SupporterTier SupporterBadgeTier => EffectiveSupporterTier ?? global::TypeWhisper.Windows.Services.SupporterTier.None;
 
     public string? CommercialTierDisplayName => CommercialTier switch
     {
@@ -110,7 +110,7 @@ public sealed partial class LicenseService : ObservableObject
         _ => null
     };
 
-    public string? SupporterTierDisplayName => SupporterTier switch
+    public string? SupporterTierDisplayName => EffectiveSupporterTier switch
     {
         global::TypeWhisper.Windows.Services.SupporterTier.Bronze => "Bronze",
         global::TypeWhisper.Windows.Services.SupporterTier.Silver => "Silver",
@@ -120,8 +120,39 @@ public sealed partial class LicenseService : ObservableObject
 
     public SupporterClaimProof? SupporterClaimProof =>
         IsSupporter && !string.IsNullOrWhiteSpace(_supporterLicenseKey) && !string.IsNullOrWhiteSpace(_supporterActivationId)
-            ? new SupporterClaimProof(_supporterLicenseKey!, _supporterActivationId!, SupporterTier!.Value)
+            ? new SupporterClaimProof(_supporterLicenseKey!, _supporterActivationId!, EffectiveSupporterTier!.Value)
             : null;
+
+    public IReadOnlyList<SupporterClaimProof> GetDiscordClaimProofCandidates()
+    {
+        var proofs = new List<SupporterClaimProof>(2);
+
+        if (SupporterClaimProof is { } supporterProof)
+            proofs.Add(supporterProof);
+
+        if (CommercialStatus == LicenseStatus.Active &&
+            !string.IsNullOrWhiteSpace(_commercialLicenseKey) &&
+            !string.IsNullOrWhiteSpace(_commercialActivationId))
+        {
+            var commercialProof = new SupporterClaimProof(
+                _commercialLicenseKey!,
+                _commercialActivationId!,
+                EffectiveSupporterTier ?? global::TypeWhisper.Windows.Services.SupporterTier.Bronze);
+
+            if (!proofs.Any(p => p.Key == commercialProof.Key && p.ActivationId == commercialProof.ActivationId))
+                proofs.Add(commercialProof);
+        }
+
+        return proofs;
+    }
+
+    private SupporterTier? EffectiveSupporterTier => SupporterTier switch
+    {
+        null => null,
+        global::TypeWhisper.Windows.Services.SupporterTier.None when SupporterStatus == LicenseStatus.Active
+            => global::TypeWhisper.Windows.Services.SupporterTier.Bronze,
+        var tier => tier,
+    };
 
     public void SetUserType(LicenseUserType type)
     {
@@ -289,7 +320,7 @@ public sealed partial class LicenseService : ObservableObject
             var validation = await ValidateCoreAsync(_supporterLicenseKey, _supporterActivationId, ct);
             SupporterStatus = validation.Status == "granted" ? LicenseStatus.Active : LicenseStatus.Expired;
             SupporterTier = validation.Status == "granted"
-                ? DetectSupporterTier(validation.Benefit?.Description)
+                ? DetectSupporterTier(validation.Benefit?.Description) ?? global::TypeWhisper.Windows.Services.SupporterTier.Bronze
                 : null;
             _supporterLastValidated = DateTime.UtcNow;
             SupporterActivationError = null;
@@ -322,6 +353,29 @@ public sealed partial class LicenseService : ObservableObject
         {
             await ValidateSupporterAsync(ct);
         }
+    }
+
+    public async Task<bool> ReactivateStoredSupporterKeyAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_supporterLicenseKey))
+            return false;
+
+        var previousActivationId = _supporterActivationId;
+        var previousStatus = SupporterStatus;
+        var previousTier = SupporterTier;
+        var previousLastValidated = _supporterLastValidated;
+
+        await ActivateSupporterKeyAsync(_supporterLicenseKey, ct);
+        if (SupporterStatus == LicenseStatus.Active && !string.IsNullOrWhiteSpace(_supporterActivationId))
+            return true;
+
+        _supporterActivationId = previousActivationId;
+        SupporterStatus = previousStatus;
+        SupporterTier = previousTier;
+        _supporterLastValidated = previousLastValidated;
+        PersistStore();
+        NotifyStateChanged();
+        return false;
     }
 
     public async Task DeactivateSupporterLicenseAsync(CancellationToken ct = default)
@@ -570,7 +624,7 @@ public sealed partial class LicenseService : ObservableObject
                 ? status
                 : LicenseStatus.Unlicensed;
             SupporterTier = Enum.TryParse<SupporterTier>(legacy.Tier, out var tier)
-                ? tier
+                ? NormalizePersistedSupporterTier(tier, SupporterStatus)
                 : null;
             _supporterLastValidated = DateTime.TryParse(legacy.LastValidated, out var lastValidated)
                 ? lastValidated
@@ -614,7 +668,7 @@ public sealed partial class LicenseService : ObservableObject
                 ? supporterStatus
                 : LicenseStatus.Unlicensed;
             _supporterTier = Enum.TryParse<SupporterTier>(supporter.Tier, out var supporterTier)
-                ? supporterTier
+                ? NormalizePersistedSupporterTier(supporterTier, _supporterStatus)
                 : null;
             _supporterLastValidated = DateTime.TryParse(supporter.LastValidated, out var supporterLastValidated)
                 ? supporterLastValidated
@@ -635,6 +689,11 @@ public sealed partial class LicenseService : ObservableObject
         var decrypted = ProtectedData.Unprotect(bytes, Entropy, DataProtectionScope.CurrentUser);
         return Encoding.UTF8.GetString(decrypted);
     }
+
+    private static SupporterTier? NormalizePersistedSupporterTier(SupporterTier tier, LicenseStatus status) =>
+        tier == global::TypeWhisper.Windows.Services.SupporterTier.None && status == LicenseStatus.Active
+            ? global::TypeWhisper.Windows.Services.SupporterTier.Bronze
+            : tier;
 
     private void NotifyStateChanged()
     {

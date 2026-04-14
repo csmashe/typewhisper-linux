@@ -1,6 +1,8 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Win32;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -20,6 +22,8 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private FileTranscriptionWindow? _fileTranscriptionWindow;
     private WelcomeWindow? _welcomeWindow;
+    private DispatcherTimer? _protocolCallbackTimer;
+    private static readonly string ProtocolCallbackInboxPath = Path.Combine(TypeWhisperEnvironment.DataPath, "protocol-callback.txt");
 
     public static ServiceProvider Services { get; private set; } = null!;
 
@@ -53,6 +57,7 @@ public partial class App : Application
         };
 
         TypeWhisperEnvironment.EnsureDirectories();
+        EnsureCustomProtocolRegistration();
 
         var services = new ServiceCollection();
         ConfigureServices(services);
@@ -90,6 +95,8 @@ public partial class App : Application
             await licenseService.ValidateAllIfNeededAsync();
             await supporterDiscord.RefreshStatusIfNeededAsync(licenseService);
         });
+        _ = ProcessProtocolArgsAsync(e.Args);
+        StartProtocolCallbackWatcher();
 
         // Plugin registry: first-run auto-install + update check (non-blocking)
         var pluginRegistry = _serviceProvider.GetRequiredService<PluginRegistryService>();
@@ -188,6 +195,57 @@ public partial class App : Application
         var updateService = _serviceProvider.GetRequiredService<UpdateService>();
         updateService.Initialize();
         _ = updateService.CheckForUpdatesAsync();
+    }
+
+    private async Task ProcessProtocolArgsAsync(string[] args)
+    {
+        var raw = args.FirstOrDefault(SupporterDiscordService.CanHandleCallbackUri);
+        if (string.IsNullOrWhiteSpace(raw) || !Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+            return;
+
+        await HandleProtocolCallbackUriAsync(uri);
+    }
+
+    private void StartProtocolCallbackWatcher()
+    {
+        _protocolCallbackTimer?.Stop();
+        _protocolCallbackTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(800)
+        };
+        _protocolCallbackTimer.Tick += async (_, _) =>
+        {
+            try
+            {
+                if (!File.Exists(ProtocolCallbackInboxPath))
+                    return;
+
+                var raw = File.ReadAllText(ProtocolCallbackInboxPath).Trim();
+                File.Delete(ProtocolCallbackInboxPath);
+
+                if (Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+                    await HandleProtocolCallbackUriAsync(uri);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Protocol callback watcher failed: {ex.Message}");
+            }
+        };
+        _protocolCallbackTimer.Start();
+    }
+
+    private async Task HandleProtocolCallbackUriAsync(Uri uri)
+    {
+        if (!SupporterDiscordService.CanHandleCallbackUri(uri))
+            return;
+
+        var licenseService = _serviceProvider!.GetRequiredService<LicenseService>();
+        var supporterDiscord = _serviceProvider.GetRequiredService<SupporterDiscordService>();
+        var handled = await supporterDiscord.HandleCallbackUriAsync(uri, licenseService);
+        if (!handled)
+            return;
+
+        ShowSettingsWindow(SettingsRoute.License);
     }
 
     private void ShowSettingsWindow(SettingsRoute? route = null, bool presentFileImporter = false)
@@ -314,8 +372,36 @@ public partial class App : Application
         services.AddTransient<WelcomeWindow>();
     }
 
+    private static void EnsureCustomProtocolRegistration()
+    {
+        try
+        {
+            var exePath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(exePath))
+                return;
+
+            using var key = Registry.CurrentUser.CreateSubKey(@"Software\Classes\typewhisper");
+            if (key is null)
+                return;
+
+            key.SetValue(string.Empty, "URL:TypeWhisper Protocol");
+            key.SetValue("URL Protocol", string.Empty);
+
+            using var iconKey = key.CreateSubKey("DefaultIcon");
+            iconKey?.SetValue(string.Empty, $"\"{exePath}\",0");
+
+            using var commandKey = key.CreateSubKey(@"shell\open\command");
+            commandKey?.SetValue(string.Empty, $"\"{exePath}\" \"%1\"");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Protocol registration failed: {ex.Message}");
+        }
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
+        _protocolCallbackTimer?.Stop();
         _trayIcon?.Dispose();
         _serviceProvider?.Dispose();
         base.OnExit(e);
