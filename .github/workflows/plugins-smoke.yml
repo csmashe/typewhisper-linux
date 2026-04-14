@@ -21,7 +21,7 @@ jobs:
       projects: ${{ steps.discover.outputs.projects }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - id: discover
         shell: pwsh
@@ -45,7 +45,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Validate plugin manifests and localization files
         shell: pwsh
@@ -101,13 +101,13 @@ jobs:
         plugin: ${{ fromJson(needs.discover-plugins.outputs.projects) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Ensure NuGet global packages folder
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE '.nuget\packages') | Out-Null
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
           cache: true
@@ -160,7 +160,7 @@ jobs:
             }
           }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: plugins-smoke-${{ matrix.plugin.name }}
