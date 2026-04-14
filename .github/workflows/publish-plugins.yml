@@ -61,6 +61,7 @@ jobs:
             'google-cloud-stt'   = 'TypeWhisper.Plugin.GoogleCloudStt'
             'qwen3-stt'          = 'TypeWhisper.Plugin.Qwen3Stt'
             'voxtral'            = 'TypeWhisper.Plugin.Voxtral'
+            'whisper-cpp'        = 'TypeWhisper.Plugin.WhisperCpp'
             'file-memory'        = 'TypeWhisper.Plugin.FileMemory'
             'openai-vector-memory' = 'TypeWhisper.Plugin.OpenAiVectorMemory'
           }
@@ -171,7 +172,9 @@ jobs:
               git fetch origin gh-pages
               git reset --hard origin/gh-pages
 
-              $registry = Get-Content plugins.json | ConvertFrom-Json
+              $registry = @(
+                Get-Content plugins.json | ConvertFrom-Json
+              )
               $updated = $false
 
               for ($j = 0; $j -lt $registry.Count; $j++) {
@@ -186,7 +189,25 @@ jobs:
               }
 
               if (-not $updated) {
-                Write-Host "Warning: Plugin $env:PLUGIN_ID not found in registry, skipping update"
+                $manifestPath = Join-Path ".." "plugins/$env:PROJECT_NAME/manifest.json"
+                $manifest = Get-Content $manifestPath | ConvertFrom-Json
+
+                $registry += [pscustomobject]@{
+                  id = $manifest.id
+                  name = $manifest.name
+                  version = $env:PLUGIN_VERSION
+                  minHostVersion = $manifest.minHostVersion
+                  author = $manifest.author
+                  description = $manifest.description
+                  category = $manifest.category
+                  size = [long]$env:ZIP_SIZE
+                  downloadUrl = $downloadUrl
+                  iconSystemName = $manifest.iconSystemName
+                  requiresApiKey = [bool]($manifest.requiresApiKey)
+                  descriptions = $manifest.descriptions
+                }
+
+                Write-Host "Added $env:PLUGIN_ID to registry at v$env:PLUGIN_VERSION"
               }
 
               $registry | ConvertTo-Json -Depth 4 | Set-Content plugins.json
