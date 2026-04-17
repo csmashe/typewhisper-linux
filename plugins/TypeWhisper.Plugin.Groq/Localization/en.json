@@ -1,9 +1,17 @@
 {
   "Settings.Test": "Test",
+  "Settings.Refresh": "Refresh",
   "Settings.Saved": "Saved",
   "Settings.EnterApiKey": "Please enter an API key first",
+  "Settings.ApiKeyHint": "Stored securely and used for both Groq transcription and LLM requests.",
   "Settings.Testing": "Testing...",
   "Settings.ApiKeyValid": "API key valid!",
   "Settings.ApiKeyInvalid": "Invalid API key",
+  "Settings.TranscriptionModel": "Transcription Model",
+  "Settings.LlmModel": "LLM Model",
+  "Settings.LlmModelHint": "Using the default Groq LLM list. Press Refresh to fetch the current models.",
+  "Settings.ModelsFetched": "Fetched {0} Groq LLM model(s).",
+  "Settings.ModelsFetchedHint": "Showing {0} Groq LLM model(s) fetched from the API.",
+  "Settings.RefreshFailed": "Could not fetch Groq LLM models. Keeping the saved/default list.",
   "Settings.Error": "Error: {0}"
 }
