@@ -36,6 +36,11 @@ internal static partial class NativeMethods
     public const int VK_LMENU = 0xA4;
     public const int VK_RMENU = 0xA5;
     public const int VK_SPACE = 0x20;
+    public const int VK_PRIOR = 0x21;
+    public const int VK_NEXT = 0x22;
+    public const int VK_END = 0x23;
+    public const int VK_HOME = 0x24;
+    public const int VK_LEFT = 0x25;
     public const int VK_F1 = 0x70;
     public const int VK_F9 = 0x78;
     public const int VK_F12 = 0x7B;
@@ -97,12 +102,33 @@ internal static partial class NativeMethods
     public const int VK_RETURN = 0x0D;
     public const int VK_ESCAPE = 0x1B;
     public const int VK_BACK = 0x08;
+    public const int VK_TAB = 0x09;
+    public const int VK_PAUSE = 0x13;
     public const int VK_UP = 0x26;
+    public const int VK_RIGHT = 0x27;
     public const int VK_DOWN = 0x28;
+    public const int VK_INSERT = 0x2D;
+    public const int VK_DELETE = 0x2E;
+    public const int VK_SNAPSHOT = 0x2C;
+    public const int VK_SCROLL = 0x91;
     public const int VK_C = 0x43;
+    public const int VK_NUMPAD0 = 0x60;
 
     // Clipboard
     public const int VK_V = 0x56;
+
+    // OEM keys
+    public const int VK_OEM_1 = 0xBA;
+    public const int VK_OEM_PLUS = 0xBB;
+    public const int VK_OEM_COMMA = 0xBC;
+    public const int VK_OEM_MINUS = 0xBD;
+    public const int VK_OEM_PERIOD = 0xBE;
+    public const int VK_OEM_2 = 0xBF;
+    public const int VK_OEM_3 = 0xC0;
+    public const int VK_OEM_4 = 0xDB;
+    public const int VK_OEM_5 = 0xDC;
+    public const int VK_OEM_6 = 0xDD;
+    public const int VK_OEM_7 = 0xDE;
 
     // Keyboard input simulation
     [LibraryImport("user32.dll", SetLastError = true)]

@@ -442,7 +442,7 @@ internal static class HotkeyParser
                 case "WIN" or "SUPER" or "META":
                     modifiers |= NativeMethods.MOD_WIN; break;
                 default:
-                    vk = ParseKey(upper);
+                    vk = ParseKey(part.Trim());
                     if (vk == 0) return false;
                     break;
             }
@@ -450,19 +450,6 @@ internal static class HotkeyParser
         return vk != 0 || modifiers != 0;
     }
 
-    private static uint ParseKey(string key)
-    {
-        if (key.StartsWith('F') && key.Length is 2 or 3 &&
-            int.TryParse(key.AsSpan(1), out var fNum) && fNum is >= 1 and <= 12)
-            return (uint)(NativeMethods.VK_F1 + fNum - 1);
-
-        return key switch
-        {
-            "ESC" or "ESCAPE" => NativeMethods.VK_ESCAPE,
-            "SPACE" => NativeMethods.VK_SPACE,
-            _ when key.Length == 1 && key[0] is >= 'A' and <= 'Z' => (uint)key[0],
-            _ when key.Length == 1 && key[0] is >= '0' and <= '9' => (uint)key[0],
-            _ => 0
-        };
-    }
+    private static uint ParseKey(string key) =>
+        HotkeyKeyMap.TryGetVirtualKey(key, out var virtualKey) ? virtualKey : 0;
 }

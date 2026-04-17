@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Extensions.DependencyInjection;
+using TypeWhisper.Windows.Native;
 using TypeWhisper.Windows.Services;
 
 namespace TypeWhisper.Windows.Controls;
@@ -198,42 +199,8 @@ public sealed class HotkeyRecorderControl : Control
         return string.Join("+", parts);
     }
 
-    internal static string FormatKeyName(Key key) => key switch
-    {
-        Key.Space => "Space",
-        >= Key.F1 and <= Key.F12 => key.ToString(),
-        >= Key.A and <= Key.Z => key.ToString(),
-        >= Key.D0 and <= Key.D9 => ((char)('0' + (key - Key.D0))).ToString(),
-        >= Key.NumPad0 and <= Key.NumPad9 => "Num" + (key - Key.NumPad0),
-        Key.OemMinus => "-",
-        Key.OemPlus => "=",
-        Key.OemOpenBrackets => "[",
-        Key.OemCloseBrackets => "]",
-        Key.OemSemicolon => ";",
-        Key.OemQuotes => "'",
-        Key.OemComma => ",",
-        Key.OemPeriod => ".",
-        Key.OemQuestion => "/",
-        Key.OemBackslash or Key.Oem5 => "\\",
-        Key.OemTilde => "`",
-        Key.Return => "Enter",
-        Key.Back => "Backspace",
-        Key.Tab => "Tab",
-        Key.Delete => "Delete",
-        Key.Insert => "Insert",
-        Key.Home => "Home",
-        Key.End => "End",
-        Key.PageUp => "PageUp",
-        Key.PageDown => "PageDown",
-        Key.Up => "Up",
-        Key.Down => "Down",
-        Key.Left => "Left",
-        Key.Right => "Right",
-        Key.PrintScreen or Key.Snapshot => "PrintScreen",
-        Key.Pause => "Pause",
-        Key.Scroll => "ScrollLock",
-        _ => ""
-    };
+    internal static string FormatKeyName(Key key) =>
+        HotkeyKeyMap.TryGetToken(key, out var token) ? token : "";
 
     internal static bool IsModifierKey(Key key) => key
         is Key.LeftCtrl or Key.RightCtrl
