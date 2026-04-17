@@ -58,12 +58,6 @@ public partial class FileTranscriptionViewModel : ObservableObject
             return;
         }
 
-        if (!_modelManager.Engine.IsModelLoaded)
-        {
-            StatusText = Loc.Instance["Status.NoModelLoaded"];
-            return;
-        }
-
         FilePath = filePath;
         IsProcessing = true;
         HasResult = false;
@@ -75,6 +69,12 @@ public partial class FileTranscriptionViewModel : ObservableObject
 
         try
         {
+            if (!await _modelManager.EnsureModelLoadedAsync(cancellationToken: _cts.Token))
+            {
+                StatusText = Loc.Instance["Status.NoModelLoaded"];
+                return;
+            }
+
             var samples = await _audioFile.LoadAudioAsync(filePath, _cts.Token);
 
             StatusText = Loc.Instance["FileTranscription.Transcribing"];

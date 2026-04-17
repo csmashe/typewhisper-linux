@@ -71,11 +71,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                     return new PluginTranscriptionEngineAdapter(plugin);
             }
 
-            // Fallback: first available transcription engine
-            var fallback = _pluginManager.TranscriptionEngines.FirstOrDefault();
-            if (fallback is not null)
-                return new PluginTranscriptionEngineAdapter(fallback);
-
             return NoOpTranscriptionEngine.Instance;
         }
     }
@@ -243,6 +238,25 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             UnloadModel();
 
         SetStatus(modelId, ModelStatus.NotDownloaded);
+    }
+
+    public async Task<bool> EnsureModelLoadedAsync(string? modelId = null, CancellationToken cancellationToken = default)
+    {
+        var targetModelId = modelId ?? _settings.Current.SelectedModelId;
+        if (string.IsNullOrWhiteSpace(targetModelId))
+            return false;
+
+        if (ActiveModelId == targetModelId)
+        {
+            CancelAutoUnload();
+            return true;
+        }
+
+        if (!IsDownloaded(targetModelId))
+            return false;
+
+        await LoadModelAsync(targetModelId, cancellationToken);
+        return true;
     }
 
     /// <summary>
