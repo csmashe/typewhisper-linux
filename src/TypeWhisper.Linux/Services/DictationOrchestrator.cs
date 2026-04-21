@@ -65,7 +65,7 @@ public sealed class DictationOrchestrator : IDisposable
 
                 var path = SaveWav(wav);
                 RecordingCaptured?.Invoke(this, path);
-                Debug.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
+                Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
 
                 await TranscribeAndInsertAsync(wav);
             }
@@ -117,7 +117,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Dictation] Transcription failed: {ex}");
+            Trace.WriteLine($"[Dictation] Transcription failed: {ex}");
             StatusMessage?.Invoke(this, $"Transcription failed: {ex.Message}");
         }
         finally

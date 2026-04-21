@@ -46,6 +46,10 @@ public partial class App : Application
         var settings = services.GetRequiredService<ISettingsService>();
         settings.Load();
 
+        // First-run: install any bundled plugins that aren't already on disk.
+        var deployer = services.GetRequiredService<BundledPluginDeployer>();
+        deployer.DeployIfMissing();
+
         // Discover and activate plugins.
         var pluginManager = services.GetRequiredService<PluginManager>();
         await pluginManager.InitializeAsync();

@@ -52,7 +52,7 @@ public sealed class PluginLocalization : IPluginLocalization
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[PluginLocalization] Failed to load {file}: {ex.Message}");
+                    Trace.WriteLine($"[PluginLocalization] Failed to load {file}: {ex.Message}");
                 }
             }
         }

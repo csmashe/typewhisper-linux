@@ -73,12 +73,12 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public void Log(PluginLogLevel level, string message)
     {
-        Debug.WriteLine($"[Plugin:{_pluginId}] [{level}] {message}");
+        Trace.WriteLine($"[Plugin:{_pluginId}] [{level}] {message}");
     }
 
     public void NotifyCapabilitiesChanged()
     {
-        Debug.WriteLine($"[Plugin:{_pluginId}] Capabilities changed, notifying host");
+        Trace.WriteLine($"[Plugin:{_pluginId}] Capabilities changed, notifying host");
         _onCapabilitiesChanged?.Invoke();
     }
 
@@ -131,7 +131,7 @@ public sealed class PluginHostServices : IPluginHostServices
             }
             catch (JsonException ex)
             {
-                Debug.WriteLine($"[Plugin:{_pluginId}] Failed to deserialize setting '{key}': {ex.Message}");
+                Trace.WriteLine($"[Plugin:{_pluginId}] Failed to deserialize setting '{key}': {ex.Message}");
             }
         }
         return default;
@@ -163,7 +163,7 @@ public sealed class PluginHostServices : IPluginHostServices
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[Plugin:{_pluginId}] Failed to load settings: {ex.Message}");
+                    Trace.WriteLine($"[Plugin:{_pluginId}] Failed to load settings: {ex.Message}");
                     _settingsCache = [];
                 }
             }
@@ -186,7 +186,7 @@ public sealed class PluginHostServices : IPluginHostServices
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Plugin:{_pluginId}] Failed to save settings: {ex.Message}");
+            Trace.WriteLine($"[Plugin:{_pluginId}] Failed to save settings: {ex.Message}");
         }
     }
 }

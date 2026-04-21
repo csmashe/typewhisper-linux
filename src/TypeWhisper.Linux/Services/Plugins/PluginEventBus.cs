@@ -36,7 +36,7 @@ public sealed class PluginEventBus : IPluginEventBus
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[PluginEventBus] Handler for {eventType.Name} threw: {ex.Message}");
+                    Trace.WriteLine($"[PluginEventBus] Handler for {eventType.Name} threw: {ex.Message}");
                 }
             });
         }

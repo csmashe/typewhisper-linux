@@ -53,6 +53,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
+        services.AddSingleton<BundledPluginDeployer>();
 
         // Deferred until implementations land:
         //   IAudioDuckingService  (pactl per-sink-input volume)

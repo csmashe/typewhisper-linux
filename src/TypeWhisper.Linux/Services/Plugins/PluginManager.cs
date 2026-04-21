@@ -103,7 +103,7 @@ public sealed class PluginManager : IDisposable
             _allPlugins.AddRange(discovered);
         }
 
-        Debug.WriteLine($"[PluginManager] Discovered {discovered.Count} plugin(s)");
+        Trace.WriteLine($"[PluginManager] Discovered {discovered.Count} plugin(s)");
 
         var enabledState = _settings.Current.PluginEnabledState;
 
@@ -126,7 +126,7 @@ public sealed class PluginManager : IDisposable
         var plugin = GetPlugin(pluginId);
         if (plugin is null)
         {
-            Debug.WriteLine($"[PluginManager] Plugin not found: {pluginId}");
+            Trace.WriteLine($"[PluginManager] Plugin not found: {pluginId}");
             return;
         }
 
@@ -192,11 +192,11 @@ public sealed class PluginManager : IDisposable
                 _activatedPlugins.Add(plugin.Manifest.Id);
             }
 
-            Debug.WriteLine($"[PluginManager] Activated plugin: {plugin.Manifest.Id}");
+            Trace.WriteLine($"[PluginManager] Activated plugin: {plugin.Manifest.Id}");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}");
+            Trace.WriteLine($"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}");
         }
     }
 
@@ -212,11 +212,11 @@ public sealed class PluginManager : IDisposable
                 _activatedPlugins.Remove(plugin.Manifest.Id);
             }
 
-            Debug.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
+            Trace.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}");
+            Trace.WriteLine($"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}");
         }
     }
 
@@ -261,7 +261,7 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[PluginManager] Error unloading plugin {pluginId}: {ex.Message}");
+            Trace.WriteLine($"[PluginManager] Error unloading plugin {pluginId}: {ex.Message}");
         }
 
         lock (_lock)
@@ -277,7 +277,7 @@ public sealed class PluginManager : IDisposable
         var plugin = _loader.LoadPlugin(pluginDirectory);
         if (plugin is null)
         {
-            Debug.WriteLine($"[PluginManager] Failed to load plugin from {pluginDirectory}");
+            Trace.WriteLine($"[PluginManager] Failed to load plugin from {pluginDirectory}");
             return;
         }
 
@@ -310,7 +310,7 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[PluginManager] Failed to persist enabled state for {pluginId}: {ex.Message}");
+            Trace.WriteLine($"[PluginManager] Failed to persist enabled state for {pluginId}: {ex.Message}");
         }
     }
 
@@ -341,12 +341,12 @@ public sealed class PluginManager : IDisposable
                     if (!string.IsNullOrEmpty(decrypted))
                     {
                         _ = hostServices.StoreSecretAsync(secretKey, decrypted);
-                        Debug.WriteLine($"[PluginManager] Migrated API key to plugin: {pluginId}");
+                        Trace.WriteLine($"[PluginManager] Migrated API key to plugin: {pluginId}");
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[PluginManager] Failed to migrate API key for {pluginId}: {ex.Message}");
+                    Trace.WriteLine($"[PluginManager] Failed to migrate API key for {pluginId}: {ex.Message}");
                 }
             }
         }
@@ -373,7 +373,7 @@ public sealed class PluginManager : IDisposable
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[PluginManager] Error disposing plugin {plugin.Manifest.Id}: {ex.Message}");
+                Trace.WriteLine($"[PluginManager] Error disposing plugin {plugin.Manifest.Id}: {ex.Message}");
             }
 
             try
@@ -382,7 +382,7 @@ public sealed class PluginManager : IDisposable
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[PluginManager] Error unloading context for {plugin.Manifest.Id}: {ex.Message}");
+                Trace.WriteLine($"[PluginManager] Error unloading context for {plugin.Manifest.Id}: {ex.Message}");
             }
         }
 

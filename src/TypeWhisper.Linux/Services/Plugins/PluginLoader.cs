@@ -62,7 +62,7 @@ public sealed class PluginLoader
         {
             if (!Directory.Exists(searchDir))
             {
-                Debug.WriteLine($"[PluginLoader] Search directory does not exist: {searchDir}");
+                Trace.WriteLine($"[PluginLoader] Search directory does not exist: {searchDir}");
                 continue;
             }
 
@@ -74,12 +74,12 @@ public sealed class PluginLoader
                     if (plugin is not null)
                     {
                         loaded.Add(plugin);
-                        Debug.WriteLine($"[PluginLoader] Loaded plugin: {plugin.Manifest.Id} v{plugin.Manifest.Version} from {pluginDir}");
+                        Trace.WriteLine($"[PluginLoader] Loaded plugin: {plugin.Manifest.Id} v{plugin.Manifest.Version} from {pluginDir}");
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[PluginLoader] Failed to load plugin from {pluginDir}: {ex.Message}");
+                    Trace.WriteLine($"[PluginLoader] Failed to load plugin from {pluginDir}: {ex.Message}");
                 }
             }
         }
@@ -92,7 +92,7 @@ public sealed class PluginLoader
         var manifestPath = Path.Combine(pluginDir, "manifest.json");
         if (!File.Exists(manifestPath))
         {
-            Debug.WriteLine($"[PluginLoader] No manifest.json in {pluginDir}, skipping");
+            Trace.WriteLine($"[PluginLoader] No manifest.json in {pluginDir}, skipping");
             return null;
         }
 
@@ -100,14 +100,14 @@ public sealed class PluginLoader
         var manifest = JsonSerializer.Deserialize<PluginManifest>(manifestJson, ManifestJsonOptions);
         if (manifest is null)
         {
-            Debug.WriteLine($"[PluginLoader] Failed to deserialize manifest in {pluginDir}");
+            Trace.WriteLine($"[PluginLoader] Failed to deserialize manifest in {pluginDir}");
             return null;
         }
 
         var assemblyPath = Path.Combine(pluginDir, manifest.AssemblyName);
         if (!File.Exists(assemblyPath))
         {
-            Debug.WriteLine($"[PluginLoader] Assembly not found: {assemblyPath}");
+            Trace.WriteLine($"[PluginLoader] Assembly not found: {assemblyPath}");
             return null;
         }
 
@@ -117,14 +117,14 @@ public sealed class PluginLoader
         var pluginType = assembly.GetType(manifest.PluginClass);
         if (pluginType is null)
         {
-            Debug.WriteLine($"[PluginLoader] Plugin class '{manifest.PluginClass}' not found in {assemblyPath}");
+            Trace.WriteLine($"[PluginLoader] Plugin class '{manifest.PluginClass}' not found in {assemblyPath}");
             loadContext.Unload();
             return null;
         }
 
         if (!typeof(ITypeWhisperPlugin).IsAssignableFrom(pluginType))
         {
-            Debug.WriteLine($"[PluginLoader] Class '{manifest.PluginClass}' does not implement ITypeWhisperPlugin");
+            Trace.WriteLine($"[PluginLoader] Class '{manifest.PluginClass}' does not implement ITypeWhisperPlugin");
             loadContext.Unload();
             return null;
         }
@@ -132,7 +132,7 @@ public sealed class PluginLoader
         var instance = Activator.CreateInstance(pluginType) as ITypeWhisperPlugin;
         if (instance is null)
         {
-            Debug.WriteLine($"[PluginLoader] Failed to create instance of '{manifest.PluginClass}'");
+            Trace.WriteLine($"[PluginLoader] Failed to create instance of '{manifest.PluginClass}'");
             loadContext.Unload();
             return null;
         }
