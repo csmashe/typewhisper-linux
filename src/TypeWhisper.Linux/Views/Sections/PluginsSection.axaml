@@ -94,9 +94,15 @@
                             <DataTemplate x:DataType="vm:PluginSettingFieldRow">
                                 <StackPanel Spacing="4" Margin="0,0,0,8">
                                     <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                                    <ComboBox ItemsSource="{Binding Options}"
+                                              SelectedItem="{Binding SelectedOption}"
+                                              DisplayMemberBinding="{Binding Label}"
+                                              Width="320"
+                                              IsVisible="{Binding HasOptions}" />
                                     <TextBox Text="{Binding Value}"
                                              PlaceholderText="{Binding Placeholder}"
-                                             Width="320" />
+                                             Width="320"
+                                             IsVisible="{Binding !HasOptions}" />
                                     <TextBlock Text="{Binding Description}"
                                                FontSize="11"
                                                TextWrapping="Wrap"

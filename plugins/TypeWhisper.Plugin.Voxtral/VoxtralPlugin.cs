@@ -1,14 +1,12 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Windows;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Voxtral;
 
-public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.mistral.ai";
     private const string ModelId = "mistral-whisper";
@@ -28,6 +26,7 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, TypeWhisper.Plug
     {
         _host = host;
         _apiKey = await host.LoadSecretAsync("api-key");
+        _selectedModelId = host.GetSetting<string>("selectedModel") ?? ModelId;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -35,54 +34,6 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, TypeWhisper.Plug
     {
         _host = null;
         return Task.CompletedTask;
-    }
-
-    public UserControl? CreateSettingsView()
-    {
-        var panel = new StackPanel { Margin = new Thickness(8) };
-
-        var label = new TextBlock
-        {
-            Text = "Mistral API Key",
-            Margin = new Thickness(0, 0, 0, 4),
-        };
-
-        var box = new PasswordBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_apiKey))
-            box.Password = _apiKey;
-
-        var status = new TextBlock
-        {
-            Margin = new Thickness(0, 4, 0, 0),
-            FontSize = 12,
-        };
-
-        var btn = new Button
-        {
-            Content = "Save",
-            Margin = new Thickness(0, 8, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-        btn.Click += async (_, _) =>
-        {
-            var key = box.Password.Trim();
-            _apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
-            if (_host is not null)
-            {
-                if (string.IsNullOrWhiteSpace(key))
-                    await _host.DeleteSecretAsync("api-key");
-                else
-                    await _host.StoreSecretAsync("api-key", key);
-            }
-            status.Text = string.IsNullOrWhiteSpace(key) ? "" : "Saved";
-            _host?.NotifyCapabilitiesChanged();
-        };
-
-        panel.Children.Add(label);
-        panel.Children.Add(box);
-        panel.Children.Add(btn);
-        panel.Children.Add(status);
-        return new UserControl { Content = panel };
     }
 
     // ITranscriptionEnginePlugin
@@ -102,6 +53,7 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, TypeWhisper.Plug
         if (modelId != ModelId)
             throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
+        _host?.SetSetting("selectedModel", modelId);
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -130,6 +82,63 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, TypeWhisper.Plug
         {
             return false;
         }
+    }
+
+    internal async Task SetApiKeyAsync(string apiKey)
+    {
+        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+        if (_host is not null)
+        {
+            if (string.IsNullOrWhiteSpace(apiKey))
+                await _host.DeleteSecretAsync("api-key");
+            else
+                await _host.StoreSecretAsync("api-key", apiKey.Trim());
+
+            _host.NotifyCapabilitiesChanged();
+        }
+    }
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new("api-key", "API key", true, null, "Required for Voxtral transcription via Mistral."),
+        new(
+            "selectedModel",
+            "Transcription model",
+            Description: "Choose the Voxtral model.",
+            Options: TranscriptionModels.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key switch
+        {
+            "api-key" => _apiKey,
+            "selectedModel" => _selectedModelId,
+            _ => null,
+        });
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        switch (key)
+        {
+            case "api-key":
+                await SetApiKeyAsync(value ?? string.Empty);
+                break;
+            case "selectedModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectModel(value);
+                break;
+        }
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        return valid
+            ? new PluginSettingsValidationResult(true, "API key is valid.")
+            : new PluginSettingsValidationResult(false, "API key is invalid.");
     }
 
     public void Dispose() => _httpClient.Dispose();

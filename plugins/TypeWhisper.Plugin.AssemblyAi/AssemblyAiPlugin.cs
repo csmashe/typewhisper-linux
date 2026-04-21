@@ -2,13 +2,12 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.AssemblyAi;
 
-public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.assemblyai.com";
 
@@ -33,6 +32,7 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, TypeWhisper.P
     {
         _host = host;
         _apiKey = await host.LoadSecretAsync("api-key");
+        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -41,8 +41,6 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, TypeWhisper.P
         _host = null;
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => new AssemblyAiSettingsView(this);
 
     // ITranscriptionEnginePlugin
 
@@ -69,6 +67,7 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, TypeWhisper.P
         if (Models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
+        _host?.SetSetting("selectedModel", modelId);
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -185,6 +184,8 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, TypeWhisper.P
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", apiKey);
+
+            _host.NotifyCapabilitiesChanged();
         }
     }
 
@@ -206,5 +207,48 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, TypeWhisper.P
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new("api-key", "API key", true, "aa...", "Required for AssemblyAI transcription and streaming."),
+        new(
+            "selectedModel",
+            "Transcription model",
+            Description: "Choose the AssemblyAI speech model.",
+            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key switch
+        {
+            "api-key" => _apiKey,
+            "selectedModel" => _selectedModelId,
+            _ => null,
+        });
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        switch (key)
+        {
+            case "api-key":
+                await SetApiKeyAsync(value ?? string.Empty);
+                break;
+            case "selectedModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectModel(value);
+                break;
+        }
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        return valid
+            ? new PluginSettingsValidationResult(true, "API key is valid.")
+            : new PluginSettingsValidationResult(false, "API key is invalid.");
     }
 }

@@ -1,12 +1,12 @@
 using System.Net.Http;
-using System.Windows.Controls;
+using System.Net.Http.Headers;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Cohere;
 
-public sealed class CoherePlugin : ILlmProviderPlugin, IDisposable, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed partial class CoherePlugin : ILlmProviderPlugin, IDisposable, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.cohere.com/compatibility";
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
@@ -51,27 +51,65 @@ public sealed class CoherePlugin : ILlmProviderPlugin, IDisposable, TypeWhisper.
             _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
     }
 
-    public UserControl? CreateSettingsView()
+    internal async Task SetApiKeyAsync(string apiKey)
     {
-        var panel = new StackPanel { Margin = new System.Windows.Thickness(8) };
-        var label = new TextBlock { Text = "API Key", Margin = new System.Windows.Thickness(0, 0, 0, 4) };
-        var box = new PasswordBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_apiKey)) box.Password = _apiKey;
-        var btn = new Button
+        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        if (_host is not null)
         {
-            Content = "Save",
-            Margin = new System.Windows.Thickness(0, 8, 0, 0),
-            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
-        };
-        btn.Click += async (_, _) =>
+            if (string.IsNullOrWhiteSpace(apiKey))
+                await _host.DeleteSecretAsync("apiKey");
+            else
+                await _host.StoreSecretAsync("apiKey", apiKey);
+
+            _host.NotifyCapabilitiesChanged();
+        }
+    }
+
+    internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        try
         {
-            _apiKey = box.Password;
-            if (_host is not null) await _host.StoreSecretAsync("apiKey", _apiKey);
-        };
-        panel.Children.Add(label);
-        panel.Children.Add(box);
-        panel.Children.Add(btn);
-        return new UserControl { Content = panel };
+            var response = await _httpClient.SendAsync(request, ct);
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "apiKey",
+            Label: "API key",
+            IsSecret: true,
+            Placeholder: "co-...",
+            Description: "Required for Cohere LLM requests.")
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "apiKey" ? _apiKey : null);
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        if (key != "apiKey")
+            return;
+
+        await SetApiKeyAsync(value ?? string.Empty);
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        return valid
+            ? new PluginSettingsValidationResult(true, "API key is valid.")
+            : new PluginSettingsValidationResult(false, "API key is invalid.");
     }
 
     public void Dispose() => _httpClient.Dispose();

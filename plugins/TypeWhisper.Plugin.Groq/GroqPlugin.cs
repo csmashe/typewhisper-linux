@@ -1,14 +1,13 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Groq;
 
-public sealed class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.groq.com/openai";
     private readonly HttpClient _httpClient;
@@ -72,8 +71,6 @@ public sealed class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
         _host = null;
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => new GroqSettingsView(this);
 
     // ITranscriptionEnginePlugin
 
@@ -158,8 +155,18 @@ public sealed class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
             else
                 await _host.StoreSecretAsync("api-key", apiKey);
 
-            if (changed && wasConfigured != IsConfigured)
-                _host.NotifyCapabilitiesChanged();
+            if (changed)
+            {
+                if (!IsConfigured)
+                {
+                    _fetchedLlmModels = [];
+                    _host.SetSetting("fetchedLlmModels", _fetchedLlmModels);
+                    NormalizeSelectedLlmModel();
+                }
+
+                if (wasConfigured != IsConfigured)
+                    _host.NotifyCapabilitiesChanged();
+            }
         }
     }
 
@@ -271,6 +278,80 @@ public sealed class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    // IPluginSettingsProvider
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "api-key",
+            Label: "API key",
+            IsSecret: true,
+            Placeholder: "gsk_...",
+            Description: "Stored securely and used for both Groq transcription and LLM requests."),
+        new(
+            Key: "selectedModel",
+            Label: "Transcription model",
+            Description: "Choose the Groq transcription model.",
+            Options: TranscriptionModelEntries
+                .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
+                .ToList()),
+        new(
+            Key: "selectedLlmModel",
+            Label: "LLM model",
+            Description: _fetchedLlmModels.Count > 0
+                ? $"Showing {_fetchedLlmModels.Count} Groq LLM model(s) fetched from the API."
+                : "Using the default Groq LLM list. Click Validate to test the key and refresh current models.",
+            Options: SupportedModels
+                .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
+                .ToList())
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key switch
+        {
+            "api-key" => _apiKey,
+            "selectedModel" => _selectedModelId,
+            "selectedLlmModel" => _selectedLlmModelId,
+            _ => null,
+        });
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        switch (key)
+        {
+            case "api-key":
+                await SetApiKeyAsync(value ?? string.Empty);
+                break;
+            case "selectedModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectModel(value);
+                break;
+            case "selectedLlmModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectLlmModel(value);
+                break;
+        }
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        if (!valid)
+            return new PluginSettingsValidationResult(false, "API key is invalid.");
+
+        var models = await FetchLlmModelsAsync(ct);
+        if (models is not null)
+        {
+            SetFetchedLlmModels(models);
+            return new PluginSettingsValidationResult(true, $"API key is valid. Fetched {models.Count} Groq LLM model(s).");
+        }
+
+        return new PluginSettingsValidationResult(true, "API key is valid. Using saved/default LLM models.");
     }
 
     private sealed record TranscriptionModelEntry(

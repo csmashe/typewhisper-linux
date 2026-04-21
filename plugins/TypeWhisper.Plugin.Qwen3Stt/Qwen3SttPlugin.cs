@@ -1,14 +1,12 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Windows;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Qwen3Stt;
 
-public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
 {
     private const string DefaultBaseUrl = "http://localhost:8000";
     private const string DefaultModel = "Qwen/Qwen3-ASR";
@@ -32,6 +30,7 @@ public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, TypeWhisper.Plu
         _baseUrl = host.GetSetting<string>("baseUrl");
         if (string.IsNullOrWhiteSpace(_baseUrl))
             _baseUrl = DefaultBaseUrl;
+        _selectedModelId = host.GetSetting<string>("selectedModel") ?? DefaultModel;
         host.Log(PluginLogLevel.Info, $"Activated (baseUrl={_baseUrl}, configured={IsConfigured})");
     }
 
@@ -39,77 +38,6 @@ public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, TypeWhisper.Plu
     {
         _host = null;
         return Task.CompletedTask;
-    }
-
-    public UserControl? CreateSettingsView()
-    {
-        var panel = new StackPanel { Margin = new Thickness(8) };
-
-        // Base URL
-        var urlLabel = new TextBlock
-        {
-            Text = "Base URL",
-            Margin = new Thickness(0, 0, 0, 4),
-        };
-        var urlBox = new TextBox
-        {
-            Text = _baseUrl ?? DefaultBaseUrl,
-            MaxLength = 500,
-        };
-
-        // API Key
-        var keyLabel = new TextBlock
-        {
-            Text = "API Key (optional)",
-            Margin = new Thickness(0, 12, 0, 4),
-        };
-        var keyBox = new PasswordBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_apiKey))
-            keyBox.Password = _apiKey;
-
-        var status = new TextBlock
-        {
-            Margin = new Thickness(0, 4, 0, 0),
-            FontSize = 12,
-        };
-
-        var btn = new Button
-        {
-            Content = "Save",
-            Margin = new Thickness(0, 8, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-        btn.Click += async (_, _) =>
-        {
-            // Save base URL
-            var url = urlBox.Text.Trim().TrimEnd('/');
-            if (url.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-                url = url[..^3];
-            _baseUrl = string.IsNullOrWhiteSpace(url) ? DefaultBaseUrl : url;
-            _host?.SetSetting("baseUrl", _baseUrl);
-
-            // Save API key
-            var key = keyBox.Password.Trim();
-            _apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
-            if (_host is not null)
-            {
-                if (string.IsNullOrWhiteSpace(key))
-                    await _host.DeleteSecretAsync("api-key");
-                else
-                    await _host.StoreSecretAsync("api-key", key);
-            }
-
-            status.Text = "Saved";
-            _host?.NotifyCapabilitiesChanged();
-        };
-
-        panel.Children.Add(urlLabel);
-        panel.Children.Add(urlBox);
-        panel.Children.Add(keyLabel);
-        panel.Children.Add(keyBox);
-        panel.Children.Add(btn);
-        panel.Children.Add(status);
-        return new UserControl { Content = panel };
     }
 
     // ITranscriptionEnginePlugin
@@ -129,6 +57,7 @@ public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, TypeWhisper.Plu
         if (modelId != DefaultModel)
             throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
+        _host?.SetSetting("selectedModel", modelId);
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -144,6 +73,68 @@ public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, TypeWhisper.Plu
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, baseUrl, apiKey, model,
             wavAudio, language, translate: false, "verbose_json", ct);
+    }
+
+    internal async Task SetApiKeyAsync(string apiKey)
+    {
+        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+        if (_host is not null)
+        {
+            if (string.IsNullOrWhiteSpace(apiKey))
+                await _host.DeleteSecretAsync("api-key");
+            else
+                await _host.StoreSecretAsync("api-key", apiKey.Trim());
+
+            _host.NotifyCapabilitiesChanged();
+        }
+    }
+
+    internal void SetBaseUrl(string url)
+    {
+        var normalized = url.Trim().TrimEnd('/');
+        if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[..^3];
+
+        _baseUrl = string.IsNullOrWhiteSpace(normalized) ? DefaultBaseUrl : normalized;
+        _host?.SetSetting("baseUrl", _baseUrl);
+        _host?.NotifyCapabilitiesChanged();
+    }
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new("baseUrl", "Base URL", false, DefaultBaseUrl, "OpenAI-compatible server base URL."),
+        new("api-key", "API key", true, null, "Optional bearer token for the server."),
+        new(
+            "selectedModel",
+            "Transcription model",
+            Description: "Choose the Qwen3 STT model.",
+            Options: TranscriptionModels.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key switch
+        {
+            "baseUrl" => _baseUrl,
+            "api-key" => _apiKey,
+            "selectedModel" => _selectedModelId,
+            _ => null,
+        });
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        switch (key)
+        {
+            case "baseUrl":
+                SetBaseUrl(value ?? DefaultBaseUrl);
+                break;
+            case "api-key":
+                await SetApiKeyAsync(value ?? string.Empty);
+                break;
+            case "selectedModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectModel(value);
+                break;
+        }
     }
 
     public void Dispose() => _httpClient.Dispose();

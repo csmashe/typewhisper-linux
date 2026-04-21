@@ -110,6 +110,7 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         var result = await provider.ValidateAsync();
         SettingsStatus = result?.Message ?? "No validation available.";
+        await LoadSelectedPluginSettingsAsync();
     }
 
     private async Task LoadSelectedPluginSettingsAsync()
@@ -141,6 +142,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                 definition.Label,
                 definition.Description ?? string.Empty,
                 definition.Placeholder ?? string.Empty,
+                definition.Options ?? [],
                 definition.IsSecret,
                 value));
         }
@@ -171,15 +173,19 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
     public string Label { get; }
     public string Description { get; }
     public string Placeholder { get; }
+    public IReadOnlyList<PluginSettingOption> Options { get; }
+    public bool HasOptions => Options.Count > 0;
     public bool IsSecret { get; }
 
     [ObservableProperty] private string _value;
+    [ObservableProperty] private PluginSettingOption? _selectedOption;
 
     public PluginSettingFieldRow(
         string key,
         string label,
         string description,
         string placeholder,
+        IReadOnlyList<PluginSettingOption> options,
         bool isSecret,
         string value)
     {
@@ -187,7 +193,27 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         Label = label;
         Description = description;
         Placeholder = placeholder;
+        Options = options;
         IsSecret = isSecret;
         _value = value;
+        _selectedOption = Options.FirstOrDefault(o => o.Value == value) ?? Options.FirstOrDefault();
+        if (_selectedOption is not null && string.IsNullOrEmpty(_value))
+            _value = _selectedOption.Value;
+    }
+
+    partial void OnSelectedOptionChanged(PluginSettingOption? value)
+    {
+        if (value is not null && _value != value.Value)
+            Value = value.Value;
+    }
+
+    partial void OnValueChanged(string value)
+    {
+        if (!HasOptions)
+            return;
+
+        var option = Options.FirstOrDefault(o => o.Value == value);
+        if (!Equals(_selectedOption, option))
+            SelectedOption = option;
     }
 }

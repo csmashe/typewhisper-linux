@@ -1,13 +1,12 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Gemini;
 
-public sealed class GeminiPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai";
     private const string DefaultModel = "gemini-2.5-flash";
@@ -34,8 +33,6 @@ public sealed class GeminiPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf
         _host = null;
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => new GeminiSettingsView(this);
 
     // ILlmProviderPlugin
 
@@ -75,6 +72,8 @@ public sealed class GeminiPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", apiKey);
+
+            _host.NotifyCapabilitiesChanged();
         }
     }
 
@@ -96,5 +95,39 @@ public sealed class GeminiPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    // IPluginSettingsProvider
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "api-key",
+            Label: "API key",
+            IsSecret: true,
+            Placeholder: "AIza...",
+            Description: "Required for Gemini LLM requests.")
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "api-key" ? _apiKey : null);
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        if (key != "api-key")
+            return;
+
+        await SetApiKeyAsync(value ?? string.Empty);
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        return valid
+            ? new PluginSettingsValidationResult(true, "API key is valid.")
+            : new PluginSettingsValidationResult(false, "API key is invalid.");
     }
 }

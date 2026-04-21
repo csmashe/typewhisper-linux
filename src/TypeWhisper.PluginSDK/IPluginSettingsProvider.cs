@@ -14,7 +14,12 @@ public sealed record PluginSettingDefinition(
     string Label,
     bool IsSecret = false,
     string? Placeholder = null,
-    string? Description = null);
+    string? Description = null,
+    IReadOnlyList<PluginSettingOption>? Options = null);
+
+public sealed record PluginSettingOption(
+    string Value,
+    string Label);
 
 public sealed record PluginSettingsValidationResult(
     bool IsSuccess,

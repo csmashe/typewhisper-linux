@@ -1,13 +1,12 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Cerebras;
 
-public sealed class CerebrasPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.cerebras.ai";
 
@@ -33,8 +32,6 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.W
         _host = null;
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => new CerebrasSettingsView(this);
 
     // ILlmProviderPlugin
 
@@ -69,6 +66,8 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.W
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", apiKey);
+
+            _host.NotifyCapabilitiesChanged();
         }
     }
 
@@ -90,5 +89,39 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.W
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    // IPluginSettingsProvider
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "api-key",
+            Label: "API key",
+            IsSecret: true,
+            Placeholder: "csk-...",
+            Description: "Required for Cerebras LLM requests.")
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "api-key" ? _apiKey : null);
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        if (key != "api-key")
+            return;
+
+        await SetApiKeyAsync(value ?? string.Empty);
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        return valid
+            ? new PluginSettingsValidationResult(true, "API key is valid.")
+            : new PluginSettingsValidationResult(false, "API key is invalid.");
     }
 }

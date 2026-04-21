@@ -2,13 +2,12 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Speechmatics;
 
-public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://asr.api.speechmatics.com/v2";
 
@@ -32,6 +31,7 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, TypeWhisper
     {
         _host = host;
         _apiKey = await host.LoadSecretAsync("api-key");
+        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -39,36 +39,6 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, TypeWhisper
     {
         _host = null;
         return Task.CompletedTask;
-    }
-
-    public UserControl? CreateSettingsView()
-    {
-        var panel = new StackPanel { Margin = new System.Windows.Thickness(8) };
-        var label = new TextBlock { Text = "API Key", Margin = new System.Windows.Thickness(0, 0, 0, 4) };
-        var box = new PasswordBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_apiKey)) box.Password = _apiKey;
-        var btn = new Button
-        {
-            Content = "Save",
-            Margin = new System.Windows.Thickness(0, 8, 0, 0),
-            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
-        };
-        btn.Click += async (_, _) =>
-        {
-            var key = box.Password;
-            _apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
-            if (_host is not null)
-            {
-                if (string.IsNullOrWhiteSpace(key))
-                    await _host.DeleteSecretAsync("api-key");
-                else
-                    await _host.StoreSecretAsync("api-key", key);
-            }
-        };
-        panel.Children.Add(label);
-        panel.Children.Add(box);
-        panel.Children.Add(btn);
-        return new UserControl { Content = panel };
     }
 
     // ITranscriptionEnginePlugin
@@ -88,6 +58,7 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, TypeWhisper
         if (Models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
+        _host?.SetSetting("selectedModel", modelId);
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -218,5 +189,51 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, TypeWhisper
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    internal async Task SetApiKeyAsync(string apiKey)
+    {
+        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        if (_host is not null)
+        {
+            if (string.IsNullOrWhiteSpace(apiKey))
+                await _host.DeleteSecretAsync("api-key");
+            else
+                await _host.StoreSecretAsync("api-key", apiKey);
+
+            _host.NotifyCapabilitiesChanged();
+        }
+    }
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new("api-key", "API key", true, null, "Required for Speechmatics transcription."),
+        new(
+            "selectedModel",
+            "Transcription model",
+            Description: "Choose the Speechmatics model.",
+            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key switch
+        {
+            "api-key" => _apiKey,
+            "selectedModel" => _selectedModelId,
+            _ => null,
+        });
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        switch (key)
+        {
+            case "api-key":
+                await SetApiKeyAsync(value ?? string.Empty);
+                break;
+            case "selectedModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectModel(value);
+                break;
+        }
     }
 }
