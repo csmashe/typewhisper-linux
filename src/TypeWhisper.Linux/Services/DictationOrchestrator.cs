@@ -1,16 +1,19 @@
 using System.Diagnostics;
 using System.IO;
 using TypeWhisper.Core;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Glues hotkey, recorder, transcription engine, and text injection into a
-/// single dictation loop:
+/// Glues hotkey, recorder, transcription engine, post-processing, and text
+/// injection into a single dictation loop:
 ///   hotkey → start recording → hotkey → stop → save WAV → transcribe via
-///   the active transcription plugin → xdotool types the result into the
-///   focused window.
+///   the active transcription plugin → apply dictionary + snippets →
+///   xdotool types the result into the focused window → history record.
 ///
 /// If no transcription plugin/model is loaded the WAV is still written so
 /// the user can inspect what was captured.
@@ -21,7 +24,15 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly AudioRecordingService _audio;
     private readonly TextInsertionService _textInsertion;
     private readonly ModelManagerService _models;
+    private readonly IHistoryService _history;
+    private readonly ISettingsService _settings;
+    private readonly IActiveWindowService _activeWindow;
+    private readonly IDictionaryService _dictionary;
+    private readonly ISnippetService _snippets;
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
+    private DateTime _recordingStart;
+    private string? _recordingAppProcess;
+    private string? _recordingAppTitle;
     private bool _initialized;
     private bool _disposed;
 
@@ -36,12 +47,22 @@ public sealed class DictationOrchestrator : IDisposable
         HotkeyService hotkey,
         AudioRecordingService audio,
         TextInsertionService textInsertion,
-        ModelManagerService models)
+        ModelManagerService models,
+        IHistoryService history,
+        ISettingsService settings,
+        IActiveWindowService activeWindow,
+        IDictionaryService dictionary,
+        ISnippetService snippets)
     {
         _hotkey = hotkey;
         _audio = audio;
         _textInsertion = textInsertion;
         _models = models;
+        _history = history;
+        _settings = settings;
+        _activeWindow = activeWindow;
+        _dictionary = dictionary;
+        _snippets = snippets;
     }
 
     public void Initialize()
@@ -67,10 +88,15 @@ public sealed class DictationOrchestrator : IDisposable
                 RecordingCaptured?.Invoke(this, path);
                 Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
 
-                await TranscribeAndInsertAsync(wav);
+                await TranscribeAndInsertAsync(wav, path);
             }
             else
             {
+                // Snapshot the active window now, before recording — the user's
+                // focused app at record-start is almost always the intended target.
+                _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
+                _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
+                _recordingStart = DateTime.UtcNow;
                 _audio.StartRecording();
                 RecordingStateChanged?.Invoke(this, true);
             }
@@ -81,7 +107,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private async Task TranscribeAndInsertAsync(byte[] wav)
+    private async Task TranscribeAndInsertAsync(byte[] wav, string wavPath)
     {
         var plugin = _models.ActiveTranscriptionPlugin;
         if (plugin is null)
@@ -90,30 +116,54 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
+        var duration = ComputeDurationSeconds(wav);
         StatusMessage?.Invoke(this, $"Transcribing via {plugin.ProviderDisplayName}…");
+
         try
         {
+            var languageHint = _settings.Current.Language is { Length: > 0 } lang && lang != "auto"
+                ? lang
+                : null;
+
             var result = await plugin.TranscribeAsync(
-                wavAudio: wav, language: null, translate: false,
+                wavAudio: wav, language: languageHint, translate: false,
                 prompt: null, ct: CancellationToken.None);
 
-            var text = result?.Text?.Trim();
-            if (string.IsNullOrEmpty(text))
+            var rawText = result?.Text?.Trim();
+            if (string.IsNullOrEmpty(rawText))
             {
                 StatusMessage?.Invoke(this, "Transcription returned no text.");
                 return;
             }
 
-            TranscriptionCompleted?.Invoke(this, text);
+            // Post-processing: dictionary corrections, then snippet expansion.
+            string finalText;
+            try { finalText = _dictionary.ApplyCorrections(rawText); }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Dictionary apply failed: {ex.Message}");
+                finalText = rawText;
+            }
+            try { finalText = _snippets.ApplySnippets(finalText); }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Snippets apply failed: {ex.Message}");
+            }
 
-            var insertion = await _textInsertion.InsertTextAsync(text);
+            TranscriptionCompleted?.Invoke(this, finalText);
+
+            var insertion = await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste);
             StatusMessage?.Invoke(this, insertion switch
             {
-                InsertionResult.Pasted => $"Typed {text.Length} char(s).",
+                InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
                 InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
-                InsertionResult.Failed => "Text insertion failed — see logs.",
+                InsertionResult.Failed => "Text insertion failed — is xdotool installed?",
                 _ => "Done.",
             });
+
+            // Write to history last so stats reflect the just-completed capture.
+            if (_settings.Current.SaveToHistoryEnabled)
+                AddHistoryRecord(rawText, finalText, duration, result, wavPath);
         }
         catch (Exception ex)
         {
@@ -124,6 +174,44 @@ public sealed class DictationOrchestrator : IDisposable
         {
             _models.ScheduleAutoUnload();
         }
+    }
+
+    private void AddHistoryRecord(string rawText, string finalText, double duration,
+        PluginTranscriptionResult? result, string wavPath)
+    {
+        try
+        {
+            var engine = _models.ActiveTranscriptionPlugin?.ProviderId ?? "unknown";
+            var model = _models.ActiveTranscriptionPlugin?.SelectedModelId;
+            var language = result?.DetectedLanguage
+                ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
+
+            _history.AddRecord(new TranscriptionRecord
+            {
+                Id = Guid.NewGuid().ToString(),
+                Timestamp = _recordingStart == default ? DateTime.UtcNow : _recordingStart,
+                RawText = rawText,
+                FinalText = finalText,
+                AppName = _recordingAppTitle,
+                AppProcessName = _recordingAppProcess,
+                DurationSeconds = duration,
+                Language = language,
+                EngineUsed = engine,
+                ModelUsed = model,
+                AudioFileName = Path.GetFileName(wavPath),
+            });
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] AddHistoryRecord failed: {ex.Message}");
+        }
+    }
+
+    private static double ComputeDurationSeconds(byte[] wav)
+    {
+        // WAV: 44-byte standard PCM header, 16-bit mono at 16kHz → 32000 bytes/sec.
+        if (wav.Length <= 44) return 0;
+        return (wav.Length - 44) / 32000.0;
     }
 
     private static string SaveWav(byte[] wav)
