@@ -16,6 +16,12 @@ public partial class App : Application
         AvaloniaXamlLoader.Load(this);
     }
 
+    /// <summary>
+    /// Tray-menu Exit flips this; Close-button handler checks it to decide
+    /// whether to actually quit or hide to the tray.
+    /// </summary>
+    public static bool ShuttingDown { get; private set; }
+
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -25,29 +31,58 @@ public partial class App : Application
             // Eagerly bootstrap the app state that the UI depends on.
             BootstrapAsync(services).GetAwaiter().GetResult();
 
-            desktop.MainWindow = services.GetRequiredService<MainWindow>();
+            var main = services.GetRequiredService<MainWindow>();
+            desktop.MainWindow = main;
+
+            // Close button → hide to tray instead of exiting, unless tray menu
+            // fired Exit (which flips ShuttingDown first).
+            main.Closing += (_, e) =>
+            {
+                if (!ShuttingDown)
+                {
+                    e.Cancel = true;
+                    main.Hide();
+                }
+            };
 
             var tray = services.GetRequiredService<TrayIconService>();
             tray.Initialize();
-            tray.ShowSettingsRequested += (_, _) => desktop.MainWindow?.Show();
-            tray.ExitRequested += (_, _) => desktop.Shutdown();
+            tray.ShowSettingsRequested += (_, _) => ShowMainWindow(main);
+            tray.ExitRequested += (_, _) =>
+            {
+                ShuttingDown = true;
+                desktop.Shutdown();
+            };
 
             var dictation = services.GetRequiredService<DictationOrchestrator>();
             dictation.Initialize();
             tray.DictationToggleRequested += (_, _) => _ = dictation.ToggleAsync();
 
+            // Launch minimized / hidden if --minimized was passed — tray icon
+            // stays the entry point.
+            if (Program.StartMinimized)
+                main.Opened += (_, _) => main.Hide();
+
             // First-run onboarding wizard
             var settings = services.GetRequiredService<ISettingsService>();
             if (!settings.Current.HasCompletedOnboarding)
             {
-                desktop.MainWindow.Opened += (_, _) =>
+                main.Opened += (_, _) =>
                 {
-                    (desktop.MainWindow?.DataContext as ViewModels.MainWindowViewModel)?.OpenWizard();
+                    (main.DataContext as ViewModels.MainWindowViewModel)?.OpenWizard();
                 };
             }
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static void ShowMainWindow(MainWindow window)
+    {
+        if (!window.IsVisible) window.Show();
+        if (window.WindowState == Avalonia.Controls.WindowState.Minimized)
+            window.WindowState = Avalonia.Controls.WindowState.Normal;
+        window.Activate();
     }
 
     private static async Task BootstrapAsync(IServiceProvider services)
