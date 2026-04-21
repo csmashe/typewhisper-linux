@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj" />
+    <Project Path="tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj" />
     <Project Path="tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj" />
   </Folder>
 </Solution>

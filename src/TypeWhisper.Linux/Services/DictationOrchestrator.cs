@@ -3,6 +3,7 @@ using System.IO;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -27,12 +28,17 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IHistoryService _history;
     private readonly ISettingsService _settings;
     private readonly IActiveWindowService _activeWindow;
+    private readonly IProfileService _profiles;
     private readonly IDictionaryService _dictionary;
     private readonly ISnippetService _snippets;
+    private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly IPostProcessingPipeline _pipeline;
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
     private string? _recordingAppProcess;
     private string? _recordingAppTitle;
+    private string? _recordingAppUrl;
+    private Profile? _recordingProfile;
     private bool _initialized;
     private bool _disposed;
 
@@ -51,8 +57,11 @@ public sealed class DictationOrchestrator : IDisposable
         IHistoryService history,
         ISettingsService settings,
         IActiveWindowService activeWindow,
+        IProfileService profiles,
         IDictionaryService dictionary,
-        ISnippetService snippets)
+        ISnippetService snippets,
+        IVocabularyBoostingService vocabularyBoosting,
+        IPostProcessingPipeline pipeline)
     {
         _hotkey = hotkey;
         _audio = audio;
@@ -61,8 +70,11 @@ public sealed class DictationOrchestrator : IDisposable
         _history = history;
         _settings = settings;
         _activeWindow = activeWindow;
+        _profiles = profiles;
         _dictionary = dictionary;
         _snippets = snippets;
+        _vocabularyBoosting = vocabularyBoosting;
+        _pipeline = pipeline;
     }
 
     public void Initialize()
@@ -106,16 +118,28 @@ public sealed class DictationOrchestrator : IDisposable
         // transcription completes.
         _recordingAppProcess = null;
         _recordingAppTitle = null;
+        _recordingAppUrl = null;
+        _recordingProfile = null;
         _ = Task.Run(() =>
         {
             try
             {
                 _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
                 _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
+                _recordingAppUrl = _activeWindow.GetBrowserUrl();
+                _recordingProfile = _profiles.MatchProfile(_recordingAppProcess, _recordingAppUrl);
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Dictation] Active-window snapshot failed: {ex.Message}");
+            }
+            finally
+            {
+                _models.PluginManager.EventBus.Publish(new RecordingStartedEvent
+                {
+                    AppName = _recordingAppTitle,
+                    AppProcessName = _recordingAppProcess
+                });
             }
         });
     }
@@ -129,13 +153,18 @@ public sealed class DictationOrchestrator : IDisposable
 
             var wav = _audio.StopRecording();
             RecordingStateChanged?.Invoke(this, false);
+            var duration = ComputeDurationSeconds(wav);
+            _models.PluginManager.EventBus.Publish(new RecordingStoppedEvent
+            {
+                DurationSeconds = duration
+            });
             if (wav.Length == 0) return;
 
             var path = SaveWav(wav);
             RecordingCaptured?.Invoke(this, path);
             Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
 
-            await TranscribeAndInsertAsync(wav, path);
+            await TranscribeAndInsertAsync(wav, path, duration);
         }
         finally
         {
@@ -143,8 +172,28 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private async Task TranscribeAndInsertAsync(byte[] wav, string wavPath)
+    private async Task TranscribeAndInsertAsync(byte[] wav, string wavPath, double duration)
     {
+        var effectiveModelId = _recordingProfile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
+        if (!string.IsNullOrWhiteSpace(effectiveModelId) && _models.ActiveModelId != effectiveModelId)
+        {
+            try
+            {
+                var loaded = await _models.EnsureModelLoadedAsync(effectiveModelId);
+                if (!loaded)
+                {
+                    StatusMessage?.Invoke(this, $"Configured model '{effectiveModelId}' is not available.");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}");
+                StatusMessage?.Invoke(this, $"Failed to load configured model: {ex.Message}");
+                return;
+            }
+        }
+
         var plugin = _models.ActiveTranscriptionPlugin;
         if (plugin is null)
         {
@@ -152,17 +201,19 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        var duration = ComputeDurationSeconds(wav);
         StatusMessage?.Invoke(this, $"Transcribing via {plugin.ProviderDisplayName}…");
 
         try
         {
-            var languageHint = _settings.Current.Language is { Length: > 0 } lang && lang != "auto"
-                ? lang
-                : null;
+            var effectiveLanguage = _recordingProfile?.InputLanguage ?? _settings.Current.Language;
+            var languageHint = effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
+            var translate = string.Equals(
+                _recordingProfile?.SelectedTask ?? _settings.Current.TranscriptionTask,
+                "translate",
+                StringComparison.OrdinalIgnoreCase);
 
             var result = await plugin.TranscribeAsync(
-                wavAudio: wav, language: languageHint, translate: false,
+                wavAudio: wav, language: languageHint, translate: translate,
                 prompt: null, ct: CancellationToken.None);
 
             var rawText = result?.Text?.Trim();
@@ -172,21 +223,54 @@ public sealed class DictationOrchestrator : IDisposable
                 return;
             }
 
-            // Post-processing: dictionary corrections, then snippet expansion.
-            string finalText;
-            try { finalText = _dictionary.ApplyCorrections(rawText); }
-            catch (Exception ex)
+            var pipelineContext = new PostProcessingContext
             {
-                Trace.WriteLine($"[Dictation] Dictionary apply failed: {ex.Message}");
-                finalText = rawText;
-            }
-            try { finalText = _snippets.ApplySnippets(finalText); }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] Snippets apply failed: {ex.Message}");
-            }
+                SourceLanguage = result?.DetectedLanguage ?? languageHint,
+                ActiveAppName = _recordingAppTitle,
+                ActiveAppProcessName = _recordingAppProcess,
+                ProfileName = _recordingProfile?.Name,
+                AudioDurationSeconds = duration
+            };
+
+            var pluginProcessors = _models.PluginManager.PostProcessors
+                .Select(processor => new PluginPostProcessor(
+                    processor.Priority,
+                    (text, token) => processor.ProcessAsync(text, pipelineContext, token)))
+                .ToList();
+
+            var pipelineResult = await _pipeline.ProcessAsync(
+                rawText,
+                new PipelineOptions
+                {
+                    AppFormatter = AppFormatterService.Format,
+                    TargetProcessName = _recordingAppProcess,
+                    DictionaryCorrector = _dictionary.ApplyCorrections,
+                    VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
+                        ? _vocabularyBoosting.Apply
+                        : null,
+                    SnippetExpander = text => _snippets.ApplySnippets(text),
+                    EffectiveSourceLanguage = languageHint,
+                    DetectedLanguage = result?.DetectedLanguage,
+                    PluginPostProcessors = pluginProcessors
+                },
+                CancellationToken.None);
+
+            var finalText = pipelineResult.Text;
 
             TranscriptionCompleted?.Invoke(this, finalText);
+            _models.PluginManager.EventBus.Publish(new TranscriptionCompletedEvent
+            {
+                RawText = rawText,
+                Text = finalText,
+                DetectedLanguage = result?.DetectedLanguage,
+                DurationSeconds = duration,
+                EngineUsed = plugin.ProviderId,
+                ModelId = plugin.SelectedModelId,
+                ProfileName = _recordingProfile?.Name,
+                AppName = _recordingAppTitle,
+                AppProcessName = _recordingAppProcess,
+                Url = _recordingAppUrl
+            });
 
             var insertion = await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste);
             StatusMessage?.Invoke(this, insertion switch
@@ -197,6 +281,15 @@ public sealed class DictationOrchestrator : IDisposable
                 _ => "Done.",
             });
 
+            if (insertion == InsertionResult.Pasted)
+            {
+                _models.PluginManager.EventBus.Publish(new TextInsertedEvent
+                {
+                    Text = finalText,
+                    TargetApp = _recordingAppProcess
+                });
+            }
+
             // Write to history last so stats reflect the just-completed capture.
             if (_settings.Current.SaveToHistoryEnabled)
                 AddHistoryRecord(rawText, finalText, duration, result, wavPath);
@@ -204,6 +297,12 @@ public sealed class DictationOrchestrator : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine($"[Dictation] Transcription failed: {ex}");
+            _models.PluginManager.EventBus.Publish(new TranscriptionFailedEvent
+            {
+                ErrorMessage = ex.Message,
+                ModelId = plugin.SelectedModelId,
+                AppName = _recordingAppTitle
+            });
             StatusMessage?.Invoke(this, $"Transcription failed: {ex.Message}");
         }
         finally
@@ -230,8 +329,10 @@ public sealed class DictationOrchestrator : IDisposable
                 FinalText = finalText,
                 AppName = _recordingAppTitle,
                 AppProcessName = _recordingAppProcess,
+                AppUrl = _recordingAppUrl,
                 DurationSeconds = duration,
                 Language = language,
+                ProfileName = _recordingProfile?.Name,
                 EngineUsed = engine,
                 ModelUsed = model,
                 AudioFileName = Path.GetFileName(wavPath),

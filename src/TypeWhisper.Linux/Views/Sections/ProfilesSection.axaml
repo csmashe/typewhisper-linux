@@ -11,13 +11,52 @@
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                        Text="Per-app rules — match a profile by focused process name. (Active-window matching is X11-only; limited on Wayland.)" />
 
-            <Grid ColumnDefinitions="*,2*,Auto" RowDefinitions="Auto">
+            <Grid ColumnDefinitions="*,2*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
                 <TextBox Grid.Column="0" Text="{Binding NewName}" PlaceholderText="Profile name"
                          Margin="0,0,8,0" />
                 <TextBox Grid.Column="1" Text="{Binding NewProcessNames}"
                          PlaceholderText="Comma-separated process names (e.g. code, firefox)"
                          Margin="0,0,8,0" />
                 <Button Grid.Column="2" Content="Add" Command="{Binding AddProfileCommand}" />
+
+                <TextBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                         Text="{Binding NewUrlPatterns}"
+                         PlaceholderText="Optional URL patterns (e.g. github.com, *.docs.google.com)"
+                         Margin="0,0,8,0" />
+
+                <ComboBox Grid.Row="2" Grid.Column="0"
+                          ItemsSource="{Binding LanguageChoices}"
+                          SelectedItem="{Binding NewInputLanguage}"
+                          Margin="0,0,8,0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding ., StringFormat='Language: {0}'}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="160,*" ColumnSpacing="8">
+                    <ComboBox Grid.Column="0"
+                              ItemsSource="{Binding TaskChoices}"
+                              SelectedItem="{Binding NewSelectedTask}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding ., StringFormat='Task: {0}'}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+
+                    <ComboBox Grid.Column="1"
+                              ItemsSource="{Binding ModelOptions}"
+                              SelectedValue="{Binding NewModelId}"
+                              SelectedValueBinding="{Binding Value}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ProfileModelOption">
+                                <TextBlock Text="{Binding Label}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
             </Grid>
         </StackPanel>
 
@@ -29,24 +68,60 @@
                         <DataTemplate x:DataType="models:Profile">
                             <Border Padding="12,8" BorderThickness="0,0,0,1"
                                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                <Grid ColumnDefinitions="*,*,Auto,Auto">
-                                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="SemiBold"
-                                               VerticalAlignment="Center" />
-                                    <ItemsControl Grid.Column="1" ItemsSource="{Binding ProcessNames}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <WrapPanel />
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Border Padding="6,2" Margin="2" CornerRadius="3"
-                                                        Background="{DynamicResource ControlFillColorSecondaryBrush}">
-                                                    <TextBlock Text="{Binding}" FontSize="10" />
-                                                </Border>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
+                                <Grid ColumnDefinitions="*,Auto,Auto">
+                                    <StackPanel Grid.Column="0" Spacing="6">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+
+                                        <ItemsControl ItemsSource="{Binding ProcessNames}"
+                                                      IsVisible="{Binding ProcessNames.Count}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Padding="6,2" Margin="0,0,4,0" CornerRadius="3"
+                                                            Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                                        <TextBlock Text="{Binding}" FontSize="10" />
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <ItemsControl ItemsSource="{Binding UrlPatterns}"
+                                                      IsVisible="{Binding UrlPatterns.Count}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Padding="6,2" Margin="0,0,4,0" CornerRadius="3"
+                                                            Background="{DynamicResource ControlFillColorTertiaryBrush}">
+                                                        <TextBlock Text="{Binding}" FontSize="10" />
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <StackPanel Orientation="Horizontal" Spacing="10">
+                                            <TextBlock Text="{Binding InputLanguage, StringFormat='Lang: {0}'}"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                       IsVisible="{Binding InputLanguage}" />
+                                            <TextBlock Text="{Binding SelectedTask, StringFormat='Task: {0}'}"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                       IsVisible="{Binding SelectedTask}" />
+                                            <TextBlock Text="{Binding TranscriptionModelOverride, StringFormat='Model: {0}'}"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                       IsVisible="{Binding TranscriptionModelOverride}" />
+                                        </StackPanel>
+                                    </StackPanel>
                                     <ToggleSwitch Grid.Column="2"
                                                   IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                   Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).ToggleEnabledCommand}"
