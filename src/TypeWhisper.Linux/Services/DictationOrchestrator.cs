@@ -69,37 +69,55 @@ public sealed class DictationOrchestrator : IDisposable
     {
         if (_initialized || _disposed) return;
         _hotkey.DictationToggleRequested += (_, _) => _ = ToggleAsync();
+        _hotkey.DictationStartRequested += (_, _) => _ = StartAsync();
+        _hotkey.DictationStopRequested += (_, _) => _ = StopAsync();
         _hotkey.Initialize();
         _initialized = true;
     }
 
     public async Task ToggleAsync()
     {
+        if (_audio.IsRecording) await StopAsync();
+        else await StartAsync();
+    }
+
+    public async Task StartAsync()
+    {
         if (!await _toggleGate.WaitAsync(0)) return;
         try
         {
-            if (_audio.IsRecording)
-            {
-                var wav = _audio.StopRecording();
-                RecordingStateChanged?.Invoke(this, false);
-                if (wav.Length == 0) return;
+            if (_audio.IsRecording) return;
 
-                var path = SaveWav(wav);
-                RecordingCaptured?.Invoke(this, path);
-                Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
+            // Snapshot the active window now, before recording — the user's
+            // focused app at record-start is almost always the intended target.
+            _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
+            _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
+            _recordingStart = DateTime.UtcNow;
+            _audio.StartRecording();
+            RecordingStateChanged?.Invoke(this, true);
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
+    }
 
-                await TranscribeAndInsertAsync(wav, path);
-            }
-            else
-            {
-                // Snapshot the active window now, before recording — the user's
-                // focused app at record-start is almost always the intended target.
-                _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
-                _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
-                _recordingStart = DateTime.UtcNow;
-                _audio.StartRecording();
-                RecordingStateChanged?.Invoke(this, true);
-            }
+    public async Task StopAsync()
+    {
+        if (!await _toggleGate.WaitAsync(0)) return;
+        try
+        {
+            if (!_audio.IsRecording) return;
+
+            var wav = _audio.StopRecording();
+            RecordingStateChanged?.Invoke(this, false);
+            if (wav.Length == 0) return;
+
+            var path = SaveWav(wav);
+            RecordingCaptured?.Invoke(this, path);
+            Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
+
+            await TranscribeAndInsertAsync(wav, path);
         }
         finally
         {

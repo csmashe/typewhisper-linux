@@ -1,19 +1,48 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:local="using:TypeWhisper.Linux"
              x:Class="TypeWhisper.Linux.Views.Sections.ShortcutsSection"
              x:DataType="vm:ShortcutsSectionViewModel">
     <ScrollViewer>
-        <StackPanel Margin="24" Spacing="16" MaxWidth="640" HorizontalAlignment="Left">
+        <StackPanel Margin="24" Spacing="20" MaxWidth="640" HorizontalAlignment="Left">
             <TextBlock Text="Keyboard shortcut" FontSize="20" FontWeight="SemiBold" />
 
-            <TextBlock TextWrapping="Wrap" FontSize="12"
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                       Text="Global hotkey that toggles dictation. Type a combination like &quot;Ctrl+Shift+Space&quot;, &quot;Alt+F9&quot;, or &quot;Ctrl+K&quot; and click Apply. Accepted modifiers: Ctrl, Shift, Alt, Meta. Keys: a-z, 0-9, F1-F24, Space, Enter, Tab, Escape, arrows, etc." />
+            <StackPanel Spacing="8">
+                <TextBlock Text="Binding" FontWeight="SemiBold" />
+                <TextBlock TextWrapping="Wrap" FontSize="12"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           Text="Global hotkey that starts/stops dictation. Type a combination like &quot;Ctrl+Shift+Space&quot;, &quot;Alt+F9&quot;, or &quot;Ctrl+K&quot; and click Apply. Accepted modifiers: Ctrl, Shift, Alt, Meta. Keys: a-z, 0-9, F1-F24, Space, Enter, Tab, Escape, arrows, etc." />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBox Width="260" Text="{Binding HotkeyText}" PlaceholderText="Ctrl+Shift+Space" />
+                    <Button Content="Apply" Command="{Binding ApplyHotkeyCommand}" />
+                </StackPanel>
+            </StackPanel>
 
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBox Width="260" Text="{Binding HotkeyText}" PlaceholderText="Ctrl+Shift+Space" />
-                <Button Content="Apply" Command="{Binding ApplyHotkeyCommand}" />
+            <Separator />
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="Activation mode" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Spacing="0">
+                    <RadioButton Content="Toggle" GroupName="mode"
+                                 IsChecked="{Binding Mode, Mode=TwoWay,
+                                             Converter={x:Static local:EnumBoolConverter.Instance},
+                                             ConverterParameter={x:Static models:RecordingMode.Toggle}}"
+                                 Margin="0,0,14,0" />
+                    <RadioButton Content="Push to talk" GroupName="mode"
+                                 IsChecked="{Binding Mode, Mode=TwoWay,
+                                             Converter={x:Static local:EnumBoolConverter.Instance},
+                                             ConverterParameter={x:Static models:RecordingMode.PushToTalk}}"
+                                 Margin="0,0,14,0" />
+                    <RadioButton Content="Hybrid" GroupName="mode"
+                                 IsChecked="{Binding Mode, Mode=TwoWay,
+                                             Converter={x:Static local:EnumBoolConverter.Instance},
+                                             ConverterParameter={x:Static models:RecordingMode.Hybrid}}" />
+                </StackPanel>
+                <TextBlock TextWrapping="Wrap" FontSize="11"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           Text="Toggle — press to start, press again to stop.   Push to talk — hold to record, release to stop and transcribe.   Hybrid — quick press toggles; holding past ~600 ms switches to push-to-talk and releasing stops." />
             </StackPanel>
 
             <TextBlock Text="{Binding StatusMessage}" FontSize="12"

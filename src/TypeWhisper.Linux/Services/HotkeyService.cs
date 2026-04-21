@@ -1,30 +1,51 @@
 using System.Diagnostics;
 using SharpHook;
 using SharpHook.Native;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Minimal global hotkey binding for the Linux shell. Uses SharpHook
-/// (libuiohook) which works reliably on X11. Wayland support varies by
-/// compositor — for robust Wayland, a future path is the XDG portal
-/// GlobalShortcuts protocol (GNOME 45+/KDE Plasma 6+).
+/// Global hotkey binding for the Linux shell. Uses SharpHook (libuiohook)
+/// which works reliably on X11. Wayland support varies by compositor — a
+/// future path is the XDG portal GlobalShortcuts protocol (GNOME 45+,
+/// KDE Plasma 6+).
 ///
-/// v1 scope: one hotkey that toggles dictation start/stop. The richer
-/// modes from the Windows HotkeyService (push-to-talk, profile-specific
-/// hotkeys, cancel shortcut) are deferred.
+/// Three modes, matching the Windows shell:
+///   - Toggle: press the hotkey to start recording, press again to stop.
+///   - PushToTalk: hold the hotkey to record, release to stop.
+///   - Hybrid: a short press acts as Toggle; holding past a threshold
+///     (600 ms) switches to push-to-talk semantics and releasing stops.
+///
+/// Callers subscribe to DictationStartRequested / DictationStopRequested /
+/// DictationToggleRequested as they need. The orchestrator handles all
+/// three with start-if-idle / stop-if-recording semantics.
 /// </summary>
 public sealed class HotkeyService : IDisposable
 {
+    private const int PushToTalkThresholdMs = 600;
+
     private readonly TaskPoolGlobalHook _hook = new();
     private readonly object _lock = new();
 
     private KeyCode _key = KeyCode.VcSpace;
     private ModifierMask _modifiers = ModifierMask.LeftCtrl | ModifierMask.LeftShift;
+    private RecordingMode _mode = RecordingMode.Toggle;
+    private bool _keyIsDown;
+    private DateTime _keyDownTime;
+    private bool _hybridDidStart;
     private bool _running;
     private bool _disposed;
 
     public event EventHandler? DictationToggleRequested;
+    public event EventHandler? DictationStartRequested;
+    public event EventHandler? DictationStopRequested;
+
+    public RecordingMode Mode
+    {
+        get => _mode;
+        set => _mode = value;
+    }
 
     public void Initialize()
     {
@@ -32,7 +53,8 @@ public sealed class HotkeyService : IDisposable
         {
             if (_running || _disposed) return;
             _hook.KeyPressed += OnKeyPressed;
-            _ = _hook.RunAsync(); // fire-and-forget; ex surfaces via TaskScheduler.UnobservedTaskException
+            _hook.KeyReleased += OnKeyReleased;
+            _ = _hook.RunAsync();
             _running = true;
         }
     }
@@ -48,10 +70,10 @@ public sealed class HotkeyService : IDisposable
 
     /// <summary>
     /// Parses strings like "Ctrl+Shift+Space", "Alt+F9", "Ctrl+K" and binds
-    /// them. Returns true on success. Accepts a small vocabulary of modifier
-    /// tokens (Ctrl, Shift, Alt, Meta/Win) and either a single letter, a
-    /// function key (F1-F24), or a small set of named keys (Space, Enter,
-    /// Tab, Escape, etc.). Invalid input leaves the current binding unchanged.
+    /// them. Returns true on success. Accepts modifier tokens (Ctrl, Shift,
+    /// Alt, Meta/Win/Super) and either a single letter, a digit, a function
+    /// key (F1-F24), or a named key (Space, Enter, Tab, Escape, arrows, etc.).
+    /// Invalid input leaves the current binding unchanged.
     /// </summary>
     public bool TrySetHotkeyFromString(string text)
     {
@@ -105,7 +127,6 @@ public sealed class HotkeyService : IDisposable
             };
             if (named is not null) { key = named.Value; continue; }
 
-            // F1 – F24
             if (part.Length is >= 2 and <= 3 && part[0] == 'f' &&
                 int.TryParse(part[1..], out var fNum) && fNum is >= 1 and <= 24)
             {
@@ -113,7 +134,7 @@ public sealed class HotkeyService : IDisposable
                 continue;
             }
 
-            return false; // unknown token
+            return false;
         }
 
         if (key is null) return false;
@@ -140,13 +161,70 @@ public sealed class HotkeyService : IDisposable
         if (e.Data.KeyCode != _key) return;
         if ((e.RawEvent.Mask & _modifiers) != _modifiers) return;
 
+        // Ignore key-repeat: treat only the first press of a hold as the event.
+        if (_keyIsDown) return;
+
+        _keyIsDown = true;
+        _keyDownTime = DateTime.UtcNow;
+        _hybridDidStart = false;
+
         try
         {
-            DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+            switch (_mode)
+            {
+                case RecordingMode.Toggle:
+                    DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case RecordingMode.PushToTalk:
+                    DictationStartRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case RecordingMode.Hybrid:
+                    // Start immediately; on release we decide whether this was
+                    // a short-press toggle (stop) or a hold that ended.
+                    DictationStartRequested?.Invoke(this, EventArgs.Empty);
+                    _hybridDidStart = true;
+                    break;
+            }
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[HotkeyService] Handler threw: {ex.Message}");
+            Debug.WriteLine($"[HotkeyService] Press handler threw: {ex.Message}");
+        }
+    }
+
+    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
+    {
+        // We only care about the release of the main key; modifier releases
+        // are ignored so the user can let go of Ctrl/Shift first.
+        if (e.Data.KeyCode != _key) return;
+        if (!_keyIsDown) return;
+
+        _keyIsDown = false;
+        var heldMs = (DateTime.UtcNow - _keyDownTime).TotalMilliseconds;
+
+        try
+        {
+            switch (_mode)
+            {
+                case RecordingMode.PushToTalk:
+                    DictationStopRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case RecordingMode.Hybrid:
+                    // Hybrid: a quick tap became "Toggle-on, user plans to tap
+                    // again to stop" — so stop on release would be wrong. Only
+                    // stop on release if the user held long enough that it
+                    // clearly was push-to-talk.
+                    if (_hybridDidStart && heldMs >= PushToTalkThresholdMs)
+                        DictationStopRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case RecordingMode.Toggle:
+                    // No-op — Toggle handled on press.
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[HotkeyService] Release handler threw: {ex.Message}");
         }
     }
 
@@ -157,14 +235,10 @@ public sealed class HotkeyService : IDisposable
         lock (_lock)
         {
             _hook.KeyPressed -= OnKeyPressed;
+            _hook.KeyReleased -= OnKeyReleased;
             _running = false;
         }
 
-        // libuiohook's hook thread polls X11 events; its Dispose() can block
-        // briefly (sometimes longer) on a quiet desktop. Run on a background
-        // thread with a hard cap so app shutdown isn't held hostage — the
-        // worst case is one leaked native thread, which the process exit
-        // reaps anyway.
         var disposeTask = Task.Run(() =>
         {
             try { _hook.Dispose(); }

@@ -34,14 +34,26 @@ public partial class App : Application
             var main = services.GetRequiredService<MainWindow>();
             desktop.MainWindow = main;
 
-            // Close button → hide to tray instead of exiting, unless tray menu
-            // fired Exit (which flips ShuttingDown first).
+            // Close-button behavior is user-configurable. Default
+            // (CloseToTray=false): X fully quits, same path as tray Exit.
+            // With CloseToTray=true the window hides and the tray stays the
+            // entry point. Tray Exit always quits (flips ShuttingDown first).
+            var prefs = services.GetRequiredService<LinuxPreferencesService>();
             main.Closing += (_, e) =>
             {
-                if (!ShuttingDown)
+                if (ShuttingDown) return;
+
+                if (prefs.Current.CloseToTray)
                 {
                     e.Cancel = true;
                     main.Hide();
+                }
+                else
+                {
+                    ShuttingDown = true;
+                    TearDownAsync(services).GetAwaiter().GetResult();
+                    // Let the close proceed; ClassicDesktopStyle shuts down
+                    // when the main window closes.
                 }
             };
 
@@ -59,13 +71,19 @@ public partial class App : Application
             dictation.Initialize();
             tray.DictationToggleRequested += (_, _) => _ = dictation.ToggleAsync();
 
-            // Launch minimized / hidden if --minimized was passed — tray icon
-            // stays the entry point.
+            // Sync the hotkey service's mode + binding with AppSettings. The
+            // handler re-runs on every settings change so flipping the mode
+            // in Settings → Shortcuts takes effect without a restart.
+            var hotkey = services.GetRequiredService<HotkeyService>();
+            var settings = services.GetRequiredService<ISettingsService>();
+            ApplyHotkeyFromSettings(hotkey, settings.Current);
+            settings.SettingsChanged += s => ApplyHotkeyFromSettings(hotkey, s);
+
+            // Launch minimized / hidden if --minimized was passed.
             if (Program.StartMinimized)
                 main.Opened += (_, _) => main.Hide();
 
-            // First-run onboarding wizard
-            var settings = services.GetRequiredService<ISettingsService>();
+            // First-run onboarding wizard.
             if (!settings.Current.HasCompletedOnboarding)
             {
                 main.Opened += (_, _) =>
@@ -76,6 +94,13 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static void ApplyHotkeyFromSettings(HotkeyService hotkey, Core.Models.AppSettings s)
+    {
+        hotkey.Mode = s.Mode;
+        if (!string.IsNullOrWhiteSpace(s.ToggleHotkey))
+            hotkey.TrySetHotkeyFromString(s.ToggleHotkey);
     }
 
     private static void ShowMainWindow(MainWindow window)
@@ -126,23 +151,18 @@ public partial class App : Application
 
     private static async Task BootstrapAsync(IServiceProvider services)
     {
-        // Load settings before anything that depends on them.
         var settings = services.GetRequiredService<ISettingsService>();
         settings.Load();
 
-        // First-run: install any bundled plugins that aren't already on disk.
         var deployer = services.GetRequiredService<BundledPluginDeployer>();
         deployer.DeployIfMissing();
 
-        // Discover and activate plugins.
         var pluginManager = services.GetRequiredService<PluginManager>();
         await pluginManager.InitializeAsync();
 
-        // Migrate old plain-name model IDs to plugin-prefixed form.
         var modelManager = services.GetRequiredService<ModelManagerService>();
         modelManager.MigrateSettings();
 
-        // Auto-load the last-selected model if it's already downloaded.
         var selectedModel = settings.Current.SelectedModelId;
         if (!string.IsNullOrEmpty(selectedModel) && modelManager.IsDownloaded(selectedModel))
         {
