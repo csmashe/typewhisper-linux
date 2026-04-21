@@ -4,21 +4,19 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
         xmlns:local="using:TypeWhisper.Linux"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="720"
         x:Class="TypeWhisper.Linux.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="TypeWhisper (Linux)"
-        Width="900" Height="640">
+        Width="980" Height="720">
     <DockPanel LastChildFill="True" Margin="16">
-        <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
+        <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,12">
             <TextBlock Text="TypeWhisper Linux" FontSize="22" FontWeight="SemiBold" />
-            <TextBlock Text="Shell scaffolding — views and transcription pipeline port incrementally from the Windows shell."
+            <TextBlock Text="Voice-to-text dictation. Global hotkey: Ctrl+Shift+Space (X11)."
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-            <TextBlock Text="{Binding PluginsPath, StringFormat='Plugins: {0}'}"
-                       FontFamily="monospace" FontSize="11"
-                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
         </StackPanel>
 
+        <!-- Recording control bar -->
         <Border DockPanel.Dock="Top" Padding="12" Margin="0,0,0,12"
                 BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="4">
@@ -32,44 +30,94 @@
                     </Ellipse>
                     <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" />
                 </StackPanel>
-                <TextBlock Text="Global hotkey: Ctrl+Shift+Space (X11; Wayland depends on compositor)"
-                           FontSize="11"
-                           Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                <TextBlock Text="{Binding LastCapturePath, StringFormat='Last capture: {0}'}"
-                           IsVisible="{Binding LastCapturePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                           FontSize="11" FontFamily="monospace"
+                <TextBlock Text="{Binding ActiveModelLabel}" FontSize="11"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                <TextBlock Text="{Binding LastCapturePath, StringFormat='WAV: {0}'}"
+                           IsVisible="{Binding LastCapturePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           FontSize="10" FontFamily="monospace"
+                           Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                <TextBlock Text="{Binding LastTranscription, StringFormat='Last result: {0}'}"
+                           IsVisible="{Binding LastTranscription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           TextWrapping="Wrap" FontSize="12" />
             </StackPanel>
         </Border>
 
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
-            <Button Content="Load Plugins" Command="{Binding LoadPluginsCommand}" />
-        </StackPanel>
+        <!-- Models + plugins tab -->
+        <TabControl>
+            <TabItem Header="Models">
+                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="4" Padding="0" Margin="0,8,0,0">
+                    <ScrollViewer>
+                        <ItemsControl ItemsSource="{Binding Models}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:TranscriptionModelItemViewModel">
+                                    <Border Padding="12,8" BorderThickness="0,0,0,1"
+                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                        <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                                            <StackPanel Grid.Column="0" Spacing="2">
+                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding SizeDescription}" FontSize="11"
+                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="Downloaded"
+                                                       IsVisible="{Binding IsDownloaded}"
+                                                       VerticalAlignment="Center" Margin="12,0"
+                                                       Foreground="{DynamicResource SystemAccentColorLight2Brush}" />
+                                            <Button Grid.Column="2" Content="Load"
+                                                    IsVisible="{Binding IsDownloaded}"
+                                                    Margin="0,0,8,0"
+                                                    Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).LoadModelCommand}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Grid.Column="3" Content="Download"
+                                                    IsVisible="{Binding SupportsDownload}"
+                                                    IsEnabled="{Binding !IsDownloaded}"
+                                                    Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).DownloadModelCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Border>
+            </TabItem>
 
-        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="4" Padding="0">
-            <ScrollViewer>
-                <ItemsControl ItemsSource="{Binding Plugins}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:PluginItemViewModel">
-                            <Border Padding="12,8" BorderThickness="0,0,0,1"
-                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                <Grid ColumnDefinitions="*,Auto">
-                                    <StackPanel Grid.Column="0" Spacing="2">
-                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                        <TextBlock Text="{Binding Id}" FontSize="11"
-                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                        <TextBlock Text="{Binding Path}" FontSize="10" FontFamily="monospace"
-                                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                                    </StackPanel>
-                                    <TextBlock Grid.Column="1" Text="{Binding Version, StringFormat='v{0}'}"
-                                               VerticalAlignment="Center" Margin="12,0" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
-        </Border>
+            <TabItem Header="Plugins">
+                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="4" Padding="0" Margin="0,8,0,0">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="8">
+                            <Button Content="Refresh" Command="{Binding LoadPluginsCommand}" />
+                            <TextBlock Text="{Binding PluginsPath, StringFormat='Path: {0}'}"
+                                       VerticalAlignment="Center" FontSize="11" FontFamily="monospace"
+                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                        </StackPanel>
+                        <ScrollViewer>
+                            <ItemsControl ItemsSource="{Binding Plugins}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PluginItemViewModel">
+                                        <Border Padding="12,8" BorderThickness="0,0,0,1"
+                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                            <Grid ColumnDefinitions="*,Auto,Auto">
+                                                <StackPanel Grid.Column="0" Spacing="2">
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding Id}" FontSize="11"
+                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding IsEnabled, StringFormat='Enabled: {0}'}"
+                                                           VerticalAlignment="Center" Margin="12,0" FontSize="11" />
+                                                <TextBlock Grid.Column="2" Text="{Binding Version, StringFormat='v{0}'}"
+                                                           VerticalAlignment="Center" Margin="12,0" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </TabItem>
+        </TabControl>
     </DockPanel>
 </Window>

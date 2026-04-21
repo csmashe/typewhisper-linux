@@ -43,6 +43,8 @@ internal static class ServiceRegistrations
         // Plugin subsystem
         services.AddSingleton<PluginEventBus>();
         services.AddSingleton<PluginLoader>();
+        services.AddSingleton<PluginManager>();
+        services.AddSingleton<ModelManagerService>();
 
         // Linux-native platform services
         services.AddSingleton<IActiveWindowService, ActiveWindowService>();

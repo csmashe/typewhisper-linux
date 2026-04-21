@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using Avalonia;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +17,10 @@ public static class Program
 
     public static int Main(string[] args)
     {
+        // Pipe Debug.WriteLine output to stdout so plugin + service logs are
+        // visible when the app runs from a terminal.
+        Trace.Listeners.Add(new ConsoleTraceListener());
+
         StartMinimized = args.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
         TypeWhisperEnvironment.EnsureDirectories();
 

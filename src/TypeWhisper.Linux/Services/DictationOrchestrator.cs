@@ -1,41 +1,47 @@
 using System.Diagnostics;
 using System.IO;
 using TypeWhisper.Core;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Glues the hotkey, recorder, and text-insertion services into a single
-/// dictation loop. v1 scope: hotkey toggles recording; on stop, the
-/// captured WAV is written to disk for inspection and an event is raised
-/// so future transcription pipeline can pick it up.
+/// Glues hotkey, recorder, transcription engine, and text injection into a
+/// single dictation loop:
+///   hotkey → start recording → hotkey → stop → save WAV → transcribe via
+///   the active transcription plugin → xdotool types the result into the
+///   focused window.
 ///
-/// Full pipeline (recorded WAV → transcription plugin → text injection)
-/// is stubbed — the transcription hook-in is a TODO until PluginManager
-/// lands on Linux.
+/// If no transcription plugin/model is loaded the WAV is still written so
+/// the user can inspect what was captured.
 /// </summary>
 public sealed class DictationOrchestrator : IDisposable
 {
     private readonly HotkeyService _hotkey;
     private readonly AudioRecordingService _audio;
     private readonly TextInsertionService _textInsertion;
+    private readonly ModelManagerService _models;
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private bool _initialized;
     private bool _disposed;
 
     public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
     public event EventHandler<bool>? RecordingStateChanged;
+    public event EventHandler<string>? TranscriptionCompleted;
+    public event EventHandler<string>? StatusMessage;
 
     public bool IsRecording => _audio.IsRecording;
 
     public DictationOrchestrator(
         HotkeyService hotkey,
         AudioRecordingService audio,
-        TextInsertionService textInsertion)
+        TextInsertionService textInsertion,
+        ModelManagerService models)
     {
         _hotkey = hotkey;
         _audio = audio;
         _textInsertion = textInsertion;
+        _models = models;
     }
 
     public void Initialize()
@@ -60,8 +66,8 @@ public sealed class DictationOrchestrator : IDisposable
                 var path = SaveWav(wav);
                 RecordingCaptured?.Invoke(this, path);
                 Debug.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
-                // TODO(Phase1): run ITranscriptionEnginePlugin.TranscribeAsync here,
-                // then _textInsertion.InsertTextAsync(result).
+
+                await TranscribeAndInsertAsync(wav);
             }
             else
             {
@@ -72,6 +78,51 @@ public sealed class DictationOrchestrator : IDisposable
         finally
         {
             _toggleGate.Release();
+        }
+    }
+
+    private async Task TranscribeAndInsertAsync(byte[] wav)
+    {
+        var plugin = _models.ActiveTranscriptionPlugin;
+        if (plugin is null)
+        {
+            StatusMessage?.Invoke(this, "No transcription model loaded. WAV saved for review.");
+            return;
+        }
+
+        StatusMessage?.Invoke(this, $"Transcribing via {plugin.ProviderDisplayName}…");
+        try
+        {
+            var result = await plugin.TranscribeAsync(
+                wavAudio: wav, language: null, translate: false,
+                prompt: null, ct: CancellationToken.None);
+
+            var text = result?.Text?.Trim();
+            if (string.IsNullOrEmpty(text))
+            {
+                StatusMessage?.Invoke(this, "Transcription returned no text.");
+                return;
+            }
+
+            TranscriptionCompleted?.Invoke(this, text);
+
+            var insertion = await _textInsertion.InsertTextAsync(text);
+            StatusMessage?.Invoke(this, insertion switch
+            {
+                InsertionResult.Pasted => $"Typed {text.Length} char(s).",
+                InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
+                InsertionResult.Failed => "Text insertion failed — see logs.",
+                _ => "Done.",
+            });
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Dictation] Transcription failed: {ex}");
+            StatusMessage?.Invoke(this, $"Transcription failed: {ex.Message}");
+        }
+        finally
+        {
+            _models.ScheduleAutoUnload();
         }
     }
 
