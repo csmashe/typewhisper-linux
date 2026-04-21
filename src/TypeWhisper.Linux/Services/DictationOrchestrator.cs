@@ -88,10 +88,8 @@ public sealed class DictationOrchestrator : IDisposable
         {
             if (_audio.IsRecording) return;
 
-            // Snapshot the active window now, before recording — the user's
-            // focused app at record-start is almost always the intended target.
-            _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
-            _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
+            // Start capturing audio immediately — the user's finger is on the
+            // key and they may already be speaking (especially in PTT).
             _recordingStart = DateTime.UtcNow;
             _audio.StartRecording();
             RecordingStateChanged?.Invoke(this, true);
@@ -100,6 +98,26 @@ public sealed class DictationOrchestrator : IDisposable
         {
             _toggleGate.Release();
         }
+
+        // Snapshot the active window off the hot path. Each xdotool call is a
+        // subprocess (~100 ms); doing them synchronously before StartRecording
+        // clipped the first chunk of speech on PTT. This races the user's
+        // speech but even worst case we'll have the metadata by the time
+        // transcription completes.
+        _recordingAppProcess = null;
+        _recordingAppTitle = null;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
+                _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Active-window snapshot failed: {ex.Message}");
+            }
+        });
     }
 
     public async Task StopAsync()

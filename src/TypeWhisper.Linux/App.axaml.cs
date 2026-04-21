@@ -74,10 +74,27 @@ public partial class App : Application
             // Sync the hotkey service's mode + binding with AppSettings. The
             // handler re-runs on every settings change so flipping the mode
             // in Settings → Shortcuts takes effect without a restart.
+            //
+            // On first apply we reconcile: if the persisted ToggleHotkey
+            // doesn't parse or differs from the service's default, write the
+            // service's current binding back to settings so subsequent
+            // SettingsChanged events (e.g. user toggling SaveToHistory) don't
+            // silently rebind the hotkey to an upstream default like
+            // "Ctrl+Shift+F9" that the user never chose.
             var hotkey = services.GetRequiredService<HotkeyService>();
             var settings = services.GetRequiredService<ISettingsService>();
-            ApplyHotkeyFromSettings(hotkey, settings.Current);
-            settings.SettingsChanged += s => ApplyHotkeyFromSettings(hotkey, s);
+            ReconcileHotkeyOnStartup(hotkey, settings);
+            var lastApplied = hotkey.CurrentHotkeyString;
+            settings.SettingsChanged += s =>
+            {
+                hotkey.Mode = s.Mode;
+                if (!string.IsNullOrWhiteSpace(s.ToggleHotkey)
+                    && s.ToggleHotkey != lastApplied
+                    && hotkey.TrySetHotkeyFromString(s.ToggleHotkey))
+                {
+                    lastApplied = hotkey.CurrentHotkeyString;
+                }
+            };
 
             // Launch minimized / hidden if --minimized was passed.
             if (Program.StartMinimized)
@@ -96,11 +113,34 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static void ApplyHotkeyFromSettings(HotkeyService hotkey, Core.Models.AppSettings s)
+    /// <summary>Upstream AppSettings default; meaningful on Windows but no
+    /// better than any other default on Linux, so we migrate past it.</summary>
+    private const string UpstreamDefaultHotkey = "Ctrl+Shift+F9";
+
+    private static void ReconcileHotkeyOnStartup(HotkeyService hotkey, ISettingsService settings)
     {
+        var s = settings.Current;
         hotkey.Mode = s.Mode;
-        if (!string.IsNullOrWhiteSpace(s.ToggleHotkey))
-            hotkey.TrySetHotkeyFromString(s.ToggleHotkey);
+
+        // Treat the upstream default as "unset" on Linux and substitute the
+        // Linux default (HotkeyService's ctor-time binding — Ctrl+Shift+Space).
+        // This prevents ApplyHotkey-on-SettingsChanged from silently rebinding
+        // the hotkey to F9 when the user has never explicitly chosen a key.
+        var linuxDefault = hotkey.CurrentHotkeyString;
+        var persisted = s.ToggleHotkey;
+        var shouldMigrate = string.IsNullOrWhiteSpace(persisted)
+                            || persisted == UpstreamDefaultHotkey;
+
+        if (shouldMigrate)
+        {
+            settings.Save(s with { ToggleHotkey = linuxDefault });
+        }
+        else if (!hotkey.TrySetHotkeyFromString(persisted))
+        {
+            // User-set but unparseable — keep the service default and fix
+            // settings so UI/state agree.
+            settings.Save(s with { ToggleHotkey = linuxDefault });
+        }
     }
 
     private static void ShowMainWindow(MainWindow window)
