@@ -29,7 +29,11 @@ public partial class App : Application
 
             var tray = services.GetRequiredService<TrayIconService>();
             tray.Initialize();
-            tray.ShowSettingsRequested += (_, _) => desktop.MainWindow?.Show();
+            tray.ShowSettingsRequested += (_, _) =>
+            {
+                desktop.MainWindow?.Show();
+                (desktop.MainWindow?.DataContext as ViewModels.MainWindowViewModel)?.OpenSettings();
+            };
             tray.ExitRequested += (_, _) => desktop.Shutdown();
 
             var dictation = services.GetRequiredService<DictationOrchestrator>();

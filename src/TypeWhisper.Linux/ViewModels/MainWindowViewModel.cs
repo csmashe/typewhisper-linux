@@ -1,10 +1,13 @@
 using System.Collections.ObjectModel;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Views;
 
 namespace TypeWhisper.Linux.ViewModels;
 
@@ -14,6 +17,8 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly ModelManagerService _models;
     private readonly DictationOrchestrator _dictation;
+    private readonly IServiceProvider _services;
+    private SettingsWindow? _settingsWindow;
 
     [ObservableProperty]
     private string _statusText = "Ready. Press Ctrl+Shift+Space (or click Toggle Recording) to capture audio.";
@@ -39,12 +44,14 @@ public partial class MainWindowViewModel : ObservableObject
         PluginLoader pluginLoader,
         PluginManager pluginManager,
         ModelManagerService models,
-        DictationOrchestrator dictation)
+        DictationOrchestrator dictation,
+        IServiceProvider services)
     {
         _pluginLoader = pluginLoader;
         _pluginManager = pluginManager;
         _models = models;
         _dictation = dictation;
+        _services = services;
 
         _dictation.RecordingStateChanged += (_, recording) =>
             Dispatcher.UIThread.Post(() =>
@@ -82,6 +89,30 @@ public partial class MainWindowViewModel : ObservableObject
 
     [RelayCommand]
     private async Task ToggleRecording() => await _dictation.ToggleAsync();
+
+    [RelayCommand]
+    public void OpenSettings()
+    {
+        if (_settingsWindow is { IsVisible: true })
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        _settingsWindow = _services.GetRequiredService<SettingsWindow>();
+        _settingsWindow.DataContext = _services.GetRequiredService<SettingsWindowViewModel>();
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+
+        if (Avalonia.Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
+            && desktop.MainWindow is { } owner)
+        {
+            _settingsWindow.Show(owner);
+        }
+        else
+        {
+            _settingsWindow.Show();
+        }
+    }
 
     [RelayCommand]
     private async Task LoadModel(TranscriptionModelItemViewModel item)

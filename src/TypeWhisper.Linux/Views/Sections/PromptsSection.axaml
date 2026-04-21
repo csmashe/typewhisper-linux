@@ -1,0 +1,67 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             x:Class="TypeWhisper.Linux.Views.Sections.PromptsSection"
+             x:DataType="vm:PromptsSectionViewModel">
+    <DockPanel Margin="16" LastChildFill="True">
+        <StackPanel DockPanel.Dock="Top" Spacing="10" Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Prompt actions" FontSize="20" FontWeight="SemiBold" />
+                <Button Content="Seed presets" Command="{Binding SeedPresetsCommand}"
+                        VerticalAlignment="Center" />
+            </StackPanel>
+            <TextBlock TextWrapping="Wrap" FontSize="11"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="LLM post-processing actions applied to transcribed text — cleanup, rewrite, translate, etc. Requires an enabled LLM provider plugin with an API key." />
+
+            <Grid ColumnDefinitions="*,2*,Auto" RowDefinitions="Auto">
+                <TextBox Grid.Column="0" Text="{Binding NewName}" PlaceholderText="Action name"
+                         Margin="0,0,8,0" />
+                <TextBox Grid.Column="1" Text="{Binding NewSystemPrompt}" PlaceholderText="System prompt"
+                         AcceptsReturn="True" MinHeight="40" Margin="0,0,8,0" />
+                <Button Grid.Column="2" Content="Add" Command="{Binding AddPromptCommand}"
+                        VerticalAlignment="Top" />
+            </Grid>
+        </StackPanel>
+
+        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="4">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Actions}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:PromptAction">
+                            <Border Padding="12,8" BorderThickness="0,0,0,1"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+                                    <TextBlock Grid.Column="0" Text="{Binding Icon}" FontSize="18"
+                                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <StackPanel Grid.Column="1" Spacing="2">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding SystemPrompt}" FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                                   MaxLines="2" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="2" Text="Preset"
+                                               FontSize="10"
+                                               IsVisible="{Binding IsPreset}"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                               VerticalAlignment="Center" Margin="12,0" />
+                                    <ToggleSwitch Grid.Column="3"
+                                                  IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                  Command="{Binding $parent[ItemsControl].((vm:PromptsSectionViewModel)DataContext).ToggleEnabledCommand}"
+                                                  CommandParameter="{Binding}" />
+                                    <Button Grid.Column="4" Content="Delete"
+                                            Command="{Binding $parent[ItemsControl].((vm:PromptsSectionViewModel)DataContext).DeleteCommand}"
+                                            CommandParameter="{Binding}" Margin="8,0,0,0"
+                                            IsEnabled="{Binding !IsPreset}" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</UserControl>

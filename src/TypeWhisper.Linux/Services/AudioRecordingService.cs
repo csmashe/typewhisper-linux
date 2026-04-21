@@ -29,8 +29,26 @@ public sealed class AudioRecordingService : IDisposable
 
     public bool IsRecording => _isRecording;
     public float CurrentRmsLevel => _currentRmsLevel;
+    public int? SelectedDeviceIndex { get; set; }
 
     public event EventHandler<float>? LevelChanged;
+
+    public IReadOnlyList<AudioInputDevice> GetInputDevices()
+    {
+        EnsurePortAudioInitialized();
+        var result = new List<AudioInputDevice>();
+        for (var i = 0; i < PortAudio.DeviceCount; i++)
+        {
+            try
+            {
+                var info = PortAudio.GetDeviceInfo(i);
+                if (info.maxInputChannels > 0)
+                    result.Add(new AudioInputDevice(i, info.name, info.maxInputChannels, i == PortAudio.DefaultInputDevice));
+            }
+            catch { /* ignore broken devices */ }
+        }
+        return result;
+    }
 
     public AudioRecordingService()
     {
@@ -43,17 +61,17 @@ public sealed class AudioRecordingService : IDisposable
 
         lock (_sampleLock) { _samples.Clear(); }
 
-        var defaultInput = PortAudio.DefaultInputDevice;
-        if (defaultInput == PortAudio.NoDevice)
+        var deviceIndex = SelectedDeviceIndex ?? PortAudio.DefaultInputDevice;
+        if (deviceIndex == PortAudio.NoDevice)
         {
             Debug.WriteLine("[AudioRecordingService] No default input device.");
             return;
         }
 
-        var inputInfo = PortAudio.GetDeviceInfo(defaultInput);
+        var inputInfo = PortAudio.GetDeviceInfo(deviceIndex);
         var inputParams = new StreamParameters
         {
-            device = defaultInput,
+            device = deviceIndex,
             channelCount = Channels,
             sampleFormat = SampleFormat.Float32,
             suggestedLatency = inputInfo.defaultLowInputLatency,
@@ -168,3 +186,6 @@ public sealed class AudioRecordingService : IDisposable
         }
     }
 }
+
+/// <summary>Minimal descriptor for an audio input device the user can pick from.</summary>
+public sealed record AudioInputDevice(int Index, string Name, int MaxInputChannels, bool IsDefault);

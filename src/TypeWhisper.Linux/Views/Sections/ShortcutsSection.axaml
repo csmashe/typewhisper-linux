@@ -1,0 +1,24 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             x:Class="TypeWhisper.Linux.Views.Sections.ShortcutsSection"
+             x:DataType="vm:ShortcutsSectionViewModel">
+    <ScrollViewer>
+        <StackPanel Margin="24" Spacing="16" MaxWidth="640" HorizontalAlignment="Left">
+            <TextBlock Text="Keyboard shortcut" FontSize="20" FontWeight="SemiBold" />
+
+            <TextBlock TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="Global hotkey that toggles dictation. Type a combination like &quot;Ctrl+Shift+Space&quot;, &quot;Alt+F9&quot;, or &quot;Ctrl+K&quot; and click Apply. Accepted modifiers: Ctrl, Shift, Alt, Meta. Keys: a-z, 0-9, F1-F24, Space, Enter, Tab, Escape, arrows, etc." />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBox Width="260" Text="{Binding HotkeyText}" PlaceholderText="Ctrl+Shift+Space" />
+                <Button Content="Apply" Command="{Binding ApplyHotkeyCommand}" />
+            </StackPanel>
+
+            <TextBlock Text="{Binding StatusMessage}" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

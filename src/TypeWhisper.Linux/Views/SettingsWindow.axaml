@@ -1,0 +1,44 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        xmlns:sections="using:TypeWhisper.Linux.Views.Sections"
+        mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="720"
+        x:Class="TypeWhisper.Linux.Views.SettingsWindow"
+        x:DataType="vm:SettingsWindowViewModel"
+        Title="TypeWhisper Settings"
+        Width="1080" Height="760">
+    <TabControl TabStripPlacement="Left" Padding="0">
+        <TabItem Header="General">
+            <sections:GeneralSection DataContext="{Binding General}" />
+        </TabItem>
+        <TabItem Header="Shortcuts">
+            <sections:ShortcutsSection DataContext="{Binding Shortcuts}" />
+        </TabItem>
+        <TabItem Header="Audio">
+            <sections:AudioSection DataContext="{Binding Audio}" />
+        </TabItem>
+        <TabItem Header="Models">
+            <sections:ModelsSection DataContext="{Binding Models}" />
+        </TabItem>
+        <TabItem Header="Plugins">
+            <sections:PluginsSection DataContext="{Binding Plugins}" />
+        </TabItem>
+        <TabItem Header="History">
+            <sections:HistorySection DataContext="{Binding History}" />
+        </TabItem>
+        <TabItem Header="Dictionary">
+            <sections:DictionarySection DataContext="{Binding Dictionary}" />
+        </TabItem>
+        <TabItem Header="Snippets">
+            <sections:SnippetsSection DataContext="{Binding Snippets}" />
+        </TabItem>
+        <TabItem Header="Profiles">
+            <sections:ProfilesSection DataContext="{Binding Profiles}" />
+        </TabItem>
+        <TabItem Header="Prompts">
+            <sections:PromptsSection DataContext="{Binding Prompts}" />
+        </TabItem>
+    </TabControl>
+</Window>

@@ -1,0 +1,46 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             x:Class="TypeWhisper.Linux.Views.Sections.PluginsSection"
+             x:DataType="vm:PluginsSectionViewModel">
+    <DockPanel Margin="16" LastChildFill="True">
+        <TextBlock DockPanel.Dock="Top" Text="Installed plugins" FontSize="20" FontWeight="SemiBold"
+                   Margin="0,0,0,12" />
+        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="4">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Plugins}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PluginRow">
+                            <Border Padding="12,10" BorderThickness="0,0,0,1"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                <Grid ColumnDefinitions="*,Auto,Auto">
+                                    <StackPanel Grid.Column="0" Spacing="2">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding Version, StringFormat='v{0}'}" FontSize="11" />
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Id}" FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Text="{Binding Description}" FontSize="11"
+                                                   TextWrapping="Wrap"
+                                                   IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Author}"
+                                               IsVisible="{Binding Author, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                               VerticalAlignment="Center" Margin="12,0" FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <ToggleSwitch Grid.Column="2"
+                                                  IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                  Command="{Binding $parent[ItemsControl].((vm:PluginsSectionViewModel)DataContext).ToggleEnabledCommand}"
+                                                  CommandParameter="{Binding}" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</UserControl>

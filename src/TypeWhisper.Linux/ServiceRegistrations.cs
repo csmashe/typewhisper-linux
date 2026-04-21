@@ -7,6 +7,8 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels;
+using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Linux.Views;
 
 namespace TypeWhisper.Linux;
 
@@ -62,8 +64,20 @@ internal static class ServiceRegistrations
 
         // ViewModels
         services.AddTransient<MainWindowViewModel>();
+        services.AddTransient<SettingsWindowViewModel>();
+        services.AddTransient<GeneralSectionViewModel>();
+        services.AddTransient<ShortcutsSectionViewModel>();
+        services.AddTransient<AudioSectionViewModel>();
+        services.AddTransient<ModelsSectionViewModel>();
+        services.AddTransient<PluginsSectionViewModel>();
+        services.AddTransient<HistorySectionViewModel>();
+        services.AddTransient<DictionarySectionViewModel>();
+        services.AddTransient<SnippetsSectionViewModel>();
+        services.AddTransient<ProfilesSectionViewModel>();
+        services.AddTransient<PromptsSectionViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();
+        services.AddTransient<SettingsWindow>();
     }
 }

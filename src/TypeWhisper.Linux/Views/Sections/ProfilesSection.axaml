@@ -1,0 +1,65 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             x:Class="TypeWhisper.Linux.Views.Sections.ProfilesSection"
+             x:DataType="vm:ProfilesSectionViewModel">
+    <DockPanel Margin="16" LastChildFill="True">
+        <StackPanel DockPanel.Dock="Top" Spacing="10" Margin="0,0,0,12">
+            <TextBlock Text="Profiles" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock TextWrapping="Wrap" FontSize="11"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="Per-app rules — match a profile by focused process name. (Active-window matching is X11-only; limited on Wayland.)" />
+
+            <Grid ColumnDefinitions="*,2*,Auto" RowDefinitions="Auto">
+                <TextBox Grid.Column="0" Text="{Binding NewName}" PlaceholderText="Profile name"
+                         Margin="0,0,8,0" />
+                <TextBox Grid.Column="1" Text="{Binding NewProcessNames}"
+                         PlaceholderText="Comma-separated process names (e.g. code, firefox)"
+                         Margin="0,0,8,0" />
+                <Button Grid.Column="2" Content="Add" Command="{Binding AddProfileCommand}" />
+            </Grid>
+        </StackPanel>
+
+        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="4">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Profiles}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:Profile">
+                            <Border Padding="12,8" BorderThickness="0,0,0,1"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                <Grid ColumnDefinitions="*,*,Auto,Auto">
+                                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                    <ItemsControl Grid.Column="1" ItemsSource="{Binding ProcessNames}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="6,2" Margin="2" CornerRadius="3"
+                                                        Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                                    <TextBlock Text="{Binding}" FontSize="10" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <ToggleSwitch Grid.Column="2"
+                                                  IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                  Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).ToggleEnabledCommand}"
+                                                  CommandParameter="{Binding}" />
+                                    <Button Grid.Column="3" Content="Delete"
+                                            Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).DeleteCommand}"
+                                            CommandParameter="{Binding}" Margin="8,0,0,0" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</UserControl>

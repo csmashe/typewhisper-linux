@@ -1,0 +1,65 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             x:Class="TypeWhisper.Linux.Views.Sections.DictionarySection"
+             x:DataType="vm:DictionarySectionViewModel">
+    <DockPanel Margin="16" LastChildFill="True">
+        <StackPanel DockPanel.Dock="Top" Spacing="10" Margin="0,0,0,12">
+            <TextBlock Text="Dictionary" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock TextWrapping="Wrap" FontSize="11"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="Terms teach the transcriber unusual words; Corrections rewrite one word into another (e.g. &quot;git hub&quot; → &quot;GitHub&quot;)." />
+
+            <Grid ColumnDefinitions="Auto,*,*,Auto,Auto" RowDefinitions="Auto">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding EntryTypes}"
+                          SelectedItem="{Binding NewEntryType}" Width="130" Margin="0,0,8,0" />
+                <TextBox Grid.Column="1" Text="{Binding NewOriginal}" PlaceholderText="Original / term"
+                         Margin="0,0,8,0" />
+                <TextBox Grid.Column="2" Text="{Binding NewReplacement}" PlaceholderText="Replacement (optional for Term)"
+                         Margin="0,0,8,0" />
+                <CheckBox Grid.Column="3" Content="Aa" IsChecked="{Binding CaseSensitive}"
+                          ToolTip.Tip="Case-sensitive match" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <Button Grid.Column="4" Content="Add" Command="{Binding AddEntryCommand}" />
+            </Grid>
+        </StackPanel>
+
+        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="4">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Entries}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:DictionaryEntry">
+                            <Border Padding="12,8" BorderThickness="0,0,0,1"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+                                    <TextBlock Grid.Column="0" Text="{Binding EntryType}"
+                                               Width="90" FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <StackPanel Grid.Column="1" Spacing="2">
+                                        <TextBlock Text="{Binding Original}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Replacement}" FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   IsVisible="{Binding Replacement, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding UsageCount, StringFormat='used {0}×'}"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                               VerticalAlignment="Center" Margin="12,0" />
+                                    <ToggleSwitch Grid.Column="3"
+                                                  IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                  Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleEnabledCommand}"
+                                                  CommandParameter="{Binding}" />
+                                    <Button Grid.Column="4" Content="Delete"
+                                            Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DeleteCommand}"
+                                            CommandParameter="{Binding}" Margin="8,0,0,0" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</UserControl>

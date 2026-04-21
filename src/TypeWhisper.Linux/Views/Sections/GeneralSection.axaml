@@ -1,0 +1,28 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             x:Class="TypeWhisper.Linux.Views.Sections.GeneralSection"
+             x:DataType="vm:GeneralSectionViewModel">
+    <ScrollViewer>
+        <StackPanel Margin="24" Spacing="16" MaxWidth="640" HorizontalAlignment="Left">
+            <TextBlock Text="General" FontSize="20" FontWeight="SemiBold" />
+
+            <CheckBox Content="Auto-paste transcription into focused window"
+                      IsChecked="{Binding AutoPaste}" />
+            <CheckBox Content="Save transcriptions to history"
+                      IsChecked="{Binding SaveToHistoryEnabled}" />
+            <CheckBox Content="Play sound when recording starts/stops"
+                      IsChecked="{Binding SoundFeedbackEnabled}" />
+
+            <StackPanel Spacing="6">
+                <TextBlock Text="Dictation language hint" FontWeight="SemiBold" />
+                <TextBlock Text="'auto' detects from speech; pin one for better accuracy if you always speak the same language."
+                           FontSize="11"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                <ComboBox ItemsSource="{Binding LanguageChoices}"
+                          SelectedItem="{Binding Language}"
+                          Width="200" HorizontalAlignment="Left" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
