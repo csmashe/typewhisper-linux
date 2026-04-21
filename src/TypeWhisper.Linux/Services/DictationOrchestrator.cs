@@ -24,6 +24,8 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly HotkeyService _hotkey;
     private readonly AudioRecordingService _audio;
     private readonly TextInsertionService _textInsertion;
+    private readonly IAudioDuckingService _audioDucking;
+    private readonly IMediaPauseService _mediaPause;
     private readonly ModelManagerService _models;
     private readonly IHistoryService _history;
     private readonly ISettingsService _settings;
@@ -55,6 +57,8 @@ public sealed class DictationOrchestrator : IDisposable
         HotkeyService hotkey,
         AudioRecordingService audio,
         TextInsertionService textInsertion,
+        IAudioDuckingService audioDucking,
+        IMediaPauseService mediaPause,
         ModelManagerService models,
         IHistoryService history,
         ISettingsService settings,
@@ -70,6 +74,8 @@ public sealed class DictationOrchestrator : IDisposable
         _hotkey = hotkey;
         _audio = audio;
         _textInsertion = textInsertion;
+        _audioDucking = audioDucking;
+        _mediaPause = mediaPause;
         _models = models;
         _history = history;
         _settings = settings;
@@ -110,6 +116,13 @@ public sealed class DictationOrchestrator : IDisposable
             // key and they may already be speaking (especially in PTT).
             _recordingStart = DateTime.UtcNow;
             _audio.StartRecording();
+            if (!_audio.IsRecording)
+                return;
+
+            if (_settings.Current.AudioDuckingEnabled)
+                _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
+            if (_settings.Current.PauseMediaDuringRecording)
+                _mediaPause.PauseMedia();
             RecordingStateChanged?.Invoke(this, true);
         }
         finally
@@ -158,6 +171,8 @@ public sealed class DictationOrchestrator : IDisposable
             if (!_audio.IsRecording) return;
 
             var wav = _audio.StopRecording();
+            _audioDucking.RestoreAudio();
+            _mediaPause.ResumeMedia();
             RecordingStateChanged?.Invoke(this, false);
             var duration = ComputeDurationSeconds(wav);
             _models.PluginManager.EventBus.Publish(new RecordingStoppedEvent
@@ -174,6 +189,8 @@ public sealed class DictationOrchestrator : IDisposable
         }
         finally
         {
+            _audioDucking.RestoreAudio();
+            _mediaPause.ResumeMedia();
             _toggleGate.Release();
         }
     }

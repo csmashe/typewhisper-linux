@@ -47,13 +47,11 @@
             <TextBlock Text="Audio routing" FontWeight="SemiBold" />
             <CheckBox Content="Duck other audio while recording"
                       IsChecked="{Binding AudioDuckingEnabled}"
-                      IsEnabled="False"
-                      ToolTip.Tip="Lower the volume of other apps while you dictate. (Not yet wired on Linux — planned via pactl.)" />
+                      ToolTip.Tip="Lower the volume of other apps while you dictate. Uses pactl on Linux." />
             <CheckBox Content="Pause media playback during recording"
                       IsChecked="{Binding PauseMediaDuringRecording}"
-                      IsEnabled="False"
-                      ToolTip.Tip="Not yet wired on Linux — planned via MPRIS2 D-Bus." />
-            <TextBlock Text="These controls are visible for parity, but the Linux runtime implementation is not wired yet."
+                      ToolTip.Tip="Pause supported MPRIS/media players while recording. Uses playerctl on Linux." />
+            <TextBlock Text="These features are best-effort and depend on Linux desktop tools being available: pactl for ducking and playerctl for media control."
                        FontSize="11"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                        TextWrapping="Wrap" />

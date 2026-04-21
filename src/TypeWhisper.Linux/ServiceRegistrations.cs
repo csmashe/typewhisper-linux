@@ -50,6 +50,8 @@ internal static class ServiceRegistrations
 
         // Linux-native platform services
         services.AddSingleton<IActiveWindowService, ActiveWindowService>();
+        services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
+        services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<AudioRecordingService>();
         services.AddSingleton<HotkeyService>();
         services.AddSingleton<TextInsertionService>();
@@ -61,8 +63,6 @@ internal static class ServiceRegistrations
         services.AddSingleton<LinuxPreferencesService>();
 
         // Deferred until implementations land:
-        //   IAudioDuckingService  (pactl per-sink-input volume)
-        //   IMediaPauseService    (Tmds.DBus -> MPRIS2)
         //   ITranslationService   (needs PluginManager port)
 
         // ViewModels — section VMs are singletons so state stays consistent
@@ -85,7 +85,6 @@ internal static class ServiceRegistrations
 
         // Windows
         services.AddSingleton<MainWindow>();
-        services.AddTransient<SettingsWindow>();
         services.AddTransient<WelcomeWizard>();
     }
 }
