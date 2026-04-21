@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Obsidian;
 
-public sealed partial class ObsidianPlugin : IActionPlugin
+public sealed partial class ObsidianPlugin : IActionPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private IPluginHostServices? _host;
 

@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.AssemblyAi;
 
-public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin
+public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.assemblyai.com";
 

@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Cohere;
 
-public sealed class CoherePlugin : ILlmProviderPlugin, IDisposable
+public sealed class CoherePlugin : ILlmProviderPlugin, IDisposable, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.cohere.com/compatibility";
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };

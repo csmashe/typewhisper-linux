@@ -216,7 +216,7 @@ public sealed class WebhookService
     public void Dispose() => _httpClient.Dispose();
 }
 
-public sealed class WebhookPlugin : ITypeWhisperPlugin
+public sealed class WebhookPlugin : ITypeWhisperPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private IDisposable? _subscription;
     private IPluginHostServices? _host;

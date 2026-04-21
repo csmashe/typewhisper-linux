@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAi;
 
-public sealed class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin
+public sealed class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.openai.com";
     private const string TranslationModel = "gpt-4o-mini";

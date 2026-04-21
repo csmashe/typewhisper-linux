@@ -1,5 +1,3 @@
-using System.Windows.Controls;
-
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
@@ -21,7 +19,4 @@ public interface ITypeWhisperPlugin : IDisposable
 
     /// <summary>Called when the plugin is deactivated.</summary>
     Task DeactivateAsync();
-
-    /// <summary>Returns a WPF settings view for this plugin, or null if none.</summary>
-    UserControl? CreateSettingsView();
 }

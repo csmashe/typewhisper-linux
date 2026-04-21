@@ -10,7 +10,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAiVectorMemory;
 
-public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin
+public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string EmbeddingModel = "text-embedding-3-small";
     private const string EmbeddingUrl = "https://api.openai.com/v1/embeddings";

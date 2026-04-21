@@ -9,7 +9,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Linear;
 
-public sealed class LinearPlugin : IActionPlugin
+public sealed class LinearPlugin : IActionPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {

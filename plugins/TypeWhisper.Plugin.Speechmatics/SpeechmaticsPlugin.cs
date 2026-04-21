@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Speechmatics;
 
-public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin
+public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://asr.api.speechmatics.com/v2";
 

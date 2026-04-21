@@ -1,6 +1,5 @@
 using System.IO;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -38,8 +37,6 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         _entries = null;
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => null;
 
     // IMemoryStoragePlugin
 

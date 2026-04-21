@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenRouter;
 
-public sealed class OpenRouterPlugin : ILlmProviderPlugin
+public sealed class OpenRouterPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://openrouter.ai/api";
 

@@ -1,6 +1,5 @@
 using System.IO;
 using System.Text;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using Whisper.net;
@@ -68,8 +67,6 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         await UnloadModelAsync();
         _host = null;
     }
-
-    public UserControl? CreateSettingsView() => null;
 
     public void SelectModel(string modelId)
     {

@@ -119,7 +119,6 @@ public class ModelManagerServiceTests
 
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
         public Task DeactivateAsync() => Task.CompletedTask;
-        public System.Windows.Controls.UserControl? CreateSettingsView() => null;
         public void SelectModel(string modelId) => SelectedModelId = modelId;
         public Task LoadModelAsync(string modelId, CancellationToken ct)
         {

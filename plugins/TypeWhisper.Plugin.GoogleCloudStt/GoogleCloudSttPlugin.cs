@@ -9,7 +9,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GoogleCloudStt;
 
-public sealed class GoogleCloudSttPlugin : ITranscriptionEnginePlugin
+public sealed class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string ApiEndpoint = "https://speech.googleapis.com/v1/speech:recognize";
 

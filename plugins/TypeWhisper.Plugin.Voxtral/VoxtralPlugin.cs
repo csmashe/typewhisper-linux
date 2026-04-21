@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Voxtral;
 
-public sealed class VoxtralPlugin : ITranscriptionEnginePlugin
+public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.mistral.ai";
     private const string ModelId = "mistral-whisper";

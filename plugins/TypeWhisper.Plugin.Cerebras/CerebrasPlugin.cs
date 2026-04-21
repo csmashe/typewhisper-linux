@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Cerebras;
 
-public sealed class CerebrasPlugin : ILlmProviderPlugin
+public sealed class CerebrasPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.cerebras.ai";
 

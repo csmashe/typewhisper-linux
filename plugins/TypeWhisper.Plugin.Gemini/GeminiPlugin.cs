@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Gemini;
 
-public sealed class GeminiPlugin : ILlmProviderPlugin
+public sealed class GeminiPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai";
     private const string DefaultModel = "gemini-2.5-flash";

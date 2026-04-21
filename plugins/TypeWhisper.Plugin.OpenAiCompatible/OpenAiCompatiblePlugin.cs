@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAiCompatible;
 
-public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin
+public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
     private IPluginHostServices? _host;

@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\TypeWhisper.Core\TypeWhisper.Core.csproj" />
     <ProjectReference Include="..\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
+    <ProjectReference Include="..\TypeWhisper.PluginSDK.Wpf\TypeWhisper.PluginSDK.Wpf.csproj" />
   </ItemGroup>
 
   <ItemGroup>

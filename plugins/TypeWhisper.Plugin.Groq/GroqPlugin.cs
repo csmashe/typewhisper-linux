@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Groq;
 
-public sealed class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin
+public sealed class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.groq.com/openai";
     private readonly HttpClient _httpClient;

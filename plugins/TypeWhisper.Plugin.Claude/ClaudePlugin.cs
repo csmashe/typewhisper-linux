@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Claude;
 
-public sealed class ClaudePlugin : ILlmProviderPlugin
+public sealed class ClaudePlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.anthropic.com";
     private const string AnthropicVersion = "2023-06-01";

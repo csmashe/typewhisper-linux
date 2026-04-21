@@ -4,7 +4,6 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -67,8 +66,6 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         StopSidecar();
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => null;
 
     public void SelectModel(string modelId)
     {

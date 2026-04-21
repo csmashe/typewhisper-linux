@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
-using System.Windows.Controls;
 using SherpaOnnx;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -82,8 +81,6 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         UnloadRecognizer();
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => null;
 
     public void SelectModel(string modelId)
     {

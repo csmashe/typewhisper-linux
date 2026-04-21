@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Fireworks;
 
-public sealed class FireworksPlugin : ILlmProviderPlugin, IDisposable
+public sealed class FireworksPlugin : ILlmProviderPlugin, IDisposable, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.fireworks.ai";
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };

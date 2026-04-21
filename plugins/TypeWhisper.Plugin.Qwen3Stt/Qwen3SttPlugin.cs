@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Qwen3Stt;
 
-public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin
+public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string DefaultBaseUrl = "http://localhost:8000";
     private const string DefaultModel = "Qwen/Qwen3-ASR";

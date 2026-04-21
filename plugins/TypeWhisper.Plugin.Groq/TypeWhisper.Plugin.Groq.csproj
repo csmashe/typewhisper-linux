@@ -12,6 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
+    <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK.Wpf\TypeWhisper.PluginSDK.Wpf.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="manifest.json">

@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Deepgram;
 
-public sealed class DeepgramPlugin : ITranscriptionEnginePlugin
+public sealed class DeepgramPlugin : ITranscriptionEnginePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.deepgram.com";
 
