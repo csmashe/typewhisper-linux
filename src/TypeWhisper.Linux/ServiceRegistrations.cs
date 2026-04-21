@@ -1,5 +1,10 @@
+using System.IO;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using TypeWhisper.Core;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels;
 
@@ -7,32 +12,50 @@ namespace TypeWhisper.Linux;
 
 /// <summary>
 /// DI wiring for the Linux host. Mirrors the registration shape of
-/// TypeWhisper.Windows but substitutes Linux-native service implementations
-/// for the Win32/WPF ones. Phase-1 services are wired incrementally.
+/// TypeWhisper.Windows/App.xaml.cs but substitutes Linux-native service
+/// implementations for the Win32/WPF ones. Services that aren't portable
+/// to Linux (Velopack updater, SMTC MediaPause, Core Audio ducking,
+/// SupporterDiscord, License server) are omitted from v1.
 /// </summary>
 internal static class ServiceRegistrations
 {
     public static void Register(HostBuilderContext context, IServiceCollection services)
     {
+        var dataPath = TypeWhisperEnvironment.DataPath;
+
+        // Core — settings & JSON-file-backed data services (all portable)
+        services.AddSingleton<ISettingsService>(
+            new SettingsService(TypeWhisperEnvironment.SettingsFilePath));
+        services.AddSingleton<IErrorLogService>(new ErrorLogService(dataPath));
+        services.AddSingleton<IHistoryService>(
+            new HistoryService(Path.Combine(dataPath, "history.json"), TypeWhisperEnvironment.AudioPath));
+        services.AddSingleton<IDictionaryService>(
+            new DictionaryService(Path.Combine(dataPath, "dictionary.json")));
+        services.AddSingleton<IVocabularyBoostingService, VocabularyBoostingService>();
+        services.AddSingleton<ISnippetService>(
+            new SnippetService(Path.Combine(dataPath, "snippets.json")));
+        services.AddSingleton<IProfileService>(
+            new ProfileService(Path.Combine(dataPath, "profiles.json")));
+        services.AddSingleton<IPromptActionService>(
+            new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
+        services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
+
         // Plugin subsystem
         services.AddSingleton<PluginEventBus>();
         services.AddSingleton<PluginLoader>();
 
-        // Linux-native platform services — populate as each is implemented:
-        //   AudioRecordingService  (PortAudioSharp2 / OpenAL)
-        //   HotkeyService          (SharpHook; XDG portal GlobalShortcuts on Wayland)
-        //   TextInsertionService   (xdotool on X11; ydotool fallback for Wayland)
-        //   TrayIconService        (Avalonia.Controls.TrayIcon -> StatusNotifierItem)
-        //   ActiveWindowService    (xdotool — implemented, see Services/ActiveWindowService.cs)
-        //   ApiKeyProtection       (Tmds.LibSecret eventually; AES-derived-key fallback)
-        //   MediaPauseService      (Tmds.DBus -> MPRIS2)
-        //   AudioDuckingService    (pactl per-sink-input volume)
-        //   StartupService         (XDG autostart — implemented, see Services/StartupService.cs)
+        // Linux-native platform services
+        services.AddSingleton<IActiveWindowService, ActiveWindowService>();
+        services.AddSingleton<AudioRecordingService>();
+        services.AddSingleton<HotkeyService>();
+        services.AddSingleton<TextInsertionService>();
+        services.AddSingleton<TrayIconService>();
+        services.AddSingleton<DictationOrchestrator>();
 
-        // Core service wiring (ProfileService, HistoryService, DictionaryService,
-        // SnippetService, PostProcessingPipeline, VocabularyBoostingService,
-        // PromptActionService, SettingsService, etc.) to be ported from
-        // TypeWhisper.Windows/App.xaml.cs in a follow-up commit.
+        // Deferred until implementations land:
+        //   IAudioDuckingService  (pactl per-sink-input volume)
+        //   IMediaPauseService    (Tmds.DBus -> MPRIS2)
+        //   ITranslationService   (needs PluginManager port)
 
         // ViewModels
         services.AddTransient<MainWindowViewModel>();
