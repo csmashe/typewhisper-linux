@@ -51,6 +51,7 @@ public partial class App : Application
             tray.ExitRequested += (_, _) =>
             {
                 ShuttingDown = true;
+                TearDownAsync(services).GetAwaiter().GetResult();
                 desktop.Shutdown();
             };
 
@@ -83,6 +84,44 @@ public partial class App : Application
         if (window.WindowState == Avalonia.Controls.WindowState.Minimized)
             window.WindowState = Avalonia.Controls.WindowState.Normal;
         window.Activate();
+    }
+
+    /// <summary>
+    /// Best-effort ordered shutdown of services that own native threads.
+    /// Runs before desktop.Shutdown() so the Host isn't left racing
+    /// libuiohook / PortAudio on exit.
+    /// </summary>
+    private static async Task TearDownAsync(IServiceProvider services)
+    {
+        try
+        {
+            var hotkey = services.GetService<HotkeyService>();
+            hotkey?.Dispose();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] Hotkey dispose failed: {ex.Message}"); }
+
+        try
+        {
+            var tray = services.GetService<TrayIconService>();
+            tray?.Dispose();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}"); }
+
+        try
+        {
+            var models = services.GetService<ModelManagerService>();
+            models?.UnloadModel();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] Model unload failed: {ex.Message}"); }
+
+        try
+        {
+            var audio = services.GetService<AudioRecordingService>();
+            audio?.Dispose();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}"); }
+
+        await Task.CompletedTask;
     }
 
     private static async Task BootstrapAsync(IServiceProvider services)

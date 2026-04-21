@@ -35,13 +35,27 @@ public static class Program
             Host = BuildHost(args);
             Host.Start();
 
-            return BuildAvaloniaApp()
+            var exitCode = BuildAvaloniaApp()
                 .StartWithClassicDesktopLifetime(args);
-        }
-        finally
-        {
-            Host?.StopAsync().GetAwaiter().GetResult();
+
+            // Graceful shutdown with a hard cap. SharpHook's libuiohook thread
+            // waits on X11 events and can block Dispose() indefinitely on a
+            // quiet desktop; Host.StopAsync would then hang forever. Cap the
+            // wait and fall back to Environment.Exit so the tray icon releases.
+            var stopped = Host.StopAsync(TimeSpan.FromSeconds(3)).Wait(TimeSpan.FromSeconds(4));
             _singleInstanceLock?.Dispose();
+
+            if (!stopped)
+            {
+                Trace.WriteLine("[Program] Host.StopAsync timed out — forcing exit.");
+                Environment.Exit(exitCode);
+            }
+            return exitCode;
+        }
+        catch
+        {
+            _singleInstanceLock?.Dispose();
+            throw;
         }
     }
 

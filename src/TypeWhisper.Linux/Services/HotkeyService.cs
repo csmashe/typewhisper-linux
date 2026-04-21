@@ -157,8 +157,19 @@ public sealed class HotkeyService : IDisposable
         lock (_lock)
         {
             _hook.KeyPressed -= OnKeyPressed;
-            _hook.Dispose();
             _running = false;
         }
+
+        // libuiohook's hook thread polls X11 events; its Dispose() can block
+        // briefly (sometimes longer) on a quiet desktop. Run on a background
+        // thread with a hard cap so app shutdown isn't held hostage — the
+        // worst case is one leaked native thread, which the process exit
+        // reaps anyway.
+        var disposeTask = Task.Run(() =>
+        {
+            try { _hook.Dispose(); }
+            catch (Exception ex) { Debug.WriteLine($"[HotkeyService] Dispose threw: {ex.Message}"); }
+        });
+        disposeTask.Wait(TimeSpan.FromSeconds(1));
     }
 }
