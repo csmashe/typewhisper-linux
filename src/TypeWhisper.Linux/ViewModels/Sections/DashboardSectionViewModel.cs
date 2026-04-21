@@ -25,8 +25,7 @@ public partial class DashboardSectionViewModel : ObservableObject
     {
         _history = history;
         _history.RecordsChanged += () => Dispatcher.UIThread.Post(Refresh);
-        _ = _history.EnsureLoadedAsync().ContinueWith(_ => Dispatcher.UIThread.Post(Refresh));
-        Refresh();
+        _ = InitializeAsync();
     }
 
     partial void OnSelectedRangeChanged(TimeRange value) => Refresh();
@@ -35,9 +34,15 @@ public partial class DashboardSectionViewModel : ObservableObject
     [RelayCommand] private void ShowMonth() => SelectedRange = TimeRange.Month;
     [RelayCommand] private void ShowAllTime() => SelectedRange = TimeRange.AllTime;
 
+    private async Task InitializeAsync()
+    {
+        await _history.EnsureLoadedAsync().ConfigureAwait(false);
+        Dispatcher.UIThread.Post(Refresh);
+    }
+
     private void Refresh()
     {
-        var now = DateTime.Now;
+        var now = DateTime.UtcNow;
         var cutoff = SelectedRange switch
         {
             TimeRange.Weekly => now.AddDays(-7),

@@ -93,12 +93,16 @@ public partial class WelcomeWizardViewModel : ObservableObject
         foreach (var p in _pluginManager.AllPlugins)
         {
             ExtensionPlugins.Add(new PluginRow(
-                Id: p.Manifest.Id,
-                Name: p.Manifest.Name,
-                Version: p.Manifest.Version,
-                Author: p.Manifest.Author ?? "",
-                Description: p.Manifest.Description ?? "",
-                IsEnabled: _pluginManager.IsEnabled(p.Manifest.Id)));
+                owner: null,
+                id: p.Manifest.Id,
+                name: p.Manifest.Name,
+                version: p.Manifest.Version,
+                author: p.Manifest.Author ?? "",
+                description: p.Manifest.Description ?? "",
+                category: p.Manifest.Category,
+                isLocal: p.Manifest.IsLocal,
+                hasExpandableSettings: false,
+                isEnabled: _pluginManager.IsEnabled(p.Manifest.Id)));
         }
     }
 
@@ -119,7 +123,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             var existing = ExtensionPlugins[i];
             var isEnabled = _pluginManager.IsEnabled(existing.Id);
             if (isEnabled != existing.IsEnabled)
-                ExtensionPlugins[i] = existing with { IsEnabled = isEnabled };
+                existing.IsEnabled = isEnabled;
         }
     }
 

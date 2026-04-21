@@ -7,6 +7,10 @@
 # Usage:
 #   scripts/deploy-linux-plugins.sh [Release|Debug]
 #
+# Environment:
+#   TYPEWHISPER_PLUGIN_PUBLISH_JOBS=<n>  Max concurrent plugin publishes.
+#                                       Defaults to 4.
+#
 # Idempotent — safe to re-run.
 
 set -euo pipefail
@@ -15,6 +19,14 @@ CONFIG="${1:-Release}"
 RID="linux-x64"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins"
+JOBS="${TYPEWHISPER_PLUGIN_PUBLISH_JOBS:-4}"
+TMP_DIR="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT
 
 # Plugin ID (manifest id) → plugin project name
 declare -A PLUGINS=(
@@ -45,30 +57,69 @@ declare -A PLUGINS=(
 
 mkdir -p "$OUT"
 
-for id in "${!PLUGINS[@]}"; do
+publish_plugin() {
+  local id="$1"
   project="${PLUGINS[$id]}"
   proj_dir="$ROOT/plugins/$project"
   pub_dir="$proj_dir/bin/$CONFIG/net10.0/$RID/publish"
   dest="$OUT/$id"
+  log_file="$TMP_DIR/${id//\//_}.log"
 
-  echo "==> $id ($project)"
-  dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" --self-contained false --nologo -v quiet > /dev/null
+  {
+    echo "==> $id ($project)"
+    dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" --self-contained false --nologo -v quiet > /dev/null
 
-  rm -rf "$dest"
-  mkdir -p "$dest"
+    rm -rf "$dest"
+    mkdir -p "$dest"
 
-  # Copy everything except the host-provided PluginSDK (would shadow host types)
-  # and .pdb symbols.
-  for item in "$pub_dir"/*; do
-    name=$(basename "$item")
-    case "$name" in
-      TypeWhisper.PluginSDK.dll|TypeWhisper.PluginSDK.pdb) continue ;;
-      *.pdb) continue ;;
-    esac
-    cp -r "$item" "$dest/"
+    # Copy everything except the host-provided PluginSDK (would shadow host
+    # types) and .pdb symbols.
+    for item in "$pub_dir"/*; do
+      name=$(basename "$item")
+      case "$name" in
+        TypeWhisper.PluginSDK.dll|TypeWhisper.PluginSDK.pdb) continue ;;
+        *.pdb) continue ;;
+      esac
+      cp -r "$item" "$dest/"
+    done
+
+    echo "    -> $dest"
+  } >"$log_file" 2>&1
+}
+
+throttle_jobs() {
+  while [ "$(jobs -pr | wc -l)" -ge "$JOBS" ]; do
+    sleep 0.1
   done
+}
 
-  echo "    -> $dest"
+declare -a PIDS=()
+declare -a IDS=()
+
+for id in "${!PLUGINS[@]}"; do
+  throttle_jobs
+  publish_plugin "$id" &
+  PIDS+=("$!")
+  IDS+=("$id")
+done
+
+status=0
+for i in "${!PIDS[@]}"; do
+  pid="${PIDS[$i]}"
+  id="${IDS[$i]}"
+  if ! wait "$pid"; then
+    status=1
+    echo "ERROR: publish failed for $id" >&2
+    sed -n '1,200p' "$TMP_DIR/${id//\//_}.log" >&2 || true
+  fi
+done
+
+if [ "$status" -ne 0 ]; then
+  exit "$status"
+fi
+
+for id in "${!PLUGINS[@]}"; do
+  sed -n '1,200p' "$TMP_DIR/${id//\//_}.log"
 done
 
 echo ""

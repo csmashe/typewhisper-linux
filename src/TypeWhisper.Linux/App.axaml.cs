@@ -27,9 +27,8 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var services = Program.Host.Services;
-
-            // Eagerly bootstrap the app state that the UI depends on.
-            BootstrapAsync(services).GetAwaiter().GetResult();
+            var settings = services.GetRequiredService<ISettingsService>();
+            settings.Load();
 
             var main = services.GetRequiredService<MainWindow>();
             desktop.MainWindow = main;
@@ -82,7 +81,6 @@ public partial class App : Application
             // silently rebind the hotkey to an upstream default like
             // "Ctrl+Shift+F9" that the user never chose.
             var hotkey = services.GetRequiredService<HotkeyService>();
-            var settings = services.GetRequiredService<ISettingsService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
             var lastApplied = hotkey.CurrentHotkeyString;
             settings.SettingsChanged += s =>
@@ -108,6 +106,8 @@ public partial class App : Application
                     (main.DataContext as ViewModels.MainWindowViewModel)?.OpenWizard();
                 };
             }
+
+            _ = BootstrapDeferredAsync(services);
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -199,7 +199,9 @@ public partial class App : Application
     private static async Task BootstrapAsync(IServiceProvider services)
     {
         var settings = services.GetRequiredService<ISettingsService>();
-        settings.Load();
+
+        var history = services.GetRequiredService<IHistoryService>();
+        await history.EnsureLoadedAsync();
 
         var audio = services.GetRequiredService<AudioRecordingService>();
         ApplyConfiguredMicrophone(audio, settings);
@@ -227,6 +229,18 @@ public partial class App : Application
             {
                 Debug.WriteLine($"[App] Auto-load model failed: {ex.Message}");
             }
+        }
+    }
+
+    private static async Task BootstrapDeferredAsync(IServiceProvider services)
+    {
+        try
+        {
+            await BootstrapAsync(services);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Deferred bootstrap failed: {ex}");
         }
     }
 
