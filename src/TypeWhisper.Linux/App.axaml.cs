@@ -29,16 +29,22 @@ public partial class App : Application
 
             var tray = services.GetRequiredService<TrayIconService>();
             tray.Initialize();
-            tray.ShowSettingsRequested += (_, _) =>
-            {
-                desktop.MainWindow?.Show();
-                (desktop.MainWindow?.DataContext as ViewModels.MainWindowViewModel)?.OpenSettings();
-            };
+            tray.ShowSettingsRequested += (_, _) => desktop.MainWindow?.Show();
             tray.ExitRequested += (_, _) => desktop.Shutdown();
 
             var dictation = services.GetRequiredService<DictationOrchestrator>();
             dictation.Initialize();
             tray.DictationToggleRequested += (_, _) => _ = dictation.ToggleAsync();
+
+            // First-run onboarding wizard
+            var settings = services.GetRequiredService<ISettingsService>();
+            if (!settings.Current.HasCompletedOnboarding)
+            {
+                desktop.MainWindow.Opened += (_, _) =>
+                {
+                    (desktop.MainWindow?.DataContext as ViewModels.MainWindowViewModel)?.OpenWizard();
+                };
+            }
         }
 
         base.OnFrameworkInitializationCompleted();

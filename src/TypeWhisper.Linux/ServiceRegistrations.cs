@@ -62,22 +62,27 @@ internal static class ServiceRegistrations
         //   IMediaPauseService    (Tmds.DBus -> MPRIS2)
         //   ITranslationService   (needs PluginManager port)
 
-        // ViewModels
-        services.AddTransient<MainWindowViewModel>();
-        services.AddTransient<SettingsWindowViewModel>();
-        services.AddTransient<GeneralSectionViewModel>();
-        services.AddTransient<ShortcutsSectionViewModel>();
-        services.AddTransient<AudioSectionViewModel>();
-        services.AddTransient<ModelsSectionViewModel>();
-        services.AddTransient<PluginsSectionViewModel>();
-        services.AddTransient<HistorySectionViewModel>();
-        services.AddTransient<DictionarySectionViewModel>();
-        services.AddTransient<SnippetsSectionViewModel>();
-        services.AddTransient<ProfilesSectionViewModel>();
-        services.AddTransient<PromptsSectionViewModel>();
+        // ViewModels — section VMs are singletons so state stays consistent
+        // across the sidebar nav and the onboarding wizard.
+        services.AddSingleton<MainWindowViewModel>();
+        services.AddSingleton<GeneralSectionViewModel>();
+        services.AddSingleton<ShortcutsSectionViewModel>();
+        services.AddSingleton<AudioSectionViewModel>();
+        services.AddSingleton<ModelsSectionViewModel>();
+        services.AddSingleton<PluginsSectionViewModel>();
+        services.AddSingleton<HistorySectionViewModel>();
+        services.AddSingleton<DictionarySectionViewModel>();
+        services.AddSingleton<SnippetsSectionViewModel>();
+        services.AddSingleton<ProfilesSectionViewModel>();
+        services.AddSingleton<PromptsSectionViewModel>();
+        services.AddSingleton<DashboardSectionViewModel>();
+        services.AddSingleton<DictationSectionViewModel>();
+        services.AddSingleton<AboutSectionViewModel>();
+        services.AddTransient<WelcomeWizardViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();
         services.AddTransient<SettingsWindow>();
+        services.AddTransient<WelcomeWizard>();
     }
 }

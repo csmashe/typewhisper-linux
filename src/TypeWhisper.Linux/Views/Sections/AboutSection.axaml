@@ -1,0 +1,44 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             x:Class="TypeWhisper.Linux.Views.Sections.AboutSection"
+             x:DataType="vm:AboutSectionViewModel">
+    <ScrollViewer>
+        <StackPanel Margin="24" Spacing="16" MaxWidth="640">
+            <TextBlock Text="About" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock Text="TypeWhisper Linux — a port of TypeWhisper to the Linux desktop via Avalonia + PortAudio + SharpHook + xdotool."
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
+            <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                    CornerRadius="6" Padding="16">
+                <StackPanel Spacing="10">
+                    <Grid ColumnDefinitions="150,*">
+                        <TextBlock Grid.Column="0" Text="Version" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="{Binding Version}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*">
+                        <TextBlock Grid.Column="0" Text=".NET runtime" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="{Binding RuntimeVersion}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*">
+                        <TextBlock Grid.Column="0" Text="Operating system" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="{Binding OsDescription}" TextWrapping="Wrap" />
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*">
+                        <TextBlock Grid.Column="0" Text="Architecture" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="{Binding Architecture}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*">
+                        <TextBlock Grid.Column="0" Text="Fork" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="{Binding ProjectUrl}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*">
+                        <TextBlock Grid.Column="0" Text="Upstream" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="{Binding UpstreamUrl}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -1,213 +1,125 @@
 using System.Collections.ObjectModel;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.DependencyInjection;
-using TypeWhisper.Core;
-using TypeWhisper.Linux.Services;
-using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
 
 namespace TypeWhisper.Linux.ViewModels;
 
 public partial class MainWindowViewModel : ObservableObject
 {
-    private readonly PluginLoader _pluginLoader;
-    private readonly PluginManager _pluginManager;
-    private readonly ModelManagerService _models;
-    private readonly DictationOrchestrator _dictation;
     private readonly IServiceProvider _services;
-    private SettingsWindow? _settingsWindow;
 
-    [ObservableProperty]
-    private string _statusText = "Ready. Press Ctrl+Shift+Space (or click Toggle Recording) to capture audio.";
+    // All section VMs stay in memory so nav switches are instantaneous.
+    public DashboardSectionViewModel Dashboard { get; }
+    public DictationSectionViewModel Dictation { get; }
+    public ShortcutsSectionViewModel Shortcuts { get; }
+    public AudioSectionViewModel Audio { get; }
+    public ModelsSectionViewModel Models { get; }
+    public HistorySectionViewModel History { get; }
+    public DictionarySectionViewModel Dictionary { get; }
+    public SnippetsSectionViewModel Snippets { get; }
+    public ProfilesSectionViewModel Profiles { get; }
+    public PromptsSectionViewModel Prompts { get; }
+    public PluginsSectionViewModel Plugins { get; }
+    public GeneralSectionViewModel General { get; }
+    public AboutSectionViewModel About { get; }
 
-    [ObservableProperty]
-    private bool _isRecording;
+    public ObservableCollection<NavItem> NavItems { get; }
 
-    [ObservableProperty]
-    private string? _lastCapturePath;
+    [ObservableProperty] private NavItem? _selectedItem;
+    [ObservableProperty] private object? _currentSection;
 
-    [ObservableProperty]
-    private string? _lastTranscription;
-
-    [ObservableProperty]
-    private string _activeModelLabel = "No model loaded";
-
-    public ObservableCollection<PluginItemViewModel> Plugins { get; } = [];
-    public ObservableCollection<TranscriptionModelItemViewModel> Models { get; } = [];
-
-    public string PluginsPath => TypeWhisperEnvironment.PluginsPath;
+    public string AppTitle => "TypeWhisper";
+    public string VersionLabel => About.Version == "dev" ? "dev" : $"v{About.Version}";
 
     public MainWindowViewModel(
-        PluginLoader pluginLoader,
-        PluginManager pluginManager,
-        ModelManagerService models,
-        DictationOrchestrator dictation,
-        IServiceProvider services)
+        IServiceProvider services,
+        DashboardSectionViewModel dashboard,
+        DictationSectionViewModel dictation,
+        ShortcutsSectionViewModel shortcuts,
+        AudioSectionViewModel audio,
+        ModelsSectionViewModel models,
+        HistorySectionViewModel history,
+        DictionarySectionViewModel dictionary,
+        SnippetsSectionViewModel snippets,
+        ProfilesSectionViewModel profiles,
+        PromptsSectionViewModel prompts,
+        PluginsSectionViewModel plugins,
+        GeneralSectionViewModel general,
+        AboutSectionViewModel about)
     {
-        _pluginLoader = pluginLoader;
-        _pluginManager = pluginManager;
-        _models = models;
-        _dictation = dictation;
         _services = services;
+        Dashboard = dashboard;
+        Dictation = dictation;
+        Shortcuts = shortcuts;
+        Audio = audio;
+        Models = models;
+        History = history;
+        Dictionary = dictionary;
+        Snippets = snippets;
+        Profiles = profiles;
+        Prompts = prompts;
+        Plugins = plugins;
+        General = general;
+        About = about;
 
-        _dictation.RecordingStateChanged += (_, recording) =>
-            Dispatcher.UIThread.Post(() =>
-            {
-                IsRecording = recording;
-                StatusText = recording
-                    ? "Recording… press the hotkey again to stop."
-                    : "Stopped. Processing…";
-            });
+        NavItems =
+        [
+            new NavItem("Overview", null, null, true),
+            new NavItem("Dashboard", "\U0001F3E0", Dashboard, false),
+            new NavItem("Capture", null, null, true),
+            new NavItem("Dictation", "\U0001F3A4", Dictation, false),
+            new NavItem("Shortcuts", "⌨️", Shortcuts, false),
+            new NavItem("Audio", "\U0001F3A7", Audio, false),
+            new NavItem("Models", "\U0001F4E6", Models, false),
+            new NavItem("Library", null, null, true),
+            new NavItem("History", "\U0001F4DC", History, false),
+            new NavItem("Dictionary", "\U0001F4D6", Dictionary, false),
+            new NavItem("Snippets", "✂️", Snippets, false),
+            new NavItem("Profiles", "\U0001F464", Profiles, false),
+            new NavItem("AI", null, null, true),
+            new NavItem("Prompts", "✨", Prompts, false),
+            new NavItem("Plugins", "\U0001F50C", Plugins, false),
+            new NavItem("System", null, null, true),
+            new NavItem("General", "⚙️", General, false),
+            new NavItem("About", "ℹ️", About, false),
+        ];
 
-        _dictation.RecordingCaptured += (_, path) =>
-            Dispatcher.UIThread.Post(() => LastCapturePath = path);
+        SelectedItem = NavItems.First(i => i.Content is DashboardSectionViewModel);
+        CurrentSection = SelectedItem.Content;
+    }
 
-        _dictation.TranscriptionCompleted += (_, text) =>
-            Dispatcher.UIThread.Post(() => LastTranscription = text);
+    partial void OnSelectedItemChanged(NavItem? value)
+    {
+        if (value is { IsHeader: false, Content: not null })
+            CurrentSection = value.Content;
+    }
 
-        _dictation.StatusMessage += (_, msg) =>
-            Dispatcher.UIThread.Post(() => StatusText = msg);
-
-        _models.PropertyChanged += (_, _) =>
-            Dispatcher.UIThread.Post(RefreshActiveModel);
-
-        _pluginManager.PluginStateChanged += (_, _) =>
-            Dispatcher.UIThread.Post(() =>
-            {
-                RefreshModels();
-                RefreshActiveModel();
-            });
-
-        // Populate from current state.
-        RefreshPlugins();
-        RefreshModels();
-        RefreshActiveModel();
+    public void Navigate<TSection>() where TSection : class
+    {
+        var target = NavItems.FirstOrDefault(i => i.Content is TSection);
+        if (target is not null) SelectedItem = target;
     }
 
     [RelayCommand]
-    private async Task ToggleRecording() => await _dictation.ToggleAsync();
-
-    [RelayCommand]
-    public void OpenSettings()
+    public void OpenWizard()
     {
-        if (_settingsWindow is { IsVisible: true })
-        {
-            _settingsWindow.Activate();
-            return;
-        }
-
-        _settingsWindow = _services.GetRequiredService<SettingsWindow>();
-        _settingsWindow.DataContext = _services.GetRequiredService<SettingsWindowViewModel>();
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        var wizard = _services.GetRequiredService<WelcomeWizard>();
+        wizard.DataContext = _services.GetRequiredService<WelcomeWizardViewModel>();
 
         if (Avalonia.Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
             && desktop.MainWindow is { } owner)
         {
-            _settingsWindow.Show(owner);
+            wizard.ShowDialog(owner);
         }
         else
         {
-            _settingsWindow.Show();
+            wizard.Show();
         }
-    }
-
-    [RelayCommand]
-    private async Task LoadModel(TranscriptionModelItemViewModel item)
-    {
-        try
-        {
-            StatusText = $"Loading {item.DisplayName}…";
-            await _models.LoadModelAsync(item.ModelId);
-            StatusText = $"Loaded {item.DisplayName}.";
-        }
-        catch (Exception ex)
-        {
-            StatusText = $"Load failed: {ex.Message}";
-        }
-    }
-
-    [RelayCommand]
-    private async Task DownloadModel(TranscriptionModelItemViewModel item)
-    {
-        try
-        {
-            StatusText = $"Downloading {item.DisplayName} (this may take a while)…";
-            await _models.DownloadAndLoadModelAsync(item.ModelId);
-            StatusText = $"Ready: {item.DisplayName}.";
-        }
-        catch (Exception ex)
-        {
-            StatusText = $"Download failed: {ex.Message}";
-        }
-    }
-
-    [RelayCommand]
-    private void LoadPlugins()
-    {
-        RefreshPlugins();
-        StatusText = Plugins.Count == 0
-            ? $"No plugins found in {TypeWhisperEnvironment.PluginsPath}."
-            : $"Loaded {Plugins.Count} plugin(s).";
-    }
-
-    private void RefreshPlugins()
-    {
-        Plugins.Clear();
-        foreach (var p in _pluginManager.AllPlugins)
-        {
-            Plugins.Add(new PluginItemViewModel(
-                Id: p.Manifest.Id,
-                Name: p.Manifest.Name,
-                Version: p.Manifest.Version,
-                Path: p.PluginDirectory,
-                IsEnabled: _pluginManager.IsEnabled(p.Manifest.Id)));
-        }
-    }
-
-    private void RefreshModels()
-    {
-        Models.Clear();
-        foreach (var engine in _pluginManager.TranscriptionEngines)
-        {
-            foreach (var model in engine.TranscriptionModels)
-            {
-                var modelId = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
-                var downloaded = engine.SupportsModelDownload
-                    ? engine.IsModelDownloaded(model.Id)
-                    : engine.IsConfigured;
-
-                Models.Add(new TranscriptionModelItemViewModel(
-                    ModelId: modelId,
-                    DisplayName: $"{engine.ProviderDisplayName} — {model.DisplayName}",
-                    SizeDescription: model.SizeDescription ?? "",
-                    IsDownloaded: downloaded,
-                    SupportsDownload: engine.SupportsModelDownload));
-            }
-        }
-    }
-
-    private void RefreshActiveModel()
-    {
-        var active = _models.ActiveModelId;
-        ActiveModelLabel = string.IsNullOrEmpty(active)
-            ? "No model loaded"
-            : $"Active: {active}";
     }
 }
 
-public sealed record PluginItemViewModel(
-    string Id,
-    string Name,
-    string Version,
-    string Path,
-    bool IsEnabled);
-
-public sealed record TranscriptionModelItemViewModel(
-    string ModelId,
-    string DisplayName,
-    string SizeDescription,
-    bool IsDownloaded,
-    bool SupportsDownload);
+public sealed record NavItem(string Label, string? Icon, object? Content, bool IsHeader);

@@ -3,125 +3,117 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
-        xmlns:local="using:TypeWhisper.Linux"
-        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="720"
+        xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
+        xmlns:sections="using:TypeWhisper.Linux.Views.Sections"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="760"
         x:Class="TypeWhisper.Linux.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="TypeWhisper (Linux)"
-        Width="980" Height="720">
-    <DockPanel LastChildFill="True" Margin="16">
-        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
-            <StackPanel Grid.Column="0" Spacing="6">
-                <TextBlock Text="TypeWhisper Linux" FontSize="22" FontWeight="SemiBold" />
-                <TextBlock Text="Voice-to-text dictation. Global hotkey: Ctrl+Shift+Space (X11)."
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+        Title="TypeWhisper"
+        Width="1200" Height="780"
+        RequestedThemeVariant="Dark">
+    <Window.Resources>
+        <DataTemplate x:Key="SectionTemplate_Dashboard" DataType="vms:DashboardSectionViewModel">
+            <sections:DashboardSection />
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid ColumnDefinitions="240,*" RowDefinitions="Auto,*">
+        <!-- Header strip (spans both columns) -->
+        <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnDefinitions="Auto,*,Auto" Margin="16,12">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <TextBlock Text="{Binding AppTitle}" FontSize="16" FontWeight="SemiBold" />
+                <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                        CornerRadius="3" Padding="6,1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding VersionLabel}" FontSize="10"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                </Border>
             </StackPanel>
-            <Button Grid.Column="1" Content="Settings…" VerticalAlignment="Top"
-                    Command="{Binding OpenSettingsCommand}" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                <Button Content="Open Wizard" Command="{Binding OpenWizardCommand}" />
+            </StackPanel>
         </Grid>
 
-        <!-- Recording control bar -->
-        <Border DockPanel.Dock="Top" Padding="12" Margin="0,0,0,12"
-                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="4">
-            <StackPanel Spacing="8">
-                <StackPanel Orientation="Horizontal" Spacing="12">
-                    <Button Content="Toggle Recording" Command="{Binding ToggleRecordingCommand}" />
-                    <Ellipse Width="14" Height="14" VerticalAlignment="Center">
-                        <Ellipse.Fill>
-                            <SolidColorBrush Color="{Binding IsRecording, Converter={x:Static local:BoolColorConverter.Instance}}" />
-                        </Ellipse.Fill>
-                    </Ellipse>
-                    <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" />
-                </StackPanel>
-                <TextBlock Text="{Binding ActiveModelLabel}" FontSize="11"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                <TextBlock Text="{Binding LastCapturePath, StringFormat='WAV: {0}'}"
-                           IsVisible="{Binding LastCapturePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                           FontSize="10" FontFamily="monospace"
-                           Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                <TextBlock Text="{Binding LastTranscription, StringFormat='Last result: {0}'}"
-                           IsVisible="{Binding LastTranscription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                           TextWrapping="Wrap" FontSize="12" />
-            </StackPanel>
+        <!-- Sidebar -->
+        <Border Grid.Row="1" Grid.Column="0"
+                Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                BorderThickness="0,1,1,0"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+            <ScrollViewer>
+                <ListBox ItemsSource="{Binding NavItems}"
+                         SelectedItem="{Binding SelectedItem}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         Padding="0,6">
+                    <ListBox.Styles>
+                        <!-- Headers render as non-selectable labels -->
+                        <Style Selector="ListBoxItem">
+                            <Setter Property="Padding" Value="16,8" />
+                            <Setter Property="CornerRadius" Value="0" />
+                        </Style>
+                    </ListBox.Styles>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NavItem">
+                            <Grid>
+                                <TextBlock Text="{Binding Label}"
+                                           FontSize="10" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                           IsVisible="{Binding IsHeader}"
+                                           Margin="0,10,0,0" />
+                                <StackPanel Orientation="Horizontal" Spacing="8"
+                                            IsVisible="{Binding !IsHeader}">
+                                    <TextBlock Text="{Binding Icon}" FontSize="14" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </ScrollViewer>
         </Border>
 
-        <!-- Models + plugins tab -->
-        <TabControl>
-            <TabItem Header="Models">
-                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                        BorderThickness="1" CornerRadius="4" Padding="0" Margin="0,8,0,0">
-                    <ScrollViewer>
-                        <ItemsControl ItemsSource="{Binding Models}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:TranscriptionModelItemViewModel">
-                                    <Border Padding="12,8" BorderThickness="0,0,0,1"
-                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                        <Grid ColumnDefinitions="*,Auto,Auto,Auto">
-                                            <StackPanel Grid.Column="0" Spacing="2">
-                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                                <TextBlock Text="{Binding SizeDescription}" FontSize="11"
-                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="Downloaded"
-                                                       IsVisible="{Binding IsDownloaded}"
-                                                       VerticalAlignment="Center" Margin="12,0"
-                                                       Foreground="{DynamicResource SystemAccentColorLight2Brush}" />
-                                            <Button Grid.Column="2" Content="Load"
-                                                    IsVisible="{Binding IsDownloaded}"
-                                                    Margin="0,0,8,0"
-                                                    Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).LoadModelCommand}"
-                                                    CommandParameter="{Binding}" />
-                                            <Button Grid.Column="3" Content="Download"
-                                                    IsVisible="{Binding SupportsDownload}"
-                                                    IsEnabled="{Binding !IsDownloaded}"
-                                                    Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).DownloadModelCommand}"
-                                                    CommandParameter="{Binding}" />
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </Border>
-            </TabItem>
-
-            <TabItem Header="Plugins">
-                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                        BorderThickness="1" CornerRadius="4" Padding="0" Margin="0,8,0,0">
-                    <DockPanel>
-                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="8">
-                            <Button Content="Refresh" Command="{Binding LoadPluginsCommand}" />
-                            <TextBlock Text="{Binding PluginsPath, StringFormat='Path: {0}'}"
-                                       VerticalAlignment="Center" FontSize="11" FontFamily="monospace"
-                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                        </StackPanel>
-                        <ScrollViewer>
-                            <ItemsControl ItemsSource="{Binding Plugins}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:PluginItemViewModel">
-                                        <Border Padding="12,8" BorderThickness="0,0,0,1"
-                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                            <Grid ColumnDefinitions="*,Auto,Auto">
-                                                <StackPanel Grid.Column="0" Spacing="2">
-                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                                    <TextBlock Text="{Binding Id}" FontSize="11"
-                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                                </StackPanel>
-                                                <TextBlock Grid.Column="1"
-                                                           Text="{Binding IsEnabled, StringFormat='Enabled: {0}'}"
-                                                           VerticalAlignment="Center" Margin="12,0" FontSize="11" />
-                                                <TextBlock Grid.Column="2" Text="{Binding Version, StringFormat='v{0}'}"
-                                                           VerticalAlignment="Center" Margin="12,0" />
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-                    </DockPanel>
-                </Border>
-            </TabItem>
-        </TabControl>
-    </DockPanel>
+        <!-- Content area — bind CurrentSection to the right view via DataTemplates -->
+        <ContentControl Grid.Row="1" Grid.Column="1" Content="{Binding CurrentSection}">
+            <ContentControl.DataTemplates>
+                <DataTemplate DataType="vms:DashboardSectionViewModel">
+                    <sections:DashboardSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:DictationSectionViewModel">
+                    <sections:DictationSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:ShortcutsSectionViewModel">
+                    <sections:ShortcutsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:AudioSectionViewModel">
+                    <sections:AudioSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:ModelsSectionViewModel">
+                    <sections:ModelsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:HistorySectionViewModel">
+                    <sections:HistorySection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:DictionarySectionViewModel">
+                    <sections:DictionarySection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:SnippetsSectionViewModel">
+                    <sections:SnippetsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:ProfilesSectionViewModel">
+                    <sections:ProfilesSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:PromptsSectionViewModel">
+                    <sections:PromptsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:PluginsSectionViewModel">
+                    <sections:PluginsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:GeneralSectionViewModel">
+                    <sections:GeneralSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:AboutSectionViewModel">
+                    <sections:AboutSection />
+                </DataTemplate>
+            </ContentControl.DataTemplates>
+        </ContentControl>
+    </Grid>
 </Window>

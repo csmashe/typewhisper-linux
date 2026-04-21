@@ -1,0 +1,49 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:local="using:TypeWhisper.Linux"
+             x:Class="TypeWhisper.Linux.Views.Sections.DictationSection"
+             x:DataType="vm:DictationSectionViewModel">
+    <ScrollViewer>
+        <StackPanel Margin="24" Spacing="16" MaxWidth="800" HorizontalAlignment="Stretch">
+            <TextBlock Text="Dictation" FontSize="24" FontWeight="SemiBold" />
+
+            <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                    CornerRadius="6" Padding="20">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                        <Button Content="Toggle Recording" Command="{Binding ToggleCommand}"
+                                FontSize="14" Padding="16,8" />
+                        <Ellipse Width="16" Height="16" VerticalAlignment="Center">
+                            <Ellipse.Fill>
+                                <SolidColorBrush Color="{Binding IsRecording,
+                                                         Converter={x:Static local:BoolColorConverter.Instance}}" />
+                            </Ellipse.Fill>
+                        </Ellipse>
+                        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding ActiveModelLabel}" FontSize="11"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                    CornerRadius="6" Padding="16"
+                    IsVisible="{Binding LastTranscription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Last transcription" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Text="{Binding LastTranscription}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <StackPanel IsVisible="{Binding LastCapturePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding LastCapturePath, StringFormat='WAV saved to: {0}'}"
+                           FontSize="10" FontFamily="monospace"
+                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

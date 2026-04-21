@@ -1,0 +1,122 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:local="using:TypeWhisper.Linux"
+             x:Class="TypeWhisper.Linux.Views.Sections.DashboardSection"
+             x:DataType="vm:DashboardSectionViewModel">
+    <ScrollViewer>
+        <StackPanel Margin="24" Spacing="20">
+            <StackPanel Spacing="4">
+                <TextBlock Text="Dashboard" FontSize="24" FontWeight="SemiBold" />
+                <TextBlock Text="Your usage, recent activity, and the quickest path back into dictation."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                    CornerRadius="6" Padding="16">
+                <StackPanel Spacing="12">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Statistics" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="Switch the time range to compare your writing activity."
+                                       FontSize="11"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                            <ToggleButton Content="Weekly"
+                                          IsChecked="{Binding SelectedRange, Mode=OneWay,
+                                                      ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.Weekly},
+                                                      Converter={x:Static local:EnumBoolConverter.Instance}}"
+                                          Command="{Binding ShowWeeklyCommand}" />
+                            <ToggleButton Content="Month"
+                                          IsChecked="{Binding SelectedRange, Mode=OneWay,
+                                                      ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.Month},
+                                                      Converter={x:Static local:EnumBoolConverter.Instance}}"
+                                          Command="{Binding ShowMonthCommand}" />
+                            <ToggleButton Content="All Time"
+                                          IsChecked="{Binding SelectedRange, Mode=OneWay,
+                                                      ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.AllTime},
+                                                      Converter={x:Static local:EnumBoolConverter.Instance}}"
+                                          Command="{Binding ShowAllTimeCommand}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <UniformGrid Columns="4" Rows="1">
+                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                CornerRadius="4" Padding="20" Margin="4">
+                            <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                <TextBlock Text="{Binding WordCount}" FontSize="32" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="Words" FontSize="11"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                CornerRadius="4" Padding="20" Margin="4">
+                            <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                <TextBlock Text="{Binding AverageWpm}" FontSize="32" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="Ø WPM" FontSize="11"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                CornerRadius="4" Padding="20" Margin="4">
+                            <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                <TextBlock Text="{Binding AppCount}" FontSize="32" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="Apps" FontSize="11"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                CornerRadius="4" Padding="20" Margin="4">
+                            <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                <TextBlock Text="{Binding TimeSavedLabel}" FontSize="32" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="Saved" FontSize="11"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="Activity" FontSize="16" FontWeight="SemiBold" />
+            <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                    CornerRadius="6" Padding="16" MinHeight="120">
+                <Grid>
+                    <TextBlock Text="No activity in this period."
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               IsVisible="{Binding !RecentActivity.Count}" />
+                    <ItemsControl ItemsSource="{Binding RecentActivity}"
+                                  IsVisible="{Binding RecentActivity.Count}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="models:TranscriptionRecord">
+                                <Border Padding="8,6" BorderThickness="0,0,0,1"
+                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding Preview}" TextWrapping="Wrap" FontSize="12" />
+                                        <StackPanel Orientation="Horizontal" Spacing="10">
+                                            <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm}'}"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                            <TextBlock Text="{Binding AppName}" FontSize="10"
+                                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
