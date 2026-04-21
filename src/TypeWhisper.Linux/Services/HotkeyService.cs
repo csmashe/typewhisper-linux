@@ -33,6 +33,7 @@ public sealed class HotkeyService : IDisposable
     private RecordingMode _mode = RecordingMode.Toggle;
     private bool _keyIsDown;
     private DateTime _keyDownTime;
+    private CancellationTokenSource? _hybridStartCts;
     private bool _hybridDidStart;
     private bool _running;
     private bool _disposed;
@@ -179,10 +180,7 @@ public sealed class HotkeyService : IDisposable
                     DictationStartRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case RecordingMode.Hybrid:
-                    // Start immediately; on release we decide whether this was
-                    // a short-press toggle (stop) or a hold that ended.
-                    DictationStartRequested?.Invoke(this, EventArgs.Empty);
-                    _hybridDidStart = true;
+                    QueueHybridStartAfterThreshold();
                     break;
             }
         }
@@ -210,12 +208,11 @@ public sealed class HotkeyService : IDisposable
                     DictationStopRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case RecordingMode.Hybrid:
-                    // Hybrid: a quick tap became "Toggle-on, user plans to tap
-                    // again to stop" — so stop on release would be wrong. Only
-                    // stop on release if the user held long enough that it
-                    // clearly was push-to-talk.
+                    CancelHybridStart();
                     if (_hybridDidStart && heldMs >= PushToTalkThresholdMs)
                         DictationStopRequested?.Invoke(this, EventArgs.Empty);
+                    else if (!_hybridDidStart)
+                        DictationToggleRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case RecordingMode.Toggle:
                     // No-op — Toggle handled on press.
@@ -228,10 +225,46 @@ public sealed class HotkeyService : IDisposable
         }
     }
 
+    private void QueueHybridStartAfterThreshold()
+    {
+        CancelHybridStart();
+        var cts = new CancellationTokenSource();
+        _hybridStartCts = cts;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(PushToTalkThresholdMs, cts.Token);
+                if (cts.IsCancellationRequested || !_keyIsDown || _mode != RecordingMode.Hybrid)
+                    return;
+
+                _hybridDidStart = true;
+                DictationStartRequested?.Invoke(this, EventArgs.Empty);
+            }
+            catch (OperationCanceledException)
+            {
+                // Quick-tap path: release canceled the delayed start.
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[HotkeyService] Hybrid start timer threw: {ex.Message}");
+            }
+        });
+    }
+
+    private void CancelHybridStart()
+    {
+        try { _hybridStartCts?.Cancel(); } catch { /* ignore */ }
+        _hybridStartCts?.Dispose();
+        _hybridStartCts = null;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        CancelHybridStart();
         lock (_lock)
         {
             _hook.KeyPressed -= OnKeyPressed;

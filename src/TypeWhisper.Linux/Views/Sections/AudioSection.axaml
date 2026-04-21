@@ -29,6 +29,20 @@
             <TextBlock Text="{Binding StatusMessage}" FontSize="11"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
 
+            <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="14,12">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Input preview" FontWeight="SemiBold" />
+                    <ProgressBar Minimum="0" Maximum="1" Value="{Binding PreviewLevel}" Height="14" Width="360" />
+                    <TextBlock FontSize="11"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="{Binding IsPreviewActive, StringFormat='Live level preview active: {0}'}" />
+                </StackPanel>
+            </Border>
+
             <Separator Margin="0,12,0,0" />
             <TextBlock Text="Audio routing" FontWeight="SemiBold" />
             <CheckBox Content="Duck other audio while recording"

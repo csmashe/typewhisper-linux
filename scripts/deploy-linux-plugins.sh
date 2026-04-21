@@ -21,6 +21,7 @@ declare -A PLUGINS=(
   ["com.typewhisper.sherpa-onnx"]="TypeWhisper.Plugin.SherpaOnnx"
   ["com.typewhisper.whisper-cpp"]="TypeWhisper.Plugin.WhisperCpp"
   ["com.typewhisper.file-memory"]="TypeWhisper.Plugin.FileMemory"
+  ["com.typewhisper.openai"]="TypeWhisper.Plugin.OpenAi"
 )
 
 mkdir -p "$OUT"
@@ -32,7 +33,7 @@ for id in "${!PLUGINS[@]}"; do
   dest="$OUT/$id"
 
   echo "==> $id ($project)"
-  dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -r "$RID" --self-contained false --nologo -v quiet > /dev/null
+  dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" --self-contained false --nologo -v quiet > /dev/null
 
   rm -rf "$dest"
   mkdir -p "$dest"

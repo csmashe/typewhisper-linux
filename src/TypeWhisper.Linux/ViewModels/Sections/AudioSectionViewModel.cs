@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
@@ -17,6 +18,8 @@ public partial class AudioSectionViewModel : ObservableObject
     [ObservableProperty] private bool _audioDuckingEnabled;
     [ObservableProperty] private bool _pauseMediaDuringRecording;
     [ObservableProperty] private string _statusMessage = "";
+    [ObservableProperty] private double _previewLevel;
+    [ObservableProperty] private bool _isPreviewActive;
 
     public AudioSectionViewModel(AudioRecordingService audio, ISettingsService settings)
     {
@@ -25,6 +28,7 @@ public partial class AudioSectionViewModel : ObservableObject
 
         AudioDuckingEnabled = settings.Current.AudioDuckingEnabled;
         PauseMediaDuringRecording = settings.Current.PauseMediaDuringRecording;
+        _audio.LevelChanged += OnLevelChanged;
 
         RefreshDevices();
     }
@@ -36,8 +40,9 @@ public partial class AudioSectionViewModel : ObservableObject
         foreach (var d in _audio.GetInputDevices())
             Devices.Add(d);
 
-        var preferred = _settings.Current.SelectedMicrophoneDevice;
-        SelectedDevice = Devices.FirstOrDefault(d => d.Index == preferred) ?? Devices.FirstOrDefault(d => d.IsDefault) ?? Devices.FirstOrDefault();
+        SelectedDevice = _audio.ResolveConfiguredDevice(
+            _settings.Current.SelectedMicrophoneDevice,
+            _settings.Current.SelectedMicrophoneDeviceId);
         StatusMessage = Devices.Count == 0
             ? "No input devices detected."
             : $"{Devices.Count} input device(s) available.";
@@ -46,8 +51,20 @@ public partial class AudioSectionViewModel : ObservableObject
     partial void OnSelectedDeviceChanged(AudioInputDevice? value)
     {
         if (value is null) return;
+
+        var restartPreview = IsPreviewActive;
+        if (restartPreview)
+            _audio.StopPreview();
+
         _audio.SelectedDeviceIndex = value.Index;
-        _settings.Save(_settings.Current with { SelectedMicrophoneDevice = value.Index });
+        _settings.Save(_settings.Current with
+        {
+            SelectedMicrophoneDevice = value.Index,
+            SelectedMicrophoneDeviceId = value.PersistentId
+        });
+
+        if (restartPreview)
+            ActivatePreview();
     }
 
     partial void OnAudioDuckingEnabledChanged(bool value)
@@ -55,4 +72,26 @@ public partial class AudioSectionViewModel : ObservableObject
 
     partial void OnPauseMediaDuringRecordingChanged(bool value)
         => _settings.Save(_settings.Current with { PauseMediaDuringRecording = value });
+
+    public void ActivatePreview()
+    {
+        IsPreviewActive = _audio.StartPreview();
+        if (!IsPreviewActive && Devices.Count > 0)
+            StatusMessage = "Could not start live input preview for the selected microphone.";
+    }
+
+    public void DeactivatePreview()
+    {
+        _audio.StopPreview();
+        IsPreviewActive = false;
+        PreviewLevel = 0;
+    }
+
+    private void OnLevelChanged(object? sender, float level)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            PreviewLevel = Math.Clamp(level * 8, 0, 1);
+        });
+    }
 }

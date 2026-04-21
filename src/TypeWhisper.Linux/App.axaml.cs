@@ -160,6 +160,13 @@ public partial class App : Application
     {
         try
         {
+            var retention = services.GetService<HistoryRetentionCoordinator>();
+            retention?.HandleShutdown();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] History retention shutdown failed: {ex.Message}"); }
+
+        try
+        {
             var hotkey = services.GetService<HotkeyService>();
             hotkey?.Dispose();
         }
@@ -194,11 +201,17 @@ public partial class App : Application
         var settings = services.GetRequiredService<ISettingsService>();
         settings.Load();
 
+        var audio = services.GetRequiredService<AudioRecordingService>();
+        ApplyConfiguredMicrophone(audio, settings);
+
         var deployer = services.GetRequiredService<BundledPluginDeployer>();
         deployer.DeployIfMissing();
 
         var pluginManager = services.GetRequiredService<PluginManager>();
         await pluginManager.InitializeAsync();
+
+        var historyRetention = services.GetRequiredService<HistoryRetentionCoordinator>();
+        historyRetention.Initialize();
 
         var modelManager = services.GetRequiredService<ModelManagerService>();
         modelManager.MigrateSettings();
@@ -214,6 +227,38 @@ public partial class App : Application
             {
                 Debug.WriteLine($"[App] Auto-load model failed: {ex.Message}");
             }
+        }
+    }
+
+    private static void ApplyConfiguredMicrophone(
+        AudioRecordingService audio,
+        ISettingsService settings)
+    {
+        var configuredIndex = settings.Current.SelectedMicrophoneDevice;
+        var configuredId = settings.Current.SelectedMicrophoneDeviceId;
+        if (!configuredIndex.HasValue && string.IsNullOrWhiteSpace(configuredId))
+            return;
+
+        try
+        {
+            var resolved = audio.ResolveConfiguredDevice(configuredIndex, configuredId);
+            if (resolved is null)
+                return;
+
+            audio.SelectedDeviceIndex = resolved.Index;
+
+            if (resolved.Index != configuredIndex || resolved.PersistentId != configuredId)
+            {
+                settings.Save(settings.Current with
+                {
+                    SelectedMicrophoneDevice = resolved.Index,
+                    SelectedMicrophoneDeviceId = resolved.PersistentId
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Failed to restore microphone selection: {ex.Message}");
         }
     }
 }

@@ -3,44 +3,119 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              x:Class="TypeWhisper.Linux.Views.Sections.PluginsSection"
              x:DataType="vm:PluginsSectionViewModel">
-    <DockPanel Margin="16" LastChildFill="True">
-        <TextBlock DockPanel.Dock="Top" Text="Installed plugins" FontSize="20" FontWeight="SemiBold"
+    <Grid Margin="16" RowDefinitions="Auto,Auto,*" ColumnDefinitions="420,*">
+        <TextBlock Grid.Row="0" Grid.ColumnSpan="2"
+                   Text="Installed plugins"
+                   FontSize="20"
+                   FontWeight="SemiBold"
                    Margin="0,0,0,12" />
-        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="4">
-            <ScrollViewer>
-                <ItemsControl ItemsSource="{Binding Plugins}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:PluginRow">
-                            <Border Padding="12,10" BorderThickness="0,0,0,1"
-                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                <Grid ColumnDefinitions="*,Auto,Auto">
-                                    <StackPanel Grid.Column="0" Spacing="2">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                            <TextBlock Text="{Binding Version, StringFormat='v{0}'}" FontSize="11" />
-                                        </StackPanel>
-                                        <TextBlock Text="{Binding Id}" FontSize="11"
-                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                        <TextBlock Text="{Binding Description}" FontSize="11"
-                                                   TextWrapping="Wrap"
-                                                   IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                    </StackPanel>
-                                    <TextBlock Grid.Column="1"
-                                               Text="{Binding Author}"
-                                               IsVisible="{Binding Author, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                                               VerticalAlignment="Center" Margin="12,0" FontSize="11"
+
+        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="8" Margin="0,0,0,12">
+            <TextBlock Text="{Binding Summary}"
+                       FontSize="11"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    IsVisible="{Binding HasLoadFailures}">
+                <StackPanel Margin="12" Spacing="8">
+                    <TextBlock Text="Plugin load failures" FontWeight="SemiBold" />
+                    <ItemsControl ItemsSource="{Binding LoadFailures}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PluginFailureRow">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding FolderName}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding Message}"
+                                               FontSize="11"
+                                               TextWrapping="Wrap"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                    <ToggleSwitch Grid.Column="2"
-                                                  IsChecked="{Binding IsEnabled, Mode=OneWay}"
-                                                  Command="{Binding $parent[ItemsControl].((vm:PluginsSectionViewModel)DataContext).ToggleEnabledCommand}"
-                                                  CommandParameter="{Binding}" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <Border Grid.Row="2" Grid.Column="0"
+                Margin="0,0,12,0"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="4">
+            <ListBox ItemsSource="{Binding Plugins}"
+                     SelectedItem="{Binding SelectedPlugin}"
+                     BorderThickness="0">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PluginRow">
+                        <Border Padding="12,10" BorderThickness="0,0,0,1"
+                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                            <Grid ColumnDefinitions="*,Auto,Auto">
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Version, StringFormat='v{0}'}" FontSize="11" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Id}" FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding Description}" FontSize="11"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding Author}"
+                                           VerticalAlignment="Center"
+                                           Margin="12,0"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                <ToggleSwitch Grid.Column="2"
+                                              IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                              Command="{Binding $parent[ListBox].((vm:PluginsSectionViewModel)DataContext).ToggleEnabledCommand}"
+                                              CommandParameter="{Binding}" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
+
+        <Border Grid.Row="2" Grid.Column="1"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="4">
+            <ScrollViewer>
+                <StackPanel Margin="16" Spacing="12">
+                    <TextBlock Text="{Binding SettingsTitle}" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding SettingsStatus}"
+                               FontSize="11"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
+                    <ItemsControl ItemsSource="{Binding SettingFields}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PluginSettingFieldRow">
+                                <StackPanel Spacing="4" Margin="0,0,0,8">
+                                    <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                                    <TextBox Text="{Binding Value}"
+                                             PlaceholderText="{Binding Placeholder}"
+                                             Width="320" />
+                                    <TextBlock Text="{Binding Description}"
+                                               FontSize="11"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Save"
+                                Command="{Binding SaveSettingsCommand}"
+                                IsEnabled="{Binding CanEditSettings}" />
+                        <Button Content="Validate"
+                                Command="{Binding ValidateSettingsCommand}"
+                                IsEnabled="{Binding CanValidateSettings}" />
+                    </StackPanel>
+                </StackPanel>
             </ScrollViewer>
         </Border>
-    </DockPanel>
+    </Grid>
 </UserControl>

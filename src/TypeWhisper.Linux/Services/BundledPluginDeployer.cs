@@ -5,16 +5,11 @@ using TypeWhisper.Core;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// First-run onboarding: copies bundled plugins from the app's install
-/// directory (e.g. next to the executable under <c>Plugins/</c>) into
-/// <c>~/.local/share/TypeWhisper/Plugins/</c>. Skips any plugin folder
-/// that already exists at the destination, so manual installs are
-/// preserved and upgrades don't clobber user customization.
-///
-/// The Windows shell uses a more elaborate PluginRegistryService that
-/// talks to a remote marketplace; for Linux v1 we ship a curated bundle
-/// (SherpaOnnx, WhisperCpp, FileMemory) alongside the app and let the
-/// user install more manually until a proper registry client exists.
+/// Copies bundled plugins from the app's install directory into
+/// <c>~/.local/share/TypeWhisper/Plugins/</c>. Unlike the original
+/// first-run-only behavior, this now repairs stale or partially deployed
+/// bundled plugins on startup while leaving non-bundled/manual installs
+/// alone.
 /// </summary>
 public sealed class BundledPluginDeployer
 {
@@ -35,17 +30,19 @@ public sealed class BundledPluginDeployer
         {
             var name = Path.GetFileName(pluginDir);
             var dest = Path.Combine(destRoot, name);
-            if (Directory.Exists(dest))
-            {
-                Trace.WriteLine($"[BundledPluginDeployer] {name} already installed — skipping.");
-                continue;
-            }
 
             try
             {
-                CopyDirectory(pluginDir, dest);
-                Trace.WriteLine($"[BundledPluginDeployer] Deployed {name} → {dest}");
-                deployed++;
+                if (NeedsRepairOrUpdate(pluginDir, dest))
+                {
+                    CopyDirectory(pluginDir, dest, overwrite: true);
+                    Trace.WriteLine($"[BundledPluginDeployer] Synced bundled plugin {name} → {dest}");
+                    deployed++;
+                }
+                else
+                {
+                    Trace.WriteLine($"[BundledPluginDeployer] {name} already up to date.");
+                }
             }
             catch (Exception ex)
             {
@@ -63,12 +60,33 @@ public sealed class BundledPluginDeployer
         return Directory.Exists(candidate) ? candidate : null;
     }
 
-    private static void CopyDirectory(string src, string dst)
+    private static bool NeedsRepairOrUpdate(string src, string dst)
+    {
+        if (!Directory.Exists(dst))
+            return true;
+
+        foreach (var srcFile in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(src, srcFile);
+            var dstFile = Path.Combine(dst, relativePath);
+            if (!File.Exists(dstFile))
+                return true;
+
+            var srcInfo = new FileInfo(srcFile);
+            var dstInfo = new FileInfo(dstFile);
+            if (srcInfo.Length != dstInfo.Length || srcInfo.LastWriteTimeUtc > dstInfo.LastWriteTimeUtc)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void CopyDirectory(string src, string dst, bool overwrite)
     {
         Directory.CreateDirectory(dst);
         foreach (var file in Directory.GetFiles(src))
-            File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite: false);
+            File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite: overwrite);
         foreach (var sub in Directory.GetDirectories(src))
-            CopyDirectory(sub, Path.Combine(dst, Path.GetFileName(sub)));
+            CopyDirectory(sub, Path.Combine(dst, Path.GetFileName(sub)), overwrite);
     }
 }

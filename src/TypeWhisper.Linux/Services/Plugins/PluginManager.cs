@@ -80,6 +80,8 @@ public sealed class PluginManager : IDisposable
         get { lock (_lock) return [.. _actionPlugins]; }
     }
 
+    public IReadOnlyList<PluginLoadFailure> LoadFailures => _loader.LastLoadFailures;
+
     public IReadOnlyList<T> GetPlugins<T>() where T : class
     {
         lock (_lock)

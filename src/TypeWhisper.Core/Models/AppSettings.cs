@@ -12,6 +12,7 @@ public record AppSettings
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
     public int HistoryRetentionMinutes { get; init; } = 90 * 24 * 60;
     public int? SelectedMicrophoneDevice { get; init; }
+    public string? SelectedMicrophoneDeviceId { get; init; }
 
     // Model
     public string? SelectedModelId { get; init; }

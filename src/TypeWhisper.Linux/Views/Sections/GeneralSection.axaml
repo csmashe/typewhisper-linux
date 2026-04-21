@@ -15,6 +15,23 @@
                       IsChecked="{Binding SoundFeedbackEnabled}" />
 
             <StackPanel Spacing="6">
+                <TextBlock Text="History retention" FontWeight="SemiBold" />
+                <TextBlock Text="Controls how long transcription history and saved WAV files are kept on disk."
+                           FontSize="11"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                <ComboBox ItemsSource="{Binding HistoryRetentionOptions}"
+                          SelectedItem="{Binding SelectedHistoryRetention}"
+                          Width="220"
+                          HorizontalAlignment="Left">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:HistoryRetentionOption">
+                            <TextBlock Text="{Binding DisplayName}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </StackPanel>
+
+            <StackPanel Spacing="6">
                 <TextBlock Text="Dictation language hint" FontWeight="SemiBold" />
                 <TextBlock Text="'auto' detects from speech; pin one for better accuracy if you always speak the same language."
                            FontSize="11"

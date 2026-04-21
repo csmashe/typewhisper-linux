@@ -40,4 +40,10 @@
     <PackageReference Include="PortAudioSharp2" Version="1.0.1" />
     <PackageReference Include="SharpHook" Version="5.3.9" />
   </ItemGroup>
+
+  <Target Name="DeployBundledLinuxPlugins"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true' and Exists('$(MSBuildProjectDirectory)/../../scripts/deploy-linux-plugins.sh')">
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../scripts/deploy-linux-plugins.sh&quot; $(Configuration)" />
+  </Target>
 </Project>

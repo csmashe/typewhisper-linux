@@ -14,6 +14,10 @@ public sealed record LoadedPlugin(
     PluginAssemblyLoadContext LoadContext,
     string PluginDirectory);
 
+public sealed record PluginLoadFailure(
+    string PluginDirectory,
+    string Message);
+
 /// <summary>
 /// Isolated assembly load context for each plugin, enabling per-plugin
 /// dependency resolution. Collectible so plugins can be unloaded.
@@ -54,9 +58,13 @@ public sealed class PluginLoader
         PropertyNameCaseInsensitive = true
     };
 
+    public IReadOnlyList<PluginLoadFailure> LastLoadFailures => _lastLoadFailures;
+    private readonly List<PluginLoadFailure> _lastLoadFailures = [];
+
     public List<LoadedPlugin> DiscoverAndLoad(IEnumerable<string> searchDirectories)
     {
         var loaded = new List<LoadedPlugin>();
+        _lastLoadFailures.Clear();
 
         foreach (var searchDir in searchDirectories)
         {
@@ -79,6 +87,7 @@ public sealed class PluginLoader
                 }
                 catch (Exception ex)
                 {
+                    _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, ex.Message));
                     Trace.WriteLine($"[PluginLoader] Failed to load plugin from {pluginDir}: {ex.Message}");
                 }
             }
@@ -100,6 +109,7 @@ public sealed class PluginLoader
         var manifest = JsonSerializer.Deserialize<PluginManifest>(manifestJson, ManifestJsonOptions);
         if (manifest is null)
         {
+            _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, "Failed to deserialize manifest.json."));
             Trace.WriteLine($"[PluginLoader] Failed to deserialize manifest in {pluginDir}");
             return null;
         }
@@ -107,6 +117,7 @@ public sealed class PluginLoader
         var assemblyPath = Path.Combine(pluginDir, manifest.AssemblyName);
         if (!File.Exists(assemblyPath))
         {
+            _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, $"Assembly not found: {manifest.AssemblyName}"));
             Trace.WriteLine($"[PluginLoader] Assembly not found: {assemblyPath}");
             return null;
         }
@@ -117,6 +128,7 @@ public sealed class PluginLoader
         var pluginType = assembly.GetType(manifest.PluginClass);
         if (pluginType is null)
         {
+            _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, $"Plugin class not found: {manifest.PluginClass}"));
             Trace.WriteLine($"[PluginLoader] Plugin class '{manifest.PluginClass}' not found in {assemblyPath}");
             loadContext.Unload();
             return null;
@@ -124,6 +136,7 @@ public sealed class PluginLoader
 
         if (!typeof(ITypeWhisperPlugin).IsAssignableFrom(pluginType))
         {
+            _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, $"Class does not implement ITypeWhisperPlugin: {manifest.PluginClass}"));
             Trace.WriteLine($"[PluginLoader] Class '{manifest.PluginClass}' does not implement ITypeWhisperPlugin");
             loadContext.Unload();
             return null;
@@ -132,6 +145,7 @@ public sealed class PluginLoader
         var instance = Activator.CreateInstance(pluginType) as ITypeWhisperPlugin;
         if (instance is null)
         {
+            _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, $"Failed to create plugin instance: {manifest.PluginClass}"));
             Trace.WriteLine($"[PluginLoader] Failed to create instance of '{manifest.PluginClass}'");
             loadContext.Unload();
             return null;

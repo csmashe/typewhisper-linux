@@ -107,7 +107,9 @@ public partial class WelcomeWizardViewModel : ObservableObject
         Mics.Clear();
         foreach (var d in _audio.GetInputDevices())
             Mics.Add(d);
-        SelectedMic = Mics.FirstOrDefault(d => d.IsDefault) ?? Mics.FirstOrDefault();
+        SelectedMic = _audio.ResolveConfiguredDevice(
+            _settings.Current.SelectedMicrophoneDevice,
+            _settings.Current.SelectedMicrophoneDeviceId);
     }
 
     private void RefreshPluginState()
@@ -183,7 +185,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
             if (SelectedMic is not null)
             {
                 _audio.SelectedDeviceIndex = SelectedMic.Index;
-                _settings.Save(_settings.Current with { SelectedMicrophoneDevice = SelectedMic.Index });
+                _settings.Save(_settings.Current with
+                {
+                    SelectedMicrophoneDevice = SelectedMic.Index,
+                    SelectedMicrophoneDeviceId = SelectedMic.PersistentId
+                });
             }
         }
 
