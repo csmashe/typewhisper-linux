@@ -15,13 +15,50 @@
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                        Text="LLM post-processing actions applied to transcribed text — cleanup, rewrite, translate, etc. Requires an enabled LLM provider plugin with an API key." />
 
-            <Grid ColumnDefinitions="*,2*,Auto" RowDefinitions="Auto">
+            <StackPanel Spacing="6">
+                <TextBlock Text="Default provider" FontWeight="SemiBold" />
+                <ComboBox ItemsSource="{Binding AvailableProviders}"
+                          SelectedValue="{Binding DefaultLlmProvider}"
+                          SelectedValueBinding="{Binding Value}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ProviderOption">
+                            <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </StackPanel>
+
+            <Grid ColumnDefinitions="*,2*,Auto" RowDefinitions="Auto,Auto" RowSpacing="8">
                 <TextBox Grid.Column="0" Text="{Binding NewName}" PlaceholderText="Action name"
                          Margin="0,0,8,0" />
                 <TextBox Grid.Column="1" Text="{Binding NewSystemPrompt}" PlaceholderText="System prompt"
                          AcceptsReturn="True" MinHeight="40" Margin="0,0,8,0" />
                 <Button Grid.Column="2" Content="Add" Command="{Binding AddPromptCommand}"
                         VerticalAlignment="Top" />
+
+                <ComboBox Grid.Row="1" Grid.Column="0"
+                          ItemsSource="{Binding AvailableProviders}"
+                          SelectedValue="{Binding NewProviderOverride}"
+                          SelectedValueBinding="{Binding Value}"
+                          Margin="0,0,8,0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ProviderOption">
+                            <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <ComboBox Grid.Row="1" Grid.Column="1"
+                          ItemsSource="{Binding ActionPluginOptions}"
+                          SelectedValue="{Binding NewTargetActionPluginId}"
+                          SelectedValueBinding="{Binding Value}"
+                          Margin="0,0,8,0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ActionPluginOption">
+                            <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
             </Grid>
         </StackPanel>
 
@@ -42,6 +79,16 @@
                                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                                    TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
                                                    MaxLines="2" />
+                                        <StackPanel Orientation="Horizontal" Spacing="10">
+                                            <TextBlock Text="{Binding ProviderOverride, StringFormat='Provider: {0}'}"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                       IsVisible="{Binding ProviderOverride}" />
+                                            <TextBlock Text="{Binding TargetActionPluginId, StringFormat='Action: {0}'}"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                       IsVisible="{Binding TargetActionPluginId}" />
+                                        </StackPanel>
                                     </StackPanel>
                                     <TextBlock Grid.Column="2" Text="Preset"
                                                FontSize="10"

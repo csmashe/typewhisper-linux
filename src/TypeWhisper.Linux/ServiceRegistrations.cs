@@ -55,6 +55,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
+        services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();

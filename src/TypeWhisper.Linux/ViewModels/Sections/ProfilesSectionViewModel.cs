@@ -13,9 +13,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
 {
     private readonly IProfileService _profiles;
     private readonly PluginManager _pluginManager;
+    private readonly IPromptActionService _promptActions;
 
     public ObservableCollection<Profile> Profiles { get; } = [];
     public ObservableCollection<ProfileModelOption> ModelOptions { get; } = [];
+    public ObservableCollection<PromptActionOption> PromptActionOptions { get; } = [];
 
     [ObservableProperty] private string _newName = "";
     [ObservableProperty] private string _newProcessNames = "";
@@ -23,6 +25,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [ObservableProperty] private string _newInputLanguage = "";
     [ObservableProperty] private string _newSelectedTask = "";
     [ObservableProperty] private string _newModelId = "";
+    [ObservableProperty] private string _newPromptActionId = "";
 
     public IReadOnlyList<string> LanguageChoices { get; } =
         ["", "auto", "en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
@@ -30,13 +33,19 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public IReadOnlyList<string> TaskChoices { get; } =
         ["", "transcribe", "translate"];
 
-    public ProfilesSectionViewModel(IProfileService profiles, PluginManager pluginManager)
+    public ProfilesSectionViewModel(
+        IProfileService profiles,
+        PluginManager pluginManager,
+        IPromptActionService promptActions)
     {
         _profiles = profiles;
         _pluginManager = pluginManager;
+        _promptActions = promptActions;
         _profiles.ProfilesChanged += () => Dispatcher.UIThread.Post(Refresh);
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModelOptions);
+        _promptActions.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshPromptActionOptions);
         RefreshModelOptions();
+        RefreshPromptActionOptions();
         Refresh();
     }
 
@@ -66,6 +75,18 @@ public partial class ProfilesSectionViewModel : ObservableObject
             NewModelId = "";
     }
 
+    private void RefreshPromptActionOptions()
+    {
+        PromptActionOptions.Clear();
+        PromptActionOptions.Add(new PromptActionOption("", "No prompt action"));
+
+        foreach (var action in _promptActions.Actions.OrderBy(action => action.SortOrder).ThenBy(action => action.Name))
+            PromptActionOptions.Add(new PromptActionOption(action.Id, action.Name));
+
+        if (!PromptActionOptions.Any(option => option.Value == NewPromptActionId))
+            NewPromptActionId = "";
+    }
+
     [RelayCommand]
     private void AddProfile()
     {
@@ -87,6 +108,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             InputLanguage = string.IsNullOrWhiteSpace(NewInputLanguage) ? null : NewInputLanguage,
             SelectedTask = string.IsNullOrWhiteSpace(NewSelectedTask) ? null : NewSelectedTask,
             TranscriptionModelOverride = string.IsNullOrWhiteSpace(NewModelId) ? null : NewModelId,
+            PromptActionId = string.IsNullOrWhiteSpace(NewPromptActionId) ? null : NewPromptActionId,
         });
         NewName = "";
         NewProcessNames = "";
@@ -94,6 +116,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         NewInputLanguage = "";
         NewSelectedTask = "";
         NewModelId = "";
+        NewPromptActionId = "";
     }
 
     [RelayCommand]
@@ -104,3 +127,5 @@ public partial class ProfilesSectionViewModel : ObservableObject
 }
 
 public sealed record ProfileModelOption(string Value, string Label);
+
+public sealed record PromptActionOption(string Value, string Label);

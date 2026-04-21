@@ -29,10 +29,12 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly ISettingsService _settings;
     private readonly IActiveWindowService _activeWindow;
     private readonly IProfileService _profiles;
+    private readonly IPromptActionService _promptActions;
     private readonly IDictionaryService _dictionary;
     private readonly ISnippetService _snippets;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
     private readonly IPostProcessingPipeline _pipeline;
+    private readonly PromptProcessingService _promptProcessing;
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
     private string? _recordingAppProcess;
@@ -58,10 +60,12 @@ public sealed class DictationOrchestrator : IDisposable
         ISettingsService settings,
         IActiveWindowService activeWindow,
         IProfileService profiles,
+        IPromptActionService promptActions,
         IDictionaryService dictionary,
         ISnippetService snippets,
         IVocabularyBoostingService vocabularyBoosting,
-        IPostProcessingPipeline pipeline)
+        IPostProcessingPipeline pipeline,
+        PromptProcessingService promptProcessing)
     {
         _hotkey = hotkey;
         _audio = audio;
@@ -71,10 +75,12 @@ public sealed class DictationOrchestrator : IDisposable
         _settings = settings;
         _activeWindow = activeWindow;
         _profiles = profiles;
+        _promptActions = promptActions;
         _dictionary = dictionary;
         _snippets = snippets;
         _vocabularyBoosting = vocabularyBoosting;
         _pipeline = pipeline;
+        _promptProcessing = promptProcessing;
     }
 
     public void Initialize()
@@ -232,6 +238,8 @@ public sealed class DictationOrchestrator : IDisposable
                 AudioDurationSeconds = duration
             };
 
+            var promptAction = ResolvePromptAction();
+
             var pluginProcessors = _models.PluginManager.PostProcessors
                 .Select(processor => new PluginPostProcessor(
                     processor.Priority,
@@ -249,9 +257,19 @@ public sealed class DictationOrchestrator : IDisposable
                         ? _vocabularyBoosting.Apply
                         : null,
                     SnippetExpander = text => _snippets.ApplySnippets(text),
+                    LlmHandler = promptAction is not null
+                        ? (text, token) => _promptProcessing.ProcessAsync(promptAction, text, token)
+                        : null,
                     EffectiveSourceLanguage = languageHint,
                     DetectedLanguage = result?.DetectedLanguage,
-                    PluginPostProcessors = pluginProcessors
+                    PluginPostProcessors = pluginProcessors,
+                    StatusCallback = status =>
+                    {
+                        StatusMessage?.Invoke(this, status == "AI"
+                            ? "Processing prompt action…"
+                            : $"Processing {status}…");
+                        return Task.CompletedTask;
+                    }
                 },
                 CancellationToken.None);
 
@@ -272,16 +290,21 @@ public sealed class DictationOrchestrator : IDisposable
                 Url = _recordingAppUrl
             });
 
-            var insertion = await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste);
+            var actionPlugin = ResolveActionPlugin(promptAction);
+            var insertion = actionPlugin is null
+                ? await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste)
+                : await ExecuteActionPluginAsync(actionPlugin, finalText, rawText, result?.DetectedLanguage);
+
             StatusMessage?.Invoke(this, insertion switch
             {
                 InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
                 InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
+                InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.Failed => "Text insertion failed — is xdotool installed?",
                 _ => "Done.",
             });
 
-            if (insertion == InsertionResult.Pasted)
+            if (insertion is InsertionResult.Pasted or InsertionResult.CopiedToClipboard)
             {
                 _models.PluginManager.EventBus.Publish(new TextInsertedEvent
                 {
@@ -309,6 +332,55 @@ public sealed class DictationOrchestrator : IDisposable
         {
             _models.ScheduleAutoUnload();
         }
+    }
+
+    private PromptAction? ResolvePromptAction()
+    {
+        var promptActionId = _recordingProfile?.PromptActionId;
+        if (string.IsNullOrWhiteSpace(promptActionId))
+            return null;
+
+        return _promptActions.EnabledActions.FirstOrDefault(action => action.Id == promptActionId);
+    }
+
+    private IActionPlugin? ResolveActionPlugin(PromptAction? promptAction)
+    {
+        if (string.IsNullOrWhiteSpace(promptAction?.TargetActionPluginId))
+            return null;
+
+        return _models.PluginManager.ActionPlugins.FirstOrDefault(plugin =>
+            string.Equals(plugin.PluginId, promptAction.TargetActionPluginId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(plugin.ActionId, promptAction.TargetActionPluginId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<InsertionResult> ExecuteActionPluginAsync(
+        IActionPlugin actionPlugin,
+        string inputText,
+        string rawText,
+        string? detectedLanguage)
+    {
+        var result = await actionPlugin.ExecuteAsync(
+            inputText,
+            new ActionContext(
+                _recordingAppTitle,
+                _recordingAppProcess,
+                _recordingAppUrl,
+                detectedLanguage,
+                rawText),
+            CancellationToken.None);
+
+        _models.PluginManager.EventBus.Publish(new ActionCompletedEvent
+        {
+            ActionId = actionPlugin.ActionId,
+            Success = result.Success,
+            Message = result.Message,
+            AppName = _recordingAppTitle
+        });
+
+        if (!string.IsNullOrWhiteSpace(result.Message))
+            StatusMessage?.Invoke(this, result.Message);
+
+        return InsertionResult.ActionHandled;
     }
 
     private void AddHistoryRecord(string rawText, string finalText, double duration,

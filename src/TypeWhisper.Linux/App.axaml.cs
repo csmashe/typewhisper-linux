@@ -58,7 +58,11 @@ public partial class App : Application
 
             var tray = services.GetRequiredService<TrayIconService>();
             tray.Initialize();
-            tray.ShowSettingsRequested += (_, _) => ShowMainWindow(main);
+            tray.ShowSettingsRequested += (_, _) =>
+            {
+                ShowMainWindow(main);
+                (main.DataContext as ViewModels.MainWindowViewModel)?.Navigate<ViewModels.Sections.GeneralSectionViewModel>();
+            };
             tray.ExitRequested += (_, _) =>
             {
                 ShuttingDown = true;

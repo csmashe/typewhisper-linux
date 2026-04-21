@@ -23,8 +23,9 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     {
         var service = CreateProfileService();
         using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, pluginManager);
+        var sut = new ProfilesSectionViewModel(service, pluginManager, promptActions);
 
         var option = Assert.Single(sut.ModelOptions);
         Assert.Equal("", option.Value);
@@ -36,8 +37,9 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     {
         var service = CreateProfileService();
         using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, pluginManager)
+        var sut = new ProfilesSectionViewModel(service, pluginManager, promptActions)
         {
             NewName = "Docs",
             NewProcessNames = "firefox, chrome",

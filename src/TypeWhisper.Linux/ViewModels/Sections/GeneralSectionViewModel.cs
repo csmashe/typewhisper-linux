@@ -15,6 +15,7 @@ public partial class GeneralSectionViewModel : ObservableObject
     [ObservableProperty] private bool _saveToHistoryEnabled;
     [ObservableProperty] private string _language = "auto";
     [ObservableProperty] private bool _closeToTray;
+    [ObservableProperty] private bool _startWithSystem;
     [ObservableProperty] private HistoryRetentionOption? _selectedHistoryRetention;
 
     public IReadOnlyList<string> LanguageChoices { get; } =
@@ -35,6 +36,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         _linuxPrefs = linuxPrefs;
         Refresh(settings.Current);
         CloseToTray = _linuxPrefs.Current.CloseToTray;
+        StartWithSystem = StartupService.IsEnabled;
         _settings.SettingsChanged += Refresh;
     }
 
@@ -61,6 +63,17 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     partial void OnCloseToTrayChanged(bool value)
         => _linuxPrefs.Save(_linuxPrefs.Current with { CloseToTray = value });
+
+    partial void OnStartWithSystemChanged(bool value)
+    {
+        if (value == StartupService.IsEnabled)
+            return;
+
+        if (value)
+            StartupService.Enable();
+        else
+            StartupService.Disable();
+    }
 
     partial void OnSelectedHistoryRetentionChanged(HistoryRetentionOption? value)
     {

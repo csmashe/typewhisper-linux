@@ -48,6 +48,14 @@
             <TextBlock TextWrapping="Wrap" FontSize="11"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                        Text="Off: the X button fully quits the app (default; safe on desktops without a system tray). On: the X button hides the window and the tray icon stays — use the tray menu's Exit to actually quit." />
+
+            <Separator Margin="0,8,0,0" />
+            <TextBlock Text="Startup" FontWeight="SemiBold" />
+            <CheckBox Content="Start TypeWhisper when you log in"
+                      IsChecked="{Binding StartWithSystem}" />
+            <TextBlock TextWrapping="Wrap" FontSize="11"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="Creates or removes the XDG autostart entry in ~/.config/autostart/typewhisper.desktop." />
         </StackPanel>
     </ScrollViewer>
 </UserControl>

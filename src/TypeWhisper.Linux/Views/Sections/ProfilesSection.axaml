@@ -11,7 +11,7 @@
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                        Text="Per-app rules — match a profile by focused process name. (Active-window matching is X11-only; limited on Wayland.)" />
 
-            <Grid ColumnDefinitions="*,2*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+            <Grid ColumnDefinitions="*,2*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
                 <TextBox Grid.Column="0" Text="{Binding NewName}" PlaceholderText="Profile name"
                          Margin="0,0,8,0" />
                 <TextBox Grid.Column="1" Text="{Binding NewProcessNames}"
@@ -57,6 +57,18 @@
                         </ComboBox.ItemTemplate>
                     </ComboBox>
                 </Grid>
+
+                <ComboBox Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                          ItemsSource="{Binding PromptActionOptions}"
+                          SelectedValue="{Binding NewPromptActionId}"
+                          SelectedValueBinding="{Binding Value}"
+                          Margin="0,0,8,0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PromptActionOption">
+                            <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
             </Grid>
         </StackPanel>
 
@@ -120,6 +132,10 @@
                                                        FontSize="10"
                                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                                        IsVisible="{Binding TranscriptionModelOverride}" />
+                                            <TextBlock Text="{Binding PromptActionId, StringFormat='Prompt: {0}'}"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                       IsVisible="{Binding PromptActionId}" />
                                         </StackPanel>
                                     </StackPanel>
                                     <ToggleSwitch Grid.Column="2"
