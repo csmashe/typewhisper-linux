@@ -23,6 +23,14 @@
                           SelectedItem="{Binding Language}"
                           Width="200" HorizontalAlignment="Left" />
             </StackPanel>
+
+            <Separator Margin="0,8,0,0" />
+            <TextBlock Text="Window behavior" FontWeight="SemiBold" />
+            <CheckBox Content="Close button minimizes to tray instead of quitting"
+                      IsChecked="{Binding CloseToTray}" />
+            <TextBlock TextWrapping="Wrap" FontSize="11"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="Off: the X button fully quits the app (default; safe on desktops without a system tray). On: the X button hides the window and the tray icon stays — use the tray menu's Exit to actually quit." />
         </StackPanel>
     </ScrollViewer>
 </UserControl>

@@ -56,6 +56,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<BundledPluginDeployer>();
+        services.AddSingleton<LinuxPreferencesService>();
 
         // Deferred until implementations land:
         //   IAudioDuckingService  (pactl per-sink-input volume)
