@@ -35,13 +35,22 @@ public static class StartupService
         var execPath = Process.GetCurrentProcess().MainModule?.FileName
             ?? throw new InvalidOperationException("Cannot determine executable path.");
 
+        // Prefer an absolute path to the bundled PNG so the entry works even
+        // when no icon theme on the system defines "typewhisper". Falls back
+        // to the theme name if the PNG is missing for any reason.
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "typewhisper-128.png");
+        if (!File.Exists(iconPath))
+            iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "typewhisper-64.png");
+        if (!File.Exists(iconPath))
+            iconPath = "typewhisper";
+
         var content = $"""
             [Desktop Entry]
             Type=Application
             Name=TypeWhisper
             GenericName=Voice-to-text dictation
             Exec="{execPath}" --minimized
-            Icon=typewhisper
+            Icon={iconPath}
             Terminal=false
             Categories=Utility;Accessibility;
             X-GNOME-Autostart-enabled=true

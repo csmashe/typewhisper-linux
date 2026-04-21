@@ -9,6 +9,7 @@
         x:Class="TypeWhisper.Linux.Views.WelcomeWizard"
         x:DataType="vm:WelcomeWizardViewModel"
         Title="Welcome to TypeWhisper"
+        Icon="avares://typewhisper/Resources/typewhisper.ico"
         Width="640" Height="720"
         WindowStartupLocation="CenterOwner"
         CanResize="False">

@@ -17,6 +17,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Window/dock icon: bundled as Avalonia resource + copied to output
+         so absolute-path references (tray, autostart .desktop) also work. -->
+    <AvaloniaResource Include="Resources\typewhisper.ico" />
+    <AvaloniaResource Include="Resources\typewhisper-*.png" />
+    <Content Include="Resources\typewhisper.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\typewhisper-*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.1" />
     <PackageReference Include="Avalonia.Desktop" Version="12.0.1" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.1" />

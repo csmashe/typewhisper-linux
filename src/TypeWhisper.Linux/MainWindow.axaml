@@ -9,6 +9,7 @@
         x:Class="TypeWhisper.Linux.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="TypeWhisper"
+        Icon="avares://typewhisper/Resources/typewhisper.ico"
         Width="1200" Height="780"
         RequestedThemeVariant="Dark">
     <Window.Resources>

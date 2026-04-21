@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.IO;
 using Avalonia.Controls;
+using Avalonia.Platform;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -28,13 +30,12 @@ public sealed class TrayIconService : IDisposable
                 ToolTipText = "TypeWhisper",
                 IsVisible = true,
                 Menu = BuildMenu(),
+                Icon = LoadIcon(),
             };
             _trayIcon.Clicked += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception ex)
         {
-            // Tray isn't available on every session (e.g. GNOME without AppIndicator
-            // extension, headless CI). Log and continue — app stays usable.
             Debug.WriteLine($"[TrayIconService] Tray init failed: {ex.Message}");
         }
     }
@@ -43,6 +44,31 @@ public sealed class TrayIconService : IDisposable
     {
         if (_trayIcon is not null)
             _trayIcon.ToolTipText = text;
+    }
+
+    private static WindowIcon? LoadIcon()
+    {
+        // Prefer 32x32 for tray — most SNI implementations downscale from
+        // there cleanly. Fall back to the .ico (Avalonia decodes multi-size
+        // .ico files natively) if the PNG isn't where we expect it.
+        var baseDir = AppContext.BaseDirectory;
+        var png = Path.Combine(baseDir, "Resources", "typewhisper-32.png");
+        var ico = Path.Combine(baseDir, "Resources", "typewhisper.ico");
+
+        try
+        {
+            if (File.Exists(png)) return new WindowIcon(png);
+            if (File.Exists(ico)) return new WindowIcon(ico);
+
+            // Last-resort: try the Avalonia resource URI embedded in the
+            // assembly itself, useful when running from a single-file publish.
+            return new WindowIcon(AssetLoader.Open(new Uri("avares://typewhisper/Resources/typewhisper-32.png")));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[TrayIconService] Icon load failed: {ex.Message}");
+            return null;
+        }
     }
 
     private NativeMenu BuildMenu()
