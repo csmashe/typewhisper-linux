@@ -3,6 +3,7 @@
     <Project Path="src/TypeWhisper.Core/TypeWhisper.Core.csproj" />
     <Project Path="src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" />
     <Project Path="src/TypeWhisper.PluginSDK.Wpf/TypeWhisper.PluginSDK.Wpf.csproj" />
+    <Project Path="src/TypeWhisper.Linux/TypeWhisper.Linux.csproj" />
     <Project Path="src/TypeWhisper.Windows/TypeWhisper.Windows.csproj" />
   </Folder>
   <Folder Name="/tests/">
