@@ -2,14 +2,51 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
         x:Class="TypeWhisper.Linux.MainWindow"
-        Title="TypeWhisper"
+        x:DataType="vm:MainWindowViewModel"
+        Title="TypeWhisper (Linux)"
         Width="900" Height="600">
-    <Grid>
-        <TextBlock HorizontalAlignment="Center"
-                   VerticalAlignment="Center"
-                   FontSize="18"
-                   Text="TypeWhisper Linux — shell scaffolding. Views will be ported from TypeWhisper.Windows." />
-    </Grid>
+    <DockPanel LastChildFill="True" Margin="16">
+        <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
+            <TextBlock Text="TypeWhisper Linux" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="Shell scaffolding — views and services port incrementally from the Windows shell."
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            <TextBlock Text="{Binding PluginsPath, StringFormat='Plugins directory: {0}'}"
+                       FontFamily="monospace" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
+            <Button Content="Load Plugins" Command="{Binding LoadPluginsCommand}" />
+            <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" />
+        </StackPanel>
+
+        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="4" Padding="0">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Plugins}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PluginItemViewModel">
+                            <Border Padding="12,8" BorderThickness="0,0,0,1"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                <Grid ColumnDefinitions="*,Auto,Auto">
+                                    <StackPanel Grid.Column="0" Spacing="2">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Id}" FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Text="{Binding Path}" FontSize="10" FontFamily="monospace"
+                                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding Version, StringFormat='v{0}'}"
+                                               VerticalAlignment="Center" Margin="12,0" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
 </Window>
