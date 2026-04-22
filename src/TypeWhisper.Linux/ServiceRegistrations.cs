@@ -55,9 +55,11 @@ internal static class ServiceRegistrations
         services.AddSingleton<IActiveWindowService>(sp => sp.GetRequiredService<ActiveWindowService>());
         services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
+        services.AddSingleton<SystemCommandAvailabilityService>();
         services.AddSingleton<AudioRecordingService>();
         services.AddSingleton<AudioPlaybackService>();
         services.AddSingleton<SessionAudioFileService>();
+        services.AddSingleton<SoundFeedbackService>();
         services.AddSingleton<HotkeyService>();
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<TrayIconService>();

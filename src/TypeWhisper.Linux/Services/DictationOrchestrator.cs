@@ -24,6 +24,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly HotkeyService _hotkey;
     private readonly AudioRecordingService _audio;
     private readonly SessionAudioFileService _sessionAudioFiles;
+    private readonly SoundFeedbackService _soundFeedback;
     private readonly TextInsertionService _textInsertion;
     private readonly IAudioDuckingService _audioDucking;
     private readonly IMediaPauseService _mediaPause;
@@ -51,6 +52,8 @@ public sealed class DictationOrchestrator : IDisposable
     private CancellationTokenSource? _partialTranscriptionCts;
     private Task? _partialTranscriptionTask;
     private string? _lastPublishedPartialText;
+    private DateTime _lastSpeechDetectedAtUtc;
+    private bool _silenceStopRequested;
     private bool _initialized;
     private bool _disposed;
 
@@ -66,6 +69,7 @@ public sealed class DictationOrchestrator : IDisposable
         HotkeyService hotkey,
         AudioRecordingService audio,
         SessionAudioFileService sessionAudioFiles,
+        SoundFeedbackService soundFeedback,
         TextInsertionService textInsertion,
         IAudioDuckingService audioDucking,
         IMediaPauseService mediaPause,
@@ -85,6 +89,7 @@ public sealed class DictationOrchestrator : IDisposable
         _hotkey = hotkey;
         _audio = audio;
         _sessionAudioFiles = sessionAudioFiles;
+        _soundFeedback = soundFeedback;
         _textInsertion = textInsertion;
         _audioDucking = audioDucking;
         _mediaPause = mediaPause;
@@ -130,6 +135,8 @@ public sealed class DictationOrchestrator : IDisposable
             // Start capturing audio immediately — the user's finger is on the
             // key and they may already be speaking (especially in PTT).
             _recordingStart = DateTime.UtcNow;
+            _lastSpeechDetectedAtUtc = _recordingStart;
+            _silenceStopRequested = false;
             _audio.StartRecording();
             if (!_audio.IsRecording)
                 return;
@@ -138,6 +145,8 @@ public sealed class DictationOrchestrator : IDisposable
                 _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
             if (_settings.Current.PauseMediaDuringRecording)
                 _mediaPause.PauseMedia();
+            if (_settings.Current.SoundFeedbackEnabled)
+                _soundFeedback.PlayRecordingStarted();
             RecordingStateChanged?.Invoke(this, true);
             SetOverlayState(state => state with
             {
@@ -214,6 +223,8 @@ public sealed class DictationOrchestrator : IDisposable
             await StopPartialTranscriptionSessionAsync();
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
+            if (_settings.Current.SoundFeedbackEnabled)
+                _soundFeedback.PlayRecordingStopped();
             RecordingStateChanged?.Invoke(this, false);
             SetOverlayState(state => state with
             {
@@ -592,25 +603,40 @@ public sealed class DictationOrchestrator : IDisposable
 
     private async Task RunPartialTranscriptionLoopAsync(int sessionVersion, CancellationToken ct)
     {
-        var pollInterval = TimeSpan.FromSeconds(3);
+        var partialPollInterval = TimeSpan.FromSeconds(3);
+        var loopDelay = TimeSpan.FromMilliseconds(250);
+        var nextPartialPollAtUtc = DateTime.UtcNow + partialPollInterval;
 
         try
         {
-            await Task.Delay(pollInterval, ct);
-
             while (!ct.IsCancellationRequested && _audio.IsRecording)
             {
-                var wav = _audio.GetCurrentBuffer();
-                var plugin = _models.ActiveTranscriptionPlugin;
-                if (wav is not null
-                    && wav.Length > 44
-                    && plugin is not null
-                    && _audio.HasSpeechEnergy)
+                if (_audio.HasSpeechEnergy)
+                    _lastSpeechDetectedAtUtc = DateTime.UtcNow;
+                else if (ShouldAutoStopForSilence())
                 {
-                    await PollPartialTranscriptOnceAsync(plugin, wav, sessionVersion, ct);
+                    _silenceStopRequested = true;
+                    ReportStatus("Silence detected. Stopping…");
+                    _ = Task.Run(StopAsync);
+                    return;
                 }
 
-                await Task.Delay(pollInterval, ct);
+                if (DateTime.UtcNow >= nextPartialPollAtUtc)
+                {
+                    var wav = _audio.GetCurrentBuffer();
+                    var plugin = _models.ActiveTranscriptionPlugin;
+                    if (wav is not null
+                        && wav.Length > 44
+                        && plugin is not null
+                        && _audio.HasSpeechEnergy)
+                    {
+                        await PollPartialTranscriptOnceAsync(plugin, wav, sessionVersion, ct);
+                    }
+
+                    nextPartialPollAtUtc = DateTime.UtcNow + partialPollInterval;
+                }
+
+                await Task.Delay(loopDelay, ct);
             }
         }
         catch (OperationCanceledException) { }
@@ -618,6 +644,18 @@ public sealed class DictationOrchestrator : IDisposable
         {
             Trace.WriteLine($"[Dictation] Partial transcription loop failed: {ex.Message}");
         }
+    }
+
+    private bool ShouldAutoStopForSilence()
+    {
+        if (_silenceStopRequested || !_settings.Current.SilenceAutoStopEnabled)
+            return false;
+
+        var timeoutSeconds = _settings.Current.SilenceAutoStopSeconds;
+        if (timeoutSeconds <= 0)
+            return false;
+
+        return DateTime.UtcNow - _lastSpeechDetectedAtUtc >= TimeSpan.FromSeconds(timeoutSeconds);
     }
 
     private async Task PollPartialTranscriptOnceAsync(

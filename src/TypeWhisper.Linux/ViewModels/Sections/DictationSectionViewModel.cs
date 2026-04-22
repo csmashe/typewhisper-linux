@@ -16,6 +16,8 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly AudioRecordingService _audio;
     private readonly ISettingsService _settings;
     private readonly PluginManager _pluginManager;
+    private readonly SystemCommandAvailabilityService _commands;
+    private bool _previewAttached;
 
     public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
     public ObservableCollection<AudioInputDevice> Devices { get; } = [];
@@ -60,6 +62,18 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty] private string _microphoneStatus = "";
     [ObservableProperty] private double _audioDuckingLevel = 0.2;
 
+    public bool CanUseAudioDucking => _commands.HasPactl;
+    public bool ShowAudioDuckingUnavailableReason => !CanUseAudioDucking;
+    public string AudioDuckingUnavailableReason => "Unavailable: pactl is not installed on this system.";
+
+    public bool CanUseMediaPause => _commands.HasPlayerCtl;
+    public bool ShowMediaPauseUnavailableReason => !CanUseMediaPause;
+    public string MediaPauseUnavailableReason => "Unavailable: playerctl is not installed on this system.";
+
+    public bool CanUseSoundFeedback => _commands.HasCanberraGtkPlay;
+    public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
+    public string SoundFeedbackUnavailableReason => "Unavailable: canberra-gtk-play is not installed on this system.";
+
     public TranslationTargetOption? SelectedTranslationTargetOption
     {
         get => TranslationTargetOptions.FirstOrDefault(option =>
@@ -95,13 +109,15 @@ public partial class DictationSectionViewModel : ObservableObject
         ModelManagerService models,
         AudioRecordingService audio,
         ISettingsService settings,
-        PluginManager pluginManager)
+        PluginManager pluginManager,
+        SystemCommandAvailabilityService commands)
     {
         _dictation = dictation;
         _models = models;
         _audio = audio;
         _settings = settings;
         _pluginManager = pluginManager;
+        _commands = commands;
 
         _dictation.RecordingStateChanged += (_, recording) =>
             Dispatcher.UIThread.Post(() =>
@@ -110,6 +126,16 @@ public partial class DictationSectionViewModel : ObservableObject
                 StatusText = recording
                     ? "Recording… press the hotkey again to stop."
                     : "Stopped. Processing…";
+
+                if (recording)
+                {
+                    _audio.StopPreview();
+                    PreviewLevel = 0;
+                }
+                else if (_previewAttached)
+                {
+                    ActivatePreview();
+                }
             });
 
         _dictation.RecordingCaptured += (_, path) =>
@@ -151,6 +177,20 @@ public partial class DictationSectionViewModel : ObservableObject
         MicrophoneStatus = Devices.Count == 0
             ? "No input devices detected."
             : $"{Devices.Count} input device(s) available.";
+    }
+
+    public void ActivatePreview()
+    {
+        _previewAttached = true;
+        if (!_audio.StartPreview() && Devices.Count > 0)
+            MicrophoneStatus = "Could not start live input preview for the selected microphone.";
+    }
+
+    public void DeactivatePreview()
+    {
+        _previewAttached = false;
+        _audio.StopPreview();
+        PreviewLevel = 0;
     }
 
     private void RefreshModels()

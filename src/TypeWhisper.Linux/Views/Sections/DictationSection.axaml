@@ -220,10 +220,18 @@
                     <Border Grid.Row="4"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Sound Feedback"
-                                       Classes="row-label" />
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Sound Feedback"
+                                           Classes="row-label" />
+                                <TextBlock Text="{Binding SoundFeedbackUnavailableReason}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           IsVisible="{Binding ShowSoundFeedbackUnavailableReason}" />
+                            </StackPanel>
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding SoundFeedbackEnabled}"
+                                          IsEnabled="{Binding CanUseSoundFeedback}"
+                                          ToolTip.Tip="{Binding SoundFeedbackUnavailableReason}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
@@ -267,10 +275,18 @@
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Reduce other audio while recording"
-                                       Classes="row-label" />
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Reduce other audio while recording"
+                                           Classes="row-label" />
+                                <TextBlock Text="{Binding AudioDuckingUnavailableReason}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           IsVisible="{Binding ShowAudioDuckingUnavailableReason}" />
+                            </StackPanel>
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding AudioDuckingEnabled}"
+                                          IsEnabled="{Binding CanUseAudioDucking}"
+                                          ToolTip.Tip="{Binding AudioDuckingUnavailableReason}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
@@ -279,7 +295,9 @@
                             Background="#18FFFFFF" />
 
                     <Border Grid.Row="2"
-                            Classes="row">
+                            Classes="row"
+                            IsEnabled="{Binding CanUseAudioDucking}"
+                            ToolTip.Tip="{Binding AudioDuckingUnavailableReason}">
                         <StackPanel>
                             <TextBlock Classes="row-label">
                                 <Run Text="Ducking level" />
@@ -301,10 +319,18 @@
                     <Border Grid.Row="4"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Pause media playback while recording"
-                                       Classes="row-label" />
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Pause media playback while recording"
+                                           Classes="row-label" />
+                                <TextBlock Text="{Binding MediaPauseUnavailableReason}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           IsVisible="{Binding ShowMediaPauseUnavailableReason}" />
+                            </StackPanel>
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding PauseMediaDuringRecording}"
+                                          IsEnabled="{Binding CanUseMediaPause}"
+                                          ToolTip.Tip="{Binding MediaPauseUnavailableReason}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
