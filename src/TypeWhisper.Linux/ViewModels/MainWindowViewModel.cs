@@ -25,6 +25,8 @@ public partial class MainWindowViewModel : ObservableObject
     public PromptsSectionViewModel Prompts { get; }
     public PluginsSectionViewModel Plugins { get; }
     public GeneralSectionViewModel General { get; }
+    public AppearanceSectionViewModel Appearance { get; }
+    public AdvancedSectionViewModel Advanced { get; }
     public AboutSectionViewModel About { get; }
 
     public ObservableCollection<NavItem> NavItems { get; }
@@ -49,6 +51,8 @@ public partial class MainWindowViewModel : ObservableObject
         PromptsSectionViewModel prompts,
         PluginsSectionViewModel plugins,
         GeneralSectionViewModel general,
+        AppearanceSectionViewModel appearance,
+        AdvancedSectionViewModel advanced,
         AboutSectionViewModel about)
     {
         _services = services;
@@ -64,6 +68,8 @@ public partial class MainWindowViewModel : ObservableObject
         Prompts = prompts;
         Plugins = plugins;
         General = general;
+        Appearance = appearance;
+        Advanced = advanced;
         About = about;
 
         NavItems =
@@ -85,6 +91,8 @@ public partial class MainWindowViewModel : ObservableObject
             new NavItem("Plugins", "\U0001F50C", Plugins, false),
             new NavItem("System", null, null, true),
             new NavItem("General", "⚙️", General, false),
+            new NavItem("Appearance", "🎨", Appearance, false),
+            new NavItem("Advanced", "◌", Advanced, false),
             new NavItem("About", "ℹ️", About, false),
         ];
 

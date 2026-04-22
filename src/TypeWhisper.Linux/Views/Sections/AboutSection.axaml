@@ -1,43 +1,117 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:local="using:TypeWhisper.Linux"
              x:Class="TypeWhisper.Linux.Views.Sections.AboutSection"
              x:DataType="vm:AboutSectionViewModel">
-    <ScrollViewer>
-        <StackPanel Margin="24" Spacing="16" MaxWidth="640">
-            <TextBlock Text="About" FontSize="24" FontWeight="SemiBold" />
-            <TextBlock Text="TypeWhisper Linux — a port of TypeWhisper to the Linux desktop via Avalonia + PortAudio + SharpHook + xdotool."
-                       TextWrapping="Wrap"
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+    <UserControl.Styles>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+    </UserControl.Styles>
 
-            <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                    CornerRadius="6" Padding="16">
-                <StackPanel Spacing="10">
-                    <Grid ColumnDefinitions="150,*">
-                        <TextBlock Grid.Column="0" Text="Version" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="1" Text="{Binding Version}" />
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28"
+                    MaxWidth="980"
+                    Spacing="18">
+            <StackPanel HorizontalAlignment="Center"
+                        Spacing="6"
+                        Margin="0,10,0,0">
+                <TextBlock Text="TypeWhisper"
+                           FontSize="22"
+                           FontWeight="SemiBold"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="Speech-to-text for your Linux desktop"
+                           FontSize="13.5"
+                           Foreground="#9BAABC"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding Version, StringFormat='Version {0}'}"
+                           FontSize="12"
+                           Foreground="#9BAABC"
+                           HorizontalAlignment="Center" />
+                <Button Content="Check for Updates"
+                        Click="OnCheckForUpdates"
+                        Margin="0,10,0,18" />
+                <TextBlock Text="Works with local and cloud transcription engines"
+                           FontSize="13"
+                           Foreground="#B7C4D3"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="License: GPL-3.0-or-later"
+                           FontSize="13"
+                           Foreground="#B7C4D3"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <Border Classes="panel"
+                    Height="386">
+                <Grid RowDefinitions="Auto,*">
+                    <Border Padding="16,12"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,0,0,1">
+                        <Grid ColumnDefinitions="*,Auto,Auto"
+                              ColumnSpacing="10">
+                            <TextBlock Text="Error Log"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <Button Grid.Column="1"
+                                    Content="Clear"
+                                    Command="{Binding ClearErrorsCommand}"
+                                    IsVisible="{Binding HasErrors}" />
+                            <Button Grid.Column="2"
+                                    Content="Export Diagnostics"
+                                    Click="OnExportDiagnostics" />
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="1">
+                        <StackPanel HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding HasErrors, Converter={x:Static local:InverseBoolConverter.Instance}}">
+                            <TextBlock Text="✓"
+                                       FontSize="42"
+                                       Foreground="#8DA0B8"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="No errors recorded."
+                                       FontSize="13"
+                                       Foreground="#8A9AAE"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      IsVisible="{Binding HasErrors}">
+                            <ItemsControl ItemsSource="{Binding ErrorEntries}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:ErrorLogEntry">
+                                        <Border Padding="16,12"
+                                                BorderBrush="#1AFFFFFF"
+                                                BorderThickness="0,0,0,1">
+                                            <StackPanel Spacing="4">
+                                                <StackPanel Orientation="Horizontal"
+                                                            Spacing="10">
+                                                    <TextBlock Text="{Binding Category}"
+                                                               FontSize="11"
+                                                               Foreground="#D6E7FF" />
+                                                    <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:g}'}"
+                                                               FontSize="11"
+                                                               Foreground="#8A9AAE" />
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Message}"
+                                                           TextWrapping="Wrap"
+                                                           Foreground="#D7DEE8" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
                     </Grid>
-                    <Grid ColumnDefinitions="150,*">
-                        <TextBlock Grid.Column="0" Text=".NET runtime" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="1" Text="{Binding RuntimeVersion}" />
-                    </Grid>
-                    <Grid ColumnDefinitions="150,*">
-                        <TextBlock Grid.Column="0" Text="Operating system" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="1" Text="{Binding OsDescription}" TextWrapping="Wrap" />
-                    </Grid>
-                    <Grid ColumnDefinitions="150,*">
-                        <TextBlock Grid.Column="0" Text="Architecture" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="1" Text="{Binding Architecture}" />
-                    </Grid>
-                    <Grid ColumnDefinitions="150,*">
-                        <TextBlock Grid.Column="0" Text="Fork" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="1" Text="{Binding ProjectUrl}" />
-                    </Grid>
-                    <Grid ColumnDefinitions="150,*">
-                        <TextBlock Grid.Column="0" Text="Upstream" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="1" Text="{Binding UpstreamUrl}" />
-                    </Grid>
-                </StackPanel>
+                </Grid>
             </Border>
         </StackPanel>
     </ScrollViewer>

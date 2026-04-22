@@ -26,11 +26,18 @@ public partial class PromptsSectionViewModel : ObservableObject
     [ObservableProperty] private string _editIcon = "\u2728";
     [ObservableProperty] private string? _editProviderOverride;
     [ObservableProperty] private string? _editTargetActionPluginId;
+    [ObservableProperty] private bool _showEditor;
 
     public bool HasSelectedAction => SelectedAction is not null || IsCreatingNew;
     public int ActionCount => Actions.Count;
     public int EnabledActionCount => Actions.Count(static action => action.IsEnabled);
-    public string Summary => $"{ActionCount} action(s), {EnabledActionCount} enabled";
+    public string Summary => $"{ActionCount} prompts, {EnabledActionCount} enabled";
+    public string PromptsHint => "AI prompts for the Prompt Palette. Select text + hotkey = AI processes the text.";
+    public bool ShowProviderWarning => AvailableProviders.Count <= 1;
+    public string ProviderWarningText => "Enable OpenAI or Groq in Extensions.";
+    public bool ShowEmptyState => ActionCount == 0;
+    public string EditorTitle => IsCreatingNew ? "New Prompt" : "Edit Prompt";
+    public bool CanEditExistingAction => SelectedAction is not null;
 
     public string? DefaultLlmProvider
     {
@@ -73,6 +80,7 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         IsCreatingNew = false;
+        ShowEditor = true;
         _editingActionId = value.Id;
         EditName = value.Name;
         EditSystemPrompt = value.SystemPrompt;
@@ -86,6 +94,7 @@ public partial class PromptsSectionViewModel : ObservableObject
     private void StartCreate()
     {
         IsCreatingNew = true;
+        ShowEditor = true;
         SelectedAction = null;
         _editingActionId = null;
         EditName = "";
@@ -142,6 +151,15 @@ public partial class PromptsSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void EditAction(PromptAction? action)
+    {
+        if (action is null)
+            return;
+
+        SelectedAction = action;
+    }
+
+    [RelayCommand]
     private void DeleteSelectedAction()
     {
         if (SelectedAction is null || SelectedAction.IsPreset)
@@ -150,6 +168,7 @@ public partial class PromptsSectionViewModel : ObservableObject
         _prompts.DeleteAction(SelectedAction.Id);
         RefreshActions();
         SelectedAction = null;
+        ShowEditor = false;
     }
 
     [RelayCommand]
@@ -201,6 +220,16 @@ public partial class PromptsSectionViewModel : ObservableObject
         RefreshActions();
     }
 
+    [RelayCommand]
+    private void CancelEdit()
+    {
+        IsCreatingNew = false;
+        ShowEditor = false;
+        SelectedAction = null;
+        ClearEditor();
+        NotifyStateChanged();
+    }
+
     private void RefreshActions()
     {
         var selectedId = SelectedAction?.Id ?? _editingActionId;
@@ -208,16 +237,13 @@ public partial class PromptsSectionViewModel : ObservableObject
         foreach (var action in _prompts.Actions.OrderBy(action => action.SortOrder))
             Actions.Add(action);
 
-        if (selectedId is not null)
+        if (selectedId is not null && ShowEditor)
         {
             SelectById(selectedId);
             return;
         }
 
-        if (Actions.Count > 0 && !IsCreatingNew)
-            SelectedAction = Actions[0];
-        else
-            NotifyStateChanged();
+        NotifyStateChanged();
     }
 
     private void RefreshPluginOptions()
@@ -248,6 +274,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
         EditProviderOverride = AvailableProviders.Any(option => option.Value == selectedProvider) ? selectedProvider : null;
         EditTargetActionPluginId = ActionPluginOptions.Any(option => option.Value == selectedActionPlugin) ? selectedActionPlugin : null;
+        OnPropertyChanged(nameof(ShowProviderWarning));
     }
 
     private void SelectById(string id)
@@ -275,6 +302,10 @@ public partial class PromptsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ActionCount));
         OnPropertyChanged(nameof(EnabledActionCount));
         OnPropertyChanged(nameof(Summary));
+        OnPropertyChanged(nameof(ShowProviderWarning));
+        OnPropertyChanged(nameof(ShowEmptyState));
+        OnPropertyChanged(nameof(EditorTitle));
+        OnPropertyChanged(nameof(CanEditExistingAction));
     }
 }
 

@@ -28,7 +28,17 @@
                             Height="10"
                             CornerRadius="999"
                             Background="#66E3A2"
-                            VerticalAlignment="Center" />
+                            VerticalAlignment="Center"
+                            IsVisible="{Binding ShowLeftMeter}" />
+
+                    <TextBlock Text="{Binding LeftText}"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="#99FFFFFF"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="120"
+                               IsVisible="{Binding ShowLeftText}" />
 
                     <TextBlock Grid.Column="1"
                                Text="{Binding StatusText}"
@@ -39,32 +49,23 @@
                                FontWeight="SemiBold"
                                Foreground="#CCFFFFFF" />
 
+                    <Border Grid.Column="2"
+                            Width="{Binding AudioMeterWidth}"
+                            Height="10"
+                            CornerRadius="999"
+                            Background="#66E3A2"
+                            VerticalAlignment="Center"
+                            IsVisible="{Binding ShowRightMeter}" />
+
                     <TextBlock Grid.Column="2"
-                               Text="{Binding RecordingTimerText}"
+                               Text="{Binding RightText}"
                                VerticalAlignment="Center"
                                FontSize="12"
                                FontWeight="SemiBold"
-                               Foreground="#99FFFFFF" />
-                </Grid>
-
-                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8"
-                      IsVisible="{Binding IsRecording}">
-                    <Border Background="#1AFFFFFF"
-                            CornerRadius="999"
-                            Padding="8,3"
-                            IsVisible="{Binding ActiveProfileName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                        <TextBlock Text="{Binding ActiveProfileName}"
-                                   FontSize="11"
-                                   Foreground="#CCFFFFFF" />
-                    </Border>
-
-                    <TextBlock Grid.Column="1"
-                               Text="{Binding ActiveAppName}"
-                               VerticalAlignment="Center"
-                               TextTrimming="CharacterEllipsis"
-                               FontSize="11"
                                Foreground="#99FFFFFF"
-                               IsVisible="{Binding ActiveAppName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="120"
+                               IsVisible="{Binding ShowRightText}" />
                 </Grid>
 
                 <TextBlock Text="{Binding PartialText}"

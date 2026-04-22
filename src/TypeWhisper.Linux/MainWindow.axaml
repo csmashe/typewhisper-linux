@@ -156,6 +156,12 @@
                 <DataTemplate DataType="vms:GeneralSectionViewModel">
                     <sections:GeneralSection />
                 </DataTemplate>
+                <DataTemplate DataType="vms:AppearanceSectionViewModel">
+                    <sections:AppearanceSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:AdvancedSectionViewModel">
+                    <sections:AdvancedSection />
+                </DataTemplate>
                 <DataTemplate DataType="vms:AboutSectionViewModel">
                     <sections:AboutSection />
                 </DataTemplate>

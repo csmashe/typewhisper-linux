@@ -1,0 +1,140 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             x:Class="TypeWhisper.Linux.Views.Sections.AppearanceSection"
+             x:DataType="vm:AppearanceSectionViewModel">
+    <UserControl.Styles>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+        <Style Selector="TextBlock.section-title">
+            <Setter Property="FontSize" Value="14.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,4,0,10" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28"
+                    MaxWidth="980"
+                    Spacing="18">
+            <TextBlock Text="Overlay layout"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Position"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding OverlayPositions}"
+                                      SelectedItem="{Binding SelectedOverlayPosition}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:OverlayPositionOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="2" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Left content"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding OverlayWidgets}"
+                                      SelectedItem="{Binding SelectedLeftWidget}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:OverlayWidgetOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="4" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Right content"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding OverlayWidgets}"
+                                      SelectedItem="{Binding SelectedRightWidget}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:OverlayWidgetOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Preview"
+                       Classes="section-title" />
+
+            <Border Classes="panel"
+                    Padding="24"
+                    Height="220">
+                <Grid>
+                    <TextBlock Text="Overlay indicator"
+                               HorizontalAlignment="Center"
+                               Margin="0,24,0,0"
+                               Foreground="#9BAABC"
+                               FontSize="12.5" />
+
+                    <Border Width="340"
+                            Height="76"
+                            CornerRadius="20"
+                            Background="#101821"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="1"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center">
+                        <Grid ColumnDefinitions="Auto,*,Auto"
+                              ColumnSpacing="16"
+                              Margin="18,0">
+                            <TextBlock Text="•••••"
+                                       VerticalAlignment="Center"
+                                       Foreground="#5EA4FF"
+                                       FontSize="16" />
+                            <StackPanel Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Spacing="2">
+                                <TextBlock Text="Recording"
+                                           HorizontalAlignment="Center"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Graphite body, brighter azure focus, and&#x0a;denser runtime metadata."
+                                           TextAlignment="Center"
+                                           Foreground="#8A9AAE"
+                                           FontSize="11" />
+                            </StackPanel>
+                            <TextBlock Grid.Column="2"
+                                       Text="0:00"
+                                       VerticalAlignment="Center"
+                                       Foreground="#9BAABC"
+                                       FontSize="12" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -76,6 +76,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<DictationOverlayViewModel>();
         services.AddSingleton<GeneralSectionViewModel>();
+        services.AddSingleton<AppearanceSectionViewModel>();
+        services.AddSingleton<AdvancedSectionViewModel>();
         services.AddSingleton<ShortcutsSectionViewModel>();
         services.AddSingleton<FileTranscriptionSectionViewModel>();
         services.AddSingleton<RecorderSectionViewModel>();

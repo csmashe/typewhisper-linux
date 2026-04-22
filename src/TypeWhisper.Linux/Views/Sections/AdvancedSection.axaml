@@ -1,8 +1,8 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
-             x:Class="TypeWhisper.Linux.Views.Sections.GeneralSection"
-             x:DataType="vm:GeneralSectionViewModel">
+             x:Class="TypeWhisper.Linux.Views.Sections.AdvancedSection"
+             x:DataType="vm:AdvancedSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.panel">
             <Setter Property="Background" Value="#141D26" />
@@ -22,99 +22,67 @@
         <StackPanel Margin="28"
                     MaxWidth="980"
                     Spacing="18">
-            <TextBlock Text="Language"
+            <TextBlock Text="Memory"
                        Classes="section-title" />
 
             <Border Classes="panel">
                 <Grid RowDefinitions="Auto,Auto">
                     <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Enable memory"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding MemoryEnabled}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="Automatically extracts facts from transcriptions with the configured LLM and injects them into prompt context."
+                                   FontSize="12"
+                                   Foreground="#8A9AAE" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Recording"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,1,Auto,Auto">
+                    <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Interface Language"
+                            <TextBlock Text="Auto-unload model"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
-                                      ItemsSource="{Binding UiLanguageChoices}"
-                                      SelectedItem="{Binding SelectedUiLanguageOption}"
-                                      IsEnabled="{Binding IsUiLanguageSupported}">
+                                      ItemsSource="{Binding AutoUnloadOptions}"
+                                      SelectedItem="{Binding SelectedAutoUnloadOption}">
                                 <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:UiLanguageOption">
+                                    <DataTemplate x:DataType="vm:AutoUnloadOption">
                                         <TextBlock Text="{Binding DisplayName}" />
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
                         </Grid>
                     </Border>
-                    <Border Grid.Row="1"
-                            BorderBrush="#1AFFFFFF"
-                            BorderThickness="0,1,0,0"
-                            Padding="18,12">
-                        <TextBlock Text="{Binding UiLanguageSupportMessage}"
-                                   FontSize="12"
-                                   Foreground="#8A9AAE" />
-                    </Border>
-                </Grid>
-            </Border>
 
-            <TextBlock Text="Startup"
-                       Classes="section-title" />
+                    <Border Grid.Row="1" Background="#1AFFFFFF" />
 
-            <Border Classes="panel">
-                <Grid RowDefinitions="Auto,Auto">
-                    <Border Padding="18,14">
+                    <Border Grid.Row="2" Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
-                            <TextBlock Text="Start automatically at system startup"
+                            <TextBlock Text="Spoken feedback"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
-                                          IsChecked="{Binding StartWithSystem}"
+                                          IsChecked="{Binding SpokenFeedbackEnabled}"
                                           VerticalAlignment="Center" />
-                        </Grid>
-                    </Border>
-                    <Border Grid.Row="1"
-                            BorderBrush="#1AFFFFFF"
-                            BorderThickness="0,1,0,0"
-                            Padding="18,12">
-                        <TextBlock Text="TypeWhisper starts automatically when you log in."
-                                   FontSize="12"
-                                   Foreground="#8A9AAE" />
-                    </Border>
-                </Grid>
-            </Border>
-
-            <TextBlock Text="Services"
-                       Classes="section-title" />
-
-            <Border Classes="panel">
-                <Grid RowDefinitions="Auto,1,Auto,Auto">
-                    <Border Padding="18,14">
-                        <Grid ColumnDefinitions="*,Auto"
-                              ColumnSpacing="16">
-                            <TextBlock Text="Enable local API"
-                                       FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
-                            <ToggleSwitch Grid.Column="1"
-                                          IsChecked="{Binding ApiServerEnabled}"
-                                          VerticalAlignment="Center" />
-                        </Grid>
-                    </Border>
-
-                    <Border Grid.Row="1"
-                            Background="#1AFFFFFF" />
-
-                    <Border Grid.Row="2"
-                            Padding="18,14">
-                        <Grid ColumnDefinitions="*,320"
-                              ColumnSpacing="16">
-                            <TextBlock Text="Port"
-                                       FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
-                            <NumericUpDown Grid.Column="1"
-                                           Minimum="1"
-                                           Maximum="65535"
-                                           Value="{Binding ApiServerPort}"
-                                           FormatString="0" />
                         </Grid>
                     </Border>
 
@@ -122,7 +90,55 @@
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
-                        <TextBlock Text="Expose the local REST endpoint for integrations and automation."
+                        <TextBlock Text="Local models can be unloaded after inactivity, and spoken feedback reads the final transcription aloud."
+                                   FontSize="12"
+                                   Foreground="#8A9AAE" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Data"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,1,Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Save transcriptions to history"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding SaveToHistoryEnabled}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="2" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="History retention"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding HistoryRetentionOptions}"
+                                      SelectedItem="{Binding SelectedHistoryRetention}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:HistoryRetentionOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="When history is disabled, transcriptions are still inserted but not stored."
                                    FontSize="12"
                                    Foreground="#8A9AAE" />
                     </Border>
