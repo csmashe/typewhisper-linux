@@ -178,6 +178,13 @@ public partial class App : Application
     {
         try
         {
+            var sessionAudio = services.GetService<SessionAudioFileService>();
+            sessionAudio?.DeleteSessionCaptures();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}"); }
+
+        try
+        {
             var retention = services.GetService<HistoryRetentionCoordinator>();
             retention?.HandleShutdown();
         }
@@ -211,6 +218,13 @@ public partial class App : Application
         }
         catch (Exception ex) { Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}"); }
 
+        try
+        {
+            var playback = services.GetService<AudioPlaybackService>();
+            playback?.Dispose();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] Playback dispose failed: {ex.Message}"); }
+
         await Task.CompletedTask;
     }
 
@@ -221,6 +235,9 @@ public partial class App : Application
         var history = services.GetRequiredService<IHistoryService>();
         await history.EnsureLoadedAsync();
 
+        var sessionAudio = services.GetRequiredService<SessionAudioFileService>();
+        sessionAudio.DeleteSessionCaptures();
+
         var audio = services.GetRequiredService<AudioRecordingService>();
         ApplyConfiguredMicrophone(audio, settings);
 
@@ -229,6 +246,15 @@ public partial class App : Application
 
         var pluginManager = services.GetRequiredService<PluginManager>();
         await pluginManager.InitializeAsync();
+
+        var pluginRegistry = services.GetRequiredService<PluginRegistryService>();
+        _ = pluginRegistry.FirstRunAutoInstallAsync()
+            .ContinueWith(_ => pluginRegistry.CheckForUpdatesAsync(), TaskScheduler.Default)
+            .ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                    Debug.WriteLine($"[App] Plugin registry check failed: {t.Exception?.Message}");
+            }, TaskScheduler.Default);
 
         var historyRetention = services.GetRequiredService<HistoryRetentionCoordinator>();
         historyRetention.Initialize();

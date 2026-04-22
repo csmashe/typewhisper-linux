@@ -23,6 +23,7 @@ public sealed class DictationOrchestrator : IDisposable
 {
     private readonly HotkeyService _hotkey;
     private readonly AudioRecordingService _audio;
+    private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly TextInsertionService _textInsertion;
     private readonly IAudioDuckingService _audioDucking;
     private readonly IMediaPauseService _mediaPause;
@@ -64,6 +65,7 @@ public sealed class DictationOrchestrator : IDisposable
     public DictationOrchestrator(
         HotkeyService hotkey,
         AudioRecordingService audio,
+        SessionAudioFileService sessionAudioFiles,
         TextInsertionService textInsertion,
         IAudioDuckingService audioDucking,
         IMediaPauseService mediaPause,
@@ -82,6 +84,7 @@ public sealed class DictationOrchestrator : IDisposable
     {
         _hotkey = hotkey;
         _audio = audio;
+        _sessionAudioFiles = sessionAudioFiles;
         _textInsertion = textInsertion;
         _audioDucking = audioDucking;
         _mediaPause = mediaPause;
@@ -229,7 +232,7 @@ public sealed class DictationOrchestrator : IDisposable
             });
             if (wav.Length == 0) return;
 
-            var path = SaveWav(wav);
+            var path = _sessionAudioFiles.SaveDictationCapture(wav);
             RecordingCaptured?.Invoke(this, path);
             Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
 
@@ -500,15 +503,6 @@ public sealed class DictationOrchestrator : IDisposable
         // WAV: 44-byte standard PCM header, 16-bit mono at 16kHz → 32000 bytes/sec.
         if (wav.Length <= 44) return 0;
         return (wav.Length - 44) / 32000.0;
-    }
-
-    private static string SaveWav(byte[] wav)
-    {
-        Directory.CreateDirectory(TypeWhisperEnvironment.AudioPath);
-        var name = $"dictation-{DateTime.Now:yyyyMMdd-HHmmss}.wav";
-        var path = Path.Combine(TypeWhisperEnvironment.AudioPath, name);
-        File.WriteAllBytes(path, wav);
-        return path;
     }
 
     private void ReportStatus(string message)

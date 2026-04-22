@@ -47,6 +47,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<PluginEventBus>();
         services.AddSingleton<PluginLoader>();
         services.AddSingleton<PluginManager>();
+        services.AddSingleton<PluginRegistryService>();
         services.AddSingleton<ModelManagerService>();
 
         // Linux-native platform services
@@ -55,6 +56,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<AudioRecordingService>();
+        services.AddSingleton<AudioPlaybackService>();
+        services.AddSingleton<SessionAudioFileService>();
         services.AddSingleton<HotkeyService>();
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<TrayIconService>();

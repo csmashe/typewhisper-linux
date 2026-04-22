@@ -1,7 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
-             xmlns:models="using:TypeWhisper.Core.Models"
              x:Class="TypeWhisper.Linux.Views.Sections.HistorySection"
              x:DataType="vm:HistorySectionViewModel">
     <DockPanel Margin="16" LastChildFill="True">
@@ -20,25 +19,31 @@
             <ScrollViewer>
                 <ItemsControl ItemsSource="{Binding Records}">
                     <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="models:TranscriptionRecord">
+                        <DataTemplate x:DataType="vm:HistoryRecordRow">
                             <Border Padding="12,10" BorderThickness="0,0,0,1"
                                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                <Grid ColumnDefinitions="*,Auto">
+                                <Grid ColumnDefinitions="*,Auto,Auto">
                                     <StackPanel Grid.Column="0" Spacing="3">
-                                        <TextBlock Text="{Binding FinalText}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding Record.FinalText}" TextWrapping="Wrap" />
                                         <StackPanel Orientation="Horizontal" Spacing="12">
-                                            <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}"
+                                            <TextBlock Text="{Binding Record.Timestamp, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}"
                                                        FontSize="10"
                                                        Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                                            <TextBlock Text="{Binding AppName}" FontSize="10"
+                                            <TextBlock Text="{Binding Record.AppName}" FontSize="10"
                                                        Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                                       IsVisible="{Binding AppName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            <TextBlock Text="{Binding WordCount, StringFormat='{}{0} words'}"
+                                                       IsVisible="{Binding Record.AppName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            <TextBlock Text="{Binding Record.WordCount, StringFormat='{}{0} words'}"
                                                        FontSize="10"
                                                        Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
                                         </StackPanel>
                                     </StackPanel>
-                                    <Button Grid.Column="1" Content="Delete"
+                                    <Button Grid.Column="1"
+                                            Content="{Binding PlaybackButtonText}"
+                                            IsVisible="{Binding HasSessionAudio}"
+                                            Command="{Binding $parent[ItemsControl].((vm:HistorySectionViewModel)DataContext).TogglePlaybackCommand}"
+                                            CommandParameter="{Binding}"
+                                            Margin="0,0,8,0" />
+                                    <Button Grid.Column="2" Content="Delete"
                                             Command="{Binding $parent[ItemsControl].((vm:HistorySectionViewModel)DataContext).DeleteRecordCommand}"
                                             CommandParameter="{Binding}" />
                                 </Grid>

@@ -78,6 +78,9 @@ public record AppSettings
     // UI Language (null = auto-detect from system)
     public string? UiLanguage { get; init; }
 
+    // Dashboard
+    public int DashboardSelectedPeriod { get; init; }
+
     public static AppSettings Default => new();
 }
 

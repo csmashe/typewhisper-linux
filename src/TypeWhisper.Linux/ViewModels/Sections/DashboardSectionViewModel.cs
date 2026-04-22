@@ -10,10 +10,11 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class DashboardSectionViewModel : ObservableObject
 {
     private readonly IHistoryService _history;
+    private readonly ISettingsService _settings;
 
     public enum TimeRange { Weekly, Month, AllTime }
 
-    [ObservableProperty] private TimeRange _selectedRange = TimeRange.Weekly;
+    [ObservableProperty] private TimeRange _selectedRange;
     [ObservableProperty] private int _wordCount;
     [ObservableProperty] private int _averageWpm;
     [ObservableProperty] private int _appCount;
@@ -21,14 +22,20 @@ public partial class DashboardSectionViewModel : ObservableObject
 
     public ObservableCollection<TranscriptionRecord> RecentActivity { get; } = [];
 
-    public DashboardSectionViewModel(IHistoryService history)
+    public DashboardSectionViewModel(IHistoryService history, ISettingsService settings)
     {
         _history = history;
+        _settings = settings;
+        _selectedRange = ReadSelectedRange(settings.Current.DashboardSelectedPeriod);
         _history.RecordsChanged += () => Dispatcher.UIThread.Post(Refresh);
         _ = InitializeAsync();
     }
 
-    partial void OnSelectedRangeChanged(TimeRange value) => Refresh();
+    partial void OnSelectedRangeChanged(TimeRange value)
+    {
+        PersistSelectedRange(value);
+        Refresh();
+    }
 
     [RelayCommand] private void ShowWeekly() => SelectedRange = TimeRange.Weekly;
     [RelayCommand] private void ShowMonth() => SelectedRange = TimeRange.Month;
@@ -71,4 +78,18 @@ public partial class DashboardSectionViewModel : ObservableObject
         foreach (var r in records.OrderByDescending(r => r.Timestamp).Take(10))
             RecentActivity.Add(r);
     }
+
+    private void PersistSelectedRange(TimeRange value)
+    {
+        var current = _settings.Current;
+        var encoded = (int)value;
+        if (current.DashboardSelectedPeriod == encoded)
+            return;
+
+        _settings.Save(current with { DashboardSelectedPeriod = encoded });
+    }
+
+    private static TimeRange ReadSelectedRange(int value) => Enum.IsDefined(typeof(TimeRange), value)
+        ? (TimeRange)value
+        : TimeRange.Weekly;
 }
