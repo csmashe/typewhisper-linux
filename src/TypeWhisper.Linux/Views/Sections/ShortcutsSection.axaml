@@ -5,62 +5,165 @@
              xmlns:local="using:TypeWhisper.Linux"
              x:Class="TypeWhisper.Linux.Views.Sections.ShortcutsSection"
              x:DataType="vm:ShortcutsSectionViewModel">
-    <ScrollViewer>
-        <StackPanel Margin="24" Spacing="20" MaxWidth="640" HorizontalAlignment="Left">
-            <TextBlock Text="Keyboard shortcut" FontSize="20" FontWeight="SemiBold" />
+    <UserControl.Styles>
+        <Style Selector="Border.section-panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Margin" Value="0,0,0,18" />
+        </Style>
+        <Style Selector="Border.section-row">
+            <Setter Property="Padding" Value="18,14" />
+        </Style>
+        <Style Selector="TextBlock.page-title">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+        <Style Selector="TextBlock.page-subtitle">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.section-label">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style Selector="TextBlock.row-title">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="TextBlock.row-hint">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+        </Style>
+    </UserControl.Styles>
 
-            <StackPanel Spacing="8">
-                <TextBlock Text="Binding" FontWeight="SemiBold" />
-                <TextBlock TextWrapping="Wrap" FontSize="12"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           Text="Global hotkey that starts/stops dictation. Type a combination like &quot;Ctrl+Shift+Space&quot;, &quot;Alt+F9&quot;, or &quot;Ctrl+K&quot; and click Apply. Accepted modifiers: Ctrl, Shift, Alt, Meta. Keys: a-z, 0-9, F1-F24, Space, Enter, Tab, Escape, arrows, etc." />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBox Width="260" Text="{Binding HotkeyText}" PlaceholderText="Ctrl+Shift+Space" />
-                    <Button Content="Apply" Command="{Binding ApplyHotkeyCommand}" />
-                </StackPanel>
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28"
+                    MaxWidth="860">
+            <StackPanel Margin="0,0,0,18">
+                <TextBlock Text="Shortcuts"
+                           Classes="page-title" />
+                <TextBlock Text="Keep capture keyboard-first. Start with one main hotkey, then adjust activation behavior or add the prompt palette shortcut as needed."
+                           Classes="page-subtitle" />
+                <TextBlock Text="Single modifier keys like Win are not allowed. Use a combination like Ctrl+Shift, Alt+F9, or Ctrl+Shift+Space."
+                           FontSize="11"
+                           Foreground="#AFC0D3"
+                           TextWrapping="Wrap"
+                           Margin="0,8,0,0" />
             </StackPanel>
 
-            <Separator />
+            <TextBlock Text="Main capture"
+                       Classes="section-label" />
+            <Border Classes="section-panel">
+                <Border Classes="section-row">
+                    <Grid ColumnDefinitions="*,Auto"
+                          ColumnSpacing="16">
+                        <StackPanel Margin="0,0,16,0">
+                            <TextBlock Text="Main dictation hotkey"
+                                       Classes="row-title" />
+                            <TextBlock Text="Global shortcut that starts dictation. Its behavior depends on the activation mode below."
+                                       Classes="row-hint" />
+                        </StackPanel>
 
-            <StackPanel Spacing="8">
-                <TextBlock Text="Prompt palette" FontWeight="SemiBold" />
-                <TextBlock TextWrapping="Wrap" FontSize="12"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           Text="Optional global hotkey that opens the prompt palette for the currently selected text without starting dictation. Leave blank to disable it." />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBox Width="260" Text="{Binding PromptPaletteHotkeyText}" PlaceholderText="Ctrl+Shift+P" />
-                    <Button Content="Apply" Command="{Binding ApplyPromptPaletteHotkeyCommand}" />
+                        <StackPanel Grid.Column="1"
+                                    Orientation="Horizontal"
+                                    Spacing="8"
+                                    VerticalAlignment="Center">
+                            <TextBox Width="240"
+                                     Text="{Binding HotkeyText}"
+                                     PlaceholderText="Ctrl+Shift+Space" />
+                            <Button Content="Apply"
+                                    Command="{Binding ApplyHotkeyCommand}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Border>
+
+            <TextBlock Text="More shortcuts"
+                       Classes="section-label" />
+            <Border Classes="section-panel">
+                <StackPanel>
+                    <Border Classes="section-row">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel Margin="0,0,16,0">
+                                <TextBlock Text="Activation mode"
+                                           Classes="row-title" />
+                                <TextBlock Text="Toggle starts and stops on repeated presses. Push to talk records while held. Hybrid uses a short press for toggle and a long hold for push-to-talk."
+                                           Classes="row-hint" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="14"
+                                        VerticalAlignment="Center">
+                                <RadioButton Content="Toggle"
+                                             GroupName="mode"
+                                             IsChecked="{Binding Mode, Mode=TwoWay,
+                                                                 Converter={x:Static local:EnumBoolConverter.Instance},
+                                                                 ConverterParameter={x:Static models:RecordingMode.Toggle}}" />
+                                <RadioButton Content="Push to talk"
+                                             GroupName="mode"
+                                             IsChecked="{Binding Mode, Mode=TwoWay,
+                                                                 Converter={x:Static local:EnumBoolConverter.Instance},
+                                                                 ConverterParameter={x:Static models:RecordingMode.PushToTalk}}" />
+                                <RadioButton Content="Hybrid"
+                                             GroupName="mode"
+                                             IsChecked="{Binding Mode, Mode=TwoWay,
+                                                                 Converter={x:Static local:EnumBoolConverter.Instance},
+                                                                 ConverterParameter={x:Static models:RecordingMode.Hybrid}}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Height="1"
+                            Background="#16FFFFFF"
+                            Margin="18,0" />
+
+                    <Border Classes="section-row">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel Margin="0,0,16,0">
+                                <TextBlock Text="Prompt Palette"
+                                           Classes="row-title" />
+                                <TextBlock Text="Optional global shortcut that opens the prompt palette for the current selection without starting dictation. Leave blank to disable it."
+                                           Classes="row-hint" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        VerticalAlignment="Center">
+                                <TextBox Width="240"
+                                         Text="{Binding PromptPaletteHotkeyText}"
+                                         PlaceholderText="Ctrl+Shift+P" />
+                                <Button Content="Apply"
+                                        Command="{Binding ApplyPromptPaletteHotkeyCommand}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
                 </StackPanel>
-            </StackPanel>
+            </Border>
 
-            <Separator />
-
-            <StackPanel Spacing="8">
-                <TextBlock Text="Activation mode" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal" Spacing="0">
-                    <RadioButton Content="Toggle" GroupName="mode"
-                                 IsChecked="{Binding Mode, Mode=TwoWay,
-                                             Converter={x:Static local:EnumBoolConverter.Instance},
-                                             ConverterParameter={x:Static models:RecordingMode.Toggle}}"
-                                 Margin="0,0,14,0" />
-                    <RadioButton Content="Push to talk" GroupName="mode"
-                                 IsChecked="{Binding Mode, Mode=TwoWay,
-                                             Converter={x:Static local:EnumBoolConverter.Instance},
-                                             ConverterParameter={x:Static models:RecordingMode.PushToTalk}}"
-                                 Margin="0,0,14,0" />
-                    <RadioButton Content="Hybrid" GroupName="mode"
-                                 IsChecked="{Binding Mode, Mode=TwoWay,
-                                             Converter={x:Static local:EnumBoolConverter.Instance},
-                                             ConverterParameter={x:Static models:RecordingMode.Hybrid}}" />
-                </StackPanel>
-                <TextBlock TextWrapping="Wrap" FontSize="11"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           Text="Toggle — press to start, press again to stop.   Push to talk — hold to record, release to stop and transcribe.   Hybrid — quick press toggles; holding past ~600 ms switches to push-to-talk and releasing stops." />
-            </StackPanel>
-
-            <TextBlock Text="{Binding StatusMessage}" FontSize="12"
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                       TextWrapping="Wrap" />
+            <Border Background="#111822"
+                    BorderBrush="#1AFFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="16,12"
+                    IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding StatusMessage}"
+                           FontSize="12"
+                           Foreground="#AFC0D3"
+                           TextWrapping="Wrap" />
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

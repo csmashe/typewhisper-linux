@@ -16,8 +16,8 @@ public partial class MainWindowViewModel : ObservableObject
     public DashboardSectionViewModel Dashboard { get; }
     public DictationSectionViewModel Dictation { get; }
     public ShortcutsSectionViewModel Shortcuts { get; }
-    public AudioSectionViewModel Audio { get; }
-    public ModelsSectionViewModel Models { get; }
+    public FileTranscriptionSectionViewModel FileTranscription { get; }
+    public RecorderSectionViewModel Recorder { get; }
     public HistorySectionViewModel History { get; }
     public DictionarySectionViewModel Dictionary { get; }
     public SnippetsSectionViewModel Snippets { get; }
@@ -40,8 +40,8 @@ public partial class MainWindowViewModel : ObservableObject
         DashboardSectionViewModel dashboard,
         DictationSectionViewModel dictation,
         ShortcutsSectionViewModel shortcuts,
-        AudioSectionViewModel audio,
-        ModelsSectionViewModel models,
+        FileTranscriptionSectionViewModel fileTranscription,
+        RecorderSectionViewModel recorder,
         HistorySectionViewModel history,
         DictionarySectionViewModel dictionary,
         SnippetsSectionViewModel snippets,
@@ -55,8 +55,8 @@ public partial class MainWindowViewModel : ObservableObject
         Dashboard = dashboard;
         Dictation = dictation;
         Shortcuts = shortcuts;
-        Audio = audio;
-        Models = models;
+        FileTranscription = fileTranscription;
+        Recorder = recorder;
         History = history;
         Dictionary = dictionary;
         Snippets = snippets;
@@ -73,8 +73,8 @@ public partial class MainWindowViewModel : ObservableObject
             new NavItem("Capture", null, null, true),
             new NavItem("Dictation", "\U0001F3A4", Dictation, false),
             new NavItem("Shortcuts", "⌨️", Shortcuts, false),
-            new NavItem("Audio", "\U0001F3A7", Audio, false),
-            new NavItem("Models", "\U0001F4E6", Models, false),
+            new NavItem("File transcription", "\U0001F4DD", FileTranscription, false),
+            new NavItem("Recorder", "\U0001F3B5", Recorder, false),
             new NavItem("Library", null, null, true),
             new NavItem("History", "\U0001F4DC", History, false),
             new NavItem("Dictionary", "\U0001F4D6", Dictionary, false),

@@ -57,6 +57,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<SystemCommandAvailabilityService>();
         services.AddSingleton<AudioRecordingService>();
+        services.AddSingleton<AudioFileService>();
         services.AddSingleton<AudioPlaybackService>();
         services.AddSingleton<SessionAudioFileService>();
         services.AddSingleton<SoundFeedbackService>();
@@ -76,8 +77,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<DictationOverlayViewModel>();
         services.AddSingleton<GeneralSectionViewModel>();
         services.AddSingleton<ShortcutsSectionViewModel>();
-        services.AddSingleton<AudioSectionViewModel>();
-        services.AddSingleton<ModelsSectionViewModel>();
+        services.AddSingleton<FileTranscriptionSectionViewModel>();
+        services.AddSingleton<RecorderSectionViewModel>();
         services.AddSingleton<PluginsSectionViewModel>();
         services.AddSingleton<HistorySectionViewModel>();
         services.AddSingleton<DictionarySectionViewModel>();

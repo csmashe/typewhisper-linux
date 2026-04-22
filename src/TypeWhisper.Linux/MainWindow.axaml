@@ -129,11 +129,11 @@
                 <DataTemplate DataType="vms:ShortcutsSectionViewModel">
                     <sections:ShortcutsSection />
                 </DataTemplate>
-                <DataTemplate DataType="vms:AudioSectionViewModel">
-                    <sections:AudioSection />
+                <DataTemplate DataType="vms:FileTranscriptionSectionViewModel">
+                    <sections:FileTranscriptionSection />
                 </DataTemplate>
-                <DataTemplate DataType="vms:ModelsSectionViewModel">
-                    <sections:ModelsSection />
+                <DataTemplate DataType="vms:RecorderSectionViewModel">
+                    <sections:RecorderSection />
                 </DataTemplate>
                 <DataTemplate DataType="vms:HistorySectionViewModel">
                     <sections:HistorySection />

@@ -7,6 +7,7 @@ public sealed class SystemCommandAvailabilityService
     public bool HasPactl => IsCommandAvailable("pactl");
     public bool HasPlayerCtl => IsCommandAvailable("playerctl");
     public bool HasCanberraGtkPlay => IsCommandAvailable("canberra-gtk-play");
+    public bool HasFfmpeg => IsCommandAvailable("ffmpeg");
 
     private static bool IsCommandAvailable(string commandName)
     {
