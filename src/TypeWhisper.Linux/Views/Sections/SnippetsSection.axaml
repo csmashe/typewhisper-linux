@@ -4,56 +4,259 @@
              xmlns:models="using:TypeWhisper.Core.Models"
              x:Class="TypeWhisper.Linux.Views.Sections.SnippetsSection"
              x:DataType="vm:SnippetsSectionViewModel">
-    <DockPanel Margin="16" LastChildFill="True">
-        <StackPanel DockPanel.Dock="Top" Spacing="10" Margin="0,0,0,12">
-            <TextBlock Text="Snippets" FontSize="20" FontWeight="SemiBold" />
-            <TextBlock TextWrapping="Wrap" FontSize="11"
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                       Text="Text expansion: saying a trigger phrase expands to replacement text (e.g. &quot;signoff&quot; → your full email signature)." />
+    <UserControl.Styles>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+        <Style Selector="Border.badge">
+            <Setter Property="Background" Value="#1B2430" />
+            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+        </Style>
+        <Style Selector="Button.toolbar-button">
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="MinWidth" Value="88" />
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+    </UserControl.Styles>
 
-            <Grid ColumnDefinitions="*,*,Auto,Auto" RowDefinitions="Auto">
-                <TextBox Grid.Column="0" Text="{Binding NewTrigger}" PlaceholderText="Trigger phrase"
-                         Margin="0,0,8,0" />
-                <TextBox Grid.Column="1" Text="{Binding NewReplacement}" PlaceholderText="Replacement text"
-                         Margin="0,0,8,0" />
-                <CheckBox Grid.Column="2" Content="Aa" IsChecked="{Binding CaseSensitive}"
-                          ToolTip.Tip="Case-sensitive" VerticalAlignment="Center" Margin="0,0,8,0" />
-                <Button Grid.Column="3" Content="Add" Command="{Binding AddSnippetCommand}" />
+    <Grid Margin="28"
+          RowDefinitions="Auto,Auto,*">
+        <Border Grid.Row="0"
+                Classes="panel"
+                Padding="18,14"
+                Margin="0,0,0,18">
+            <Grid ColumnDefinitions="*,Auto,Auto,Auto"
+                  ColumnSpacing="8">
+                <StackPanel Margin="0,0,18,0">
+                    <TextBlock Text="Snippets"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,4" />
+                    <TextBlock Text="{Binding SummaryText}"
+                               FontSize="12"
+                               Foreground="#8A9AAE"
+                               Margin="0,0,0,4" />
+                    <TextBlock Text="Placeholders: {date}, {time}, {datetime}, {day}, {year}, {clipboard}, {date:FORMAT}"
+                               FontSize="11.5"
+                               Foreground="#8A9AAE"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,4" />
+                    <TextBlock Text="Double-click a row to edit it. Use tags to keep reusable phrases organized."
+                               FontSize="11.5"
+                               Foreground="#8A9AAE"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+
+                <Button Grid.Column="1"
+                        Classes="toolbar-button"
+                        Content="Import"
+                        Click="OnImport" />
+                <Button Grid.Column="2"
+                        Classes="toolbar-button"
+                        Content="Export"
+                        Click="OnExport" />
+                <Button Grid.Column="3"
+                        Classes="toolbar-button"
+                        Content="+ New"
+                        Command="{Binding BeginCreateCommand}"
+                        Background="#2196F3"
+                        BorderBrush="#2196F3"
+                        Foreground="White" />
             </Grid>
-        </StackPanel>
-
-        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="4">
-            <ScrollViewer>
-                <ItemsControl ItemsSource="{Binding Snippets}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="models:Snippet">
-                            <Border Padding="12,8" BorderThickness="0,0,0,1"
-                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                <Grid ColumnDefinitions="*,2*,Auto,Auto,Auto">
-                                    <TextBlock Grid.Column="0" Text="{Binding Trigger}" FontWeight="SemiBold"
-                                               VerticalAlignment="Center" />
-                                    <TextBlock Grid.Column="1" Text="{Binding Replacement}"
-                                               TextWrapping="Wrap" FontSize="12"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                    <TextBlock Grid.Column="2"
-                                               Text="{Binding UsageCount, StringFormat='used {0}×'}"
-                                               FontSize="10"
-                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                               VerticalAlignment="Center" Margin="12,0" />
-                                    <ToggleSwitch Grid.Column="3"
-                                                  IsChecked="{Binding IsEnabled, Mode=OneWay}"
-                                                  Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).ToggleEnabledCommand}"
-                                                  CommandParameter="{Binding}" />
-                                    <Button Grid.Column="4" Content="Delete"
-                                            Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).DeleteCommand}"
-                                            CommandParameter="{Binding}" Margin="8,0,0,0" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
         </Border>
-    </DockPanel>
+
+        <Border Grid.Row="1"
+                Classes="panel"
+                Padding="16,14"
+                Margin="0,0,0,18"
+                IsVisible="{Binding ShowEditor}">
+            <Grid ColumnDefinitions="170,*,170,Auto,Auto"
+                  ColumnSpacing="10"
+                  RowDefinitions="Auto,Auto">
+                <TextBlock Grid.ColumnSpan="5"
+                           Text="{Binding EditorTitle}"
+                           FontSize="14"
+                           FontWeight="SemiBold"
+                           Margin="0,0,0,12" />
+
+                <TextBox Grid.Row="1"
+                         Grid.Column="0"
+                         Text="{Binding NewTrigger}"
+                         PlaceholderText="Trigger" />
+                <TextBox Grid.Row="1"
+                         Grid.Column="1"
+                         Text="{Binding NewReplacement}"
+                         PlaceholderText="Replacement text" />
+                <TextBox Grid.Row="1"
+                         Grid.Column="2"
+                         Text="{Binding NewTags}"
+                         PlaceholderText="Tags" />
+                <CheckBox Grid.Row="1"
+                          Grid.Column="3"
+                          Content="Case sensitive"
+                          IsChecked="{Binding CaseSensitive}"
+                          VerticalAlignment="Center" />
+                <StackPanel Grid.Row="1"
+                            Grid.Column="4"
+                            Orientation="Horizontal"
+                            Spacing="8">
+                    <Button Content="{Binding EditorSaveText}"
+                            Command="{Binding SaveSnippetCommand}"
+                            Background="#2196F3"
+                            BorderBrush="#2196F3"
+                            Foreground="White"
+                            Padding="14,8" />
+                    <Button Content="Cancel"
+                            Command="{Binding CancelEditCommand}"
+                            Padding="14,8" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2"
+                Classes="panel">
+            <Grid RowDefinitions="Auto,*">
+                <Border Grid.Row="0"
+                        BorderBrush="#1AFFFFFF"
+                        BorderThickness="0,0,0,1"
+                        Padding="16,12">
+                    <Grid ColumnDefinitions="Auto,Auto,Auto,*"
+                          ColumnSpacing="10">
+                        <TextBlock Grid.Column="0"
+                                   Text="Tag filter:"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   VerticalAlignment="Center" />
+                        <ComboBox Grid.Column="1"
+                                  Width="180"
+                                  ItemsSource="{Binding AvailableTags}"
+                                  SelectedItem="{Binding SelectedTagFilter}" />
+                        <Button Grid.Column="2"
+                                Content="All tags"
+                                Command="{Binding ClearTagFilterCommand}"
+                                IsVisible="{Binding HasSelectedTagFilter}" />
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="1">
+                    <StackPanel HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                MaxWidth="420"
+                                IsVisible="{Binding ShowEmptyState}">
+                        <TextBlock Text="♪"
+                                   FontSize="38"
+                                   Foreground="#8A9AAE"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,12" />
+                        <TextBlock Text="No snippets yet."
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,8" />
+                        <TextBlock Text="Create short triggers that expand into longer text automatically after transcription."
+                                   FontSize="12.5"
+                                   Foreground="#8A9AAE"
+                                   TextAlignment="Center"
+                                   Margin="0,0,0,18" />
+                        <Button Content="+ Create first snippet"
+                                Command="{Binding BeginCreateCommand}"
+                                HorizontalAlignment="Center"
+                                Padding="16,8"
+                                Background="#2196F3"
+                                BorderBrush="#2196F3"
+                                Foreground="White" />
+                    </StackPanel>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  IsVisible="{Binding ShowSnippetList}">
+                        <ItemsControl ItemsSource="{Binding FilteredSnippets}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="models:Snippet">
+                                    <Border Padding="16,13"
+                                            BorderBrush="#1AFFFFFF"
+                                            BorderThickness="0,0,0,1">
+                                        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto"
+                                              ColumnSpacing="14">
+                                            <Border Grid.Column="0"
+                                                    Background="#14337FD8"
+                                                    BorderBrush="#225E9FF2"
+                                                    BorderThickness="1"
+                                                    CornerRadius="7"
+                                                    Padding="9,4"
+                                                    VerticalAlignment="Top">
+                                                <TextBlock Text="{Binding Trigger}"
+                                                           FontSize="12"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="#8FC0FF" />
+                                            </Border>
+
+                                            <TextBlock Grid.Column="1"
+                                                       Text="→"
+                                                       FontSize="12"
+                                                       Foreground="#8A9AAE"
+                                                       Margin="0,4,0,0" />
+
+                                            <StackPanel Grid.Column="2"
+                                                        Margin="0,0,14,0">
+                                                <TextBlock Text="{Binding Replacement}"
+                                                           FontSize="13"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <WrapPanel Margin="0,7,0,0">
+                                                    <Border Classes="badge"
+                                                            IsVisible="{Binding CaseSensitive}">
+                                                        <TextBlock Text="Aa"
+                                                                   FontSize="10"
+                                                                   Foreground="#D6DEE9" />
+                                                    </Border>
+                                                    <Border Classes="badge">
+                                                        <TextBlock Text="{Binding UsageCount, StringFormat='{}{0}x'}"
+                                                                   FontSize="10"
+                                                                   Foreground="#D6DEE9" />
+                                                    </Border>
+                                                    <Border Classes="badge"
+                                                            IsVisible="{Binding Tags, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                        <TextBlock Text="{Binding Tags}"
+                                                                   FontSize="10"
+                                                                   Foreground="#D6DEE9" />
+                                                    </Border>
+                                                </WrapPanel>
+                                            </StackPanel>
+
+                                            <Button Grid.Column="3"
+                                                    Content="Edit"
+                                                    Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).BeginEditCommand}"
+                                                    CommandParameter="{Binding}"
+                                                    Padding="12,6"
+                                                    VerticalAlignment="Center" />
+                                            <Button Grid.Column="4"
+                                                    Content="Delete"
+                                                    Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).DeleteCommand}"
+                                                    CommandParameter="{Binding}"
+                                                    Padding="12,6"
+                                                    VerticalAlignment="Center" />
+                                            <ToggleSwitch Grid.Column="5"
+                                                          IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                          Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).ToggleEnabledCommand}"
+                                                          CommandParameter="{Binding}"
+                                                          VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
 </UserControl>

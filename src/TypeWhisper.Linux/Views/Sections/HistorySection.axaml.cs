@@ -85,4 +85,21 @@ public partial class HistorySection : UserControl
         if (confirmed)
             viewModel.ClearAll();
     }
+
+    private async void OnDeleteRecord(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is not HistorySectionViewModel viewModel
+            || sender is not Button { Tag: HistoryRecordRow row })
+            return;
+
+        var dialog = new MessageDialogWindow();
+        var confirmed = await dialog.ShowConfirmationAsync(
+            "Delete history entry",
+            "Delete this history entry? Any session audio still attached to it will also be removed.",
+            "Delete",
+            "Cancel");
+
+        if (confirmed)
+            viewModel.DeleteRecordCommand.Execute(row);
+    }
 }

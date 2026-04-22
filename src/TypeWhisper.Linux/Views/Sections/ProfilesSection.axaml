@@ -2,38 +2,121 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:local="using:TypeWhisper.Linux"
              x:Class="TypeWhisper.Linux.Views.Sections.ProfilesSection"
              x:DataType="vm:ProfilesSectionViewModel">
-    <Grid Margin="24" ColumnDefinitions="280,20,*">
-        <Grid Grid.Column="0" RowDefinitions="Auto,*,Auto">
-            <StackPanel Spacing="4" Margin="0,0,0,8">
-                <TextBlock Text="Profiles" FontSize="22" FontWeight="SemiBold" />
+    <UserControl.Styles>
+        <Style Selector="TextBlock.panel-title">
+            <Setter Property="FontSize" Value="14.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+        <Style Selector="TextBlock.page-subtitle">
+            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.field-label">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style Selector="TextBlock.row-label">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#D6DEE9" />
+        </Style>
+        <Style Selector="Border.section-panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+        <Style Selector="Border.chip">
+            <Setter Property="Background" Value="#1B2430" />
+            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+        </Style>
+        <Style Selector="Button.chip-remove">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Width" Value="18" />
+            <Setter Property="Height" Value="18" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="#8A9AAE" />
+        </Style>
+        <Style Selector="Border.profile-tile">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="14,12" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+        <Style Selector="ListBox.profile-list">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
+        <Style Selector="ListBox.profile-list ListBoxItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+        <Style Selector="ListBox.profile-list ListBoxItem:selected Border.profile-tile">
+            <Setter Property="Background" Value="#203347" />
+            <Setter Property="BorderBrush" Value="#305478" />
+        </Style>
+    </UserControl.Styles>
+
+    <Grid Margin="24"
+          ColumnDefinitions="260,18,*">
+        <Grid Grid.Column="0"
+              RowDefinitions="Auto,*,Auto">
+            <StackPanel Margin="0,0,0,8">
+                <TextBlock Text="Profiles"
+                           Classes="panel-title" />
                 <TextBlock Text="{Binding Summary}"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                           Classes="page-subtitle" />
             </StackPanel>
 
             <ListBox Grid.Row="1"
+                     Classes="profile-list"
                      ItemsSource="{Binding Profiles}"
                      SelectedItem="{Binding SelectedProfile}"
-                     BorderThickness="0"
-                     Background="Transparent"
-                     Margin="0,8,0,0">
+                     Margin="0,6,0,0">
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="models:Profile">
-                        <Border Padding="12,10" Margin="0,0,0,8"
-                                Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                                CornerRadius="8">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <StackPanel Spacing="4">
-                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                    <TextBlock Text="{Binding Priority, StringFormat='Priority {0}'}"
-                                               FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <Border Classes="profile-tile">
+                            <Grid ColumnDefinitions="4,*,Auto"
+                                  ColumnSpacing="10">
+                                <Border Grid.Column="0"
+                                        Background="#2196F3"
+                                        CornerRadius="2"
+                                        Margin="0,2,0,2" />
+                                <StackPanel Grid.Column="1"
+                                            Spacing="4">
+                                    <TextBlock Text="{Binding Name}"
+                                               FontSize="13"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock FontSize="11"
+                                               Foreground="#8A9AAE">
+                                        <Run Text="{Binding ProcessNames.Count, StringFormat='{}{0} app rule(s)'}" />
+                                        <Run Text=" · " />
+                                        <Run Text="{Binding UrlPatterns.Count, StringFormat='{}{0} URL rule(s)'}" />
+                                    </TextBlock>
                                 </StackPanel>
-                                <ToggleSwitch Grid.Column="1"
+                                <ToggleSwitch Grid.Column="2"
                                               IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                               Command="{Binding $parent[ListBox].((vm:ProfilesSectionViewModel)DataContext).ToggleProfileEnabledCommand}"
-                                              CommandParameter="{Binding}" />
+                                              CommandParameter="{Binding}"
+                                              VerticalAlignment="Center" />
                             </Grid>
                         </Border>
                     </DataTemplate>
@@ -41,212 +124,329 @@
             </ListBox>
 
             <Button Grid.Row="2"
-                    Content="New Profile"
+                    Content="+ New Profile"
                     Command="{Binding AddProfileCommand}"
+                    Padding="12,8"
                     Margin="0,12,0,0" />
         </Grid>
 
         <Border Grid.Column="2"
-                Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                CornerRadius="10"
-                Padding="18">
-            <ScrollViewer IsVisible="{Binding HasSelectedProfile}">
-                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="{Binding SelectedProfileDisplayName}" FontSize="20" FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding SelectedProfileSummary}"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <Border Grid.Column="1"
-                                Background="{DynamicResource ControlFillColorTertiaryBrush}"
-                                CornerRadius="999"
-                                Padding="10,6"
-                                VerticalAlignment="Center">
-                            <TextBlock Text="{Binding MatchStatusText}" FontSize="11" FontWeight="SemiBold" />
+                Classes="section-panel"
+                IsVisible="{Binding HasSelectedProfile}">
+            <Grid RowDefinitions="*,Auto">
+                <ScrollViewer Grid.Row="0"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="18,18,18,18"
+                                MaxWidth="940">
+                        <Border Classes="section-panel"
+                                Padding="18,16"
+                                Margin="0,0,0,18">
+                            <StackPanel>
+                                <TextBlock Text="Name"
+                                           Classes="field-label" />
+                                <TextBox Text="{Binding EditName}"
+                                         Margin="0,0,0,14" />
+
+                                <TextBlock Text="Apps"
+                                           Classes="field-label" />
+                                <ItemsControl ItemsSource="{Binding ProcessNameChips}"
+                                              Margin="0,0,0,6">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Classes="chip">
+                                                <StackPanel Orientation="Horizontal"
+                                                            Spacing="6">
+                                                    <TextBlock Text="{Binding}"
+                                                               FontSize="11" />
+                                                    <Button Content="×"
+                                                            Classes="chip-remove"
+                                                            Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveProcessNameChipCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBox Text="{Binding ProcessNameInput}"
+                                         PlaceholderText="Add process name and press Enter"
+                                         KeyDown="OnProcessNameKeyDown"
+                                         Margin="0,0,0,8" />
+                                <TextBlock Text="Enter process names and press Enter, or use Live Context for the current app."
+                                           Classes="page-subtitle"
+                                           Margin="0,0,0,14" />
+
+                                <TextBlock Text="URL Patterns"
+                                           Classes="field-label" />
+                                <ItemsControl ItemsSource="{Binding UrlPatternChips}"
+                                              Margin="0,0,0,6">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Classes="chip">
+                                                <StackPanel Orientation="Horizontal"
+                                                            Spacing="6">
+                                                    <TextBlock Text="{Binding}"
+                                                               FontSize="11" />
+                                                    <Button Content="×"
+                                                            Classes="chip-remove"
+                                                            Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveUrlPatternChipCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBox Text="{Binding UrlPatternInput}"
+                                         PlaceholderText="Add URL pattern and press Enter"
+                                         KeyDown="OnUrlPatternKeyDown"
+                                         Margin="0,0,0,8" />
+                                <TextBlock Text="Enter URL patterns and press Enter (e.g. slack.com, *.github.com)"
+                                           Classes="page-subtitle" />
+                            </StackPanel>
                         </Border>
-                    </Grid>
 
-                    <Border Grid.Row="1"
-                            Background="{DynamicResource ControlFillColorTertiaryBrush}"
-                            CornerRadius="10"
-                            Padding="12"
-                            Margin="0,16,0,0">
-                        <StackPanel Spacing="12">
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                <StackPanel Spacing="4">
-                                    <TextBlock Text="Current App" FontWeight="SemiBold" />
-                                    <TextBlock Text="{Binding CurrentProcessName}" />
-                                    <TextBlock Text="{Binding CurrentWindowTitle}"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                               TextWrapping="Wrap"
-                                               IsVisible="{Binding HasCurrentWindowTitle}" />
-                                </StackPanel>
-                                <Button Grid.Column="1"
-                                        Content="Use current app"
-                                        Command="{Binding AddCurrentProcessRuleCommand}"
-                                        IsVisible="{Binding HasCurrentProcess}"
-                                        VerticalAlignment="Center" />
-                            </Grid>
+                        <TextBlock Text="Overrides"
+                                   FontSize="14.5"
+                                   FontWeight="SemiBold"
+                                   Margin="0,0,0,8" />
 
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                <StackPanel Spacing="4">
-                                    <TextBlock Text="Current Domain" FontWeight="SemiBold" />
-                                    <TextBlock Text="{Binding CurrentUrlPattern}"
-                                               IsVisible="{Binding HasCurrentUrl}" />
-                                    <TextBlock Text="No browser URL available"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                               IsVisible="{Binding ShowNoBrowserUrlHint}" />
-                                </StackPanel>
-                                <Button Grid.Column="1"
-                                        Content="Use current domain"
-                                        Command="{Binding AddCurrentUrlRuleCommand}"
-                                        IsVisible="{Binding HasCurrentUrl}"
-                                        VerticalAlignment="Center" />
-                            </Grid>
-
-                            <Button Content="Open Live Context Window"
-                                    HorizontalAlignment="Left"
-                                    Command="{Binding OpenLiveContextWindowCommand}" />
-                        </StackPanel>
-                    </Border>
-
-                    <TextBlock Grid.Row="2" Text="Name" Margin="0,16,0,6" />
-                    <TextBox Grid.Row="3" Text="{Binding EditName}" />
-
-                    <TextBlock Grid.Row="4" Text="Process Names" Margin="0,16,0,6" />
-                    <ItemsControl Grid.Row="5" ItemsSource="{Binding ProcessNameChips}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <WrapPanel />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="{DynamicResource ControlFillColorTertiaryBrush}"
-                                        CornerRadius="12" Padding="8,4" Margin="0,0,6,6">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <TextBlock Text="{Binding}" FontSize="11" />
-                                        <Button Content="×"
-                                                Padding="0"
-                                                Width="18"
-                                                Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveProcessNameChipCommand}"
-                                                CommandParameter="{Binding}" />
-                                    </StackPanel>
+                        <Border Classes="section-panel"
+                                Margin="0,0,0,18">
+                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                                <Border Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <TextBlock Text="Language"
+                                                   Classes="row-label"
+                                                   VerticalAlignment="Center" />
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding LanguageChoices}"
+                                                  SelectedItem="{Binding EditLanguage}" />
+                                    </Grid>
                                 </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                                <Border Grid.Row="1" Background="#16FFFFFF" />
 
-                    <Grid Grid.Row="6" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <TextBox Text="{Binding ProcessNameInput}" PlaceholderText="Add process name" />
-                        <Button Grid.Column="1" Content="Add" Command="{Binding AddProcessNameChipCommand}" />
-                    </Grid>
-
-                    <TextBlock Grid.Row="7" Text="URL Patterns" Margin="0,16,0,6" />
-                    <ItemsControl Grid.Row="8" ItemsSource="{Binding UrlPatternChips}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <WrapPanel />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="{DynamicResource ControlFillColorTertiaryBrush}"
-                                        CornerRadius="12" Padding="8,4" Margin="0,0,6,6">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <TextBlock Text="{Binding}" FontSize="11" />
-                                        <Button Content="×"
-                                                Padding="0"
-                                                Width="18"
-                                                Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveUrlPatternChipCommand}"
-                                                CommandParameter="{Binding}" />
-                                    </StackPanel>
+                                <Border Grid.Row="2" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Task"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Choose when this profile should transcribe normally or translate instead."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding TaskChoices}"
+                                                  SelectedItem="{Binding EditTask}"
+                                                  VerticalAlignment="Center" />
+                                    </Grid>
                                 </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                                <Border Grid.Row="3" Background="#16FFFFFF" />
 
-                    <Grid Grid.Row="9" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <TextBox Text="{Binding UrlPatternInput}" PlaceholderText="Add URL pattern" />
-                        <Button Grid.Column="1" Content="Add" Command="{Binding AddUrlPatternChipCommand}" />
-                    </Grid>
+                                <Border Grid.Row="4" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Translation"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Overrides the global translation setting for this profile."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding TranslationTargetOptions}"
+                                                  SelectedItem="{Binding SelectedTranslationTargetOption}"
+                                                  VerticalAlignment="Center">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="models:TranslationTargetOption">
+                                                    <TextBlock Text="{Binding DisplayName}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="5" Background="#16FFFFFF" />
 
-                    <Grid Grid.Row="10" ColumnDefinitions="*,*,*" ColumnSpacing="12" Margin="0,16,0,0">
-                        <StackPanel>
-                            <TextBlock Text="Language" Margin="0,0,0,6" />
-                            <ComboBox ItemsSource="{Binding LanguageChoices}" SelectedItem="{Binding EditLanguage}" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Task" Margin="0,0,0,6" />
-                            <ComboBox ItemsSource="{Binding TaskChoices}" SelectedItem="{Binding EditTask}" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="2">
-                            <TextBlock Text="Priority" Margin="0,0,0,6" />
-                            <NumericUpDown Minimum="-100" Maximum="100" Value="{Binding EditPriority}" />
-                        </StackPanel>
-                    </Grid>
+                                <Border Grid.Row="6" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Model"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Override the global transcription model for this profile."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding ModelOptions}"
+                                                  SelectedItem="{Binding SelectedModelOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileModelOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="7" Background="#16FFFFFF" />
 
-                    <Grid Grid.Row="11" ColumnDefinitions="*,*,*,*" ColumnSpacing="12" Margin="0,16,0,0">
-                        <StackPanel>
-                            <TextBlock Text="Transcription Model" Margin="0,0,0,6" />
-                            <ComboBox ItemsSource="{Binding ModelOptions}"
-                                      SelectedValue="{Binding EditModelId}"
-                                      SelectedValueBinding="{Binding Value}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:ProfileModelOption">
-                                        <TextBlock Text="{Binding Label}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Prompt Action" Margin="0,0,0,6" />
-                            <ComboBox ItemsSource="{Binding PromptActionOptions}"
-                                      SelectedValue="{Binding EditPromptActionId}"
-                                      SelectedValueBinding="{Binding Value}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:PromptActionOption">
-                                        <TextBlock Text="{Binding Label}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2">
-                            <TextBlock Text="Translation Target" Margin="0,0,0,6" />
-                            <ComboBox ItemsSource="{Binding TranslationTargetOptions}"
-                                      SelectedItem="{Binding SelectedTranslationTargetOption}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="models:TranslationTargetOption">
-                                        <TextBlock Text="{Binding DisplayName}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </StackPanel>
-                        <StackPanel Grid.Column="3">
-                            <TextBlock Text="Whisper Mode" Margin="0,0,0,6" />
-                            <ComboBox ItemsSource="{Binding WhisperModeOptions}"
-                                      SelectedItem="{Binding SelectedWhisperModeOption}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:NullableBooleanOption">
-                                        <TextBlock Text="{Binding Label}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </StackPanel>
-                    </Grid>
+                                <Border Grid.Row="8" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Prompt Action"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Run a prompt action after transcription for this profile."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding PromptActionOptions}"
+                                                  SelectedItem="{Binding SelectedPromptActionOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:PromptActionOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="9" Background="#16FFFFFF" />
 
-                    <StackPanel Grid.Row="12" Orientation="Horizontal" Spacing="12" Margin="0,16,0,0">
-                        <CheckBox Content="Enabled" IsChecked="{Binding EditIsEnabled}" />
+                                <Border Grid.Row="10" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Whisper Mode (AGC)"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Override the global whisper mode behavior for this profile."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding WhisperModeOptions}"
+                                                  SelectedItem="{Binding SelectedWhisperModeOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:NullableBooleanOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="11" Background="#16FFFFFF" />
+
+                                <Border Grid.Row="12" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,150"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Priority"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Higher priority profiles win when multiple rules match."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <NumericUpDown Grid.Column="1"
+                                                       Minimum="0"
+                                                       Maximum="999"
+                                                       Value="{Binding EditPriority}" />
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Text="Activation"
+                                   FontSize="14.5"
+                                   FontWeight="SemiBold"
+                                   Margin="0,0,0,8" />
+
+                        <Border Classes="section-panel"
+                                Margin="0,0,0,18">
+                            <Border Padding="18,14">
+                                <Grid ColumnDefinitions="*,Auto,Auto"
+                                      ColumnSpacing="14">
+                                    <TextBlock Text="Enabled"
+                                               Classes="row-label"
+                                               VerticalAlignment="Center" />
+                                    <ToggleSwitch Grid.Column="1"
+                                                  IsChecked="{Binding EditIsEnabled}"
+                                                  VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding EditIsEnabledStatusText}"
+                                               VerticalAlignment="Center"
+                                               FontSize="12"
+                                               FontWeight="SemiBold" />
+                                </Grid>
+                            </Border>
+                        </Border>
                     </StackPanel>
+                </ScrollViewer>
 
-                    <StackPanel Grid.Row="13" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,24,0,0">
-                        <Button Content="Duplicate" Command="{Binding DuplicateProfileCommand}" />
-                        <Button Content="Delete" Command="{Binding DeleteSelectedProfileCommand}" />
-                        <Button Content="Save" Command="{Binding SaveProfileCommand}" />
+                <Border Grid.Row="1"
+                        Background="#141D26"
+                        BorderBrush="#1AFFFFFF"
+                        BorderThickness="1,0,0,0"
+                        Padding="18,16">
+                    <Grid ColumnDefinitions="*,Auto,Auto,Auto"
+                          ColumnSpacing="10">
+                        <TextBlock Text="Save once after changing rules, overrides, or activation."
+                                   Classes="page-subtitle"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="1"
+                                Content="Delete"
+                                Click="OnDeleteProfile"
+                                Padding="12,8" />
+                        <Button Grid.Column="2"
+                                Content="Open live context"
+                                Command="{Binding OpenLiveContextWindowCommand}"
+                                Padding="12,8" />
+                        <Button Grid.Column="3"
+                                Content="Save"
+                                Command="{Binding SaveProfileCommand}"
+                                Padding="16,8"
+                                Background="#2196F3"
+                                BorderBrush="#2196F3"
+                                Foreground="White" />
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+
+        <Border Grid.Column="2"
+                Classes="section-panel"
+                IsVisible="{Binding HasSelectedProfile, Converter={x:Static local:InverseBoolConverter.Instance}}">
+            <Grid>
+                <Border Background="#16202B"
+                        BorderBrush="#1AFFFFFF"
+                        BorderThickness="1"
+                        CornerRadius="14"
+                        Padding="20,18"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Width="312">
+                    <StackPanel>
+                        <TextBlock Text="Select Profile"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,8" />
+                        <TextBlock Text="Select a profile from the list or create a new one"
+                                   Classes="page-subtitle"
+                                   TextAlignment="Center" />
                     </StackPanel>
-                </Grid>
-            </ScrollViewer>
+                </Border>
+            </Grid>
         </Border>
     </Grid>
 </UserControl>

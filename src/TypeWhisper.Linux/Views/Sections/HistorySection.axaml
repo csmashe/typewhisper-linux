@@ -270,7 +270,8 @@
                                                                     IsVisible="{Binding HasSessionAudio}" />
                                                             <Button Classes="link-button"
                                                                     Content="Delete"
-                                                                    Command="{Binding DeleteCommand}"
+                                                                    Click="OnDeleteRecord"
+                                                                    Tag="{Binding}"
                                                                     Foreground="#F06A6A" />
                                                         </StackPanel>
                                                     </StackPanel>

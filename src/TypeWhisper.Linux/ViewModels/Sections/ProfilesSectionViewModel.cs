@@ -74,6 +74,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public bool ShowNoBrowserUrlHint => !HasCurrentUrl;
     public bool HasCurrentWindowTitle => !string.IsNullOrWhiteSpace(CurrentWindowTitle) && CurrentWindowTitle != "-";
     public string CurrentUrlPattern => TryExtractUrlPattern(CurrentUrl);
+    public string EditIsEnabledStatusText => EditIsEnabled ? "On" : "Off";
     public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; } =
     [
         new(null, "Use global default"),
@@ -91,6 +92,36 @@ public partial class ProfilesSectionViewModel : ObservableObject
                 return;
 
             EditTranslationTarget = code;
+            OnPropertyChanged();
+        }
+    }
+
+    public ProfileModelOption? SelectedModelOption
+    {
+        get => ModelOptions.FirstOrDefault(option =>
+            string.Equals(option.Value, EditModelId, StringComparison.Ordinal));
+        set
+        {
+            var selected = value?.Value;
+            if (string.Equals(selected, EditModelId, StringComparison.Ordinal))
+                return;
+
+            EditModelId = selected;
+            OnPropertyChanged();
+        }
+    }
+
+    public PromptActionOption? SelectedPromptActionOption
+    {
+        get => PromptActionOptions.FirstOrDefault(option =>
+            string.Equals(option.Value, EditPromptActionId, StringComparison.Ordinal));
+        set
+        {
+            var selected = value?.Value;
+            if (string.Equals(selected, EditPromptActionId, StringComparison.Ordinal))
+                return;
+
+            EditPromptActionId = selected;
             OnPropertyChanged();
         }
     }
@@ -179,8 +210,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
     partial void OnEditTranslationTargetChanged(string? value) =>
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
 
+    partial void OnEditModelIdChanged(string? value) =>
+        OnPropertyChanged(nameof(SelectedModelOption));
+
+    partial void OnEditPromptActionIdChanged(string? value) =>
+        OnPropertyChanged(nameof(SelectedPromptActionOption));
+
     partial void OnEditWhisperModeOverrideChanged(bool? value) =>
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
+
+    partial void OnEditIsEnabledChanged(bool value) =>
+        OnPropertyChanged(nameof(EditIsEnabledStatusText));
 
     [RelayCommand]
     private void AddProfile()
@@ -459,6 +499,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedProfileDisplayName));
         OnPropertyChanged(nameof(SelectedProfileSummary));
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
+        OnPropertyChanged(nameof(SelectedModelOption));
+        OnPropertyChanged(nameof(SelectedPromptActionOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(MatchStatusText));
         OnPropertyChanged(nameof(ShowLiveContextProfileHint));
@@ -467,6 +509,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowNoBrowserUrlHint));
         OnPropertyChanged(nameof(HasCurrentWindowTitle));
         OnPropertyChanged(nameof(CurrentUrlPattern));
+        OnPropertyChanged(nameof(EditIsEnabledStatusText));
     }
 
     private static string TryExtractUrlPattern(string? rawUrl)
