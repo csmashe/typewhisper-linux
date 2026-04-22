@@ -50,7 +50,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<ModelManagerService>();
 
         // Linux-native platform services
-        services.AddSingleton<IActiveWindowService, ActiveWindowService>();
+        services.AddSingleton<ActiveWindowService>();
+        services.AddSingleton<IActiveWindowService>(sp => sp.GetRequiredService<ActiveWindowService>());
         services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<AudioRecordingService>();
@@ -67,6 +68,7 @@ internal static class ServiceRegistrations
         // ViewModels — section VMs are singletons so state stays consistent
         // across the sidebar nav and the onboarding wizard.
         services.AddSingleton<MainWindowViewModel>();
+        services.AddSingleton<DictationOverlayViewModel>();
         services.AddSingleton<GeneralSectionViewModel>();
         services.AddSingleton<ShortcutsSectionViewModel>();
         services.AddSingleton<AudioSectionViewModel>();
@@ -84,6 +86,7 @@ internal static class ServiceRegistrations
 
         // Windows
         services.AddSingleton<MainWindow>();
+        services.AddSingleton<DictationOverlayWindow>();
         services.AddTransient<PromptPaletteWindow>();
         services.AddTransient<WelcomeWizard>();
     }

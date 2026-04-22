@@ -161,23 +161,26 @@ Result:
 - remaining risk is primarily manual browser/compositor validation, not a known missing hookup
 - Phase 10 is complete for now and no longer part of the active parity backlog
 
+### 9. Overlay-style dictation presentation is now implemented on Linux
+
+Linux now supports a dedicated Windows-style dictation overlay flow instead of relying only on the main shell, including:
+
+- a separate Linux overlay window for in-session dictation feedback
+- recording, processing, and transient completion/error presentation in that surface
+- active-profile and active-app display in the overlay
+- live recording timer and audio-level presentation during dictation
+- overlay positioning through the shared `OverlayPosition` setting
+- X11/XWayland focus handoff back to the original target window before text insertion
+
+Result:
+
+- Linux dictation now has a dedicated in-session presentation layer much closer to the Windows model
+- the overlay no longer regresses normal text insertion in the validated Linux environment
+- Phase 11 is complete and no longer part of the active parity backlog
+
 ## Remaining Gaps
 
-### 1. Dictation presentation still differs from the Windows overlay model
-
-Windows has a dedicated floating overlay-style dictation presentation. Linux currently uses the main shell and section viewmodels for status.
-
-Still missing on Linux:
-
-- overlay presentation model parity
-- active-profile/status overlay behavior
-- closer visual and interaction parity during recording/processing
-
-Impact:
-
-- Linux runtime behavior is hooked up, but it does not yet look and feel the same while dictating
-
-### 2. Partial/live transcript event parity is still incomplete
+### 1. Partial/live transcript event parity is still incomplete
 
 Linux now publishes the main lifecycle events, but it still does not match Windows for partial transcript / streaming-style updates.
 
@@ -193,22 +196,6 @@ Impact:
 ## Updated Execution Strategy
 
 The foundational hookup work is complete. Remaining work should now be done in parity order: user-visible Windows behavior first, then optional deeper UX polish.
-
-### Phase 11. Port overlay-style dictation presentation
-
-Primary goal:
-
-- make Linux dictation look and feel closer to the Windows recording experience
-
-Likely work:
-
-- design a Linux overlay shell/presentation model
-- expose recording, processing, feedback, and active-profile state in that surface
-- align timing and feedback behavior with Windows where practical
-
-Acceptance criteria:
-
-- Linux dictation provides a dedicated in-session presentation layer instead of only main-window status updates
 
 ### Phase 12. Add partial transcript / live update parity
 
@@ -230,9 +217,7 @@ Acceptance criteria:
 
 These are the remaining GitHub issues implied by the current state:
 
-1. Port Windows live profile-context helpers to Linux
-2. Design and implement Linux overlay-style dictation presentation
-3. Publish Linux partial transcription update events
+1. Publish Linux partial transcription update events
 
 ## Verification
 
@@ -247,10 +232,9 @@ dotnet build TypeWhisper.slnx -nologo
 
 ### Remaining focused validation
 
-1. Verify current-app/current-URL helpers create working profiles without manual entry.
-2. Verify overlay/session feedback on Linux matches the Windows recording lifecycle closely.
-3. Verify partial transcript events are emitted and consumed correctly by Linux plugins.
+1. Verify overlay/session feedback on Linux remains stable across target desktop environments and compositors.
+2. Verify partial transcript events are emitted and consumed correctly by Linux plugins.
 
 ## Recommendation
 
-The next highest-value work is `profile live-context tooling`, then `overlay presentation`, then `partial transcript updates`. Those are the most visible remaining places where the Windows app still does more than the Linux port.
+The next highest-value work is `partial transcript updates`. That is now the clearest remaining runtime parity gap between the Windows app and the Linux port.

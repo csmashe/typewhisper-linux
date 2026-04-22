@@ -74,6 +74,9 @@ public partial class App : Application
             dictation.Initialize();
             tray.DictationToggleRequested += (_, _) => _ = dictation.ToggleAsync();
 
+            var overlay = services.GetRequiredService<Views.DictationOverlayWindow>();
+            overlay.Initialize();
+
             // Sync the hotkey service's mode + binding with AppSettings. The
             // handler re-runs on every settings change so flipping the mode
             // in Settings → Shortcuts takes effect without a restart.

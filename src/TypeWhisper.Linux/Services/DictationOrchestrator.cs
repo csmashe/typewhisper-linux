@@ -29,7 +29,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly ModelManagerService _models;
     private readonly IHistoryService _history;
     private readonly ISettingsService _settings;
-    private readonly IActiveWindowService _activeWindow;
+    private readonly ActiveWindowService _activeWindow;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
     private readonly IDictionaryService _dictionary;
@@ -43,7 +43,9 @@ public sealed class DictationOrchestrator : IDisposable
     private string? _recordingAppProcess;
     private string? _recordingAppTitle;
     private string? _recordingAppUrl;
+    private string? _recordingWindowId;
     private Profile? _recordingProfile;
+    private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
     private bool _initialized;
     private bool _disposed;
 
@@ -51,6 +53,7 @@ public sealed class DictationOrchestrator : IDisposable
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? TranscriptionCompleted;
     public event EventHandler<string>? StatusMessage;
+    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
     public bool IsRecording => _audio.IsRecording;
 
@@ -63,7 +66,7 @@ public sealed class DictationOrchestrator : IDisposable
         ModelManagerService models,
         IHistoryService history,
         ISettingsService settings,
-        IActiveWindowService activeWindow,
+        ActiveWindowService activeWindow,
         IProfileService profiles,
         IPromptActionService promptActions,
         IDictionaryService dictionary,
@@ -129,6 +132,18 @@ public sealed class DictationOrchestrator : IDisposable
             if (_settings.Current.PauseMediaDuringRecording)
                 _mediaPause.PauseMedia();
             RecordingStateChanged?.Invoke(this, true);
+            SetOverlayState(state => state with
+            {
+                IsOverlayVisible = true,
+                ShowFeedback = false,
+                FeedbackIsError = false,
+                FeedbackText = null,
+                IsRecording = true,
+                StatusText = "Recording… press the hotkey again to stop.",
+                ActiveProfileName = null,
+                ActiveAppName = null,
+                SessionStartedAtUtc = DateTime.UtcNow
+            });
         }
         finally
         {
@@ -143,6 +158,7 @@ public sealed class DictationOrchestrator : IDisposable
         _recordingAppProcess = null;
         _recordingAppTitle = null;
         _recordingAppUrl = null;
+        _recordingWindowId = _activeWindow.GetActiveWindowId();
         _recordingProfile = null;
         _ = Task.Run(() =>
         {
@@ -164,6 +180,11 @@ public sealed class DictationOrchestrator : IDisposable
             }
             finally
             {
+                SetOverlayState(state => state with
+                {
+                    ActiveProfileName = _recordingProfile?.Name,
+                    ActiveAppName = _recordingAppTitle
+                });
                 _models.PluginManager.EventBus.Publish(new RecordingStartedEvent
                 {
                     AppName = _recordingAppTitle,
@@ -184,6 +205,16 @@ public sealed class DictationOrchestrator : IDisposable
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
             RecordingStateChanged?.Invoke(this, false);
+            SetOverlayState(state => state with
+            {
+                IsOverlayVisible = true,
+                ShowFeedback = false,
+                FeedbackText = null,
+                FeedbackIsError = false,
+                IsRecording = false,
+                StatusText = "Processing…",
+                SessionStartedAtUtc = null
+            });
             var duration = ComputeDurationSeconds(wav);
             _models.PluginManager.EventBus.Publish(new RecordingStoppedEvent
             {
@@ -215,14 +246,16 @@ public sealed class DictationOrchestrator : IDisposable
                 var loaded = await _models.EnsureModelLoadedAsync(effectiveModelId);
                 if (!loaded)
                 {
-                    StatusMessage?.Invoke(this, $"Configured model '{effectiveModelId}' is not available.");
+                    ReportStatus($"Configured model '{effectiveModelId}' is not available.");
+                    ShowFeedback("Model unavailable.", isError: true);
                     return;
                 }
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}");
-                StatusMessage?.Invoke(this, $"Failed to load configured model: {ex.Message}");
+                ReportStatus($"Failed to load configured model: {ex.Message}");
+                ShowFeedback("Model load failed.", isError: true);
                 return;
             }
         }
@@ -230,11 +263,12 @@ public sealed class DictationOrchestrator : IDisposable
         var plugin = _models.ActiveTranscriptionPlugin;
         if (plugin is null)
         {
-            StatusMessage?.Invoke(this, "No transcription model loaded. WAV saved for review.");
+            ReportStatus("No transcription model loaded. WAV saved for review.");
+            ShowFeedback("No transcription model loaded.", isError: true);
             return;
         }
 
-        StatusMessage?.Invoke(this, $"Transcribing via {plugin.ProviderDisplayName}…");
+        ReportStatus($"Transcribing via {plugin.ProviderDisplayName}…");
 
         try
         {
@@ -252,7 +286,8 @@ public sealed class DictationOrchestrator : IDisposable
             var rawText = result?.Text?.Trim();
             if (string.IsNullOrEmpty(rawText))
             {
-                StatusMessage?.Invoke(this, "Transcription returned no text.");
+                ReportStatus("Transcription returned no text.");
+                ShowFeedback("Transcription returned no text.", isError: true);
                 return;
             }
 
@@ -297,7 +332,7 @@ public sealed class DictationOrchestrator : IDisposable
                     PluginPostProcessors = pluginProcessors,
                     StatusCallback = status =>
                     {
-                        StatusMessage?.Invoke(this, status == "AI"
+                        ReportStatus(status == "AI"
                             ? "Processing prompt action…"
                             : $"Processing {status}…");
                         return Task.CompletedTask;
@@ -324,17 +359,21 @@ public sealed class DictationOrchestrator : IDisposable
 
             var actionPlugin = ResolveActionPlugin(promptAction);
             var insertion = actionPlugin is null
-                ? await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste)
+                ? await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste, _recordingWindowId)
                 : await ExecuteActionPluginAsync(actionPlugin, finalText, rawText, result?.DetectedLanguage);
 
-            StatusMessage?.Invoke(this, insertion switch
+            var completionMessage = insertion switch
             {
                 InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
                 InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
                 InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.Failed => "Text insertion failed — is xdotool installed?",
                 _ => "Done.",
-            });
+            };
+            ReportStatus(completionMessage);
+            ShowFeedback(
+                insertion is InsertionResult.Failed ? completionMessage : "Dictation completed.",
+                isError: insertion is InsertionResult.Failed);
 
             if (insertion is InsertionResult.Pasted or InsertionResult.CopiedToClipboard)
             {
@@ -358,7 +397,8 @@ public sealed class DictationOrchestrator : IDisposable
                 ModelId = plugin.SelectedModelId,
                 AppName = _recordingAppTitle
             });
-            StatusMessage?.Invoke(this, $"Transcription failed: {ex.Message}");
+            ReportStatus($"Transcription failed: {ex.Message}");
+            ShowFeedback("Transcription failed.", isError: true);
         }
         finally
         {
@@ -410,7 +450,7 @@ public sealed class DictationOrchestrator : IDisposable
         });
 
         if (!string.IsNullOrWhiteSpace(result.Message))
-            StatusMessage?.Invoke(this, result.Message);
+            ReportStatus(result.Message);
 
         return InsertionResult.ActionHandled;
     }
@@ -462,6 +502,39 @@ public sealed class DictationOrchestrator : IDisposable
         var path = Path.Combine(TypeWhisperEnvironment.AudioPath, name);
         File.WriteAllBytes(path, wav);
         return path;
+    }
+
+    private void ReportStatus(string message)
+    {
+        StatusMessage?.Invoke(this, message);
+        SetOverlayState(state => state with
+        {
+            IsOverlayVisible = true,
+            StatusText = message,
+            ShowFeedback = false,
+            FeedbackText = null
+        });
+    }
+
+    private void ShowFeedback(string text, bool isError)
+    {
+        SetOverlayState(state => state with
+        {
+            IsOverlayVisible = false,
+            ShowFeedback = true,
+            FeedbackIsError = isError,
+            FeedbackText = text,
+            IsRecording = false,
+            ActiveProfileName = null,
+            ActiveAppName = null,
+            SessionStartedAtUtc = null
+        });
+    }
+
+    private void SetOverlayState(Func<DictationOverlayState, DictationOverlayState> updater)
+    {
+        _overlayState = updater(_overlayState);
+        OverlayStateChanged?.Invoke(this, _overlayState);
     }
 
     public void Dispose()

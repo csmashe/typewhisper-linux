@@ -131,6 +131,22 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
+    public string? GetActiveWindowId()
+    {
+        if (!IsXdotoolAvailable) return null;
+        var windowId = RunXdotool("getactivewindow");
+        return string.IsNullOrWhiteSpace(windowId) ? null : windowId;
+    }
+
+    public bool TryActivateWindow(string? windowId)
+    {
+        if (string.IsNullOrWhiteSpace(windowId) || !IsXdotoolAvailable)
+            return false;
+
+        var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId}", out _);
+        return exitCode == 0;
+    }
+
     private static string? TryCaptureBrowserUrl(string windowId)
     {
         string? previousClipboard = null;

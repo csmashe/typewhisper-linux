@@ -21,16 +21,17 @@ public enum InsertionResult
 /// </summary>
 public sealed class TextInsertionService
 {
-    public async Task<InsertionResult> InsertTextAsync(string text, bool autoPaste = true)
+    public async Task<InsertionResult> InsertTextAsync(
+        string text,
+        bool autoPaste = true,
+        string? targetWindowId = null)
     {
         if (string.IsNullOrEmpty(text))
             return InsertionResult.NoText;
 
         if (autoPaste)
         {
-            // Let the hotkey-release UI settle before typing.
-            await Task.Delay(80);
-            return await TryXdotoolTypeAsync(text);
+            return await TryXdotoolTypeAsync(text, targetWindowId);
         }
 
         return await TryCopyToClipboardAsync(text);
@@ -52,7 +53,7 @@ public sealed class TextInsertionService
         return selectedText;
     }
 
-    private static async Task<InsertionResult> TryXdotoolTypeAsync(string text)
+    private static async Task<InsertionResult> TryXdotoolTypeAsync(string text, string? targetWindowId)
     {
         try
         {
@@ -61,13 +62,26 @@ public sealed class TextInsertionService
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
-            psi.ArgumentList.Add("type");
+            if (!string.IsNullOrWhiteSpace(targetWindowId))
+            {
+                psi.ArgumentList.Add("windowactivate");
+                psi.ArgumentList.Add("--sync");
+                psi.ArgumentList.Add(targetWindowId);
+                psi.ArgumentList.Add("type");
+            }
+            else
+            {
+                psi.ArgumentList.Add("type");
+            }
             psi.ArgumentList.Add("--clearmodifiers");
             psi.ArgumentList.Add("--delay");
             psi.ArgumentList.Add("5");
             psi.ArgumentList.Add("--");
             psi.ArgumentList.Add(text);
 
+            // Let the hotkey-release and overlay UI settle before re-focusing
+            // the original target and typing into it.
+            await Task.Delay(80);
             using var p = Process.Start(psi);
             if (p is null) return InsertionResult.Failed;
             await p.WaitForExitAsync();
