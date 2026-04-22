@@ -3,6 +3,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        xmlns:local="using:TypeWhisper.Linux"
         xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
         xmlns:sections="using:TypeWhisper.Linux.Views.Sections"
         mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="760"
@@ -11,69 +12,113 @@
         Title="TypeWhisper"
         Icon="avares://typewhisper/Resources/typewhisper.ico"
         Width="1200" Height="780"
-        RequestedThemeVariant="Dark">
+        RequestedThemeVariant="Dark"
+        Background="#0E131B">
     <Window.Resources>
         <DataTemplate x:Key="SectionTemplate_Dashboard" DataType="vms:DashboardSectionViewModel">
             <sections:DashboardSection />
         </DataTemplate>
     </Window.Resources>
 
-    <Grid ColumnDefinitions="240,*" RowDefinitions="Auto,*">
-        <!-- Header strip (spans both columns) -->
-        <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnDefinitions="Auto,*,Auto" Margin="16,12">
-            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                <TextBlock Text="{Binding AppTitle}" FontSize="16" FontWeight="SemiBold" />
-                <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                        CornerRadius="3" Padding="6,1" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding VersionLabel}" FontSize="10"
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                </Border>
-            </StackPanel>
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
-                <Button Content="Open Wizard" Command="{Binding OpenWizardCommand}" />
-            </StackPanel>
-        </Grid>
+    <Grid ColumnDefinitions="272,1,*" RowDefinitions="*">
+        <Grid Grid.Column="0" Margin="18,18,0,18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
 
-        <!-- Sidebar -->
-        <Border Grid.Row="1" Grid.Column="0"
-                Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                BorderThickness="0,1,1,0"
-                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-            <ScrollViewer>
-                <ListBox ItemsSource="{Binding NavItems}"
-                         SelectedItem="{Binding SelectedItem}"
-                         Background="Transparent"
-                         BorderThickness="0"
-                         Padding="0,6">
-                    <ListBox.Styles>
-                        <!-- Headers render as non-selectable labels -->
-                        <Style Selector="ListBoxItem">
-                            <Setter Property="Padding" Value="16,8" />
-                            <Setter Property="CornerRadius" Value="0" />
-                        </Style>
-                    </ListBox.Styles>
-                    <ListBox.ItemTemplate>
+            <DockPanel Grid.Row="0" Margin="2,8,14,14">
+                <TextBlock Text="{Binding AppTitle}"
+                           FontSize="15"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                <TextBlock DockPanel.Dock="Right"
+                           Text="{Binding VersionLabel}"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </DockPanel>
+
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Margin="0,0,14,0">
+                <ItemsControl ItemsSource="{Binding NavItems}">
+                    <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:NavItem">
                             <Grid>
                                 <TextBlock Text="{Binding Label}"
-                                           FontSize="10" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                           IsVisible="{Binding IsHeader}"
-                                           Margin="0,10,0,0" />
-                                <StackPanel Orientation="Horizontal" Spacing="8"
-                                            IsVisible="{Binding !IsHeader}">
-                                    <TextBlock Text="{Binding Icon}" FontSize="14" VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
-                                </StackPanel>
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           Foreground="#7D8796"
+                                           Margin="2,14,0,8"
+                                           IsVisible="{Binding IsHeader}"/>
+
+                                <Button IsVisible="{Binding !IsHeader}"
+                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).NavigateToItemCommand}"
+                                        CommandParameter="{Binding}"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        HorizontalContentAlignment="Stretch"
+                                        Padding="0"
+                                        MinHeight="0">
+                                    <Button.Styles>
+                                        <Style Selector="Button">
+                                            <Setter Property="Foreground" Value="#D7DEE8"/>
+                                        </Style>
+                                        <Style Selector="Button:pointerover">
+                                            <Setter Property="Foreground" Value="White"/>
+                                        </Style>
+                                    </Button.Styles>
+                                    <Border CornerRadius="6"
+                                            Padding="12,9"
+                                            Background="{Binding IsSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1C2735|False=Transparent'}"
+                                            BorderBrush="{Binding IsSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2A3C55|False=Transparent'}"
+                                            BorderThickness="1">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                            <TextBlock Text="{Binding Icon}"
+                                                       FontSize="13"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding Label}"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="13"/>
+                                        </Grid>
+                                    </Border>
+                                </Button>
                             </Grid>
                         </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </ScrollViewer>
-        </Border>
+        </Grid>
 
-        <!-- Content area — bind CurrentSection to the right view via DataTemplates -->
-        <ContentControl Grid.Row="1" Grid.Column="1" Content="{Binding CurrentSection}">
+        <Border Grid.Column="1" Background="#283644" Margin="0,18,0,18"/>
+
+        <Grid Grid.Column="2" Margin="0,18,18,18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="52"/>
+                <RowDefinition Height="1"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="28,0,28,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Content="Open Wizard"
+                            Command="{Binding OpenWizardCommand}"/>
+                </StackPanel>
+            </Grid>
+
+            <Border Grid.Row="1" Background="#283644"/>
+
+            <!-- Content area — bind CurrentSection to the right view via DataTemplates -->
+            <ContentControl Grid.Row="2" Content="{Binding CurrentSection}">
             <ContentControl.DataTemplates>
                 <DataTemplate DataType="vms:DashboardSectionViewModel">
                     <sections:DashboardSection />
@@ -115,6 +160,7 @@
                     <sections:AboutSection />
                 </DataTemplate>
             </ContentControl.DataTemplates>
-        </ContentControl>
+            </ContentControl>
+        </Grid>
     </Grid>
 </Window>
