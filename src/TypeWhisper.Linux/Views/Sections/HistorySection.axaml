@@ -3,55 +3,288 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              x:Class="TypeWhisper.Linux.Views.Sections.HistorySection"
              x:DataType="vm:HistorySectionViewModel">
-    <DockPanel Margin="16" LastChildFill="True">
-        <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
-            <TextBlock Text="History" FontSize="20" FontWeight="SemiBold" />
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBox Width="320" Text="{Binding SearchQuery}" PlaceholderText="Search transcriptions…" />
-                <Button Content="Clear all" Command="{Binding ClearAllCommand}" />
-                <TextBlock Text="{Binding Summary}" VerticalAlignment="Center" FontSize="11"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-            </StackPanel>
-        </StackPanel>
+    <UserControl.Styles>
+        <Style Selector="TextBlock.section-header">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="TextBlock.label">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#7D8796" />
+        </Style>
+        <Style Selector="Border.timeline-card">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Padding" Value="13,11" />
+        </Style>
+        <Style Selector="Border.badge">
+            <Setter Property="Background" Value="#1B2430" />
+            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="7,2" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+        </Style>
+        <Style Selector="Button.link-button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="#8FC0FF" />
+        </Style>
+        <Style Selector="Button.card-toggle">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+    </UserControl.Styles>
 
-        <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="4">
-            <ScrollViewer>
-                <ItemsControl ItemsSource="{Binding Records}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:HistoryRecordRow">
-                            <Border Padding="12,10" BorderThickness="0,0,0,1"
-                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                <Grid ColumnDefinitions="*,Auto,Auto">
-                                    <StackPanel Grid.Column="0" Spacing="3">
-                                        <TextBlock Text="{Binding Record.FinalText}" TextWrapping="Wrap" />
-                                        <StackPanel Orientation="Horizontal" Spacing="12">
-                                            <TextBlock Text="{Binding Record.Timestamp, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}"
-                                                       FontSize="10"
-                                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                                            <TextBlock Text="{Binding Record.AppName}" FontSize="10"
-                                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                                       IsVisible="{Binding Record.AppName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            <TextBlock Text="{Binding Record.WordCount, StringFormat='{}{0} words'}"
-                                                       FontSize="10"
-                                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                                        </StackPanel>
-                                    </StackPanel>
-                                    <Button Grid.Column="1"
-                                            Content="{Binding PlaybackButtonText}"
-                                            IsVisible="{Binding HasSessionAudio}"
-                                            Command="{Binding $parent[ItemsControl].((vm:HistorySectionViewModel)DataContext).TogglePlaybackCommand}"
-                                            CommandParameter="{Binding}"
-                                            Margin="0,0,8,0" />
-                                    <Button Grid.Column="2" Content="Delete"
-                                            Command="{Binding $parent[ItemsControl].((vm:HistorySectionViewModel)DataContext).DeleteRecordCommand}"
-                                            CommandParameter="{Binding}" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
+    <DockPanel Margin="28">
+        <StackPanel HorizontalAlignment="Stretch"
+                    MaxWidth="1080">
+            <TextBlock Text="History"
+                       Classes="section-header" />
+
+            <Grid Margin="0,12,0,8"
+                  RowDefinitions="Auto,Auto"
+                  ColumnDefinitions="*,Auto,Auto,Auto">
+                <TextBlock Grid.Row="0"
+                           Grid.Column="0"
+                           Text="Search"
+                           Classes="label"
+                           Margin="0,0,0,6" />
+                <TextBlock Grid.Row="0"
+                           Grid.Column="1"
+                           Text="App"
+                           Classes="label"
+                           Margin="0,0,8,6" />
+
+                <TextBox Grid.Row="1"
+                         Grid.Column="0"
+                         Text="{Binding SearchQuery}"
+                         PlaceholderText="Search transcriptions..."
+                         Margin="0,0,8,0" />
+
+                <ComboBox Grid.Row="1"
+                          Grid.Column="1"
+                          ItemsSource="{Binding AvailableApps}"
+                          SelectedItem="{Binding SelectedAppFilter}"
+                          Width="160"
+                          Margin="0,0,8,0" />
+
+                <Button Grid.Row="1"
+                        Grid.Column="2"
+                        Content="Export"
+                        Click="OnExport"
+                        Padding="12,7"
+                        Margin="0,0,8,0" />
+
+                <Button Grid.Row="1"
+                        Grid.Column="3"
+                        Content="Clear all"
+                        Click="OnClearAll"
+                        Padding="12,7" />
+            </Grid>
+
+            <TextBlock HorizontalAlignment="Right"
+                       Foreground="#8A9AAE"
+                       FontSize="11.5"
+                       Margin="0,0,0,10"
+                       Text="{Binding Summary}" />
+
+            <StackPanel HorizontalAlignment="Center"
+                        Margin="0,40,0,0"
+                        IsVisible="{Binding IsLoading}">
+                <ProgressBar IsIndeterminate="True"
+                             Width="160"
+                             Height="4" />
+                <TextBlock Text="Loading history..."
+                           Foreground="#8A9AAE"
+                           FontSize="13"
+                           HorizontalAlignment="Center"
+                           Margin="0,12,0,0" />
+            </StackPanel>
+
+            <TextBlock Text="No recordings yet."
+                       Foreground="#8A9AAE"
+                       FontSize="14"
+                       HorizontalAlignment="Center"
+                       Margin="0,40,0,0"
+                       IsVisible="{Binding ShowEmptyState}" />
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          IsVisible="{Binding ShowTimeline}">
+                <ItemsControl ItemsSource="{Binding Groups}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:HistoryGroupViewModel">
+                        <StackPanel>
+                            <Grid Margin="42,14,0,7"
+                                  ColumnDefinitions="Auto,*">
+                                <TextBlock Text="{Binding Name}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Foreground="#8A9AAE"
+                                           Margin="0,0,10,0" />
+                                <Border Grid.Column="1"
+                                        Height="1"
+                                        Background="#1AFFFFFF"
+                                        VerticalAlignment="Center" />
+                            </Grid>
+
+                            <ItemsControl ItemsSource="{Binding Entries}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:HistoryRecordRow">
+                                        <Grid Margin="0,0,0,1"
+                                              ColumnDefinitions="42,*">
+                                            <Grid Grid.Column="0">
+                                                <Border Width="2"
+                                                        Background="#1AFFFFFF"
+                                                        HorizontalAlignment="Center" />
+                                                <Ellipse Width="10"
+                                                         Height="10"
+                                                         Fill="#2E8FFF"
+                                                         Stroke="#0E1620"
+                                                         StrokeThickness="2"
+                                                         VerticalAlignment="Top"
+                                                         HorizontalAlignment="Center"
+                                                         Margin="0,14,0,0" />
+                                            </Grid>
+
+                                            <Border Grid.Column="1"
+                                                    Classes="timeline-card"
+                                                    Margin="0,3,10,3">
+                                                <StackPanel>
+                                                    <Button Classes="card-toggle"
+                                                            Command="{Binding ToggleExpandCommand}">
+                                                        <Grid ColumnDefinitions="Auto,*,Auto">
+                                                            <TextBlock Grid.Column="0"
+                                                                       Text="{Binding TimeLabel}"
+                                                                       Foreground="#8A9AAE"
+                                                                       FontSize="12"
+                                                                       VerticalAlignment="Top"
+                                                                       Margin="0,1,10,0" />
+
+                                                            <TextBlock Grid.Column="1"
+                                                                       Text="{Binding Record.Preview}"
+                                                                       FontSize="13"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       VerticalAlignment="Top"
+                                                                       MaxLines="2" />
+
+                                                            <WrapPanel Grid.Column="2"
+                                                                       Orientation="Horizontal"
+                                                                       HorizontalAlignment="Right"
+                                                                       VerticalAlignment="Top"
+                                                                       Margin="8,0,0,0">
+                                                                <Border Classes="badge"
+                                                                        IsVisible="{Binding HasProfileName}">
+                                                                    <TextBlock Text="{Binding Record.ProfileName}"
+                                                                               Foreground="#8FC0FF"
+                                                                               FontSize="11" />
+                                                                </Border>
+                                                                <Border Classes="badge"
+                                                                        IsVisible="{Binding HasAppProcessName}">
+                                                                    <TextBlock Text="{Binding Record.AppProcessName}"
+                                                                               Foreground="#8A9AAE"
+                                                                               FontSize="11" />
+                                                                </Border>
+                                                                <Border Classes="badge">
+                                                                    <TextBlock Text="{Binding DurationLabel}"
+                                                                               Foreground="#8A9AAE"
+                                                                               FontSize="11" />
+                                                                </Border>
+                                                            </WrapPanel>
+                                                        </Grid>
+                                                    </Button>
+
+                                                    <StackPanel IsVisible="{Binding IsExpanded}">
+                                                        <Border Height="1"
+                                                                Background="#1AFFFFFF"
+                                                                Margin="0,8,0,7" />
+
+                                                        <TextBlock Text="{Binding Record.FinalText}"
+                                                                   TextWrapping="Wrap"
+                                                                   FontSize="13"
+                                                                   LineHeight="19"
+                                                                   Margin="0,0,0,7"
+                                                                   IsVisible="{Binding ShowReadOnlyText}" />
+
+                                                        <StackPanel IsVisible="{Binding ShowEditPanel}">
+                                                            <TextBox Text="{Binding EditText}"
+                                                                     TextWrapping="Wrap"
+                                                                     AcceptsReturn="True"
+                                                                     MinHeight="60"
+                                                                     MaxHeight="200"
+                                                                     Margin="0,0,0,8" />
+                                                            <StackPanel Orientation="Horizontal"
+                                                                        Spacing="8">
+                                                                <Button Content="Save"
+                                                                        Padding="12,6"
+                                                                        Command="{Binding SaveEditCommand}" />
+                                                                <Button Content="Cancel"
+                                                                        Padding="12,6"
+                                                                        Command="{Binding CancelEditCommand}" />
+                                                            </StackPanel>
+                                                        </StackPanel>
+
+                                                        <StackPanel Orientation="Horizontal"
+                                                                    Margin="0,2,0,4"
+                                                                    IsVisible="{Binding ShowExpandedMeta}">
+                                                            <TextBlock Foreground="#8A9AAE"
+                                                                       FontSize="11">
+                                                                <Run Text="{Binding Record.Timestamp, StringFormat='{}{0:MM/dd/yyyy HH:mm}'}" />
+                                                                <Run Text=" · " />
+                                                                <Run Text="{Binding Record.WordCount, StringFormat='{}{0} words'}" />
+                                                            </TextBlock>
+                                                            <TextBlock Foreground="#8A9AAE"
+                                                                       FontSize="11"
+                                                                       Margin="8,0,0,0"
+                                                                       IsVisible="{Binding HasLanguage}">
+                                                                <Run Text="· " />
+                                                                <Run Text="{Binding Record.Language}" />
+                                                            </TextBlock>
+                                                        </StackPanel>
+
+                                                        <StackPanel Orientation="Horizontal"
+                                                                    Spacing="12"
+                                                                    Margin="0,2,0,0"
+                                                                    IsVisible="{Binding ShowExpandedActions}">
+                                                            <Button Classes="link-button"
+                                                                    Content="Edit"
+                                                                    Command="{Binding StartEditCommand}" />
+                                                            <Button Classes="link-button"
+                                                                    Content="Copy"
+                                                                    Click="OnCopyRecord"
+                                                                    Tag="{Binding Record.FinalText}" />
+                                                            <Button Classes="link-button"
+                                                                    Content="{Binding PlaybackButtonText}"
+                                                                    Command="{Binding TogglePlaybackCommand}"
+                                                                    IsVisible="{Binding HasSessionAudio}" />
+                                                            <Button Classes="link-button"
+                                                                    Content="Delete"
+                                                                    Command="{Binding DeleteCommand}"
+                                                                    Foreground="#F06A6A" />
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </ScrollViewer>
-        </Border>
+        </StackPanel>
     </DockPanel>
 </UserControl>
