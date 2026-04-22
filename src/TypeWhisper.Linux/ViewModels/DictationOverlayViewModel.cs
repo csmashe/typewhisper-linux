@@ -16,6 +16,7 @@ public partial class DictationOverlayViewModel : ObservableObject
     [ObservableProperty] private bool _feedbackIsError;
     [ObservableProperty] private bool _isRecording;
     [ObservableProperty] private string _statusText = "Ready";
+    [ObservableProperty] private string? _partialText;
     [ObservableProperty] private string? _feedbackText;
     [ObservableProperty] private string? _activeProfileName;
     [ObservableProperty] private string? _activeAppName;
@@ -90,6 +91,7 @@ public partial class DictationOverlayViewModel : ObservableObject
         FeedbackIsError = state.FeedbackIsError;
         FeedbackText = state.FeedbackText;
         StatusText = state.StatusText;
+        PartialText = state.PartialText;
         ActiveProfileName = state.ActiveProfileName;
         ActiveAppName = state.ActiveAppName;
         _sessionStartedAtUtc = state.SessionStartedAtUtc;

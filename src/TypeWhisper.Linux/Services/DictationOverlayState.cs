@@ -9,6 +9,7 @@ public sealed record DictationOverlayState
     public bool FeedbackIsError { get; init; }
     public bool IsRecording { get; init; }
     public string StatusText { get; init; } = "Ready";
+    public string? PartialText { get; init; }
     public string? FeedbackText { get; init; }
     public string? ActiveProfileName { get; init; }
     public string? ActiveAppName { get; init; }

@@ -38,6 +38,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IPostProcessingPipeline _pipeline;
     private readonly ITranslationService _translation;
     private readonly PromptProcessingService _promptProcessing;
+    private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
     private string? _recordingAppProcess;
@@ -46,6 +47,9 @@ public sealed class DictationOrchestrator : IDisposable
     private string? _recordingWindowId;
     private Profile? _recordingProfile;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
+    private CancellationTokenSource? _partialTranscriptionCts;
+    private Task? _partialTranscriptionTask;
+    private string? _lastPublishedPartialText;
     private bool _initialized;
     private bool _disposed;
 
@@ -138,12 +142,14 @@ public sealed class DictationOrchestrator : IDisposable
                 ShowFeedback = false,
                 FeedbackIsError = false,
                 FeedbackText = null,
+                PartialText = null,
                 IsRecording = true,
                 StatusText = "Recording… press the hotkey again to stop.",
                 ActiveProfileName = null,
                 ActiveAppName = null,
                 SessionStartedAtUtc = DateTime.UtcNow
             });
+            StartPartialTranscriptionSession();
         }
         finally
         {
@@ -202,6 +208,7 @@ public sealed class DictationOrchestrator : IDisposable
             if (!_audio.IsRecording) return;
 
             var wav = _audio.StopRecording();
+            await StopPartialTranscriptionSessionAsync();
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
             RecordingStateChanged?.Invoke(this, false);
@@ -524,6 +531,7 @@ public sealed class DictationOrchestrator : IDisposable
             ShowFeedback = true,
             FeedbackIsError = isError,
             FeedbackText = text,
+            PartialText = null,
             IsRecording = false,
             ActiveProfileName = null,
             ActiveAppName = null,
@@ -541,6 +549,146 @@ public sealed class DictationOrchestrator : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _partialTranscriptionCts?.Cancel();
+        _partialTranscriptionCts?.Dispose();
         _toggleGate.Dispose();
+    }
+
+    private void StartPartialTranscriptionSession()
+    {
+        _partialTranscriptionCts?.Cancel();
+        _partialTranscriptionCts?.Dispose();
+
+        _lastPublishedPartialText = null;
+        var sessionVersion = _partialTranscriptState.StartSession();
+        var cts = new CancellationTokenSource();
+        _partialTranscriptionCts = cts;
+        _partialTranscriptionTask = Task.Run(() => RunPartialTranscriptionLoopAsync(sessionVersion, cts.Token));
+    }
+
+    private async Task StopPartialTranscriptionSessionAsync()
+    {
+        var cts = _partialTranscriptionCts;
+        var task = _partialTranscriptionTask;
+        _partialTranscriptionCts = null;
+        _partialTranscriptionTask = null;
+
+        if (cts is not null)
+        {
+            cts.Cancel();
+            cts.Dispose();
+        }
+
+        if (task is not null)
+        {
+            try
+            {
+                await task.WaitAsync(TimeSpan.FromMilliseconds(500));
+            }
+            catch (OperationCanceledException) { }
+            catch (TimeoutException) { }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Partial transcription shutdown failed: {ex.Message}");
+            }
+        }
+
+        _partialTranscriptState.StopSession();
+    }
+
+    private async Task RunPartialTranscriptionLoopAsync(int sessionVersion, CancellationToken ct)
+    {
+        var pollInterval = TimeSpan.FromSeconds(3);
+
+        try
+        {
+            await Task.Delay(pollInterval, ct);
+
+            while (!ct.IsCancellationRequested && _audio.IsRecording)
+            {
+                var wav = _audio.GetCurrentBuffer();
+                var plugin = _models.ActiveTranscriptionPlugin;
+                if (wav is not null
+                    && wav.Length > 44
+                    && plugin is not null
+                    && _audio.HasSpeechEnergy)
+                {
+                    await PollPartialTranscriptOnceAsync(plugin, wav, sessionVersion, ct);
+                }
+
+                await Task.Delay(pollInterval, ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Partial transcription loop failed: {ex.Message}");
+        }
+    }
+
+    private async Task PollPartialTranscriptOnceAsync(
+        ITranscriptionEnginePlugin plugin,
+        byte[] wav,
+        int sessionVersion,
+        CancellationToken ct)
+    {
+        var effectiveLanguage = _recordingProfile?.InputLanguage ?? _settings.Current.Language;
+        var languageHint = effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
+        var translate = string.Equals(
+            _recordingProfile?.SelectedTask ?? _settings.Current.TranscriptionTask,
+            "translate",
+            StringComparison.OrdinalIgnoreCase);
+
+        try
+        {
+            var result = await plugin.TranscribeStreamingAsync(
+                wav,
+                languageHint,
+                translate,
+                prompt: null,
+                onProgress: partial =>
+                {
+                    TryPublishPartialTranscript(sessionVersion, partial);
+                    return !ct.IsCancellationRequested && _audio.IsRecording;
+                },
+                ct);
+
+            TryPublishPartialTranscript(sessionVersion, result.Text);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Partial transcription polling failed: {ex.Message}");
+        }
+    }
+
+    private void TryPublishPartialTranscript(int sessionVersion, string? text)
+    {
+        if (!_partialTranscriptState.TryApplyPolling(
+                sessionVersion,
+                text ?? "",
+                _dictionary.ApplyCorrections,
+                out var partialText))
+        {
+            return;
+        }
+
+        if (string.Equals(_lastPublishedPartialText, partialText, StringComparison.Ordinal))
+            return;
+
+        _lastPublishedPartialText = partialText;
+        _models.PluginManager.EventBus.Publish(new PartialTranscriptionUpdateEvent
+        {
+            PartialText = partialText,
+            IsRecording = _audio.IsRecording,
+            ElapsedSeconds = _recordingStart == default
+                ? 0
+                : Math.Max(0, (DateTime.UtcNow - _recordingStart).TotalSeconds)
+        });
+
+        SetOverlayState(state => state with
+        {
+            PartialText = partialText
+        });
     }
 }

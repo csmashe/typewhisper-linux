@@ -19,6 +19,7 @@ public sealed class AudioRecordingService : IDisposable
     private const float AgcTargetRms = 0.1f;
     private const float AgcMaxGain = 20f;
     private const float AgcMinGain = 1f;
+    public const float SpeechEnergyThreshold = 0.01f;
 
     private static int _paInitCount;
     private static readonly object _paInitLock = new();
@@ -35,6 +36,7 @@ public sealed class AudioRecordingService : IDisposable
     public bool IsRecording => _isRecording;
     public bool IsPreviewing => _isPreviewing;
     public float CurrentRmsLevel => _currentRmsLevel;
+    public bool HasSpeechEnergy => _currentRmsLevel >= SpeechEnergyThreshold;
     public int? SelectedDeviceIndex { get; set; }
     public bool WhisperModeEnabled { get; set; }
 
@@ -95,6 +97,23 @@ public sealed class AudioRecordingService : IDisposable
 
         float[] floats;
         lock (_sampleLock) { floats = [.. _samples]; }
+
+        return FloatSamplesToWav(floats, SampleRate);
+    }
+
+    public byte[]? GetCurrentBuffer()
+    {
+        if (!_isRecording)
+            return null;
+
+        float[] floats;
+        lock (_sampleLock)
+        {
+            if (_samples.Count == 0)
+                return null;
+
+            floats = [.. _samples];
+        }
 
         return FloatSamplesToWav(floats, SampleRate);
     }

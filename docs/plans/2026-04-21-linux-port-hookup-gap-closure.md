@@ -178,46 +178,35 @@ Result:
 - the overlay no longer regresses normal text insertion in the validated Linux environment
 - Phase 11 is complete and no longer part of the active parity backlog
 
+### 10. Partial transcript / live update parity is now implemented on Linux
+
+Linux now supports Windows-style partial transcript updates during recording, including:
+
+- polling the live Linux recording buffer while dictation is active
+- stabilized incremental transcript updates during recording
+- publishing `PartialTranscriptionUpdateEvent` from the Linux dictation flow
+- support for provider-specific progress callbacks through `TranscribeStreamingAsync`
+- Linux overlay display of the current partial transcript during recording
+
+Result:
+
+- Linux plugins can now receive incremental transcript updates during dictation
+- Linux dictation UI now exposes live transcript feedback instead of only lifecycle/status state
+- Phase 12 is complete and no longer part of the active parity backlog
+
 ## Remaining Gaps
 
-### 1. Partial/live transcript event parity is still incomplete
-
-Linux now publishes the main lifecycle events, but it still does not match Windows for partial transcript / streaming-style updates.
-
-Still missing on Linux:
-
-- `PartialTranscriptionUpdateEvent`
-- any streaming transcript state comparable to the Windows flow
-
-Impact:
-
-- plugins that depend on full live-update behavior may still have reduced functionality on Linux
+No known Windows-to-Linux runtime hookup gaps remain in this backlog.
 
 ## Updated Execution Strategy
 
-The foundational hookup work is complete. Remaining work should now be done in parity order: user-visible Windows behavior first, then optional deeper UX polish.
+The foundational hookup work is complete. This backlog no longer has an active runtime parity section and should only be extended if a new Windows/Linux behavior gap is identified.
 
-### Phase 12. Add partial transcript / live update parity
-
-Primary goal:
-
-- close the remaining plugin/runtime event gap for streaming updates
-
-Likely work:
-
-- define Linux partial transcript production
-- publish `PartialTranscriptionUpdateEvent`
-- connect any needed UI/plugin consumers
-
-Acceptance criteria:
-
-- Linux plugins can receive incremental transcript updates where supported
+There is no current Phase 12 successor in this document.
 
 ## Suggested Issue Breakdown
 
-These are the remaining GitHub issues implied by the current state:
-
-1. Publish Linux partial transcription update events
+There are no remaining GitHub issues implied by this runtime-hookup backlog at the moment.
 
 ## Verification
 
@@ -237,4 +226,4 @@ dotnet build TypeWhisper.slnx -nologo
 
 ## Recommendation
 
-The next highest-value work is `partial transcript updates`. That is now the clearest remaining runtime parity gap between the Windows app and the Linux port.
+This backlog is now effectively closed. The next work should come from newly discovered parity gaps or from separate UX/manual-validation follow-up items rather than from the original Linux hookup backlog.

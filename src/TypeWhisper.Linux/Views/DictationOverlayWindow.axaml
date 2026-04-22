@@ -66,6 +66,13 @@
                                Foreground="#99FFFFFF"
                                IsVisible="{Binding ActiveAppName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </Grid>
+
+                <TextBlock Text="{Binding PartialText}"
+                           TextWrapping="Wrap"
+                           MaxWidth="420"
+                           FontSize="12"
+                           Foreground="#E6FFFFFF"
+                           IsVisible="{Binding PartialText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
         </Border>
 
