@@ -17,7 +17,6 @@ public sealed class PromptPaletteService
     private readonly PromptProcessingService _processing;
     private readonly TextInsertionService _textInsertion;
     private readonly PluginManager _pluginManager;
-    private readonly ISettingsService _settings;
 
     private bool _opening;
 
@@ -26,15 +25,13 @@ public sealed class PromptPaletteService
         IPromptActionService promptActions,
         PromptProcessingService processing,
         TextInsertionService textInsertion,
-        PluginManager pluginManager,
-        ISettingsService settings)
+        PluginManager pluginManager)
     {
         _services = services;
         _promptActions = promptActions;
         _processing = processing;
         _textInsertion = textInsertion;
         _pluginManager = pluginManager;
-        _settings = settings;
     }
 
     public async Task TogglePaletteAsync()
@@ -79,7 +76,12 @@ public sealed class PromptPaletteService
     private async Task ExecuteActionAsync(PromptAction action, string capturedText)
     {
         if (!_processing.IsAnyProviderAvailable)
+        {
+            await ShowWarningAsync(
+                "TypeWhisper",
+                "No LLM provider available. Please configure an API key in Plugins.");
             return;
+        }
 
         try
         {
@@ -88,28 +90,12 @@ public sealed class PromptPaletteService
             var actionPlugin = ResolveActionPlugin(action);
             if (actionPlugin is not null)
             {
-                var execution = await actionPlugin.ExecuteAsync(
-                    result,
-                    new ActionContext(null, null, null, null, capturedText),
-                    cts.Token);
-
-                _pluginManager.EventBus.Publish(new ActionCompletedEvent
-                {
-                    ActionId = actionPlugin.ActionId,
-                    Success = execution.Success,
-                    Message = execution.Message
-                });
+                var context = new ActionContext(null, null, null, null, capturedText);
+                await actionPlugin.ExecuteAsync(result, context, cts.Token);
                 return;
             }
 
-            var insertion = await _textInsertion.InsertTextAsync(result, _settings.Current.AutoPaste);
-            if (insertion is InsertionResult.Pasted or InsertionResult.CopiedToClipboard)
-            {
-                _pluginManager.EventBus.Publish(new TextInsertedEvent
-                {
-                    Text = result
-                });
-            }
+            await _textInsertion.InsertTextAsync(result, autoPaste: true);
         }
         catch (OperationCanceledException)
         {
@@ -118,6 +104,9 @@ public sealed class PromptPaletteService
         catch (Exception ex)
         {
             Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
+            await ShowWarningAsync(
+                "TypeWhisper",
+                $"Prompt processing failed: {ex.Message}");
         }
     }
 
@@ -129,5 +118,14 @@ public sealed class PromptPaletteService
         return _pluginManager.ActionPlugins.FirstOrDefault(plugin =>
             string.Equals(plugin.PluginId, action.TargetActionPluginId, StringComparison.OrdinalIgnoreCase)
             || string.Equals(plugin.ActionId, action.TargetActionPluginId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static async Task ShowWarningAsync(string title, string message)
+    {
+        await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var dialog = new MessageDialogWindow();
+            await dialog.ShowMessageAsync(title, message);
+        });
     }
 }

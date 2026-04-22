@@ -37,12 +37,13 @@ public partial class PromptPaletteWindow : Window
     {
         if (!string.IsNullOrWhiteSpace(SourceText))
         {
-            SourcePreviewText.Text = SourceText.Length > 160
-                ? SourceText[..160] + "..."
+            SourcePreviewText.Text = SourceText.Length > 120
+                ? SourceText[..120] + "..."
                 : SourceText;
             SourcePreviewBorder.IsVisible = true;
         }
 
+        Activate();
         SearchBox.Focus();
     }
 
@@ -71,11 +72,15 @@ public partial class PromptPaletteWindow : Window
                     ActionListBox.SelectedIndex++;
                 else if (ActionListBox.SelectedIndex == -1 && _filteredActions.Count > 0)
                     ActionListBox.SelectedIndex = 0;
+                if (ActionListBox.SelectedItem is not null)
+                    ActionListBox.ScrollIntoView(ActionListBox.SelectedItem);
                 e.Handled = true;
                 break;
             case Key.Up:
                 if (ActionListBox.SelectedIndex > 0)
                     ActionListBox.SelectedIndex--;
+                if (ActionListBox.SelectedItem is not null)
+                    ActionListBox.ScrollIntoView(ActionListBox.SelectedItem);
                 e.Handled = true;
                 break;
             case Key.Enter:
@@ -129,5 +134,13 @@ public partial class PromptPaletteWindow : Window
             return;
 
         Close();
+    }
+
+    public void ShowStatus(string text)
+    {
+        StatusText.Text = text;
+        StatusBorder.IsVisible = true;
+        ActionListBox.IsEnabled = false;
+        SearchBox.IsEnabled = false;
     }
 }

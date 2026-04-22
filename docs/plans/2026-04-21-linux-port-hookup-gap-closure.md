@@ -86,23 +86,26 @@ Result:
 - Linux now has one intentional settings shell model
 - autostart, ducking, and media pause are no longer misleading settings-only controls
 
+### 6. Prompt palette workflow is now wired on Linux
+
+Linux now supports the separate Windows-style prompt palette flow through the Linux shell, including:
+
+- prompt palette hotkey wiring through the shared `PromptPaletteHotkey` setting
+- a Linux prompt palette window for selected text
+- selected-text capture outside dictation
+- prompt-action execution without starting a dictation session
+- action-plugin routing and normal text insertion from the prompt palette path
+- user-facing warning dialogs for prompt-provider and prompt-processing failures
+
+Result:
+
+- Linux prompt actions are no longer limited to dictation or profile-bound automation
+- the Linux prompt palette workflow now behaves much closer to the Windows flow
+- Phase 8 is complete and no longer part of the active parity backlog
+
 ## Remaining Gaps
 
-### 1. Prompt palette workflow is still Windows-only
-
-Windows supports a separate prompt palette flow and prompt-palette hotkey. Linux currently supports prompt actions only as part of dictation and profile-bound automation.
-
-Still missing on Linux:
-
-- prompt palette hotkey wiring
-- a Linux prompt palette UI/workflow for selected text
-- parity with the Windows "run prompt without dictation" flow
-
-Impact:
-
-- Linux has the prompt engine, but not the full Windows prompt workflow surface
-
-### 2. Whisper mode is still not implemented in Linux recording
+### 1. Whisper mode is still not implemented in Linux recording
 
 The shared setting and profile override fields still exist, but Linux `AudioRecordingService` does not implement the Windows whisper-mode capture behavior.
 
@@ -116,7 +119,7 @@ Impact:
 
 - this remains dead configuration on Linux
 
-### 3. Profile live-context tooling is still behind Windows
+### 2. Profile live-context tooling is still behind Windows
 
 Windows exposes a richer profile authoring flow with live app/url detection helpers. Linux now has the core editor and runtime matching, but not the live-context conveniences.
 
@@ -131,7 +134,7 @@ Impact:
 
 - Linux profiles work, but the authoring experience is still weaker than Windows
 
-### 4. Dictation presentation still differs from the Windows overlay model
+### 3. Dictation presentation still differs from the Windows overlay model
 
 Windows has a dedicated floating overlay-style dictation presentation. Linux currently uses the main shell and section viewmodels for status.
 
@@ -145,7 +148,7 @@ Impact:
 
 - Linux runtime behavior is hooked up, but it does not yet look and feel the same while dictating
 
-### 5. Partial/live transcript event parity is still incomplete
+### 4. Partial/live transcript event parity is still incomplete
 
 Linux now publishes the main lifecycle events, but it still does not match Windows for partial transcript / streaming-style updates.
 
@@ -161,23 +164,6 @@ Impact:
 ## Updated Execution Strategy
 
 The foundational hookup work is complete. Remaining work should now be done in parity order: user-visible Windows behavior first, then optional deeper UX polish.
-
-### Phase 8. Port the prompt palette workflow
-
-Primary goal:
-
-- make Linux prompt actions usable the same way as Windows, not only through profile-bound dictation
-
-Likely work:
-
-- add Linux prompt-palette hotkey support
-- add a Linux prompt palette UI
-- route selected/captured text through prompt actions outside dictation
-
-Acceptance criteria:
-
-- Linux can trigger prompt actions without starting a dictation session
-- behavior is close to the Windows prompt palette flow
 
 ### Phase 9. Implement whisper mode on Linux
 
@@ -249,11 +235,10 @@ Acceptance criteria:
 
 These are the remaining GitHub issues implied by the current state:
 
-1. Add Linux prompt palette hotkey and prompt palette UI
-2. Implement Linux whisper mode and profile whisper overrides
-3. Port Windows live profile-context helpers to Linux
-4. Design and implement Linux overlay-style dictation presentation
-5. Publish Linux partial transcription update events
+1. Implement Linux whisper mode and profile whisper overrides
+2. Port Windows live profile-context helpers to Linux
+3. Design and implement Linux overlay-style dictation presentation
+4. Publish Linux partial transcription update events
 
 ## Verification
 
@@ -268,12 +253,11 @@ dotnet build TypeWhisper.slnx -nologo
 
 ### Remaining focused validation
 
-1. Verify Linux prompt palette behavior matches Windows once that workflow is ported.
-2. Verify whisper mode changes Linux capture behavior and that profile overrides take effect.
-3. Verify current-app/current-URL helpers create working profiles without manual entry.
-4. Verify overlay/session feedback on Linux matches the Windows recording lifecycle closely.
-5. Verify partial transcript events are emitted and consumed correctly by Linux plugins.
+1. Verify whisper mode changes Linux capture behavior and that profile overrides take effect.
+2. Verify current-app/current-URL helpers create working profiles without manual entry.
+3. Verify overlay/session feedback on Linux matches the Windows recording lifecycle closely.
+4. Verify partial transcript events are emitted and consumed correctly by Linux plugins.
 
 ## Recommendation
 
-The next highest-value work is `prompt palette`, then `whisper mode`, then `profile live-context tooling`. Those are the most visible remaining places where the Windows app still does more than the Linux port.
+The next highest-value work is `whisper mode`, then `profile live-context tooling`, then `overlay presentation`. Those are the most visible remaining places where the Windows app still does more than the Linux port.
