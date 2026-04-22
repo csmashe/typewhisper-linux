@@ -87,6 +87,7 @@ public partial class App : Application
             var hotkey = services.GetRequiredService<HotkeyService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
             var lastApplied = hotkey.CurrentHotkeyString;
+            var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
             settings.SettingsChanged += s =>
             {
                 hotkey.Mode = s.Mode;
@@ -96,7 +97,16 @@ public partial class App : Application
                 {
                     lastApplied = hotkey.CurrentHotkeyString;
                 }
+
+                if (s.PromptPaletteHotkey != lastPromptPaletteApplied
+                    && hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey))
+                {
+                    lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
+                }
             };
+
+            var promptPalette = services.GetRequiredService<PromptPaletteService>();
+            hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
 
             // Launch minimized / hidden if --minimized was passed.
             if (Program.StartMinimized)
@@ -125,6 +135,7 @@ public partial class App : Application
     {
         var s = settings.Current;
         hotkey.Mode = s.Mode;
+        hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey);
 
         // Treat the upstream default as "unset" on Linux and substitute the
         // Linux default (HotkeyService's ctor-time binding — Ctrl+Shift+Space).

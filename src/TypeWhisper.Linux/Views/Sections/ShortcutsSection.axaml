@@ -23,6 +23,19 @@
             <Separator />
 
             <StackPanel Spacing="8">
+                <TextBlock Text="Prompt palette" FontWeight="SemiBold" />
+                <TextBlock TextWrapping="Wrap" FontSize="12"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           Text="Optional global hotkey that opens the prompt palette for the currently selected text without starting dictation. Leave blank to disable it." />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBox Width="260" Text="{Binding PromptPaletteHotkeyText}" PlaceholderText="Ctrl+Shift+P" />
+                    <Button Content="Apply" Command="{Binding ApplyPromptPaletteHotkeyCommand}" />
+                </StackPanel>
+            </StackPanel>
+
+            <Separator />
+
+            <StackPanel Spacing="8">
                 <TextBlock Text="Activation mode" FontWeight="SemiBold" />
                 <StackPanel Orientation="Horizontal" Spacing="0">
                     <RadioButton Content="Toggle" GroupName="mode"

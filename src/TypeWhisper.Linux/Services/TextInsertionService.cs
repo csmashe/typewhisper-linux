@@ -36,6 +36,22 @@ public sealed class TextInsertionService
         return await TryCopyToClipboardAsync(text);
     }
 
+    public async Task<string> CaptureSelectedTextAsync()
+    {
+        var previousClipboard = await TryReadClipboardAsync();
+
+        if (!await TrySendCopyShortcutAsync())
+            return "";
+
+        await Task.Delay(150);
+        var selectedText = await TryReadClipboardAsync() ?? "";
+
+        if (previousClipboard is not null)
+            await TryWriteClipboardTextAsync(previousClipboard);
+
+        return selectedText;
+    }
+
     private static async Task<InsertionResult> TryXdotoolTypeAsync(string text)
     {
         try
@@ -66,6 +82,71 @@ public sealed class TextInsertionService
 
     private static async Task<InsertionResult> TryCopyToClipboardAsync(string text)
     {
+        try
+        {
+            return await TryWriteClipboardTextAsync(text)
+                ? InsertionResult.CopiedToClipboard
+                : InsertionResult.Failed;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[TextInsertionService] clipboard failed: {ex.Message}");
+            return InsertionResult.Failed;
+        }
+    }
+
+    private static async Task<bool> TrySendCopyShortcutAsync()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("xdotool")
+            {
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            psi.ArgumentList.Add("key");
+            psi.ArgumentList.Add("--clearmodifiers");
+            psi.ArgumentList.Add("ctrl+c");
+
+            using var p = Process.Start(psi);
+            if (p is null) return false;
+            await p.WaitForExitAsync();
+            return p.ExitCode == 0;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[TextInsertionService] copy shortcut failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static async Task<string?> TryReadClipboardAsync()
+    {
+        var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+        var psi = isWayland
+            ? new ProcessStartInfo("wl-paste", "--no-newline")
+            : new ProcessStartInfo("xclip", "-selection clipboard -o");
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.UseShellExecute = false;
+
+        try
+        {
+            using var p = Process.Start(psi);
+            if (p is null) return null;
+            var output = await p.StandardOutput.ReadToEndAsync();
+            await p.WaitForExitAsync();
+            return p.ExitCode == 0 ? output : null;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[TextInsertionService] clipboard read failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static async Task<bool> TryWriteClipboardTextAsync(string text)
+    {
         var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
         var psi = isWayland
             ? new ProcessStartInfo("wl-copy")
@@ -74,19 +155,11 @@ public sealed class TextInsertionService
         psi.RedirectStandardError = true;
         psi.UseShellExecute = false;
 
-        try
-        {
-            using var p = Process.Start(psi);
-            if (p is null) return InsertionResult.Failed;
-            await p.StandardInput.WriteAsync(text);
-            p.StandardInput.Close();
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0 ? InsertionResult.CopiedToClipboard : InsertionResult.Failed;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[TextInsertionService] clipboard failed: {ex.Message}");
-            return InsertionResult.Failed;
-        }
+        using var p = Process.Start(psi);
+        if (p is null) return false;
+        await p.StandardInput.WriteAsync(text);
+        p.StandardInput.Close();
+        await p.WaitForExitAsync();
+        return p.ExitCode == 0;
     }
 }

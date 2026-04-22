@@ -2,392 +2,278 @@
 
 ## Context
 
-This repository is a Linux port of the Windows TypeWhisper app. The current Linux app builds and runs, but several features that exist in the Windows product surface are only partially ported: some are present as UI and persisted settings, some are represented in models and services, and some are loaded through the plugin system, but they are not connected to the Linux runtime flow.
+This repository is a Linux port of the Windows TypeWhisper app. The Linux app now has the main runtime hookup path working: dictation, profile resolution, prompt/action execution, plugin events, post-processing, autostart, audio ducking, media pause, and translation are all wired into the Linux flow.
 
-The goal of this plan is to close the highest-value wiring gaps in the Linux port without trying to reach immediate feature parity everywhere. The focus is on runtime hookups first: the parts that make existing UI, models, and plugins actually affect dictation behavior.
+This document is now the active backlog for the remaining Windows-to-Linux parity work. The focus has shifted from basic hookup work to the smaller set of features that still exist on Windows but do not yet look or behave the same on Linux.
 
-## Current Gaps
+## Completed Work
 
-### 1. Plugin event bus is never published to from Linux runtime
+### 1. Runtime event bus is wired
 
-The Linux port activates plugins and exposes `PluginEventBus`, but the app does not publish runtime events such as:
+Linux now publishes runtime plugin events from dictation:
 
 - `RecordingStartedEvent`
 - `RecordingStoppedEvent`
 - `TranscriptionCompletedEvent`
 - `TranscriptionFailedEvent`
 - `TextInsertedEvent`
-- `PartialTranscriptionUpdateEvent`
 - `ActionCompletedEvent`
 
-Impact:
+Result:
 
-- Event-driven plugins like `LiveTranscript` and `Webhook` can load and activate, but they do not receive runtime data.
-- The plugin system appears functional in settings while being disconnected from the actual dictation flow.
+- event-driven plugins are no longer loaded-only dead weight
+- history, action execution, and downstream plugin logic now receive real runtime context
 
-### 2. Profiles are stored and editable, but not applied during dictation
+### 2. Profiles are resolved and applied during dictation
 
-The Linux port includes:
+Linux dictation now resolves the active window context and applies profile-bound overrides for:
 
-- `ProfileService.MatchProfile(processName, url)`
-- profile UI
-- profile model fields for language, task, model override, prompt action, whisper mode, URL patterns, and hotkeys
+- language
+- task
+- model override
+- prompt action
+- translation target
+- profile metadata in history and plugin events
 
-However, the dictation runtime does not:
+Result:
 
-- resolve the active profile before transcription
-- apply profile overrides to the effective transcription request
-- persist `ProfileName` into history/events
-- expose active profile state in the Linux UI
+- profiles are now functional runtime behavior, not just stored configuration
+- saved history records include `ProfileName`
+- profile editing UI supports real selection/edit/save workflows
 
-Impact:
+### 3. Post-processing pipeline is integrated
 
-- Profiles are mostly a data-entry screen, not a functional runtime feature.
-- Several profile fields are currently dead configuration.
+Linux now uses `IPostProcessingPipeline` instead of an ad hoc post-processing path, including:
 
-### 3. Prompt actions, post-processors, and LLM pipeline are not invoked
-
-The Linux port registers:
-
-- `IPromptActionService`
-- `IPostProcessingPipeline`
-- plugin manager indices for `ILlmProviderPlugin`, `IPostProcessorPlugin`, and `IActionPlugin`
-
-But the Linux dictation flow currently performs:
-
-- transcription
+- app formatting
 - dictionary corrections
 - snippet expansion
-- insertion
-- history write
-
-It does not invoke:
-
-- `PostProcessingPipeline.ProcessAsync(...)`
-- LLM provider execution for prompt actions
+- vocabulary boosting
 - plugin post-processors
-- translation hooks
+- prompt-driven LLM processing
+- translation
+
+Result:
+
+- Linux post-processing behavior now tracks the shared pipeline model used by the Windows app
+- plugin post-processors and translation hooks are no longer dead abstractions
+
+### 4. Prompt actions and action plugins are operational
+
+Linux now supports:
+
+- profile-bound prompt actions through enabled LLM providers
+- routing processed output into bound action plugins
+- `ActionCompletedEvent` publishing for action execution results
+
+Result:
+
+- the Prompts section is no longer CRUD-only
+- action plugins are no longer loaded-but-unreachable in Linux dictation
+
+### 5. Settings shell cleanup and Linux-native platform wiring are done
+
+Completed shell/platform cleanup:
+
+- removed the dead dedicated Linux settings window path
+- tray settings now intentionally open the main window and navigate to settings
+- exposed `StartupService` in Linux General settings
+- implemented Linux audio ducking via `pactl`
+- implemented Linux media pause/resume via `playerctl`
+
+Result:
+
+- Linux now has one intentional settings shell model
+- autostart, ducking, and media pause are no longer misleading settings-only controls
+
+## Remaining Gaps
+
+### 1. Prompt palette workflow is still Windows-only
+
+Windows supports a separate prompt palette flow and prompt-palette hotkey. Linux currently supports prompt actions only as part of dictation and profile-bound automation.
+
+Still missing on Linux:
+
+- prompt palette hotkey wiring
+- a Linux prompt palette UI/workflow for selected text
+- parity with the Windows "run prompt without dictation" flow
 
 Impact:
 
-- the Prompts section is CRUD-only
-- LLM provider plugins are configurable but not used from Linux dictation
-- post-processor plugins can load but do not affect text
+- Linux has the prompt engine, but not the full Windows prompt workflow surface
 
-### 4. Action plugins are loaded but never executed
+### 2. Whisper mode is still not implemented in Linux recording
 
-The Linux plugin system exposes `IActionPlugin`, but the app does not define when or how action plugins should run during Linux dictation.
+The shared setting and profile override fields still exist, but Linux `AudioRecordingService` does not implement the Windows whisper-mode capture behavior.
 
-Impact:
+Still missing on Linux:
 
-- action plugins like Linear, Obsidian, and Script can be enabled but are operationally disconnected
-- there is no Linux action execution policy or result reporting path
-
-### 5. Dedicated Settings window exists but is unreachable
-
-The Linux project includes:
-
-- `SettingsWindow`
-- `SettingsWindowViewModel`
-- tabbed settings XAML
-
-But the current app shell routes tray settings requests to the main window instead of opening the dedicated settings window.
+- runtime use of `WhisperModeEnabled`
+- runtime use of profile `WhisperModeOverride`
+- matching Windows audio-capture behavior when whisper mode is active
 
 Impact:
 
-- dead code path and duplicate settings surfaces
-- uncertainty about intended shell UX
+- this remains dead configuration on Linux
 
-### 6. Startup/autostart service exists but is not exposed
+### 3. Profile live-context tooling is still behind Windows
 
-`StartupService` can create and remove an XDG autostart entry, but it is not registered or surfaced in the Linux UI.
+Windows exposes a richer profile authoring flow with live app/url detection helpers. Linux now has the core editor and runtime matching, but not the live-context conveniences.
 
-Impact:
+Still missing on Linux:
 
-- useful Linux-native feature is present in code but unreachable
-
-### 7. Audio ducking and media pause are settings-only
-
-The Linux audio section persists:
-
-- `AudioDuckingEnabled`
-- `PauseMediaDuringRecording`
-
-But DI explicitly notes the underlying Linux implementations are deferred.
+- current focused app/url context panel
+- "add current app" and "add current URL" helpers
+- live matched-profile display in the Profiles section
+- the Windows-style profile context window
 
 Impact:
 
-- visible UI suggests runtime behavior that does not exist yet
-- settings are stored without effect
+- Linux profiles work, but the authoring experience is still weaker than Windows
 
-## Execution Strategy
+### 4. Dictation presentation still differs from the Windows overlay model
 
-The work should be done in dependency order. The plugin/event and profile/post-processing work are foundational; UI cleanup and smaller platform features should come after the runtime path is reliable.
+Windows has a dedicated floating overlay-style dictation presentation. Linux currently uses the main shell and section viewmodels for status.
 
-### Phase 1. Wire runtime events and context into dictation
+Still missing on Linux:
 
-Primary goal:
+- overlay presentation model parity
+- active-profile/status overlay behavior
+- closer visual and interaction parity during recording/processing
 
-- make the Linux dictation loop publish plugin-visible lifecycle events and carry enough context for downstream features
+Impact:
 
-Files likely involved:
+- Linux runtime behavior is hooked up, but it does not yet look and feel the same while dictating
 
-- `src/TypeWhisper.Linux/Services/DictationOrchestrator.cs`
-- `src/TypeWhisper.Linux/Services/Plugins/PluginManager.cs`
-- `src/TypeWhisper.Linux/Services/ActiveWindowService.cs`
-- `src/TypeWhisper.PluginSDK/Models/PluginEvents.cs`
+### 5. Partial/live transcript event parity is still incomplete
 
-Required changes:
+Linux now publishes the main lifecycle events, but it still does not match Windows for partial transcript / streaming-style updates.
 
-- inject or otherwise access the plugin event bus from `DictationOrchestrator`
-- publish `RecordingStartedEvent` on recording start
-- publish `RecordingStoppedEvent` when capture stops
-- publish `TranscriptionCompletedEvent` on successful end-to-end transcription
-- publish `TranscriptionFailedEvent` on transcription failures
-- publish `TextInsertedEvent` after successful insertion or clipboard fallback
-- ensure event payloads include app/process metadata, model/engine, duration, and later profile data
+Still missing on Linux:
 
-Acceptance criteria:
+- `PartialTranscriptionUpdateEvent`
+- any streaming transcript state comparable to the Windows flow
 
-- `Webhook` plugin receives transcription completion events on Linux
-- `LiveTranscript` receives at least start/stop/completed events on Linux
-- failure path emits plugin-visible failure events
+Impact:
 
-Notes:
+- plugins that depend on full live-update behavior may still have reduced functionality on Linux
 
-- partial transcript events should be deferred unless streaming/polling partials are first-class in Linux
-- do not invent new event shapes unless the existing SDK events are insufficient
+## Updated Execution Strategy
 
-### Phase 2. Resolve and apply profiles during dictation
+The foundational hookup work is complete. Remaining work should now be done in parity order: user-visible Windows behavior first, then optional deeper UX polish.
+
+### Phase 8. Port the prompt palette workflow
 
 Primary goal:
 
-- make profiles influence actual dictation behavior
+- make Linux prompt actions usable the same way as Windows, not only through profile-bound dictation
 
-Files likely involved:
+Likely work:
 
-- `src/TypeWhisper.Linux/Services/DictationOrchestrator.cs`
-- `src/TypeWhisper.Core/Services/ProfileService.cs`
-- `src/TypeWhisper.Linux/ViewModels/Sections/ProfilesSectionViewModel.cs`
-- `src/TypeWhisper.Linux/Views/Sections/ProfilesSection.axaml`
-- possibly `src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.cs`
-
-Required changes:
-
-- resolve the active process name and browser URL before transcription
-- call `MatchProfile(processName, url)`
-- define an effective dictation context:
-  - source language
-  - selected task
-  - model override
-  - prompt action
-  - whisper mode override
-- persist active profile name into history and plugin events
-- update Linux UI so the profiles screen can edit more than name + process list
-
-Initial Linux scope recommendation:
-
-- process-name matching
-- URL matching where available
-- language override
-- model override
-- prompt action binding
-- profile name in history/events
-
-Deferred unless needed immediately:
-
-- per-profile hotkeys
-- full website-aware behavior on Wayland
-- whisper mode override if audio stack support is incomplete
+- add Linux prompt-palette hotkey support
+- add a Linux prompt palette UI
+- route selected/captured text through prompt actions outside dictation
 
 Acceptance criteria:
 
-- a matching profile changes effective language/model/prompt selection during dictation
-- the selected profile name is visible in saved history records
-- plugin events include `ProfileName`
+- Linux can trigger prompt actions without starting a dictation session
+- behavior is close to the Windows prompt palette flow
 
-### Phase 3. Integrate the post-processing pipeline
+### Phase 9. Implement whisper mode on Linux
 
 Primary goal:
 
-- replace the hand-written dictation post-processing path with the existing pipeline abstraction
+- make the shared whisper-mode setting and profile override affect Linux recording
 
-Files likely involved:
+Likely work:
 
-- `src/TypeWhisper.Linux/Services/DictationOrchestrator.cs`
-- `src/TypeWhisper.Core/Interfaces/IPostProcessingPipeline.cs`
-- `src/TypeWhisper.Core/Services/PostProcessingPipeline.cs`
-- `src/TypeWhisper.Linux/Services/Plugins/PluginManager.cs`
-
-Required changes:
-
-- inject `IPostProcessingPipeline` into the Linux dictation flow
-- build `PipelineOptions` using:
-  - dictionary corrector
-  - snippet expander
-  - vocabulary booster if applicable
-  - plugin post-processors from active plugins
-  - status callback
-- preserve current behavior where pipeline failures should not break transcription output
+- define the Linux whisper-mode capture behavior
+- wire global and profile overrides into recording
+- verify parity against the Windows capture path
 
 Acceptance criteria:
 
-- dictionary and snippets still work after migration
-- enabled post-processor plugins affect final text on Linux
-- pipeline failures degrade gracefully and keep dictation usable
+- enabling whisper mode changes Linux recording behavior in a meaningful, testable way
+- profile whisper overrides are no longer dead fields
 
-### Phase 4. Hook prompt actions and LLM providers into the pipeline
+### Phase 10. Improve profile authoring parity
 
 Primary goal:
 
-- make the Prompts section operational instead of storage-only
+- bring the Linux Profiles section closer to the Windows workflow
 
-Files likely involved:
+Likely work:
 
-- `src/TypeWhisper.Linux/Services/DictationOrchestrator.cs`
-- `src/TypeWhisper.Linux/Services/Plugins/PluginManager.cs`
-- `src/TypeWhisper.Core/Services/PromptActionService.cs`
-- provider plugins that expose `ILlmProviderPlugin`
-
-Required changes:
-
-- choose a Linux rule for selecting the active prompt action:
-  - profile-bound prompt action, or
-  - a globally enabled/default prompt action
-- choose a Linux rule for selecting the active LLM provider/model
-- add `LlmHandler` to pipeline options
-- surface useful user-facing status during AI processing
-
-Open design question:
-
-- whether Linux should support exactly one active prompt action in dictation, or a user-selected prompt palette workflow later
-
-Recommended first implementation:
-
-- support one optional prompt action in dictation
-- source it from the active profile first
-- if no profile prompt action is set, do not run LLM processing automatically
+- add live current-app/current-URL inspection
+- add quick-add helpers for active process and URL
+- surface the currently matched profile in the UI
 
 Acceptance criteria:
 
-- a profile-configured prompt action runs through an enabled LLM provider on Linux
-- processed text is inserted and saved as final text
-- failures fall back to the pre-LLM text with a clear status message
+- Linux users can create and validate profiles with less manual trial and error
+- the Linux profiles workflow feels much closer to Windows
 
-### Phase 5. Define and implement action plugin execution
+### Phase 11. Port overlay-style dictation presentation
 
 Primary goal:
 
-- decide when action plugins run and wire that into Linux dictation
+- make Linux dictation look and feel closer to the Windows recording experience
 
-Files likely involved:
+Likely work:
 
-- `src/TypeWhisper.Linux/Services/DictationOrchestrator.cs`
-- `src/TypeWhisper.PluginSDK/Models/ActionContext.cs`
-- `src/TypeWhisper.PluginSDK/IActionPlugin.cs`
-
-Design options:
-
-1. Auto-run all enabled action plugins after successful transcription.
-2. Allow actions to be bound per profile.
-3. Add an explicit user-triggered execution surface later and do not auto-run yet.
-
-Recommended first implementation:
-
-- do not auto-run all action plugins globally
-- support action execution only when explicitly bound by profile or future UI
-
-Reason:
-
-- action plugins can have side effects like issue creation or file writes
-- global auto-execution is too risky as a Linux default
+- design a Linux overlay shell/presentation model
+- expose recording, processing, feedback, and active-profile state in that surface
+- align timing and feedback behavior with Windows where practical
 
 Acceptance criteria:
 
-- at least one explicit binding path exists for Linux action execution
-- action completion emits `ActionCompletedEvent`
-- action failures are surfaced without breaking base dictation
+- Linux dictation provides a dedicated in-session presentation layer instead of only main-window status updates
 
-### Phase 6. Clean up shell/UI gaps
+### Phase 12. Add partial transcript / live update parity
 
 Primary goal:
 
-- remove dead shell paths or make them real
+- close the remaining plugin/runtime event gap for streaming updates
 
-Subtasks:
+Likely work:
 
-- decide whether Linux keeps:
-  - a single main-window settings shell, or
-  - a separate `SettingsWindow`
-- if separate settings window is kept:
-  - wire tray settings to open it
-  - decide whether main window remains dashboard-first
-- if separate settings window is dropped:
-  - remove `SettingsWindow` and `SettingsWindowViewModel`
-
-- expose `StartupService` in General settings
-- add a Linux autostart toggle
+- define Linux partial transcript production
+- publish `PartialTranscriptionUpdateEvent`
+- connect any needed UI/plugin consumers
 
 Acceptance criteria:
 
-- there is exactly one intentional settings navigation model
-- autostart can be toggled from Linux UI and persists correctly
-
-### Phase 7. Audio routing implementation or UI gating
-
-Primary goal:
-
-- stop presenting non-functional controls as if they work
-
-Options:
-
-1. Implement Linux audio ducking and media pause.
-2. Hide or disable those controls until implementation lands.
-
-Recommended first implementation:
-
-- disable or clearly badge the controls as unsupported in current Linux builds unless implementation is ready in the same workstream
-
-Potential implementation targets:
-
-- ducking via `pactl`
-- media pause via MPRIS over D-Bus
-
-Acceptance criteria:
-
-- the UI no longer implies completed functionality when runtime support is absent
+- Linux plugins can receive incremental transcript updates where supported
 
 ## Suggested Issue Breakdown
 
-These can become GitHub issues after the plan is reviewed:
+These are the remaining GitHub issues implied by the current state:
 
-1. Publish Linux dictation lifecycle events to the plugin event bus
-2. Apply active profile matching and overrides in Linux dictation
-3. Replace ad hoc Linux text post-processing with `IPostProcessingPipeline`
-4. Execute prompt actions through enabled Linux LLM provider plugins
-5. Define and wire explicit action plugin execution on Linux
-6. Resolve Linux settings shell duplication and wire tray settings intentionally
-7. Expose XDG autostart through Linux General settings
-8. Implement or gate Linux audio ducking and media pause controls
+1. Add Linux prompt palette hotkey and prompt palette UI
+2. Implement Linux whisper mode and profile whisper overrides
+3. Port Windows live profile-context helpers to Linux
+4. Design and implement Linux overlay-style dictation presentation
+5. Publish Linux partial transcription update events
 
 ## Verification
 
-### Build
+### Current baseline
+
+These commands currently pass after the completed hookup work:
 
 ```bash
+dotnet test tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj -nologo
 dotnet build TypeWhisper.slnx -nologo
 ```
 
-### Focused validation
+### Remaining focused validation
 
-1. Enable `Webhook` plugin and verify Linux dictation emits completion payloads.
-2. Enable `LiveTranscript` and verify it reacts to Linux recording lifecycle events.
-3. Create a profile with language/model/prompt overrides and verify dictation behavior changes in the matching app.
-4. Configure an LLM provider plus one prompt action and verify Linux dictation runs it.
-5. Save history and confirm profile name, engine, model, and final text are recorded correctly.
-6. Verify tray settings behavior matches the chosen shell design.
-7. Toggle autostart and confirm `~/.config/autostart/typewhisper.desktop` is created/removed.
+1. Verify Linux prompt palette behavior matches Windows once that workflow is ported.
+2. Verify whisper mode changes Linux capture behavior and that profile overrides take effect.
+3. Verify current-app/current-URL helpers create working profiles without manual entry.
+4. Verify overlay/session feedback on Linux matches the Windows recording lifecycle closely.
+5. Verify partial transcript events are emitted and consumed correctly by Linux plugins.
 
 ## Recommendation
 
-Start with Phases 1 through 3 in one implementation slice. They unlock the real Linux runtime path and make existing plugins, profile data, and post-processing abstractions meaningful. After that, Phases 4 and 5 can be implemented with less rework because the required context and lifecycle hooks will already exist.
+The next highest-value work is `prompt palette`, then `whisper mode`, then `profile live-context tooling`. Those are the most visible remaining places where the Windows app still does more than the Linux port.

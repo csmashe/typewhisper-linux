@@ -12,6 +12,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
 
     [ObservableProperty] private string _hotkeyText = "";
+    [ObservableProperty] private string _promptPaletteHotkeyText = "";
     [ObservableProperty] private string _statusMessage = "";
     [ObservableProperty] private RecordingMode _mode;
 
@@ -23,6 +24,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         _hotkey = hotkey;
         _settings = settings;
         HotkeyText = _hotkey.CurrentHotkeyString;
+        PromptPaletteHotkeyText = settings.Current.PromptPaletteHotkey;
         Mode = settings.Current.Mode;
     }
 
@@ -31,13 +33,33 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetHotkeyFromString(HotkeyText))
         {
-            _settings.Save(_settings.Current with { ToggleHotkey = HotkeyText });
+            _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
             StatusMessage = $"Hotkey set to {_hotkey.CurrentHotkeyString}.";
             HotkeyText = _hotkey.CurrentHotkeyString;
         }
         else
         {
             StatusMessage = $"Could not parse '{HotkeyText}'. Try e.g. Ctrl+Shift+Space, Alt+F9, Ctrl+K.";
+        }
+    }
+
+    [RelayCommand]
+    private void ApplyPromptPaletteHotkey()
+    {
+        if (_hotkey.TrySetPromptPaletteHotkeyFromString(PromptPaletteHotkeyText))
+        {
+            _settings.Save(_settings.Current with
+            {
+                PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString
+            });
+            StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentPromptPaletteHotkeyString)
+                ? "Prompt palette hotkey cleared."
+                : $"Prompt palette hotkey set to {_hotkey.CurrentPromptPaletteHotkeyString}.";
+            PromptPaletteHotkeyText = _hotkey.CurrentPromptPaletteHotkeyString;
+        }
+        else
+        {
+            StatusMessage = $"Could not parse '{PromptPaletteHotkeyText}'. Try e.g. Ctrl+Shift+P, Alt+F10, Ctrl+K.";
         }
     }
 

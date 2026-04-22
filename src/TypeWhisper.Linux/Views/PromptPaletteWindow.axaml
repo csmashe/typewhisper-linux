@@ -1,0 +1,109 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:models="using:TypeWhisper.Core.Models"
+        mc:Ignorable="d"
+        x:Class="TypeWhisper.Linux.Views.PromptPaletteWindow"
+        x:DataType="models:PromptAction"
+        Title="Prompt Palette"
+        Width="560"
+        Height="520"
+        MinWidth="480"
+        MinHeight="420"
+        WindowStartupLocation="CenterScreen"
+        Topmost="True"
+        ShowInTaskbar="False"
+        CanResize="True">
+    <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20">
+        <StackPanel Grid.Row="0" Spacing="6">
+            <TextBlock Text="Prompt Palette" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="Choose a prompt action for the currently selected text."
+                       FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+
+        <Border Grid.Row="1"
+                x:Name="SourcePreviewBorder"
+                Margin="0,14,0,14"
+                Padding="12"
+                CornerRadius="8"
+                Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                IsVisible="False">
+            <StackPanel Spacing="4">
+                <TextBlock Text="Selected text" FontWeight="SemiBold" />
+                <TextBlock x:Name="SourcePreviewText"
+                           TextWrapping="Wrap"
+                           MaxHeight="72"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="2" RowDefinitions="Auto,*,Auto">
+            <TextBox Grid.Row="0"
+                     x:Name="SearchBox"
+                     PlaceholderText="Search prompt actions"
+                     TextChanged="SearchBox_OnTextChanged"
+                     KeyDown="SearchBox_OnKeyDown" />
+
+            <Border Grid.Row="1"
+                    Margin="0,12,0,0"
+                    CornerRadius="8"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <ListBox x:Name="ActionListBox"
+                         SelectionChanged="ActionListBox_OnSelectionChanged"
+                         DoubleTapped="ActionListBox_OnDoubleTapped">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:PromptAction">
+                            <Grid Margin="0,2" ColumnDefinitions="Auto,*">
+                                <Border Grid.Column="0"
+                                        Width="32"
+                                        Height="32"
+                                        Margin="0,0,10,0"
+                                        CornerRadius="8"
+                                        Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                    <TextBlock Text="{Binding Icon}"
+                                               FontSize="16"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center" />
+                                </Border>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding SystemPrompt}"
+                                               MaxLines="2"
+                                               TextWrapping="Wrap"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+
+            <TextBlock Grid.Row="2"
+                       x:Name="EmptyText"
+                       Margin="0,10,0,0"
+                       Text="No actions found"
+                       HorizontalAlignment="Center"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       IsVisible="False" />
+        </Grid>
+
+        <Grid Grid.Row="3" Margin="0,16,0,0" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Text="Enter runs the selected action. Esc closes."
+                       VerticalAlignment="Center"
+                       FontSize="11"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            <Button Grid.Column="1"
+                    Margin="12,0,8,0"
+                    Content="Cancel"
+                    Click="CancelButton_OnClick" />
+            <Button Grid.Column="2"
+                    Content="Run"
+                    Classes="accent"
+                    Click="RunButton_OnClick" />
+        </Grid>
+    </Grid>
+</Window>

@@ -59,6 +59,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
+        services.AddSingleton<PromptPaletteService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
@@ -83,6 +84,7 @@ internal static class ServiceRegistrations
 
         // Windows
         services.AddSingleton<MainWindow>();
+        services.AddTransient<PromptPaletteWindow>();
         services.AddTransient<WelcomeWizard>();
     }
 }

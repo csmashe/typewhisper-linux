@@ -30,6 +30,8 @@ public sealed class HotkeyService : IDisposable
 
     private KeyCode _key = KeyCode.VcSpace;
     private ModifierMask _modifiers = ModifierMask.LeftCtrl | ModifierMask.LeftShift;
+    private KeyCode? _promptPaletteKey;
+    private ModifierMask _promptPaletteModifiers = ModifierMask.None;
     private RecordingMode _mode = RecordingMode.Toggle;
     private bool _keyIsDown;
     private DateTime _keyDownTime;
@@ -41,6 +43,7 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? DictationToggleRequested;
     public event EventHandler? DictationStartRequested;
     public event EventHandler? DictationStopRequested;
+    public event EventHandler? PromptPaletteRequested;
 
     public RecordingMode Mode
     {
@@ -66,8 +69,16 @@ public sealed class HotkeyService : IDisposable
         _modifiers = modifiers;
     }
 
+    public void SetPromptPaletteHotkey(KeyCode? key, ModifierMask modifiers)
+    {
+        _promptPaletteKey = key;
+        _promptPaletteModifiers = key is null ? ModifierMask.None : modifiers;
+    }
+
     /// <summary>Human-friendly form of the currently-bound hotkey, e.g. "Ctrl+Shift+Space".</summary>
     public string CurrentHotkeyString => FormatHotkey(_key, _modifiers);
+    public string CurrentPromptPaletteHotkeyString =>
+        _promptPaletteKey is null ? "" : FormatHotkey(_promptPaletteKey.Value, _promptPaletteModifiers);
 
     /// <summary>
     /// Parses strings like "Ctrl+Shift+Space", "Alt+F9", "Ctrl+K" and binds
@@ -78,13 +89,50 @@ public sealed class HotkeyService : IDisposable
     /// </summary>
     public bool TrySetHotkeyFromString(string text)
     {
+        if (!TryParseHotkey(text, out var key, out var modifiers))
+            return false;
+
+        SetHotkey(key!.Value, modifiers);
+        return true;
+    }
+
+    public bool TrySetPromptPaletteHotkeyFromString(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            SetPromptPaletteHotkey(null, ModifierMask.None);
+            return true;
+        }
+
+        if (!TryParseHotkey(text, out var key, out var modifiers))
+            return false;
+
+        SetPromptPaletteHotkey(key, modifiers);
+        return true;
+    }
+
+    private static string FormatHotkey(KeyCode key, ModifierMask mods)
+    {
+        var parts = new List<string>();
+        if (mods.HasFlag(ModifierMask.LeftCtrl) || mods.HasFlag(ModifierMask.RightCtrl)) parts.Add("Ctrl");
+        if (mods.HasFlag(ModifierMask.LeftShift) || mods.HasFlag(ModifierMask.RightShift)) parts.Add("Shift");
+        if (mods.HasFlag(ModifierMask.LeftAlt) || mods.HasFlag(ModifierMask.RightAlt)) parts.Add("Alt");
+        if (mods.HasFlag(ModifierMask.LeftMeta) || mods.HasFlag(ModifierMask.RightMeta)) parts.Add("Meta");
+
+        var keyName = key.ToString();
+        if (keyName.StartsWith("Vc", StringComparison.Ordinal)) keyName = keyName[2..];
+        parts.Add(keyName);
+        return string.Join('+', parts);
+    }
+
+    private static bool TryParseHotkey(string text, out KeyCode? key, out ModifierMask modifiers)
+    {
+        key = null;
+        modifiers = ModifierMask.None;
         if (string.IsNullOrWhiteSpace(text)) return false;
 
         var parts = text.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0) return false;
-
-        var modifiers = ModifierMask.None;
-        KeyCode? key = null;
 
         foreach (var raw in parts)
         {
@@ -102,6 +150,7 @@ public sealed class HotkeyService : IDisposable
                 key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{char.ToUpperInvariant(part[0])}");
                 continue;
             }
+
             if (part.Length == 1 && part[0] is >= '0' and <= '9')
             {
                 key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{part[0]}");
@@ -126,7 +175,11 @@ public sealed class HotkeyService : IDisposable
                 "down" => KeyCode.VcDown,
                 _ => (KeyCode?)null,
             };
-            if (named is not null) { key = named.Value; continue; }
+            if (named is not null)
+            {
+                key = named.Value;
+                continue;
+            }
 
             if (part.Length is >= 2 and <= 3 && part[0] == 'f' &&
                 int.TryParse(part[1..], out var fNum) && fNum is >= 1 and <= 24)
@@ -135,30 +188,21 @@ public sealed class HotkeyService : IDisposable
                 continue;
             }
 
+            key = null;
             return false;
         }
 
-        if (key is null) return false;
-        SetHotkey(key.Value, modifiers);
-        return true;
-    }
-
-    private static string FormatHotkey(KeyCode key, ModifierMask mods)
-    {
-        var parts = new List<string>();
-        if (mods.HasFlag(ModifierMask.LeftCtrl) || mods.HasFlag(ModifierMask.RightCtrl)) parts.Add("Ctrl");
-        if (mods.HasFlag(ModifierMask.LeftShift) || mods.HasFlag(ModifierMask.RightShift)) parts.Add("Shift");
-        if (mods.HasFlag(ModifierMask.LeftAlt) || mods.HasFlag(ModifierMask.RightAlt)) parts.Add("Alt");
-        if (mods.HasFlag(ModifierMask.LeftMeta) || mods.HasFlag(ModifierMask.RightMeta)) parts.Add("Meta");
-
-        var keyName = key.ToString();
-        if (keyName.StartsWith("Vc", StringComparison.Ordinal)) keyName = keyName[2..];
-        parts.Add(keyName);
-        return string.Join('+', parts);
+        return key is not null;
     }
 
     private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
     {
+        if (MatchesPromptPaletteHotkey(e))
+        {
+            PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
         if (e.Data.KeyCode != _key) return;
         if ((e.RawEvent.Mask & _modifiers) != _modifiers) return;
 
@@ -188,6 +232,13 @@ public sealed class HotkeyService : IDisposable
         {
             Debug.WriteLine($"[HotkeyService] Press handler threw: {ex.Message}");
         }
+    }
+
+    private bool MatchesPromptPaletteHotkey(KeyboardHookEventArgs e)
+    {
+        if (_promptPaletteKey is null) return false;
+        return e.Data.KeyCode == _promptPaletteKey.Value
+            && (e.RawEvent.Mask & _promptPaletteModifiers) == _promptPaletteModifiers;
     }
 
     private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
