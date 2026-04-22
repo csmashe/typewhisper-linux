@@ -19,6 +19,7 @@ public partial class AudioSectionViewModel : ObservableObject
     [ObservableProperty] private AudioInputDevice? _selectedDevice;
     [ObservableProperty] private bool _audioDuckingEnabled;
     [ObservableProperty] private bool _pauseMediaDuringRecording;
+    [ObservableProperty] private bool _whisperModeEnabled;
     [ObservableProperty] private string? _translationTargetLanguage;
     [ObservableProperty] private string _statusMessage = "";
     [ObservableProperty] private double _previewLevel;
@@ -46,6 +47,7 @@ public partial class AudioSectionViewModel : ObservableObject
 
         AudioDuckingEnabled = settings.Current.AudioDuckingEnabled;
         PauseMediaDuringRecording = settings.Current.PauseMediaDuringRecording;
+        WhisperModeEnabled = settings.Current.WhisperModeEnabled;
         TranslationTargetLanguage = settings.Current.TranslationTargetLanguage;
         _audio.LevelChanged += OnLevelChanged;
 
@@ -94,6 +96,9 @@ public partial class AudioSectionViewModel : ObservableObject
 
     partial void OnPauseMediaDuringRecordingChanged(bool value)
         => _settings.Save(_settings.Current with { PauseMediaDuringRecording = value });
+
+    partial void OnWhisperModeEnabledChanged(bool value)
+        => _settings.Save(_settings.Current with { WhisperModeEnabled = value });
 
     partial void OnTranslationTargetLanguageChanged(string? value)
     {

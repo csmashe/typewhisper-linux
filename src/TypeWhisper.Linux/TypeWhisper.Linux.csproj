@@ -17,6 +17,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="TypeWhisper.Linux.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Window/dock icon: bundled as Avalonia resource + copied to output
          so absolute-path references (tray, autostart .desktop) also work. -->
     <AvaloniaResource Include="Resources\typewhisper.ico" />

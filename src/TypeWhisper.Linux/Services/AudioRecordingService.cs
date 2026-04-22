@@ -16,6 +16,9 @@ public sealed class AudioRecordingService : IDisposable
     private const int SampleRate = 16000;
     private const int Channels = 1;
     private const uint FramesPerBuffer = 512;
+    private const float AgcTargetRms = 0.1f;
+    private const float AgcMaxGain = 20f;
+    private const float AgcMinGain = 1f;
 
     private static int _paInitCount;
     private static readonly object _paInitLock = new();
@@ -33,6 +36,7 @@ public sealed class AudioRecordingService : IDisposable
     public bool IsPreviewing => _isPreviewing;
     public float CurrentRmsLevel => _currentRmsLevel;
     public int? SelectedDeviceIndex { get; set; }
+    public bool WhisperModeEnabled { get; set; }
 
     public event EventHandler<float>? LevelChanged;
 
@@ -155,14 +159,44 @@ public sealed class AudioRecordingService : IDisposable
         var buffer = new float[frameCount];
         System.Runtime.InteropServices.Marshal.Copy(input, buffer, 0, (int)frameCount);
 
-        double sumSquares = 0;
-        for (var i = 0; i < buffer.Length; i++)
-            sumSquares += buffer[i] * buffer[i];
-        UpdateLevel((float)Math.Sqrt(sumSquares / Math.Max(1, buffer.Length)));
+        var processedBuffer = ApplyWhisperModeGain(buffer, copySamples && WhisperModeEnabled);
+        UpdateLevel(ComputeRmsLevel(processedBuffer));
 
         if (copySamples)
-            lock (_sampleLock) { _samples.AddRange(buffer); }
+            lock (_sampleLock) { _samples.AddRange(processedBuffer); }
         return StreamCallbackResult.Continue;
+    }
+
+    internal static float[] ApplyWhisperModeGain(float[] samples, bool whisperModeEnabled)
+    {
+        if (!whisperModeEnabled || samples.Length == 0)
+            return samples;
+
+        var rms = ComputeRmsLevel(samples);
+        if (rms <= 0.0001f)
+            return samples;
+
+        var gain = Math.Clamp(AgcTargetRms / rms, AgcMinGain, AgcMaxGain);
+        if (gain <= 1f)
+            return samples;
+
+        var adjusted = new float[samples.Length];
+        for (var i = 0; i < samples.Length; i++)
+            adjusted[i] = Math.Clamp(samples[i] * gain, -1f, 1f);
+
+        return adjusted;
+    }
+
+    internal static float ComputeRmsLevel(float[] samples)
+    {
+        if (samples.Length == 0)
+            return 0f;
+
+        double sumSquares = 0;
+        for (var i = 0; i < samples.Length; i++)
+            sumSquares += samples[i] * samples[i];
+
+        return (float)Math.Sqrt(sumSquares / samples.Length);
     }
 
     private void UpdateLevel(float level)

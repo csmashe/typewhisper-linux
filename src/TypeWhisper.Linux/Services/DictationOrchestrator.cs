@@ -115,6 +115,8 @@ public sealed class DictationOrchestrator : IDisposable
         {
             if (_audio.IsRecording) return;
 
+            _audio.WhisperModeEnabled = _settings.Current.WhisperModeEnabled;
+
             // Start capturing audio immediately — the user's finger is on the
             // key and they may already be speaking (especially in PTT).
             _recordingStart = DateTime.UtcNow;
@@ -150,6 +152,11 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
                 _recordingAppUrl = _activeWindow.GetBrowserUrl();
                 _recordingProfile = _profiles.MatchProfile(_recordingAppProcess, _recordingAppUrl);
+                // Keep recording start hot, then converge to the effective
+                // Windows-style profile->global whisper-mode precedence as
+                // soon as context matching finishes.
+                _audio.WhisperModeEnabled =
+                    _recordingProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
             }
             catch (Exception ex)
             {

@@ -46,12 +46,19 @@
 
             <Separator Margin="0,12,0,0" />
             <TextBlock Text="Audio routing" FontWeight="SemiBold" />
+            <CheckBox Content="Whisper mode (AGC)"
+                      IsChecked="{Binding WhisperModeEnabled}"
+                      ToolTip.Tip="Applies automatic gain control during recording to boost quiet speech, matching the Windows whisper-mode capture path." />
             <CheckBox Content="Duck other audio while recording"
                       IsChecked="{Binding AudioDuckingEnabled}"
                       ToolTip.Tip="Lower the volume of other apps while you dictate. Uses pactl on Linux." />
             <CheckBox Content="Pause media playback during recording"
                       IsChecked="{Binding PauseMediaDuringRecording}"
                       ToolTip.Tip="Pause supported MPRIS/media players while recording. Uses playerctl on Linux." />
+            <TextBlock Text="Whisper mode affects recorded dictation audio and can also be overridden per profile."
+                       FontSize="11"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap" />
             <TextBlock Text="These features are best-effort and depend on Linux desktop tools being available: pactl for ducking and playerctl for media control."
                        FontSize="11"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
