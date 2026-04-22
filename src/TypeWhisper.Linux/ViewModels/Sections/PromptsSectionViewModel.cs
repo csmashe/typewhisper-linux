@@ -13,15 +13,24 @@ public partial class PromptsSectionViewModel : ObservableObject
     private readonly IPromptActionService _prompts;
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
+    private string? _editingActionId;
 
     public ObservableCollection<PromptAction> Actions { get; } = [];
     public ObservableCollection<ProviderOption> AvailableProviders { get; } = [];
     public ObservableCollection<ActionPluginOption> ActionPluginOptions { get; } = [];
 
-    [ObservableProperty] private string _newName = "";
-    [ObservableProperty] private string _newSystemPrompt = "";
-    [ObservableProperty] private string? _newProviderOverride;
-    [ObservableProperty] private string? _newTargetActionPluginId;
+    [ObservableProperty] private PromptAction? _selectedAction;
+    [ObservableProperty] private bool _isCreatingNew;
+    [ObservableProperty] private string _editName = "";
+    [ObservableProperty] private string _editSystemPrompt = "";
+    [ObservableProperty] private string _editIcon = "\u2728";
+    [ObservableProperty] private string? _editProviderOverride;
+    [ObservableProperty] private string? _editTargetActionPluginId;
+
+    public bool HasSelectedAction => SelectedAction is not null || IsCreatingNew;
+    public int ActionCount => Actions.Count;
+    public int EnabledActionCount => Actions.Count(static action => action.IsEnabled);
+    public string Summary => $"{ActionCount} action(s), {EnabledActionCount} enabled";
 
     public string? DefaultLlmProvider
     {
@@ -44,25 +53,180 @@ public partial class PromptsSectionViewModel : ObservableObject
         _prompts = prompts;
         _pluginManager = pluginManager;
         _settings = settings;
-        _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(Refresh);
+
+        _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshPluginOptions);
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(DefaultLlmProvider)));
+
         RefreshPluginOptions();
-        Refresh();
+        RefreshActions();
     }
 
-    private void Refresh()
+    partial void OnSelectedActionChanged(PromptAction? value)
     {
+        if (value is null)
+        {
+            if (!IsCreatingNew)
+                ClearEditor();
+            NotifyStateChanged();
+            return;
+        }
+
+        IsCreatingNew = false;
+        _editingActionId = value.Id;
+        EditName = value.Name;
+        EditSystemPrompt = value.SystemPrompt;
+        EditIcon = value.Icon;
+        EditProviderOverride = value.ProviderOverride;
+        EditTargetActionPluginId = value.TargetActionPluginId;
+        NotifyStateChanged();
+    }
+
+    [RelayCommand]
+    private void StartCreate()
+    {
+        IsCreatingNew = true;
+        SelectedAction = null;
+        _editingActionId = null;
+        EditName = "";
+        EditSystemPrompt = "";
+        EditIcon = "\u2728";
+        EditProviderOverride = null;
+        EditTargetActionPluginId = null;
+        NotifyStateChanged();
+    }
+
+    [RelayCommand]
+    private void SaveAction()
+    {
+        if (string.IsNullOrWhiteSpace(EditName) || string.IsNullOrWhiteSpace(EditSystemPrompt))
+            return;
+
+        if (IsCreatingNew)
+        {
+            var action = new PromptAction
+            {
+                Id = Guid.NewGuid().ToString(),
+                Name = EditName.Trim(),
+                SystemPrompt = EditSystemPrompt.Trim(),
+                Icon = EditIcon,
+                ProviderOverride = EditProviderOverride,
+                TargetActionPluginId = EditTargetActionPluginId,
+                IsEnabled = true,
+                SortOrder = _prompts.Actions.Count
+            };
+
+            _prompts.AddAction(action);
+            RefreshActions();
+            SelectById(action.Id);
+            return;
+        }
+
+        if (_editingActionId is null)
+            return;
+
+        var existing = _prompts.Actions.FirstOrDefault(action => action.Id == _editingActionId);
+        if (existing is null)
+            return;
+
+        _prompts.UpdateAction(existing with
+        {
+            Name = EditName.Trim(),
+            SystemPrompt = EditSystemPrompt.Trim(),
+            Icon = EditIcon,
+            ProviderOverride = EditProviderOverride,
+            TargetActionPluginId = EditTargetActionPluginId
+        });
+        RefreshActions();
+        SelectById(existing.Id);
+    }
+
+    [RelayCommand]
+    private void DeleteSelectedAction()
+    {
+        if (SelectedAction is null || SelectedAction.IsPreset)
+            return;
+
+        _prompts.DeleteAction(SelectedAction.Id);
+        RefreshActions();
+        SelectedAction = null;
+    }
+
+    [RelayCommand]
+    private void ToggleEnabled(PromptAction? action)
+    {
+        if (action is null)
+            return;
+
+        _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled });
+        RefreshActions();
+    }
+
+    [RelayCommand]
+    private void MoveUp(PromptAction? action)
+    {
+        if (action is null)
+            return;
+
+        var orderedIds = _prompts.Actions.OrderBy(prompt => prompt.SortOrder).Select(prompt => prompt.Id).ToList();
+        var index = orderedIds.IndexOf(action.Id);
+        if (index <= 0)
+            return;
+
+        (orderedIds[index], orderedIds[index - 1]) = (orderedIds[index - 1], orderedIds[index]);
+        _prompts.Reorder(orderedIds);
+        RefreshActions();
+    }
+
+    [RelayCommand]
+    private void MoveDown(PromptAction? action)
+    {
+        if (action is null)
+            return;
+
+        var orderedIds = _prompts.Actions.OrderBy(prompt => prompt.SortOrder).Select(prompt => prompt.Id).ToList();
+        var index = orderedIds.IndexOf(action.Id);
+        if (index < 0 || index >= orderedIds.Count - 1)
+            return;
+
+        (orderedIds[index], orderedIds[index + 1]) = (orderedIds[index + 1], orderedIds[index]);
+        _prompts.Reorder(orderedIds);
+        RefreshActions();
+    }
+
+    [RelayCommand]
+    private void SeedPresets()
+    {
+        _prompts.SeedPresets();
+        RefreshActions();
+    }
+
+    private void RefreshActions()
+    {
+        var selectedId = SelectedAction?.Id ?? _editingActionId;
         Actions.Clear();
-        foreach (var a in _prompts.Actions.OrderBy(a => a.SortOrder).ThenBy(a => a.Name))
-            Actions.Add(a);
+        foreach (var action in _prompts.Actions.OrderBy(action => action.SortOrder))
+            Actions.Add(action);
+
+        if (selectedId is not null)
+        {
+            SelectById(selectedId);
+            return;
+        }
+
+        if (Actions.Count > 0 && !IsCreatingNew)
+            SelectedAction = Actions[0];
+        else
+            NotifyStateChanged();
     }
 
     private void RefreshPluginOptions()
     {
+        var selectedProvider = EditProviderOverride;
+        var selectedActionPlugin = EditTargetActionPluginId;
+
         AvailableProviders.Clear();
         AvailableProviders.Add(new ProviderOption(null, "Use default provider"));
-
         foreach (var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable))
         {
             var plugin = _pluginManager.AllPlugins.FirstOrDefault(candidate => ReferenceEquals(candidate.Instance, provider));
@@ -82,41 +246,36 @@ public partial class PromptsSectionViewModel : ObservableObject
         foreach (var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName))
             ActionPluginOptions.Add(new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName));
 
-        if (!AvailableProviders.Any(option => option.Value == NewProviderOverride))
-            NewProviderOverride = null;
-        if (!ActionPluginOptions.Any(option => option.Value == NewTargetActionPluginId))
-            NewTargetActionPluginId = null;
+        EditProviderOverride = AvailableProviders.Any(option => option.Value == selectedProvider) ? selectedProvider : null;
+        EditTargetActionPluginId = ActionPluginOptions.Any(option => option.Value == selectedActionPlugin) ? selectedActionPlugin : null;
     }
 
-    [RelayCommand]
-    private void AddPrompt()
+    private void SelectById(string id)
     {
-        if (string.IsNullOrWhiteSpace(NewName) || string.IsNullOrWhiteSpace(NewSystemPrompt)) return;
-        _prompts.AddAction(new PromptAction
-        {
-            Id = Guid.NewGuid().ToString(),
-            Name = NewName.Trim(),
-            SystemPrompt = NewSystemPrompt.Trim(),
-            IsEnabled = true,
-            IsPreset = false,
-            SortOrder = Actions.Count,
-            ProviderOverride = NewProviderOverride,
-            TargetActionPluginId = NewTargetActionPluginId,
-        });
-        NewName = "";
-        NewSystemPrompt = "";
-        NewProviderOverride = null;
-        NewTargetActionPluginId = null;
+        var match = Actions.FirstOrDefault(action => action.Id == id);
+        if (match is not null)
+            SelectedAction = match;
+        else
+            NotifyStateChanged();
     }
 
-    [RelayCommand]
-    private void Delete(PromptAction p) => _prompts.DeleteAction(p.Id);
+    private void ClearEditor()
+    {
+        _editingActionId = null;
+        EditName = "";
+        EditSystemPrompt = "";
+        EditIcon = "\u2728";
+        EditProviderOverride = null;
+        EditTargetActionPluginId = null;
+    }
 
-    [RelayCommand]
-    private void ToggleEnabled(PromptAction p) => _prompts.UpdateAction(p with { IsEnabled = !p.IsEnabled });
-
-    [RelayCommand]
-    private void SeedPresets() => _prompts.SeedPresets();
+    private void NotifyStateChanged()
+    {
+        OnPropertyChanged(nameof(HasSelectedAction));
+        OnPropertyChanged(nameof(ActionCount));
+        OnPropertyChanged(nameof(EnabledActionCount));
+        OnPropertyChanged(nameof(Summary));
+    }
 }
 
 public sealed record ProviderOption(string? Value, string Label);

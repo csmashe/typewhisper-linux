@@ -41,6 +41,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IPromptActionService>(
             new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
+        services.AddSingleton<ITranslationService, TranslationService>();
 
         // Plugin subsystem
         services.AddSingleton<PluginEventBus>();
@@ -61,9 +62,6 @@ internal static class ServiceRegistrations
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
-
-        // Deferred until implementations land:
-        //   ITranslationService   (needs PluginManager port)
 
         // ViewModels — section VMs are singletons so state stays consistent
         // across the sidebar nav and the onboarding wizard.

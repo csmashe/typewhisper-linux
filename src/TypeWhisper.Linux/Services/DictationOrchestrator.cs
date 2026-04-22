@@ -36,6 +36,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly ISnippetService _snippets;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
     private readonly IPostProcessingPipeline _pipeline;
+    private readonly ITranslationService _translation;
     private readonly PromptProcessingService _promptProcessing;
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
@@ -69,6 +70,7 @@ public sealed class DictationOrchestrator : IDisposable
         ISnippetService snippets,
         IVocabularyBoostingService vocabularyBoosting,
         IPostProcessingPipeline pipeline,
+        ITranslationService translation,
         PromptProcessingService promptProcessing)
     {
         _hotkey = hotkey;
@@ -86,6 +88,7 @@ public sealed class DictationOrchestrator : IDisposable
         _snippets = snippets;
         _vocabularyBoosting = vocabularyBoosting;
         _pipeline = pipeline;
+        _translation = translation;
         _promptProcessing = promptProcessing;
     }
 
@@ -256,6 +259,7 @@ public sealed class DictationOrchestrator : IDisposable
             };
 
             var promptAction = ResolvePromptAction();
+            var translationTarget = _recordingProfile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
 
             var pluginProcessors = _models.PluginManager.PostProcessors
                 .Select(processor => new PluginPostProcessor(
@@ -277,6 +281,10 @@ public sealed class DictationOrchestrator : IDisposable
                     LlmHandler = promptAction is not null
                         ? (text, token) => _promptProcessing.ProcessAsync(promptAction, text, token)
                         : null,
+                    TranslationHandler = !string.IsNullOrWhiteSpace(translationTarget)
+                        ? (text, source, target, token) => _translation.TranslateAsync(text, source, target, token)
+                        : null,
+                    TranslationTarget = string.IsNullOrWhiteSpace(translationTarget) ? null : translationTarget,
                     EffectiveSourceLanguage = languageHint,
                     DetectedLanguage = result?.DetectedLanguage,
                     PluginPostProcessors = pluginProcessors,

@@ -3,6 +3,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -13,13 +14,30 @@ public partial class AudioSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
 
     public ObservableCollection<AudioInputDevice> Devices { get; } = [];
+    public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
 
     [ObservableProperty] private AudioInputDevice? _selectedDevice;
     [ObservableProperty] private bool _audioDuckingEnabled;
     [ObservableProperty] private bool _pauseMediaDuringRecording;
+    [ObservableProperty] private string? _translationTargetLanguage;
     [ObservableProperty] private string _statusMessage = "";
     [ObservableProperty] private double _previewLevel;
     [ObservableProperty] private bool _isPreviewActive;
+
+    public TranslationTargetOption? SelectedTranslationTargetOption
+    {
+        get => TranslationTargetOptions.FirstOrDefault(option =>
+            string.Equals(option.Code, TranslationTargetLanguage, StringComparison.Ordinal));
+        set
+        {
+            var code = value?.Code;
+            if (string.Equals(code, TranslationTargetLanguage, StringComparison.Ordinal))
+                return;
+
+            TranslationTargetLanguage = code;
+            OnPropertyChanged();
+        }
+    }
 
     public AudioSectionViewModel(AudioRecordingService audio, ISettingsService settings)
     {
@@ -28,7 +46,11 @@ public partial class AudioSectionViewModel : ObservableObject
 
         AudioDuckingEnabled = settings.Current.AudioDuckingEnabled;
         PauseMediaDuringRecording = settings.Current.PauseMediaDuringRecording;
+        TranslationTargetLanguage = settings.Current.TranslationTargetLanguage;
         _audio.LevelChanged += OnLevelChanged;
+
+        foreach (var option in TranslationModelInfo.GlobalTargetOptions)
+            TranslationTargetOptions.Add(option);
 
         RefreshDevices();
     }
@@ -72,6 +94,12 @@ public partial class AudioSectionViewModel : ObservableObject
 
     partial void OnPauseMediaDuringRecordingChanged(bool value)
         => _settings.Save(_settings.Current with { PauseMediaDuringRecording = value });
+
+    partial void OnTranslationTargetLanguageChanged(string? value)
+    {
+        _settings.Save(_settings.Current with { TranslationTargetLanguage = value });
+        OnPropertyChanged(nameof(SelectedTranslationTargetOption));
+    }
 
     public void ActivatePreview()
     {

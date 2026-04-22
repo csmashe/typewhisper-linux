@@ -16,21 +16,19 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     }
 
     [Fact]
-    public void AddPrompt_PersistsProviderOverrideAndTargetAction()
+    public void SaveAction_PersistsProviderOverrideAndTargetAction()
     {
         var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
-        {
-            NewName = "Rewrite",
-            NewSystemPrompt = "Rewrite this",
-            NewProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini",
-            NewTargetActionPluginId = "com.typewhisper.linear"
-        };
-
-        sut.AddPromptCommand.Execute(null);
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Rewrite";
+        sut.EditSystemPrompt = "Rewrite this";
+        sut.EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini";
+        sut.EditTargetActionPluginId = "com.typewhisper.linear";
+        sut.SaveActionCommand.Execute(null);
 
         var action = Assert.Single(prompts.Actions);
         Assert.Equal("plugin:com.typewhisper.openai:gpt-4.1-mini", action.ProviderOverride);

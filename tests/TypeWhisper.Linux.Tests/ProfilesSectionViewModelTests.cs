@@ -28,28 +28,34 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         var sut = new ProfilesSectionViewModel(service, pluginManager, promptActions);
 
         var option = Assert.Single(sut.ModelOptions);
-        Assert.Equal("", option.Value);
+        Assert.Null(option.Value);
         Assert.Equal("Use global default", option.Label);
     }
 
     [Fact]
-    public void AddProfile_PersistsConfiguredOverrides()
+    public void SaveProfile_PersistsConfiguredOverrides()
     {
         var service = CreateProfileService();
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, pluginManager, promptActions)
-        {
-            NewName = "Docs",
-            NewProcessNames = "firefox, chrome",
-            NewUrlPatterns = "docs.google.com, *.github.com",
-            NewInputLanguage = "de",
-            NewSelectedTask = "translate",
-            NewModelId = "plugin:com.typewhisper.sherpa-onnx:parakeet"
-        };
-
+        var sut = new ProfilesSectionViewModel(service, pluginManager, promptActions);
         sut.AddProfileCommand.Execute(null);
+
+        sut.EditName = "Docs";
+        sut.ProcessNameInput = "firefox";
+        sut.AddProcessNameChipCommand.Execute(null);
+        sut.ProcessNameInput = "chrome";
+        sut.AddProcessNameChipCommand.Execute(null);
+        sut.UrlPatternInput = "docs.google.com";
+        sut.AddUrlPatternChipCommand.Execute(null);
+        sut.UrlPatternInput = "*.github.com";
+        sut.AddUrlPatternChipCommand.Execute(null);
+        sut.EditLanguage = "de";
+        sut.EditTask = "translate";
+        sut.EditTranslationTarget = "en";
+        sut.EditModelId = "plugin:com.typewhisper.sherpa-onnx:parakeet";
+        sut.SaveProfileCommand.Execute(null);
 
         var profile = Assert.Single(service.Profiles);
         Assert.Equal("Docs", profile.Name);
@@ -57,6 +63,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         Assert.Equal(["docs.google.com", "*.github.com"], profile.UrlPatterns);
         Assert.Equal("de", profile.InputLanguage);
         Assert.Equal("translate", profile.SelectedTask);
+        Assert.Equal("en", profile.TranslationTarget);
         Assert.Equal("plugin:com.typewhisper.sherpa-onnx:parakeet", profile.TranscriptionModelOverride);
     }
 
