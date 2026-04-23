@@ -19,27 +19,79 @@ jobs:
     runs-on: windows-latest
     outputs:
       projects: ${{ steps.discover.outputs.projects }}
+      has_projects: ${{ steps.discover.outputs.has_projects }}
+      scan_mode: ${{ steps.discover.outputs.scan_mode }}
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - id: discover
         shell: pwsh
         run: |
-          $projects = Get-ChildItem plugins -Recurse -Filter *.csproj |
-            Sort-Object FullName |
-            ForEach-Object {
-              [ordered]@{
-                name = $_.BaseName
-                path = $_.FullName.Replace($env:GITHUB_WORKSPACE + [System.IO.Path]::DirectorySeparatorChar, '').Replace('\', '/')
-              }
-            }
-
-          if (-not $projects) {
+          $allProjects = @(Get-ChildItem plugins -Recurse -Filter *.csproj | Sort-Object FullName)
+          if ($allProjects.Count -eq 0) {
             throw "No plugin projects found under plugins/."
           }
 
-          "projects=$($projects | ConvertTo-Json -Compress -Depth 3)" >> $env:GITHUB_OUTPUT
+          $runAll = $env:GITHUB_EVENT_NAME -ne 'pull_request'
+          $selectedPluginDirs = [ordered]@{}
+          $changedFiles = @()
+
+          if (-not $runAll) {
+            $baseSha = '${{ github.event.pull_request.base.sha }}'
+            $changedFiles = @(git diff --name-only $baseSha HEAD | ForEach-Object { $_.Replace('\', '/') })
+
+            foreach ($file in $changedFiles) {
+              if (
+                $file -eq '.github/workflows/plugins-smoke.yml' -or
+                $file -eq 'Directory.Build.props' -or
+                $file -like 'src/TypeWhisper.PluginSDK/*'
+              ) {
+                $runAll = $true
+                break
+              }
+
+              if ($file -match '^plugins/([^/]+)/') {
+                $selectedPluginDirs[$Matches[1]] = $true
+              }
+            }
+          }
+
+          $projects = @()
+          foreach ($project in $allProjects) {
+            $relativePath = $project.FullName.Replace($env:GITHUB_WORKSPACE + [System.IO.Path]::DirectorySeparatorChar, '').Replace('\', '/')
+            $parts = $relativePath.Split('/')
+            $pluginDir = if ($parts.Count -ge 2) { $parts[1] } else { '' }
+
+            if ($runAll -or $selectedPluginDirs.Contains($pluginDir)) {
+              $projects += [ordered]@{
+                name = $project.BaseName
+                path = $relativePath
+              }
+            }
+          }
+
+          $scanMode = if ($runAll) { 'all' } elseif ($projects.Count -gt 0) { 'changed' } else { 'none' }
+          $json = if ($projects.Count -gt 0) { ConvertTo-Json -InputObject $projects -Compress -Depth 3 } else { '[]' }
+          $hasProjects = if ($projects.Count -gt 0) { 'true' } else { 'false' }
+
+          Write-Host "Plugin smoke scan mode: $scanMode"
+          if ($changedFiles.Count -gt 0) {
+            Write-Host "Changed files:"
+            $changedFiles | ForEach-Object { Write-Host "  $_" }
+          }
+          if ($projects.Count -gt 0) {
+            Write-Host "Selected plugin projects:"
+            $projects | ForEach-Object { Write-Host "  $($_.path)" }
+          } else {
+            Write-Host "No plugin projects selected for this pull request."
+          }
+
+          "projects=$json" >> $env:GITHUB_OUTPUT
+          "has_projects=$hasProjects" >> $env:GITHUB_OUTPUT
+          "scan_mode=$scanMode" >> $env:GITHUB_OUTPUT
 
   validate-metadata:
     runs-on: windows-latest
@@ -94,6 +146,7 @@ jobs:
 
   build-plugin:
     needs: discover-plugins
+    if: needs.discover-plugins.outputs.has_projects == 'true'
     runs-on: windows-latest
     strategy:
       fail-fast: false
