@@ -120,7 +120,7 @@ TypeWhisper can run a local HTTP server (default port 9876, configurable in Sett
 |----------|--------|-------------|
 | `/v1/status` | GET | App status and active model |
 | `/v1/models` | GET | List all available models (local + cloud) |
-| `/v1/transcribe` | POST | Transcribe audio from request body. Query params: `language`, `task` (transcribe/translate) |
+| `/v1/transcribe` | POST | Transcribe multipart or raw audio |
 | `/v1/history` | GET | Search history with pagination. Query params: `q`, `limit`, `offset` |
 | `/v1/history` | DELETE | Delete history entries by ID |
 | `/v1/profiles` | GET | List all profiles |
@@ -128,6 +128,47 @@ TypeWhisper can run a local HTTP server (default port 9876, configurable in Sett
 | `/v1/dictation/start` | POST | Start recording |
 | `/v1/dictation/stop` | POST | Stop recording |
 | `/v1/dictation/status` | GET | Check current dictation state |
+| `/v1/dictation/transcription` | GET | Poll dictation result by session ID |
+| `/v1/dictionary/terms` | GET/PUT/DELETE | List, replace/append, or clear dictionary terms |
+
+`/v1/transcribe` accepts either `multipart/form-data` with a `file` part or a raw audio request body. Multipart fields are:
+
+- `language` - exact source language, such as `en` or `de`
+- `language_hint` - repeatable language hints; do not combine with `language`
+- `task` - `transcribe` or `translate`
+- `target_language` - translate the final text to this language
+- `response_format` - `json` or `verbose_json`
+- `prompt` - request-specific transcription prompt/context
+- `engine` and `model` - per-request overrides using IDs from `/v1/models`
+
+Raw audio requests can pass the same options with headers: `X-Language`, `X-Language-Hints`, `X-Task`, `X-Target-Language`, `X-Response-Format`, `X-Prompt`, `X-Engine`, and `X-Model`. Add `?await_download=1` to wait for a local model download/restore when supported.
+
+```bash
+curl -X POST http://localhost:9876/v1/transcribe \
+  -F "file=@recording.wav" \
+  -F "language_hint=de" \
+  -F "language_hint=en" \
+  -F "response_format=verbose_json"
+
+curl -X POST http://localhost:9876/v1/dictation/start
+curl -X POST http://localhost:9876/v1/dictation/stop
+curl "http://localhost:9876/v1/dictation/transcription?id=<session-id>"
+```
+
+## CLI
+
+The optional `typewhisper` CLI talks to the local HTTP API.
+
+```bash
+typewhisper status
+typewhisper models
+typewhisper transcribe recording.wav --language de --json
+typewhisper transcribe recording.wav --language-hint de --language-hint en
+typewhisper transcribe recording.wav --engine groq --model whisper-large-v3-turbo
+typewhisper transcribe - < audio.wav
+```
+
+Useful flags: `--port`, `--json`, `--language`, repeatable `--language-hint`, `--task`, `--translate-to`, `--engine`, `--model`, and `--await-download`.
 
 ## Profiles
 

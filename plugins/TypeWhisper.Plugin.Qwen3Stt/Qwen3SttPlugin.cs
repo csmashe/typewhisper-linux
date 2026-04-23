@@ -143,7 +143,7 @@ public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, baseUrl, apiKey, model,
-            wavAudio, language, translate: false, "verbose_json", ct);
+            wavAudio, language, translate: false, "verbose_json", ct, prompt);
     }
 
     public void Dispose() => _httpClient.Dispose();

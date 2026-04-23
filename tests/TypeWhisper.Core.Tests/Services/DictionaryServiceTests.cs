@@ -137,6 +137,43 @@ public class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void SetTerms_AppendsNormalizedTerms()
+    {
+        _sut.SetTerms([" TypeWhisper ", "WhisperKit", "typewhisper"], replaceExisting: false);
+        _sut.SetTerms(["Kubernetes"], replaceExisting: false);
+
+        Assert.Equal(["TypeWhisper", "WhisperKit", "Kubernetes"], _sut.GetEnabledTerms());
+    }
+
+    [Fact]
+    public void SetTerms_ReplacesExistingTerms()
+    {
+        _sut.SetTerms(["TypeWhisper", "WhisperKit"], replaceExisting: false);
+        _sut.SetTerms(["Kubernetes"], replaceExisting: true);
+
+        Assert.Equal(["Kubernetes"], _sut.GetEnabledTerms());
+    }
+
+    [Fact]
+    public void RemoveAllTerms_LeavesCorrections()
+    {
+        _sut.SetTerms(["TypeWhisper"], replaceExisting: false);
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "correction",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "typo",
+            Replacement = "term"
+        });
+
+        _sut.RemoveAllTerms();
+
+        Assert.Empty(_sut.GetEnabledTerms());
+        Assert.Single(_sut.Entries);
+        Assert.Equal(DictionaryEntryType.Correction, _sut.Entries[0].EntryType);
+    }
+
+    [Fact]
     public void LearnCorrection_AddsNewCorrection()
     {
         _sut.LearnCorrection("kubernets", "Kubernetes");

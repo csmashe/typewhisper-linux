@@ -98,13 +98,64 @@ public sealed class DictionaryService : IDictionaryService
     public string? GetTermsForPrompt()
     {
         EnsureCacheLoaded();
-        var terms = _cache
-            .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Term)
-            .Select(e => e.Original)
-            .ToList();
+        var terms = GetEnabledTerms();
 
         if (terms.Count == 0) return null;
         return string.Join(", ", terms);
+    }
+
+    public IReadOnlyList<string> GetEnabledTerms()
+    {
+        EnsureCacheLoaded();
+        return NormalizeTerms(_cache
+            .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Term)
+            .Select(e => e.Original));
+    }
+
+    public void SetTerms(IEnumerable<string> terms, bool replaceExisting)
+    {
+        EnsureCacheLoaded();
+
+        var normalized = NormalizeTerms(terms);
+        var desiredByKey = normalized.ToDictionary(TermKey, term => term);
+        var existingTerms = _cache.Where(e => e.EntryType == DictionaryEntryType.Term).ToList();
+
+        foreach (var entry in existingTerms)
+        {
+            var key = TermKey(entry.Original);
+            if (desiredByKey.TryGetValue(key, out var desiredTerm))
+            {
+                var idx = _cache.FindIndex(e => e.Id == entry.Id);
+                if (idx >= 0)
+                    _cache[idx] = entry with { Original = desiredTerm, IsEnabled = true };
+            }
+            else if (replaceExisting)
+            {
+                _cache.Remove(entry);
+            }
+        }
+
+        var existingKeys = existingTerms.Select(e => TermKey(e.Original)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var term in normalized.Where(term => !existingKeys.Contains(TermKey(term))))
+        {
+            _cache.Add(new DictionaryEntry
+            {
+                Id = Guid.NewGuid().ToString(),
+                EntryType = DictionaryEntryType.Term,
+                Original = term
+            });
+        }
+
+        SaveToDisk();
+        EntriesChanged?.Invoke();
+    }
+
+    public void RemoveAllTerms()
+    {
+        EnsureCacheLoaded();
+        _cache.RemoveAll(e => e.EntryType == DictionaryEntryType.Term);
+        SaveToDisk();
+        EntriesChanged?.Invoke();
     }
 
     public void LearnCorrection(string original, string replacement)
@@ -215,4 +266,24 @@ public sealed class DictionaryService : IDictionaryService
         }
         catch { }
     }
+
+    private static IReadOnlyList<string> NormalizeTerms(IEnumerable<string> terms)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var normalized = new List<string>();
+
+        foreach (var rawTerm in terms)
+        {
+            var term = rawTerm.Trim();
+            if (term.Length == 0)
+                continue;
+
+            if (seen.Add(TermKey(term)))
+                normalized.Add(term);
+        }
+
+        return normalized;
+    }
+
+    private static string TermKey(string term) => term.Trim().ToUpperInvariant();
 }

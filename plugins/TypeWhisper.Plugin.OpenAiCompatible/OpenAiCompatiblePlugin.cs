@@ -91,7 +91,7 @@ public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmPro
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, _baseUrl!, _apiKey ?? "", _selectedModelId!,
-            wavAudio, language, translate, "verbose_json", ct);
+            wavAudio, language, translate, "verbose_json", ct, prompt);
     }
 
     // ILlmProviderPlugin
