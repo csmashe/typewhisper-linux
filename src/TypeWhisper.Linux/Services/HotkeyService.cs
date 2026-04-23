@@ -328,19 +328,13 @@ public sealed class HotkeyService : IDisposable
 
     internal static bool ModifiersMatch(ModifierMask pressed, ModifierMask required)
     {
-        if (RequiresCtrl(required) && !HasCtrl(pressed))
-            return false;
-
-        if (RequiresShift(required) && !HasShift(pressed))
-            return false;
-
-        if (RequiresAlt(required) && !HasAlt(pressed))
-            return false;
-
-        if (RequiresMeta(required) && !HasMeta(pressed))
-            return false;
-
-        return true;
+        // Exact match on the four modifier groups (Ctrl/Shift/Alt/Meta). We
+        // only compare these four — other bits like NumLock/CapsLock in
+        // `pressed` must be ignored since the user might have them latched.
+        return HasCtrl(pressed) == RequiresCtrl(required)
+            && HasShift(pressed) == RequiresShift(required)
+            && HasAlt(pressed) == RequiresAlt(required)
+            && HasMeta(pressed) == RequiresMeta(required);
     }
 
     private static bool RequiresCtrl(ModifierMask mask) =>

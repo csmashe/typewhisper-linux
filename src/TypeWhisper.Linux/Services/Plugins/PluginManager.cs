@@ -23,7 +23,7 @@ public sealed class PluginManager : IDisposable
     private readonly List<LoadedPlugin> _allPlugins = [];
     private readonly Dictionary<string, PluginHostServices> _hostServices = [];
     private readonly HashSet<string> _activatedPlugins = [];
-    private readonly ConcurrentDictionary<string, Task> _activationTasks = new();
+    private readonly ConcurrentDictionary<string, Task<bool>> _activationTasks = new();
     private readonly object _lock = new();
 
     private List<ILlmProviderPlugin> _llmProviders = [];
@@ -134,18 +134,33 @@ public sealed class PluginManager : IDisposable
             return;
         }
 
+        // Short-circuit if already activated — otherwise a second call after
+        // the first activation task was removed from _activationTasks would
+        // run ActivatePluginAsync again and double-activate.
+        lock (_lock)
+        {
+            if (_activatedPlugins.Contains(pluginId))
+            {
+                PersistEnabledState(pluginId, true);
+                return;
+            }
+        }
+
         // Serialize activation per plugin so concurrent callers share one
         // activation Task instead of both passing the Contains check and
         // double-activating.
         var activation = _activationTasks.GetOrAdd(pluginId, _ => ActivatePluginAsync(plugin));
+        bool success;
         try
         {
-            await activation;
+            success = await activation;
         }
         finally
         {
-            _activationTasks.TryRemove(new KeyValuePair<string, Task>(pluginId, activation));
+            _activationTasks.TryRemove(new KeyValuePair<string, Task<bool>>(pluginId, activation));
         }
+
+        if (!success) return;
 
         RebuildCapabilityIndices();
         PersistEnabledState(pluginId, true);
@@ -169,7 +184,9 @@ public sealed class PluginManager : IDisposable
             return;
         }
 
-        await DeactivatePluginAsync(plugin);
+        if (!await DeactivatePluginAsync(plugin))
+            return;
+
         RebuildCapabilityIndices();
         PersistEnabledState(pluginId, false);
     }
@@ -190,7 +207,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private async Task ActivatePluginAsync(LoadedPlugin plugin)
+    private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
     {
         try
         {
@@ -212,14 +229,16 @@ public sealed class PluginManager : IDisposable
             }
 
             Trace.WriteLine($"[PluginManager] Activated plugin: {plugin.Manifest.Id}");
+            return true;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}");
+            return false;
         }
     }
 
-    private async Task DeactivatePluginAsync(LoadedPlugin plugin)
+    private async Task<bool> DeactivatePluginAsync(LoadedPlugin plugin)
     {
         try
         {
@@ -232,10 +251,12 @@ public sealed class PluginManager : IDisposable
             }
 
             Trace.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
+            return true;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}");
+            return false;
         }
     }
 
@@ -279,14 +300,24 @@ public sealed class PluginManager : IDisposable
         if (wasActivated)
             await DeactivatePluginAsync(plugin);
 
+        // Always run Unload, even if Dispose throws — otherwise the
+        // collectible ALC stays rooted and its native deps aren't freed.
         try
         {
             plugin.Instance.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PluginManager] Dispose failed for {pluginId}: {ex.Message}");
+        }
+
+        try
+        {
             plugin.LoadContext.Unload();
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[PluginManager] Error unloading plugin {pluginId}: {ex.Message}");
+            Trace.WriteLine($"[PluginManager] LoadContext.Unload failed for {pluginId}: {ex.Message}");
         }
 
         lock (_lock)

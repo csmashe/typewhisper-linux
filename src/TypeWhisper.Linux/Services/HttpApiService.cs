@@ -263,7 +263,10 @@ public sealed class HttpApiService : IDisposable
 
     private async Task<(int, string)> HandleTranscribeAsync(HttpListenerRequest request, CancellationToken ct)
     {
-        if (request.ContentLength64 is <= 0 or > MaxTranscribeRequestBytes)
+        // ContentLength64 is -1 for chunked (Transfer-Encoding: chunked) uploads.
+        // Reject empty bodies and known-too-large bodies up front; let chunked
+        // requests through so LimitedReadStream can enforce the cap while reading.
+        if (request.ContentLength64 == 0 || request.ContentLength64 > MaxTranscribeRequestBytes)
             return (413, Serialize(new { error = "Request body too large" }));
 
         var modelId = request.QueryString["model"] ?? _settings.Current.SelectedModelId;
