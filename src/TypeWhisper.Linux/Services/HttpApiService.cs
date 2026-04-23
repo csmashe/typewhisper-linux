@@ -183,12 +183,15 @@ public sealed class HttpApiService : IDisposable
             if (!IsAuthorized(request))
             {
                 response.Headers["WWW-Authenticate"] = "Bearer";
-                await WriteJsonAsync(response, 401, Serialize(new { error = "Unauthorized" }), ct, origin: null);
+                // Include CORS headers so browser clients from allowed loopback
+                // origins can actually read the 401 body and react.
+                await WriteJsonAsync(response, 401, Serialize(new { error = "Unauthorized" }), ct, allowedOrigin);
                 return;
             }
 
             if (!IsValidOrigin(request) || !IsAllowedLoopbackHost(request.Url?.Host))
             {
+                // Origin itself is forbidden — do not send CORS to it.
                 await WriteJsonAsync(response, 403, Serialize(new { error = "Forbidden" }), ct, origin: null);
                 return;
             }
@@ -213,7 +216,11 @@ public sealed class HttpApiService : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine($"[HttpApiService] Request failed: {ex}");
-            await WriteJsonAsync(response, 500, Serialize(new { error = "Internal server error" }), ct, origin: null);
+            // Re-resolve origin from context.Request; allowedOrigin from the try
+            // block isn't in scope here (the exception may have been thrown
+            // before or after it was computed).
+            var recoveredOrigin = GetAllowedOrigin(context.Request);
+            await WriteJsonAsync(response, 500, Serialize(new { error = "Internal server error" }), ct, recoveredOrigin);
         }
         finally
         {

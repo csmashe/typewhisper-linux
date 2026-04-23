@@ -34,6 +34,7 @@ public sealed class HotkeyService : IDisposable
     private ModifierMask _promptPaletteModifiers = ModifierMask.None;
     private RecordingMode _mode = RecordingMode.Toggle;
     private bool _keyIsDown;
+    private bool _promptKeyIsDown;
     private DateTime _keyDownTime;
     private bool _running;
     private int _disposed;
@@ -74,12 +75,28 @@ public sealed class HotkeyService : IDisposable
 
     public void SetHotkey(KeyCode key, ModifierMask modifiers)
     {
+        // Defense in depth: TrySet* is the normal path (already rejects
+        // collisions), but the raw setter is reachable from tests and any
+        // future direct caller. Silently no-op rather than throw so call
+        // sites don't need try/catch.
+        if (HotkeyMatches(key, modifiers, _promptPaletteKey, _promptPaletteModifiers))
+        {
+            Trace.WriteLine("[HotkeyService] Refusing dictation hotkey that collides with prompt palette.");
+            return;
+        }
+
         _key = key;
         _modifiers = modifiers;
     }
 
     public void SetPromptPaletteHotkey(KeyCode? key, ModifierMask modifiers)
     {
+        if (key is not null && HotkeyMatches(key.Value, modifiers, _key, _modifiers))
+        {
+            Trace.WriteLine("[HotkeyService] Refusing prompt palette hotkey that collides with dictation.");
+            return;
+        }
+
         _promptPaletteKey = key;
         _promptPaletteModifiers = key is null ? ModifierMask.None : modifiers;
     }
@@ -227,6 +244,10 @@ public sealed class HotkeyService : IDisposable
     {
         if (MatchesPromptPaletteHotkey(e))
         {
+            // Same repeat-guard as the dictation key so OS auto-repeat doesn't
+            // spam PromptPaletteRequested.
+            if (_promptKeyIsDown) return;
+            _promptKeyIsDown = true;
             PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
@@ -270,6 +291,11 @@ public sealed class HotkeyService : IDisposable
 
     private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
     {
+        // Clear the prompt-palette repeat guard on its own key release so the
+        // next press fires again.
+        if (_promptPaletteKey is not null && e.Data.KeyCode == _promptPaletteKey.Value)
+            _promptKeyIsDown = false;
+
         // We only care about the release of the main key; modifier releases
         // are ignored so the user can let go of Ctrl/Shift first.
         if (e.Data.KeyCode != _key) return;

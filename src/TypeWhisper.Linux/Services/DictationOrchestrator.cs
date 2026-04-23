@@ -60,6 +60,11 @@ public sealed class DictationOrchestrator : IDisposable
     private bool _initialized;
     private bool _disposed;
 
+    private EventHandler? _toggleHandler;
+    private EventHandler? _startHandler;
+    private EventHandler? _stopHandler;
+    private EventHandler<string>? _hookFailedHandler;
+
     public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? TranscriptionCompleted;
@@ -117,15 +122,19 @@ public sealed class DictationOrchestrator : IDisposable
     public void Initialize()
     {
         if (_initialized || _disposed) return;
-        _hotkey.DictationToggleRequested += (_, _) => FireAndLog(ToggleAsync, nameof(ToggleAsync));
-        _hotkey.DictationStartRequested += (_, _) => FireAndLog(StartAsync, nameof(StartAsync));
-        _hotkey.DictationStopRequested += (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
-        _hotkey.HookFailed += (_, message) =>
+        _toggleHandler = (_, _) => FireAndLog(ToggleAsync, nameof(ToggleAsync));
+        _startHandler = (_, _) => FireAndLog(StartAsync, nameof(StartAsync));
+        _stopHandler = (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
+        _hookFailedHandler = (_, message) =>
         {
             Trace.WriteLine($"[Dictation] Hotkey hook unavailable: {message}");
             ReportStatus("Global hotkey disabled.");
             ShowFeedback("Global hotkey disabled. Check libuiohook/X11 permissions.", isError: true);
         };
+        _hotkey.DictationToggleRequested += _toggleHandler;
+        _hotkey.DictationStartRequested += _startHandler;
+        _hotkey.DictationStopRequested += _stopHandler;
+        _hotkey.HookFailed += _hookFailedHandler;
         _hotkey.Initialize();
         _initialized = true;
     }
@@ -252,7 +261,20 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 DurationSeconds = duration
             });
-            if (wav.Length == 0) return;
+            if (wav.Length == 0)
+            {
+                SetOverlayState(state => state with
+                {
+                    IsOverlayVisible = true,
+                    ShowFeedback = true,
+                    FeedbackText = "No audio captured",
+                    FeedbackIsError = true,
+                    IsRecording = false,
+                    StatusText = "No audio captured",
+                });
+                ReportStatus("No audio captured");
+                return;
+            }
 
             var path = _sessionAudioFiles.SaveDictationCapture(wav);
             RecordingCaptured?.Invoke(this, path);
@@ -592,6 +614,12 @@ public sealed class DictationOrchestrator : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        if (_toggleHandler is not null) _hotkey.DictationToggleRequested -= _toggleHandler;
+        if (_startHandler is not null) _hotkey.DictationStartRequested -= _startHandler;
+        if (_stopHandler is not null) _hotkey.DictationStopRequested -= _stopHandler;
+        if (_hookFailedHandler is not null) _hotkey.HookFailed -= _hookFailedHandler;
+
         ShutdownPartialTranscriptionSession();
         try
         {

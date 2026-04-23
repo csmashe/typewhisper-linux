@@ -157,7 +157,13 @@ public sealed class PluginManager : IDisposable
         if (plugin is null)
             return;
 
-        if (!_activatedPlugins.Contains(pluginId))
+        bool wasActivated;
+        lock (_lock)
+        {
+            wasActivated = _activatedPlugins.Contains(pluginId);
+        }
+
+        if (!wasActivated)
         {
             PersistEnabledState(pluginId, false);
             return;
@@ -264,7 +270,13 @@ public sealed class PluginManager : IDisposable
         if (plugin is null)
             return;
 
-        if (_activatedPlugins.Contains(pluginId))
+        bool wasActivated;
+        lock (_lock)
+        {
+            wasActivated = _activatedPlugins.Contains(pluginId);
+        }
+
+        if (wasActivated)
             await DeactivatePluginAsync(plugin);
 
         try
@@ -395,16 +407,18 @@ public sealed class PluginManager : IDisposable
     public void Dispose()
     {
         List<LoadedPlugin> plugins;
+        HashSet<string> activated;
         lock (_lock)
         {
             plugins = [.. _allPlugins];
+            activated = [.. _activatedPlugins];
         }
 
         foreach (var plugin in plugins)
         {
             try
             {
-                if (_activatedPlugins.Contains(plugin.Manifest.Id))
+                if (activated.Contains(plugin.Manifest.Id))
                 {
                     plugin.Instance.DeactivateAsync().GetAwaiter().GetResult();
                 }
