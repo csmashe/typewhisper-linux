@@ -36,12 +36,14 @@ public sealed class HotkeyService : IDisposable
     private bool _keyIsDown;
     private DateTime _keyDownTime;
     private bool _running;
-    private bool _disposed;
+    private int _disposed;
+    private Task? _hookTask;
 
     public event EventHandler? DictationToggleRequested;
     public event EventHandler? DictationStartRequested;
     public event EventHandler? DictationStopRequested;
     public event EventHandler? PromptPaletteRequested;
+    public event EventHandler<string>? HookFailed;
 
     public RecordingMode Mode
     {
@@ -53,10 +55,19 @@ public sealed class HotkeyService : IDisposable
     {
         lock (_lock)
         {
-            if (_running || _disposed) return;
+            if (_running || Volatile.Read(ref _disposed) == 1) return;
             _hook.KeyPressed += OnKeyPressed;
             _hook.KeyReleased += OnKeyReleased;
-            _ = _hook.RunAsync();
+            _hookTask = _hook.RunAsync();
+            _hookTask.ContinueWith(task =>
+            {
+                if (Volatile.Read(ref _disposed) == 1 || task.IsCanceled)
+                    return;
+
+                var error = task.Exception?.GetBaseException().Message ?? "Global hotkey hook stopped unexpectedly.";
+                Trace.WriteLine($"[HotkeyService] Hook failed: {error}");
+                HookFailed?.Invoke(this, error);
+            }, TaskContinuationOptions.NotOnRanToCompletion);
             _running = true;
         }
     }
@@ -202,7 +213,7 @@ public sealed class HotkeyService : IDisposable
         }
 
         if (e.Data.KeyCode != _key) return;
-        if ((e.RawEvent.Mask & _modifiers) != _modifiers) return;
+        if (!ModifiersMatch(e.RawEvent.Mask, _modifiers)) return;
 
         // Ignore key-repeat: treat only the first press of a hold as the event.
         if (_keyIsDown) return;
@@ -227,7 +238,7 @@ public sealed class HotkeyService : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[HotkeyService] Press handler threw: {ex.Message}");
+            Trace.WriteLine($"[HotkeyService] Press handler threw: {ex.Message}");
         }
     }
 
@@ -235,7 +246,7 @@ public sealed class HotkeyService : IDisposable
     {
         if (_promptPaletteKey is null) return false;
         return e.Data.KeyCode == _promptPaletteKey.Value
-            && (e.RawEvent.Mask & _promptPaletteModifiers) == _promptPaletteModifiers;
+            && ModifiersMatch(e.RawEvent.Mask, _promptPaletteModifiers);
     }
 
     private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
@@ -266,14 +277,54 @@ public sealed class HotkeyService : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[HotkeyService] Release handler threw: {ex.Message}");
+            Trace.WriteLine($"[HotkeyService] Release handler threw: {ex.Message}");
         }
     }
 
+    internal static bool ModifiersMatch(ModifierMask pressed, ModifierMask required)
+    {
+        if (RequiresCtrl(required) && !HasCtrl(pressed))
+            return false;
+
+        if (RequiresShift(required) && !HasShift(pressed))
+            return false;
+
+        if (RequiresAlt(required) && !HasAlt(pressed))
+            return false;
+
+        if (RequiresMeta(required) && !HasMeta(pressed))
+            return false;
+
+        return true;
+    }
+
+    private static bool RequiresCtrl(ModifierMask mask) =>
+        mask.HasFlag(ModifierMask.LeftCtrl) || mask.HasFlag(ModifierMask.RightCtrl);
+
+    private static bool RequiresShift(ModifierMask mask) =>
+        mask.HasFlag(ModifierMask.LeftShift) || mask.HasFlag(ModifierMask.RightShift);
+
+    private static bool RequiresAlt(ModifierMask mask) =>
+        mask.HasFlag(ModifierMask.LeftAlt) || mask.HasFlag(ModifierMask.RightAlt);
+
+    private static bool RequiresMeta(ModifierMask mask) =>
+        mask.HasFlag(ModifierMask.LeftMeta) || mask.HasFlag(ModifierMask.RightMeta);
+
+    private static bool HasCtrl(ModifierMask mask) =>
+        mask.HasFlag(ModifierMask.LeftCtrl) || mask.HasFlag(ModifierMask.RightCtrl);
+
+    private static bool HasShift(ModifierMask mask) =>
+        mask.HasFlag(ModifierMask.LeftShift) || mask.HasFlag(ModifierMask.RightShift);
+
+    private static bool HasAlt(ModifierMask mask) =>
+        mask.HasFlag(ModifierMask.LeftAlt) || mask.HasFlag(ModifierMask.RightAlt);
+
+    private static bool HasMeta(ModifierMask mask) =>
+        mask.HasFlag(ModifierMask.LeftMeta) || mask.HasFlag(ModifierMask.RightMeta);
+
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
         lock (_lock)
         {
             _hook.KeyPressed -= OnKeyPressed;
@@ -284,7 +335,7 @@ public sealed class HotkeyService : IDisposable
         var disposeTask = Task.Run(() =>
         {
             try { _hook.Dispose(); }
-            catch (Exception ex) { Debug.WriteLine($"[HotkeyService] Dispose threw: {ex.Message}"); }
+            catch (Exception ex) { Trace.WriteLine($"[HotkeyService] Dispose threw: {ex.Message}"); }
         });
         disposeTask.Wait(TimeSpan.FromSeconds(1));
     }

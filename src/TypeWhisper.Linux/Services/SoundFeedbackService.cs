@@ -12,7 +12,7 @@ public sealed class SoundFeedbackService
     {
         try
         {
-            using var process = Process.Start(new ProcessStartInfo("canberra-gtk-play", $"-i {eventId}")
+            var process = Process.Start(new ProcessStartInfo("canberra-gtk-play", $"-i {eventId}")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -32,6 +32,10 @@ public sealed class SoundFeedbackService
                 catch
                 {
                     // Best-effort only.
+                }
+                finally
+                {
+                    process.Dispose();
                 }
             });
         }

@@ -31,19 +31,12 @@ public sealed class AudioPlaybackService : IDisposable
         EnsurePortAudioInitialized();
     }
 
-    public bool CanPlay(string? audioFileName)
-    {
-        if (string.IsNullOrWhiteSpace(audioFileName))
-            return false;
-
-        var path = Path.Combine(TypeWhisperEnvironment.AudioPath, audioFileName);
-        return File.Exists(path);
-    }
+    public bool CanPlay(string? audioFileName) =>
+        ResolveAudioPath(audioFileName) is { } path && File.Exists(path);
 
     public void Play(string audioFileName)
     {
-        var path = Path.Combine(TypeWhisperEnvironment.AudioPath, audioFileName);
-        if (!File.Exists(path))
+        if (ResolveAudioPath(audioFileName) is not { } path || !File.Exists(path))
             return;
 
         lock (_gate)
@@ -162,6 +155,37 @@ public sealed class AudioPlaybackService : IDisposable
         _position = 0;
         CurrentFile = null;
         IsPlaying = false;
+    }
+
+    // Resolve audioFileName relative to the audio root, rejecting anything that escapes via "..".
+    private static string? ResolveAudioPath(string? audioFileName)
+    {
+        if (string.IsNullOrWhiteSpace(audioFileName))
+            return null;
+
+        string root;
+        string candidate;
+        try
+        {
+            root = Path.GetFullPath(TypeWhisperEnvironment.AudioPath);
+            candidate = Path.GetFullPath(Path.Combine(root, audioFileName));
+        }
+        catch
+        {
+            return null;
+        }
+
+        var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+
+        if (candidate.Equals(root, StringComparison.Ordinal)
+            || candidate.StartsWith(rootWithSep, StringComparison.Ordinal))
+        {
+            return candidate;
+        }
+
+        return null;
     }
 
     private static (float[] Samples, int SampleRate) LoadWav(string path)

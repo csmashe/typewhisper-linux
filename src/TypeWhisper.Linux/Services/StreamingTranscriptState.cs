@@ -10,9 +10,12 @@ internal sealed class StreamingTranscriptState
 
     public int StartSession()
     {
+        // Bump the version before clearing so any in-flight writer with the
+        // old version fails its re-check and can't clobber the fresh buffers.
+        var newVersion = Interlocked.Increment(ref _sessionVersion);
         _confirmedText = "";
         _lastDisplayedText = "";
-        return Interlocked.Increment(ref _sessionVersion);
+        return newVersion;
     }
 
     public string StopSession()
@@ -48,6 +51,12 @@ internal sealed class StreamingTranscriptState
             return false;
 
         var stable = StabilizeText(_confirmedText, text);
+
+        // Re-check immediately before writing: a StartSession/InvalidateSession
+        // may have bumped the version while we were corrector-ing and stabilizing.
+        if (!IsCurrentSession(sessionVersion))
+            return false;
+
         _confirmedText = stable;
         _lastDisplayedText = stable;
         displayText = stable;

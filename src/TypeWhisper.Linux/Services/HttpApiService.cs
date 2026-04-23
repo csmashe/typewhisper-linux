@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
@@ -9,6 +11,7 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class HttpApiService : IDisposable
 {
+    private const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
     private readonly ModelManagerService _models;
     private readonly ISettingsService _settings;
     private readonly AudioFileService _audioFiles;
@@ -110,7 +113,10 @@ public sealed class HttpApiService : IDisposable
     {
         var settings = _settings.Current;
         if (settings.ApiServerEnabled)
-            Start(settings.ApiServerPort);
+        {
+            EnsureBearerToken();
+            Start(_settings.Current.ApiServerPort);
+        }
         else
             Stop();
     }
@@ -156,6 +162,20 @@ public sealed class HttpApiService : IDisposable
             var request = context.Request;
             var path = request.Url?.AbsolutePath ?? "";
             var method = request.HttpMethod;
+            var allowedOrigin = GetAllowedOrigin(request);
+
+            if (!IsAuthorized(request))
+            {
+                response.Headers["WWW-Authenticate"] = "Bearer";
+                await WriteJsonAsync(response, 401, Serialize(new { error = "Unauthorized" }), ct, origin: null);
+                return;
+            }
+
+            if (!IsValidOrigin(request) || !IsAllowedLoopbackHost(request.Url?.Host))
+            {
+                await WriteJsonAsync(response, 403, Serialize(new { error = "Forbidden" }), ct, origin: null);
+                return;
+            }
 
             var (statusCode, body) = (path, method) switch
             {
@@ -172,11 +192,12 @@ public sealed class HttpApiService : IDisposable
                 _ => (404, Serialize(new { error = "Not found" }))
             };
 
-            await WriteJsonAsync(response, statusCode, body, ct);
+            await WriteJsonAsync(response, statusCode, body, ct, allowedOrigin);
         }
         catch (Exception ex)
         {
-            await WriteJsonAsync(response, 500, Serialize(new { error = ex.Message }), ct);
+            Trace.WriteLine($"[HttpApiService] Request failed: {ex}");
+            await WriteJsonAsync(response, 500, Serialize(new { error = "Internal server error" }), ct, origin: null);
         }
         finally
         {
@@ -219,6 +240,9 @@ public sealed class HttpApiService : IDisposable
 
     private async Task<(int, string)> HandleTranscribeAsync(HttpListenerRequest request, CancellationToken ct)
     {
+        if (request.ContentLength64 is <= 0 or > MaxTranscribeRequestBytes)
+            return (413, Serialize(new { error = "Request body too large" }));
+
         var modelId = request.QueryString["model"] ?? _settings.Current.SelectedModelId;
         if (!await _models.EnsureModelLoadedAsync(modelId, ct))
             return (503, Serialize(new { error = "No model loaded" }));
@@ -230,8 +254,16 @@ public sealed class HttpApiService : IDisposable
         var tempPath = Path.Combine(Path.GetTempPath(), $"typewhisper-api-{Guid.NewGuid():N}{InferExtension(request)}");
         try
         {
-            await using (var fs = File.Create(tempPath))
-                await request.InputStream.CopyToAsync(fs, ct);
+            try
+            {
+                await using var fs = File.Create(tempPath);
+                await using var limited = new LimitedReadStream(request.InputStream, MaxTranscribeRequestBytes);
+                await limited.CopyToAsync(fs, ct);
+            }
+            catch (InvalidOperationException)
+            {
+                return (413, Serialize(new { error = "Request body too large" }));
+            }
 
             var wav = await _audioFiles.LoadAudioAsWavAsync(tempPath, ct);
             var settings = _settings.Current;
@@ -367,11 +399,12 @@ public sealed class HttpApiService : IDisposable
             activeModel = _models.ActiveModelId
         }));
 
-    private static async Task WriteJsonAsync(HttpListenerResponse response, int statusCode, string body, CancellationToken ct)
+    private static async Task WriteJsonAsync(HttpListenerResponse response, int statusCode, string body, CancellationToken ct, string? origin)
     {
         response.StatusCode = statusCode;
         response.ContentType = "application/json";
-        response.Headers["Access-Control-Allow-Origin"] = "http://localhost";
+        if (!string.IsNullOrWhiteSpace(origin))
+            response.Headers["Access-Control-Allow-Origin"] = origin;
 
         var bytes = Encoding.UTF8.GetBytes(body);
         response.ContentLength64 = bytes.Length;
@@ -399,6 +432,143 @@ public sealed class HttpApiService : IDisposable
             "video/webm" => ".webm",
             _ => ".wav"
         };
+    }
+
+    private void EnsureBearerToken()
+    {
+        var current = _settings.Current;
+        var storedToken = current.ApiServerBearerToken;
+        var decryptedToken = ReadBearerToken(current);
+        if (!string.IsNullOrWhiteSpace(decryptedToken))
+        {
+            if (!string.Equals(storedToken, decryptedToken, StringComparison.Ordinal))
+                return;
+
+            _settings.Save(current with { ApiServerBearerToken = ApiKeyProtection.Encrypt(decryptedToken) });
+            return;
+        }
+
+        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        _settings.Save(current with { ApiServerBearerToken = ApiKeyProtection.Encrypt(token) });
+    }
+
+    private bool IsAuthorized(HttpListenerRequest request)
+    {
+        var expectedToken = ReadBearerToken(_settings.Current);
+        if (string.IsNullOrWhiteSpace(expectedToken))
+            return false;
+
+        var authorization = request.Headers["Authorization"];
+        if (string.IsNullOrWhiteSpace(authorization) || !authorization.StartsWith("Bearer ", StringComparison.Ordinal))
+            return false;
+
+        var providedToken = authorization["Bearer ".Length..].Trim();
+        if (providedToken.Length != expectedToken.Length)
+            return false;
+
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(providedToken),
+            Encoding.UTF8.GetBytes(expectedToken));
+    }
+
+    internal static string ReadBearerToken(Core.Models.AppSettings settings) =>
+        string.IsNullOrWhiteSpace(settings.ApiServerBearerToken)
+            ? ""
+            : ApiKeyProtection.Decrypt(settings.ApiServerBearerToken);
+
+    private string? GetAllowedOrigin(HttpListenerRequest request)
+    {
+        var origin = request.Headers["Origin"];
+        if (string.IsNullOrWhiteSpace(origin))
+            return null;
+
+        if (Uri.TryCreate(origin, UriKind.Absolute, out var originUri)
+            && IsAllowedLoopbackHost(originUri.Host)
+            && originUri.Port == _port)
+        {
+            return origin;
+        }
+
+        return null;
+    }
+
+    private bool IsValidOrigin(HttpListenerRequest request)
+    {
+        var origin = request.Headers["Origin"];
+        if (string.IsNullOrWhiteSpace(origin))
+            return true;
+
+        return string.Equals(origin, GetAllowedOrigin(request), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAllowedLoopbackHost(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+            return false;
+
+        return string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class LimitedReadStream(Stream inner, long maxBytes) : Stream
+    {
+        private readonly Stream _inner = inner;
+        private readonly long _maxBytes = maxBytes;
+        private long _bytesRead;
+
+        public override bool CanRead => _inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => _inner.Length;
+        public override long Position
+        {
+            get => _bytesRead;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => _inner.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = _inner.Read(buffer, offset, count);
+            TrackBytes(read);
+            return read;
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            var read = _inner.Read(buffer);
+            TrackBytes(read);
+            return read;
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var read = await _inner.ReadAsync(buffer, cancellationToken);
+            TrackBytes(read);
+            return read;
+        }
+
+        public override int ReadByte()
+        {
+            var value = _inner.ReadByte();
+            if (value >= 0)
+                TrackBytes(1);
+            return value;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        private void TrackBytes(int read)
+        {
+            _bytesRead += read;
+            if (_bytesRead > _maxBytes)
+                throw new InvalidOperationException("Request body exceeded the configured limit.");
+        }
     }
 
     public void Dispose()

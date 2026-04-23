@@ -17,6 +17,8 @@ ICON_TARGET="$ICONS_DIR/$APP_ID.png"
 EXECUTABLE_NAME="typewhisper"
 EXECUTABLE_PATH="$INSTALL_ROOT/$EXECUTABLE_NAME"
 
+[ -n "${HOME:-}" ] || { echo "HOME must be set." >&2; exit 1; }
+
 if ! command -v dotnet >/dev/null 2>&1; then
   echo "dotnet SDK is required to build and install $APP_NAME." >&2
   exit 1

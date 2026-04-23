@@ -13,6 +13,7 @@ public partial class GeneralSectionViewModel : ObservableObject
     [ObservableProperty] private bool _startWithSystem;
     [ObservableProperty] private bool _apiServerEnabled;
     [ObservableProperty] private int _apiServerPort;
+    [ObservableProperty] private string _apiBearerToken = "";
     [ObservableProperty] private string _apiStatusText = "";
 
     public IReadOnlyList<UiLanguageOption> UiLanguageChoices { get; } =
@@ -66,6 +67,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         UiLanguage = s.UiLanguage;
         ApiServerEnabled = s.ApiServerEnabled;
         ApiServerPort = s.ApiServerPort;
+        ApiBearerToken = HttpApiService.ReadBearerToken(s);
         OnPropertyChanged(nameof(SelectedUiLanguageOption));
     }
 

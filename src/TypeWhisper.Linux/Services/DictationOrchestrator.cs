@@ -53,6 +53,7 @@ public sealed class DictationOrchestrator : IDisposable
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
     private CancellationTokenSource? _partialTranscriptionCts;
     private Task? _partialTranscriptionTask;
+    private Task? _recordingSnapshotTask;
     private string? _lastPublishedPartialText;
     private DateTime _lastSpeechDetectedAtUtc;
     private bool _silenceStopRequested;
@@ -119,6 +120,12 @@ public sealed class DictationOrchestrator : IDisposable
         _hotkey.DictationToggleRequested += (_, _) => _ = ToggleAsync();
         _hotkey.DictationStartRequested += (_, _) => _ = StartAsync();
         _hotkey.DictationStopRequested += (_, _) => _ = StopAsync();
+        _hotkey.HookFailed += (_, message) =>
+        {
+            Trace.WriteLine($"[Dictation] Hotkey hook unavailable: {message}");
+            ReportStatus("Global hotkey disabled.");
+            ShowFeedback("Global hotkey disabled. Check libuiohook/X11 permissions.", isError: true);
+        };
         _hotkey.Initialize();
         _initialized = true;
     }
@@ -131,6 +138,7 @@ public sealed class DictationOrchestrator : IDisposable
 
     public async Task StartAsync()
     {
+        Task? recordingSnapshotTask = null;
         if (!await _toggleGate.WaitAsync(0)) return;
         try
         {
@@ -169,54 +177,49 @@ public sealed class DictationOrchestrator : IDisposable
                 SessionStartedAtUtc = DateTime.UtcNow
             });
             StartPartialTranscriptionSession();
+
+            // Publish the snapshot task before releasing the toggle gate so a
+            // near-immediate StopAsync can reliably observe and await it.
+            _recordingAppProcess = null;
+            _recordingAppTitle = null;
+            _recordingAppUrl = null;
+            _recordingWindowId = _activeWindow.GetActiveWindowId();
+            _recordingProfile = null;
+            recordingSnapshotTask = Task.Run(() =>
+            {
+                try
+                {
+                    _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
+                    _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
+                    _recordingAppUrl = _activeWindow.GetBrowserUrl();
+                    _recordingProfile = _profiles.MatchProfile(_recordingAppProcess, _recordingAppUrl);
+                    _audio.WhisperModeEnabled =
+                        _recordingProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Active-window snapshot failed: {ex.Message}");
+                }
+                finally
+                {
+                    SetOverlayState(state => state with
+                    {
+                        ActiveProfileName = _recordingProfile?.Name,
+                        ActiveAppName = _recordingAppTitle
+                    });
+                    _models.PluginManager.EventBus.Publish(new RecordingStartedEvent
+                    {
+                        AppName = _recordingAppTitle,
+                        AppProcessName = _recordingAppProcess
+                    });
+                }
+            });
+            _recordingSnapshotTask = recordingSnapshotTask;
         }
         finally
         {
             _toggleGate.Release();
         }
-
-        // Snapshot the active window off the hot path. Each xdotool call is a
-        // subprocess (~100 ms); doing them synchronously before StartRecording
-        // clipped the first chunk of speech on PTT. This races the user's
-        // speech but even worst case we'll have the metadata by the time
-        // transcription completes.
-        _recordingAppProcess = null;
-        _recordingAppTitle = null;
-        _recordingAppUrl = null;
-        _recordingWindowId = _activeWindow.GetActiveWindowId();
-        _recordingProfile = null;
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
-                _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
-                _recordingAppUrl = _activeWindow.GetBrowserUrl();
-                _recordingProfile = _profiles.MatchProfile(_recordingAppProcess, _recordingAppUrl);
-                // Keep recording start hot, then converge to the effective
-                // Windows-style profile->global whisper-mode precedence as
-                // soon as context matching finishes.
-                _audio.WhisperModeEnabled =
-                    _recordingProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] Active-window snapshot failed: {ex.Message}");
-            }
-            finally
-            {
-                SetOverlayState(state => state with
-                {
-                    ActiveProfileName = _recordingProfile?.Name,
-                    ActiveAppName = _recordingAppTitle
-                });
-                _models.PluginManager.EventBus.Publish(new RecordingStartedEvent
-                {
-                    AppName = _recordingAppTitle,
-                    AppProcessName = _recordingAppProcess
-                });
-            }
-        });
     }
 
     public async Task StopAsync()
@@ -228,6 +231,7 @@ public sealed class DictationOrchestrator : IDisposable
 
             var wav = _audio.StopRecording();
             await StopPartialTranscriptionSessionAsync();
+            await AwaitRecordingSnapshotAsync();
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
             if (_settings.Current.SoundFeedbackEnabled)
@@ -566,8 +570,15 @@ public sealed class DictationOrchestrator : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _partialTranscriptionCts?.Cancel();
-        _partialTranscriptionCts?.Dispose();
+        ShutdownPartialTranscriptionSession();
+        try
+        {
+            _recordingSnapshotTask?.Wait(TimeSpan.FromMilliseconds(300));
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.Message}");
+        }
         _toggleGate.Dispose();
     }
 
@@ -607,6 +618,55 @@ public sealed class DictationOrchestrator : IDisposable
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Dictation] Partial transcription shutdown failed: {ex.Message}");
+            }
+        }
+
+        _partialTranscriptState.StopSession();
+    }
+
+    private async Task AwaitRecordingSnapshotAsync()
+    {
+        var snapshotTask = _recordingSnapshotTask;
+        _recordingSnapshotTask = null;
+        if (snapshotTask is null)
+            return;
+
+        try
+        {
+            await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(500));
+        }
+        catch (TimeoutException)
+        {
+            Trace.WriteLine("[Dictation] Active-window snapshot timed out during stop.");
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Active-window snapshot wait failed: {ex.Message}");
+        }
+    }
+
+    private void ShutdownPartialTranscriptionSession()
+    {
+        var cts = _partialTranscriptionCts;
+        var task = _partialTranscriptionTask;
+        _partialTranscriptionCts = null;
+        _partialTranscriptionTask = null;
+
+        if (cts is not null)
+        {
+            cts.Cancel();
+            cts.Dispose();
+        }
+
+        if (task is not null)
+        {
+            try
+            {
+                task.Wait(TimeSpan.FromSeconds(1));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Partial transcription dispose wait failed: {ex.Message}");
             }
         }
 

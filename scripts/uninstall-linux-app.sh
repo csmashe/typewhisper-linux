@@ -8,6 +8,8 @@ ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps"
 DESKTOP_FILE="$APPLICATIONS_DIR/$APP_ID.desktop"
 ICON_FILE="$ICONS_DIR/$APP_ID.png"
 
+[ -n "${HOME:-}" ] || { echo "HOME must be set." >&2; exit 1; }
+
 rm -f "$DESKTOP_FILE"
 rm -f "$ICON_FILE"
 rm -rf "$INSTALL_ROOT"

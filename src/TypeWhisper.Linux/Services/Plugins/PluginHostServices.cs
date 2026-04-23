@@ -85,9 +85,9 @@ public sealed class PluginHostServices : IPluginHostServices
     public Task StoreSecretAsync(string key, string value)
     {
         var encrypted = ApiKeyProtection.Encrypt(value);
-        var settings = LoadSettings();
         lock (_settingsLock)
         {
+            var settings = LoadSettings();
             settings[$"{SecretPrefix}{key}"] = JsonSerializer.SerializeToElement(encrypted);
             SaveSettings(settings);
         }
@@ -96,24 +96,23 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public Task<string?> LoadSecretAsync(string key)
     {
-        var settings = LoadSettings();
-        var secretKey = $"{SecretPrefix}{key}";
-        if (settings.TryGetValue(secretKey, out var element))
+        string? encrypted;
+        lock (_settingsLock)
         {
-            var encrypted = element.Deserialize<string>();
-            if (encrypted is not null)
-            {
-                return Task.FromResult<string?>(ApiKeyProtection.Decrypt(encrypted));
-            }
+            var settings = LoadSettings();
+            encrypted = settings.TryGetValue($"{SecretPrefix}{key}", out var element)
+                ? element.Deserialize<string>()
+                : null;
         }
-        return Task.FromResult<string?>(null);
+
+        return Task.FromResult(encrypted is null ? null : ApiKeyProtection.Decrypt(encrypted));
     }
 
     public Task DeleteSecretAsync(string key)
     {
-        var settings = LoadSettings();
         lock (_settingsLock)
         {
+            var settings = LoadSettings();
             settings.Remove($"{SecretPrefix}{key}");
             SaveSettings(settings);
         }
@@ -122,9 +121,12 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public T? GetSetting<T>(string key)
     {
-        var settings = LoadSettings();
-        if (settings.TryGetValue(key, out var element))
+        lock (_settingsLock)
         {
+            var settings = LoadSettings();
+            if (!settings.TryGetValue(key, out var element))
+                return default;
+
             try
             {
                 return element.Deserialize<T>(JsonOptions);
@@ -132,16 +134,16 @@ public sealed class PluginHostServices : IPluginHostServices
             catch (JsonException ex)
             {
                 Trace.WriteLine($"[Plugin:{_pluginId}] Failed to deserialize setting '{key}': {ex.Message}");
+                return default;
             }
         }
-        return default;
     }
 
     public void SetSetting<T>(string key, T value)
     {
-        var settings = LoadSettings();
         lock (_settingsLock)
         {
+            var settings = LoadSettings();
             settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
             SaveSettings(settings);
         }

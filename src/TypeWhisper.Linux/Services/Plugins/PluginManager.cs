@@ -120,7 +120,7 @@ public sealed class PluginManager : IDisposable
         }
 
         RebuildCapabilityIndices();
-        MigrateApiKeys();
+        await MigrateApiKeysAsync();
     }
 
     public async Task EnablePluginAsync(string pluginId)
@@ -283,9 +283,19 @@ public sealed class PluginManager : IDisposable
             return;
         }
 
+        // Tear down any existing plugin with the same Id through the normal
+        // lifecycle so we don't leak its host services or load context.
+        bool hasExisting;
         lock (_lock)
         {
-            _allPlugins.RemoveAll(p => p.Manifest.Id == plugin.Manifest.Id);
+            hasExisting = _allPlugins.Any(p => p.Manifest.Id == plugin.Manifest.Id);
+        }
+
+        if (hasExisting)
+            await UnloadPluginAsync(plugin.Manifest.Id);
+
+        lock (_lock)
+        {
             _allPlugins.Add(plugin);
         }
 
@@ -320,37 +330,54 @@ public sealed class PluginManager : IDisposable
     /// Migrates legacy GroqApiKey/OpenAiApiKey from AppSettings to plugin secrets.
     /// On a fresh Linux install these fields are typically empty so this is a no-op.
     /// </summary>
-    private void MigrateApiKeys()
+    private async Task MigrateApiKeysAsync()
     {
         var settings = _settings.Current;
+        var migratedGroq = false;
+        var migratedOpenAi = false;
 
         if (!string.IsNullOrEmpty(settings.GroqApiKey))
-            MigrateKeyToPlugin("com.typewhisper.groq", "api-key", settings.GroqApiKey);
+            migratedGroq = await MigrateKeyToPluginAsync("com.typewhisper.groq", "api-key", settings.GroqApiKey);
 
         if (!string.IsNullOrEmpty(settings.OpenAiApiKey))
-            MigrateKeyToPlugin("com.typewhisper.openai", "api-key", settings.OpenAiApiKey);
+            migratedOpenAi = await MigrateKeyToPluginAsync("com.typewhisper.openai", "api-key", settings.OpenAiApiKey);
+
+        if (migratedGroq || migratedOpenAi)
+        {
+            var current = _settings.Current;
+            _settings.Save(current with
+            {
+                GroqApiKey = migratedGroq ? "" : current.GroqApiKey,
+                OpenAiApiKey = migratedOpenAi ? "" : current.OpenAiApiKey
+            });
+        }
     }
 
-    private void MigrateKeyToPlugin(string pluginId, string secretKey, string encryptedValue)
+    private async Task<bool> MigrateKeyToPluginAsync(string pluginId, string secretKey, string encryptedValue)
     {
+        PluginHostServices? hostServices;
         lock (_lock)
         {
-            if (_hostServices.TryGetValue(pluginId, out var hostServices))
-            {
-                try
-                {
-                    var decrypted = ApiKeyProtection.Decrypt(encryptedValue);
-                    if (!string.IsNullOrEmpty(decrypted))
-                    {
-                        _ = hostServices.StoreSecretAsync(secretKey, decrypted);
-                        Trace.WriteLine($"[PluginManager] Migrated API key to plugin: {pluginId}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Trace.WriteLine($"[PluginManager] Failed to migrate API key for {pluginId}: {ex.Message}");
-                }
-            }
+            _hostServices.TryGetValue(pluginId, out hostServices);
+        }
+
+        if (hostServices is null)
+            return false;
+
+        try
+        {
+            var decrypted = ApiKeyProtection.Decrypt(encryptedValue);
+            if (string.IsNullOrEmpty(decrypted))
+                return false;
+
+            await hostServices.StoreSecretAsync(secretKey, decrypted);
+            Trace.WriteLine($"[PluginManager] Migrated API key to plugin: {pluginId}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PluginManager] Failed to migrate API key for {pluginId}: {ex.Message}");
+            return false;
         }
     }
 

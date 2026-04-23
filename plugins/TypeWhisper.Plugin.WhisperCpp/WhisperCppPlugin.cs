@@ -34,6 +34,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string? _selectedModelId;
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
+    private bool _runtimeLibraryOrderInitialized;
 
     public string PluginId => "com.typewhisper.whisper-cpp";
     public string PluginName => "whisper.cpp (Local)";
@@ -166,6 +167,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         try
         {
             DisposeFactoryUnsafe();
+            EnsureRuntimeLibraryOrderInitialized();
             _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
             _loadedModelId = modelId;
             _selectedModelId = modelId;
@@ -301,16 +303,22 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _factory = null;
     }
 
-    private WhisperFactoryOptions CreateFactoryOptions()
+    private WhisperFactoryOptions CreateFactoryOptions() => new()
     {
+        UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+    };
+
+    // RuntimeOptions.RuntimeLibraryOrder is consulted once when the native library first loads.
+    // Later changes are ignored for the process lifetime, so set it once before the first factory.
+    private void EnsureRuntimeLibraryOrderInitialized()
+    {
+        if (_runtimeLibraryOrderInitialized)
+            return;
+
         RuntimeOptions.RuntimeLibraryOrder = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? [RuntimeLibrary.Cuda]
             : [RuntimeLibrary.Cpu];
-
-        return new WhisperFactoryOptions
-        {
-            UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
-        };
+        _runtimeLibraryOrderInitialized = true;
     }
 
     private static void TryDeleteFile(string path)

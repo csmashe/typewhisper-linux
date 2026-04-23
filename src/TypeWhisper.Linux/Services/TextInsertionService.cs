@@ -89,7 +89,7 @@ public sealed class TextInsertionService
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[TextInsertionService] xdotool failed: {ex.Message}");
+            Trace.WriteLine($"[TextInsertionService] xdotool failed: {ex.Message}");
             return InsertionResult.Failed;
         }
     }
@@ -104,7 +104,7 @@ public sealed class TextInsertionService
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[TextInsertionService] clipboard failed: {ex.Message}");
+            Trace.WriteLine($"[TextInsertionService] clipboard failed: {ex.Message}");
             return InsertionResult.Failed;
         }
     }
@@ -129,7 +129,7 @@ public sealed class TextInsertionService
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[TextInsertionService] copy shortcut failed: {ex.Message}");
+            Trace.WriteLine($"[TextInsertionService] copy shortcut failed: {ex.Message}");
             return false;
         }
     }
@@ -154,7 +154,7 @@ public sealed class TextInsertionService
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[TextInsertionService] clipboard read failed: {ex.Message}");
+            Trace.WriteLine($"[TextInsertionService] clipboard read failed: {ex.Message}");
             return null;
         }
     }

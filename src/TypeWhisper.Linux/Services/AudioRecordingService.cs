@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Threading;
+using Avalonia.Threading;
 using PortAudioSharp;
 using PaStream = PortAudioSharp.Stream;
 
@@ -24,29 +26,25 @@ public sealed class AudioRecordingService : IDisposable
     private static int _paInitCount;
     private static readonly object _paInitLock = new();
 
-    private readonly List<float> _samples = [];
+    private readonly List<float[]> _sampleChunks = [];
     private readonly object _sampleLock = new();
     private PaStream? _stream;
-    private bool _isRecording;
-    private bool _isPreviewing;
+    private int _sampleCount;
+    private int _isRecording;
+    private int _isPreviewing;
     private int? _selectedDeviceIndex;
     private float _currentRmsLevel;
-    private bool _disposed;
+    private long _lastLevelPostedTicksUtc;
+    private int _disposed;
 
-    public bool IsRecording => _isRecording;
-    public bool IsPreviewing => _isPreviewing;
-    public float CurrentRmsLevel => _currentRmsLevel;
-    public bool HasSpeechEnergy => _currentRmsLevel >= SpeechEnergyThreshold;
+    public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
+    public bool IsPreviewing => Volatile.Read(ref _isPreviewing) == 1;
+    public float CurrentRmsLevel => Volatile.Read(ref _currentRmsLevel);
+    public bool HasSpeechEnergy => CurrentRmsLevel >= SpeechEnergyThreshold;
     public int? SelectedDeviceIndex
     {
         get => _selectedDeviceIndex;
-        set
-        {
-            if (_selectedDeviceIndex == value)
-                return;
-
-            _selectedDeviceIndex = value;
-        }
+        set => _selectedDeviceIndex = value;
     }
     public bool WhisperModeEnabled { get; set; }
 
@@ -83,50 +81,48 @@ public sealed class AudioRecordingService : IDisposable
 
     public void StartRecording()
     {
-        if (_isRecording || _disposed) return;
+        if (IsRecording || Volatile.Read(ref _disposed) == 1) return;
 
-        lock (_sampleLock) { _samples.Clear(); }
+        lock (_sampleLock)
+        {
+            _sampleChunks.Clear();
+            _sampleCount = 0;
+        }
 
         if (!EnsureInputStreamStarted())
             return;
 
-        _isRecording = true;
+        Volatile.Write(ref _isRecording, 1);
     }
 
     public byte[] StopRecording()
     {
-        if (!_isRecording) return [];
-        _isRecording = false;
+        if (!IsRecording) return [];
+        Volatile.Write(ref _isRecording, 0);
 
-        if (!_isPreviewing)
+        if (!IsPreviewing)
             StopAndDisposeInputStream();
 
-        float[] floats;
-        lock (_sampleLock) { floats = [.. _samples]; }
-
-        return FloatSamplesToWav(floats, SampleRate);
+        return BuildWavFromRecordedAudio();
     }
 
     public byte[]? GetCurrentBuffer()
     {
-        if (!_isRecording)
+        if (!IsRecording)
             return null;
 
-        float[] floats;
         lock (_sampleLock)
         {
-            if (_samples.Count == 0)
+            if (_sampleCount == 0)
                 return null;
-
-            floats = [.. _samples];
         }
 
-        return FloatSamplesToWav(floats, SampleRate);
+        return BuildWavFromRecordedAudio();
     }
 
     public bool StartPreview()
     {
-        if (_disposed || _isRecording || _isPreviewing)
+        if (Volatile.Read(ref _disposed) == 1 || IsRecording || IsPreviewing)
             return false;
 
         try
@@ -134,14 +130,14 @@ public sealed class AudioRecordingService : IDisposable
             if (!EnsureInputStreamStarted())
                 return false;
 
-            _isPreviewing = true;
+            Volatile.Write(ref _isPreviewing, 1);
             return true;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
-            _isPreviewing = false;
-            if (!_isRecording)
+            Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
+            Volatile.Write(ref _isPreviewing, 0);
+            if (!IsRecording)
                 StopAndDisposeInputStream();
             return false;
         }
@@ -149,11 +145,11 @@ public sealed class AudioRecordingService : IDisposable
 
     public void StopPreview()
     {
-        if (!_isPreviewing)
+        if (!IsPreviewing)
             return;
 
-        _isPreviewing = false;
-        if (!_isRecording)
+        Volatile.Write(ref _isPreviewing, 0);
+        if (!IsRecording)
             StopAndDisposeInputStream();
         UpdateLevel(0f);
     }
@@ -162,7 +158,7 @@ public sealed class AudioRecordingService : IDisposable
         IntPtr input, IntPtr output, uint frameCount,
         ref StreamCallbackTimeInfo timeInfo,
         StreamCallbackFlags statusFlags, IntPtr userData)
-        => ProcessAudioBuffer(input, frameCount, copySamples: _isRecording);
+        => ProcessAudioBuffer(input, frameCount, copySamples: IsRecording);
 
     private StreamCallbackResult ProcessAudioBuffer(
         IntPtr input,
@@ -179,7 +175,14 @@ public sealed class AudioRecordingService : IDisposable
         UpdateLevel(ComputeRmsLevel(processedBuffer));
 
         if (copySamples)
-            lock (_sampleLock) { _samples.AddRange(processedBuffer); }
+        {
+            lock (_sampleLock)
+            {
+                _sampleChunks.Add(processedBuffer);
+                _sampleCount += processedBuffer.Length;
+            }
+        }
+
         return StreamCallbackResult.Continue;
     }
 
@@ -217,8 +220,31 @@ public sealed class AudioRecordingService : IDisposable
 
     private void UpdateLevel(float level)
     {
-        _currentRmsLevel = level;
-        try { LevelChanged?.Invoke(this, _currentRmsLevel); } catch { /* ignore */ }
+        Volatile.Write(ref _currentRmsLevel, level);
+
+        var nowTicks = DateTime.UtcNow.Ticks;
+        if (level > 0f && !ShouldPostLevelUpdate(nowTicks))
+            return;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            try { LevelChanged?.Invoke(this, level); } catch { /* ignore */ }
+        });
+    }
+
+    private bool ShouldPostLevelUpdate(long nowTicks)
+    {
+        var minIntervalTicks = TimeSpan.FromMilliseconds(66).Ticks;
+
+        while (true)
+        {
+            var lastTicks = Interlocked.Read(ref _lastLevelPostedTicksUtc);
+            if (nowTicks - lastTicks < minIntervalTicks)
+                return false;
+
+            if (Interlocked.CompareExchange(ref _lastLevelPostedTicksUtc, nowTicks, lastTicks) == lastTicks)
+                return true;
+        }
     }
 
     public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
@@ -247,7 +273,7 @@ public sealed class AudioRecordingService : IDisposable
         var deviceIndex = SelectedDeviceIndex ?? PortAudio.DefaultInputDevice;
         if (deviceIndex == PortAudio.NoDevice)
         {
-            Debug.WriteLine("[AudioRecordingService] No default input device.");
+            Trace.WriteLine("[AudioRecordingService] No default input device.");
             return null;
         }
 
@@ -302,11 +328,35 @@ public sealed class AudioRecordingService : IDisposable
 
     private static byte[] FloatSamplesToWav(float[] samples, int sampleRate)
     {
+        return WriteWav(sampleRate, samples.Length, writer =>
+        {
+            foreach (var sample in samples)
+                writer.Write(ToPcm16(sample));
+        });
+    }
+
+    private byte[] BuildWavFromRecordedAudio()
+    {
+        lock (_sampleLock)
+        {
+            return WriteWav(SampleRate, _sampleCount, writer =>
+            {
+                foreach (var chunk in _sampleChunks)
+                {
+                    foreach (var sample in chunk)
+                        writer.Write(ToPcm16(sample));
+                }
+            });
+        }
+    }
+
+    private static byte[] WriteWav(int sampleRate, int sampleCount, Action<BinaryWriter> writeSamples)
+    {
         const short bitsPerSample = 16;
         const short channels = 1;
         var byteRate = sampleRate * channels * bitsPerSample / 8;
         var blockAlign = channels * bitsPerSample / 8;
-        var dataSize = samples.Length * 2;
+        var dataSize = sampleCount * 2;
 
         using var ms = new MemoryStream();
         using var w = new BinaryWriter(ms);
@@ -324,13 +374,15 @@ public sealed class AudioRecordingService : IDisposable
         w.Write("data"u8);
         w.Write(dataSize);
 
-        foreach (var s in samples)
-        {
-            var clamped = Math.Max(-1f, Math.Min(1f, s));
-            w.Write((short)(clamped * short.MaxValue));
-        }
+        writeSamples(w);
 
         return ms.ToArray();
+    }
+
+    private static short ToPcm16(float sample)
+    {
+        var clamped = Math.Clamp(sample, -1f, 1f);
+        return (short)(clamped * short.MaxValue);
     }
 
     private static void EnsurePortAudioInitialized()
@@ -345,11 +397,11 @@ public sealed class AudioRecordingService : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _isPreviewing = false;
-        _isRecording = false;
+        if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
+        Volatile.Write(ref _isPreviewing, 0);
+        Volatile.Write(ref _isRecording, 0);
         StopAndDisposeInputStream();
+        UpdateLevel(0f);
 
         lock (_paInitLock)
         {

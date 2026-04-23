@@ -50,7 +50,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
     public bool ShowMemoryUnavailableReason => !CanUseMemory;
     public string MemoryUnavailableReason => "Unavailable: enable a memory storage plugin and configure an LLM provider.";
     public string MemoryHint => CanUseMemory
-        ? "Automatically extracts lasting facts from transcriptions and injects relevant memories into prompt context."
+        ? "Sends each eligible transcription to the configured LLM provider to extract lasting facts. With cloud providers, transcript text is uploaded off-device and stored as memory."
         : MemoryUnavailableReason;
 
     public AdvancedSectionViewModel(

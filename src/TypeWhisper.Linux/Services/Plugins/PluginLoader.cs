@@ -24,6 +24,13 @@ public sealed record PluginLoadFailure(
 /// </summary>
 public sealed class PluginAssemblyLoadContext : AssemblyLoadContext
 {
+    // Shared managed contracts must resolve to the host's copy so type identity
+    // (e.g. ITypeWhisperPlugin) is preserved across host/plugin boundaries.
+    private static readonly string[] SharedContractAssemblies =
+    [
+        "TypeWhisper.PluginSDK",
+    ];
+
     private readonly AssemblyDependencyResolver _resolver;
 
     public PluginAssemblyLoadContext(string pluginPath) : base(isCollectible: true)
@@ -33,10 +40,18 @@ public sealed class PluginAssemblyLoadContext : AssemblyLoadContext
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
+        if (assemblyName.Name is { } name
+            && Array.Exists(SharedContractAssemblies, s => string.Equals(s, name, StringComparison.Ordinal)))
+        {
+            return Default.LoadFromAssemblyName(assemblyName);
+        }
+
         var path = _resolver.ResolveAssemblyToPath(assemblyName);
         return path is not null ? LoadFromAssemblyPath(path) : null;
     }
 
+    // No shared unmanaged contracts exist: native libs (e.g. libwhisper) are
+    // genuinely plugin-private, so the resolver is authoritative here.
     protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
     {
         var path = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);

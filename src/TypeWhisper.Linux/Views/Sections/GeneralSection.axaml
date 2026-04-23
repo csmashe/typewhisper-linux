@@ -87,7 +87,7 @@
                        Classes="section-title" />
 
             <Border Classes="panel">
-                <Grid RowDefinitions="Auto,1,Auto,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,Auto">
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
@@ -119,6 +119,22 @@
                     </Border>
 
                     <Border Grid.Row="3"
+                            Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Bearer token"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     IsReadOnly="True"
+                                     Text="{Binding ApiBearerToken}" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5"
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
