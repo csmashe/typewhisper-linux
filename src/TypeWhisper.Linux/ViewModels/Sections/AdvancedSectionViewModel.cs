@@ -147,9 +147,10 @@ public partial class AdvancedSectionViewModel : ObservableObject
     private HistoryRetentionOption MatchRetention(HistoryRetentionMode mode, int minutes) =>
         HistoryRetentionOptions.FirstOrDefault(option =>
             option.Mode == mode && (mode != HistoryRetentionMode.Duration || option.Minutes == minutes))
-        ?? HistoryRetentionOptions.First(option =>
+        ?? HistoryRetentionOptions.FirstOrDefault(option =>
             option.Mode == AppSettings.Default.HistoryRetentionMode
-            && option.Minutes == AppSettings.Default.HistoryRetentionMinutes);
+            && option.Minutes == AppSettings.Default.HistoryRetentionMinutes)
+        ?? HistoryRetentionOptions[0];
 }
 
 public sealed record AutoUnloadOption(int Seconds, string DisplayName);

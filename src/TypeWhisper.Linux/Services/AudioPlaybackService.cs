@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using PortAudioSharp;
 using TypeWhisper.Core;
@@ -50,37 +51,49 @@ public sealed class AudioPlaybackService : IDisposable
 
             StopCore();
 
-            var (samples, sampleRate) = LoadWav(path);
-            _samples = samples;
-            _position = 0;
-
-            var deviceIndex = PortAudio.DefaultOutputDevice;
-            if (deviceIndex == PortAudio.NoDevice)
-                return;
-
-            var outputInfo = PortAudio.GetDeviceInfo(deviceIndex);
-            var outputParams = new StreamParameters
+            try
             {
-                device = deviceIndex,
-                channelCount = Channels,
-                sampleFormat = SampleFormat.Float32,
-                suggestedLatency = outputInfo.defaultLowOutputLatency,
-                hostApiSpecificStreamInfo = IntPtr.Zero,
-            };
+                var (samples, sampleRate) = LoadWav(path);
+                _samples = samples;
+                _position = 0;
 
-            _stream = new PaStream(
-                inParams: null,
-                outParams: outputParams,
-                sampleRate: sampleRate,
-                framesPerBuffer: FramesPerBuffer,
-                streamFlags: StreamFlags.ClipOff,
-                callback: PlaybackCallback,
-                userData: IntPtr.Zero);
+                var deviceIndex = PortAudio.DefaultOutputDevice;
+                if (deviceIndex == PortAudio.NoDevice)
+                {
+                    StopCore();
+                    return;
+                }
 
-            CurrentFile = audioFileName;
-            IsPlaying = true;
-            _stream.Start();
-            _ = MonitorPlaybackCompletionAsync();
+                var outputInfo = PortAudio.GetDeviceInfo(deviceIndex);
+                var outputParams = new StreamParameters
+                {
+                    device = deviceIndex,
+                    channelCount = Channels,
+                    sampleFormat = SampleFormat.Float32,
+                    suggestedLatency = outputInfo.defaultLowOutputLatency,
+                    hostApiSpecificStreamInfo = IntPtr.Zero,
+                };
+
+                _stream = new PaStream(
+                    inParams: null,
+                    outParams: outputParams,
+                    sampleRate: sampleRate,
+                    framesPerBuffer: FramesPerBuffer,
+                    streamFlags: StreamFlags.ClipOff,
+                    callback: PlaybackCallback,
+                    userData: IntPtr.Zero);
+
+                _stream.Start();
+                CurrentFile = audioFileName;
+                IsPlaying = true;
+                _ = MonitorPlaybackCompletionAsync();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[AudioPlaybackService] Play failed: {ex.Message}");
+                StopCore();
+                return;
+            }
         }
 
         NotifyPlaybackChanged();
@@ -258,8 +271,9 @@ public sealed class AudioPlaybackService : IDisposable
     {
         lock (_paInitLock)
         {
-            if (_paInitCount++ == 0)
+            if (_paInitCount == 0)
                 PortAudio.Initialize();
+            _paInitCount++;
         }
     }
 

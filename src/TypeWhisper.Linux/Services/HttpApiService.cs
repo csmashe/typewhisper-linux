@@ -164,6 +164,22 @@ public sealed class HttpApiService : IDisposable
             var method = request.HttpMethod;
             var allowedOrigin = GetAllowedOrigin(request);
 
+            // CORS preflight: respond before auth so browsers can complete the
+            // handshake. The actual request that follows still goes through auth.
+            if (string.Equals(method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(allowedOrigin))
+                {
+                    response.Headers["Access-Control-Allow-Origin"] = allowedOrigin;
+                    response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+                    response.Headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+                    response.Headers["Access-Control-Max-Age"] = "600";
+                }
+                response.StatusCode = 204;
+                response.ContentLength64 = 0;
+                return;
+            }
+
             if (!IsAuthorized(request))
             {
                 response.Headers["WWW-Authenticate"] = "Bearer";
@@ -379,6 +395,12 @@ public sealed class HttpApiService : IDisposable
             return (409, Serialize(new { error = "Already recording" }));
 
         await _dictation.StartAsync();
+
+        // The orchestrator can bail silently (no device, model load failure,
+        // toggle gate already held); reflect actual state in the response.
+        if (!_dictation.IsRecording)
+            return (409, Serialize(new { error = "Failed to start dictation" }));
+
         return (200, Serialize(new { started = true }));
     }
 
@@ -388,6 +410,10 @@ public sealed class HttpApiService : IDisposable
             return (409, Serialize(new { error = "Not recording" }));
 
         await _dictation.StopAsync();
+
+        if (_dictation.IsRecording)
+            return (409, Serialize(new { error = "Failed to stop dictation" }));
+
         return (200, Serialize(new { stopped = true }));
     }
 
@@ -404,7 +430,10 @@ public sealed class HttpApiService : IDisposable
         response.StatusCode = statusCode;
         response.ContentType = "application/json";
         if (!string.IsNullOrWhiteSpace(origin))
+        {
             response.Headers["Access-Control-Allow-Origin"] = origin;
+            response.Headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+        }
 
         var bytes = Encoding.UTF8.GetBytes(body);
         response.ContentLength64 = bytes.Length;

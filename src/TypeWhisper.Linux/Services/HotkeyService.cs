@@ -101,7 +101,12 @@ public sealed class HotkeyService : IDisposable
         if (!TryParseHotkey(text, out var key, out var modifiers))
             return false;
 
-        SetHotkey(key!.Value, modifiers);
+        // Don't let the dictation hotkey collide with the prompt palette — the
+        // palette handler runs first in OnKeyPressed and would shadow this key.
+        if (HotkeyMatches(key!.Value, modifiers, _promptPaletteKey, _promptPaletteModifiers))
+            return false;
+
+        SetHotkey(key.Value, modifiers);
         return true;
     }
 
@@ -116,8 +121,18 @@ public sealed class HotkeyService : IDisposable
         if (!TryParseHotkey(text, out var key, out var modifiers))
             return false;
 
+        // Don't let the prompt palette collide with the dictation hotkey.
+        if (HotkeyMatches(key!.Value, modifiers, _key, _modifiers))
+            return false;
+
         SetPromptPaletteHotkey(key, modifiers);
         return true;
+    }
+
+    private static bool HotkeyMatches(KeyCode key, ModifierMask modifiers, KeyCode? otherKey, ModifierMask otherModifiers)
+    {
+        if (otherKey is null) return false;
+        return key == otherKey.Value && modifiers == otherModifiers;
     }
 
     private static string FormatHotkey(KeyCode key, ModifierMask mods)
@@ -156,12 +171,14 @@ public sealed class HotkeyService : IDisposable
 
             if (part.Length == 1 && part[0] is >= 'a' and <= 'z')
             {
+                if (key is not null) return false;
                 key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{char.ToUpperInvariant(part[0])}");
                 continue;
             }
 
             if (part.Length == 1 && part[0] is >= '0' and <= '9')
             {
+                if (key is not null) return false;
                 key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{part[0]}");
                 continue;
             }
@@ -186,6 +203,7 @@ public sealed class HotkeyService : IDisposable
             };
             if (named is not null)
             {
+                if (key is not null) return false;
                 key = named.Value;
                 continue;
             }
@@ -193,6 +211,7 @@ public sealed class HotkeyService : IDisposable
             if (part.Length is >= 2 and <= 3 && part[0] == 'f' &&
                 int.TryParse(part[1..], out var fNum) && fNum is >= 1 and <= 24)
             {
+                if (key is not null) return false;
                 key = (KeyCode)Enum.Parse(typeof(KeyCode), $"VcF{fNum}");
                 continue;
             }

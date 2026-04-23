@@ -385,13 +385,18 @@ public sealed class AudioRecordingService : IDisposable
         return (short)(clamped * short.MaxValue);
     }
 
+    // Idempotent: only initializes (and bumps the count to 1) on first call.
+    // GetInputDevices calls this too; without idempotence we'd leak the count
+    // every enumeration and Dispose would never terminate PortAudio.
     private static void EnsurePortAudioInitialized()
     {
         lock (_paInitLock)
         {
             if (_paInitCount == 0)
+            {
                 PortAudio.Initialize();
-            _paInitCount++;
+                _paInitCount = 1;
+            }
         }
     }
 
@@ -405,9 +410,11 @@ public sealed class AudioRecordingService : IDisposable
 
         lock (_paInitLock)
         {
-            _paInitCount--;
-            if (_paInitCount == 0)
+            if (_paInitCount > 0)
+            {
+                _paInitCount = 0;
                 try { PortAudio.Terminate(); } catch { }
+            }
         }
     }
 }

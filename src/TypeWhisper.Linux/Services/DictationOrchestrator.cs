@@ -117,9 +117,9 @@ public sealed class DictationOrchestrator : IDisposable
     public void Initialize()
     {
         if (_initialized || _disposed) return;
-        _hotkey.DictationToggleRequested += (_, _) => _ = ToggleAsync();
-        _hotkey.DictationStartRequested += (_, _) => _ = StartAsync();
-        _hotkey.DictationStopRequested += (_, _) => _ = StopAsync();
+        _hotkey.DictationToggleRequested += (_, _) => FireAndLog(ToggleAsync, nameof(ToggleAsync));
+        _hotkey.DictationStartRequested += (_, _) => FireAndLog(StartAsync, nameof(StartAsync));
+        _hotkey.DictationStopRequested += (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
         _hotkey.HookFailed += (_, message) =>
         {
             Trace.WriteLine($"[Dictation] Hotkey hook unavailable: {message}");
@@ -400,13 +400,15 @@ public sealed class DictationOrchestrator : IDisposable
                 InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
                 InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
                 InsertionResult.ActionHandled => "Action completed.",
+                InsertionResult.ActionFailed => "Action failed.",
                 InsertionResult.Failed => "Text insertion failed — is xdotool installed?",
                 _ => "Done.",
             };
+            var isError = insertion is InsertionResult.Failed or InsertionResult.ActionFailed;
             ReportStatus(completionMessage);
             ShowFeedback(
-                insertion is InsertionResult.Failed ? completionMessage : "Dictation completed.",
-                isError: insertion is InsertionResult.Failed);
+                isError ? completionMessage : "Dictation completed.",
+                isError: isError);
 
             if (insertion is InsertionResult.Pasted or InsertionResult.CopiedToClipboard)
             {
@@ -489,7 +491,27 @@ public sealed class DictationOrchestrator : IDisposable
         if (!string.IsNullOrWhiteSpace(result.Message))
             ReportStatus(result.Message);
 
-        return InsertionResult.ActionHandled;
+        return result.Success ? InsertionResult.ActionHandled : InsertionResult.ActionFailed;
+    }
+
+    private static void FireAndLog(Func<Task> start, string label)
+    {
+        Task task;
+        try
+        {
+            task = start();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] {label} threw synchronously: {ex.Message}");
+            return;
+        }
+
+        task.ContinueWith(
+            t => Trace.WriteLine($"[Dictation] {label} faulted: {t.Exception?.GetBaseException().Message}"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private void AddHistoryRecord(string rawText, string finalText, double duration,
@@ -689,7 +711,7 @@ public sealed class DictationOrchestrator : IDisposable
                 {
                     _silenceStopRequested = true;
                     ReportStatus("Silence detected. Stopping…");
-                    _ = Task.Run(StopAsync);
+                    FireAndLog(() => Task.Run(StopAsync), "silence auto-stop");
                     return;
                 }
 

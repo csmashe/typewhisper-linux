@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -22,6 +23,7 @@ public sealed class PluginManager : IDisposable
     private readonly List<LoadedPlugin> _allPlugins = [];
     private readonly Dictionary<string, PluginHostServices> _hostServices = [];
     private readonly HashSet<string> _activatedPlugins = [];
+    private readonly ConcurrentDictionary<string, Task> _activationTasks = new();
     private readonly object _lock = new();
 
     private List<ILlmProviderPlugin> _llmProviders = [];
@@ -132,10 +134,19 @@ public sealed class PluginManager : IDisposable
             return;
         }
 
-        if (_activatedPlugins.Contains(pluginId))
-            return;
+        // Serialize activation per plugin so concurrent callers share one
+        // activation Task instead of both passing the Contains check and
+        // double-activating.
+        var activation = _activationTasks.GetOrAdd(pluginId, _ => ActivatePluginAsync(plugin));
+        try
+        {
+            await activation;
+        }
+        finally
+        {
+            _activationTasks.TryRemove(new KeyValuePair<string, Task>(pluginId, activation));
+        }
 
-        await ActivatePluginAsync(plugin);
         RebuildCapabilityIndices();
         PersistEnabledState(pluginId, true);
     }

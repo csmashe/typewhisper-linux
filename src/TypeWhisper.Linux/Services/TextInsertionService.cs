@@ -8,6 +8,7 @@ public enum InsertionResult
     CopiedToClipboard,
     NoText,
     ActionHandled,
+    ActionFailed,
     Failed,
 }
 

@@ -157,7 +157,19 @@ public sealed class PluginLoader
             return null;
         }
 
-        var instance = Activator.CreateInstance(pluginType) as ITypeWhisperPlugin;
+        ITypeWhisperPlugin? instance;
+        try
+        {
+            instance = Activator.CreateInstance(pluginType) as ITypeWhisperPlugin;
+        }
+        catch (Exception ex)
+        {
+            _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, $"Plugin constructor threw: {ex.GetBaseException().Message}"));
+            Trace.WriteLine($"[PluginLoader] Constructor of '{manifest.PluginClass}' threw: {ex}");
+            loadContext.Unload();
+            return null;
+        }
+
         if (instance is null)
         {
             _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, $"Failed to create plugin instance: {manifest.PluginClass}"));
