@@ -78,7 +78,6 @@ public sealed class HistoryService : IHistoryService
     public void AddRecord(TranscriptionRecord record)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             _cache.Insert(0, record);
@@ -93,17 +92,15 @@ public sealed class HistoryService : IHistoryService
                 _distinctApps.Sort(StringComparer.OrdinalIgnoreCase);
             }
 
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
-        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
     public void UpdateRecord(string id, string finalText)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
@@ -115,17 +112,15 @@ public sealed class HistoryService : IHistoryService
                 _totalWords += updated.WordCount - old.WordCount;
             }
 
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
-        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
     public void DeleteRecord(string id)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         string? removedAudioFileName = null;
         lock (_gate)
         {
@@ -141,11 +136,10 @@ public sealed class HistoryService : IHistoryService
             }
 
             RebuildDistinctApps();
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
         DeleteAudioFile(removedAudioFileName);
-        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
@@ -161,10 +155,10 @@ public sealed class HistoryService : IHistoryService
             _totalWords = 0;
             _totalDuration = 0;
             _distinctApps.Clear();
+            SaveToDisk([]);
         }
 
         DeleteAudioFiles(audioFiles);
-        SaveToDisk([]);
         RecordsChanged?.Invoke();
     }
 
@@ -190,7 +184,6 @@ public sealed class HistoryService : IHistoryService
         EnsureCacheLoaded();
         var cutoff = DateTime.UtcNow - retention.Value;
         List<string?> removedAudioFiles;
-        List<TranscriptionRecord>? snapshot = null;
 
         lock (_gate)
         {
@@ -204,11 +197,10 @@ public sealed class HistoryService : IHistoryService
 
             _cache = _cache.Where(r => r.CreatedAt >= cutoff).ToList();
             RebuildStats();
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
         DeleteAudioFiles(removedAudioFiles);
-        SaveToDisk(snapshot!);
         RecordsChanged?.Invoke();
     }
 
