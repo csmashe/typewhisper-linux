@@ -81,6 +81,9 @@ public partial class PromptsViewModel : ObservableObject
             ?? AvailableProviders.FirstOrDefault();
         set
         {
+            if (_isRefreshingProviders)
+                return;
+
             if (string.Equals(EditProviderOverride, value?.Value, StringComparison.Ordinal))
                 return;
 

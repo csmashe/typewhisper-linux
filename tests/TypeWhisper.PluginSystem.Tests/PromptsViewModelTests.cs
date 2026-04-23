@@ -172,6 +172,28 @@ public class PromptsViewModelTests
     }
 
     [Fact]
+    public void SelectedEditProvider_IgnoresTransientNullDuringProviderRefresh()
+    {
+        var settings = new FakeSettingsService(new AppSettings
+        {
+            DefaultLlmProvider = "plugin:com.typewhisper.groq:llama-3.3-70b-versatile"
+        });
+        var promptActions = CreatePromptActionService();
+        var groq = CreateLlmProvider("com.typewhisper.groq", "Groq", "llama-3.3-70b-versatile", "Llama 3.3 70B Versatile");
+        var openAi = CreateLlmProvider("com.typewhisper.openai", "OpenAI", "gpt-4.1-mini", "GPT-4.1 Mini");
+        var pluginManager = CreatePluginManager(settings, groq, openAi);
+        var sut = new PromptsViewModel(promptActions.Object, pluginManager, settings)
+        {
+            EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini"
+        };
+
+        SetPrivateField(sut, "_isRefreshingProviders", true);
+        sut.SelectedEditProvider = null;
+
+        Assert.Equal("plugin:com.typewhisper.openai:gpt-4.1-mini", sut.EditProviderOverride);
+    }
+
+    [Fact]
     public void DefaultProviderLabel_ShowsUnavailableState_WhenConfiguredDefaultCannotBeResolved()
     {
         var settings = new FakeSettingsService(new AppSettings
