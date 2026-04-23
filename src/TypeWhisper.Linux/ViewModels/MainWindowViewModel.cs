@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Controls.ApplicationLifetimes;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using FluentIcons.Common;
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -75,25 +76,25 @@ public partial class MainWindowViewModel : ObservableObject
         NavItems =
         [
             new NavItem("Overview", null, null, true),
-            new NavItem("Dashboard", "\U0001F3E0", Dashboard, false),
+            new NavItem("Dashboard", Symbol.Home, Dashboard, false),
             new NavItem("Capture", null, null, true),
-            new NavItem("Dictation", "\U0001F3A4", Dictation, false),
-            new NavItem("Shortcuts", "⌨️", Shortcuts, false),
-            new NavItem("File transcription", "\U0001F4DD", FileTranscription, false),
-            new NavItem("Recorder", "\U0001F3B5", Recorder, false),
+            new NavItem("Dictation", Symbol.Mic, Dictation, false),
+            new NavItem("Shortcuts", Symbol.Keyboard, Shortcuts, false),
+            new NavItem("File transcription", Symbol.DocumentText, FileTranscription, false),
+            new NavItem("Recorder", Symbol.Record, Recorder, false),
             new NavItem("Library", null, null, true),
-            new NavItem("History", "\U0001F4DC", History, false),
-            new NavItem("Dictionary", "\U0001F4D6", Dictionary, false),
-            new NavItem("Snippets", "✂️", Snippets, false),
-            new NavItem("Profiles", "\U0001F464", Profiles, false),
+            new NavItem("History", Symbol.History, History, false),
+            new NavItem("Dictionary", Symbol.Book, Dictionary, false),
+            new NavItem("Snippets", Symbol.Cut, Snippets, false),
+            new NavItem("Profiles", Symbol.Person, Profiles, false),
             new NavItem("AI", null, null, true),
-            new NavItem("Prompts", "✨", Prompts, false),
-            new NavItem("Plugins", "\U0001F50C", Plugins, false),
+            new NavItem("Prompts", Symbol.Prompt, Prompts, false),
+            new NavItem("Plugins", Symbol.PlugConnected, Plugins, false),
             new NavItem("System", null, null, true),
-            new NavItem("General", "⚙️", General, false),
-            new NavItem("Appearance", "🎨", Appearance, false),
-            new NavItem("Advanced", "◌", Advanced, false),
-            new NavItem("About", "ℹ️", About, false),
+            new NavItem("General", Symbol.Settings, General, false),
+            new NavItem("Appearance", Symbol.Color, Appearance, false),
+            new NavItem("Advanced", Symbol.AppsSettings, Advanced, false),
+            new NavItem("About", Symbol.Info, About, false),
         ];
 
         SelectedItem = NavItems.First(i => i.Content is DashboardSectionViewModel);
@@ -143,13 +144,13 @@ public partial class MainWindowViewModel : ObservableObject
 public partial class NavItem : ObservableObject
 {
     public string Label { get; }
-    public string? Icon { get; }
+    public Symbol? Icon { get; }
     public object? Content { get; }
     public bool IsHeader { get; }
 
     [ObservableProperty] private bool _isSelected;
 
-    public NavItem(string label, string? icon, object? content, bool isHeader)
+    public NavItem(string label, Symbol? icon, object? content, bool isHeader)
     {
         Label = label;
         Icon = icon;
