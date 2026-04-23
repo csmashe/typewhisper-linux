@@ -8,10 +8,12 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class GeneralSectionViewModel : ObservableObject
 {
     private readonly ISettingsService _settings;
+    private readonly HttpApiService _api;
     [ObservableProperty] private string? _uiLanguage;
     [ObservableProperty] private bool _startWithSystem;
     [ObservableProperty] private bool _apiServerEnabled;
     [ObservableProperty] private int _apiServerPort;
+    [ObservableProperty] private string _apiStatusText = "";
 
     public IReadOnlyList<UiLanguageOption> UiLanguageChoices { get; } =
     [
@@ -48,12 +50,15 @@ public partial class GeneralSectionViewModel : ObservableObject
         }
     }
 
-    public GeneralSectionViewModel(ISettingsService settings)
+    public GeneralSectionViewModel(ISettingsService settings, HttpApiService api)
     {
         _settings = settings;
+        _api = api;
         Refresh(settings.Current);
         StartWithSystem = StartupService.IsEnabled;
         _settings.SettingsChanged += Refresh;
+        _api.StateChanged += () => ApiStatusText = _api.StatusText;
+        ApiStatusText = _api.StatusText;
     }
 
     private void Refresh(Core.Models.AppSettings s)

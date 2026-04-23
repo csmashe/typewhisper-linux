@@ -1,12 +1,17 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class AdvancedSectionViewModel : ObservableObject
 {
     private readonly ISettingsService _settings;
+    private readonly SpeechFeedbackService _speechFeedback;
+    private readonly PluginManager _pluginManager;
 
     [ObservableProperty] private bool _memoryEnabled;
     [ObservableProperty] private AutoUnloadOption? _selectedAutoUnloadOption;
@@ -33,17 +38,45 @@ public partial class AdvancedSectionViewModel : ObservableObject
         new(HistoryRetentionMode.UntilAppCloses, null, "Until app closes")
     ];
 
-    public AdvancedSectionViewModel(ISettingsService settings)
+    public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
+    public bool ShowSpokenFeedbackUnavailableReason => !CanUseSpokenFeedback;
+    public string SpokenFeedbackUnavailableReason => "Unavailable: install espeak-ng, espeak, or speech-dispatcher.";
+    public string SpokenFeedbackHint => CanUseSpokenFeedback
+        ? $"Spoken feedback reads the final transcription aloud via {_speechFeedback.BackendName}."
+        : SpokenFeedbackUnavailableReason;
+
+    public bool CanUseMemory => _pluginManager.GetPlugins<IMemoryStoragePlugin>().Any()
+                                && _pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
+    public bool ShowMemoryUnavailableReason => !CanUseMemory;
+    public string MemoryUnavailableReason => "Unavailable: enable a memory storage plugin and configure an LLM provider.";
+    public string MemoryHint => CanUseMemory
+        ? "Automatically extracts lasting facts from transcriptions and injects relevant memories into prompt context."
+        : MemoryUnavailableReason;
+
+    public AdvancedSectionViewModel(
+        ISettingsService settings,
+        SpeechFeedbackService speechFeedback,
+        PluginManager pluginManager)
     {
         _settings = settings;
+        _speechFeedback = speechFeedback;
+        _pluginManager = pluginManager;
         Refresh(settings.Current);
         _settings.SettingsChanged += Refresh;
+        _pluginManager.PluginStateChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(CanUseMemory));
+            OnPropertyChanged(nameof(ShowMemoryUnavailableReason));
+            OnPropertyChanged(nameof(MemoryHint));
+            if (!CanUseMemory && MemoryEnabled)
+                MemoryEnabled = false;
+        };
     }
 
     private void Refresh(AppSettings settings)
     {
-        MemoryEnabled = settings.MemoryEnabled;
-        SpokenFeedbackEnabled = settings.SpokenFeedbackEnabled;
+        MemoryEnabled = settings.MemoryEnabled && CanUseMemory;
+        SpokenFeedbackEnabled = settings.SpokenFeedbackEnabled && CanUseSpokenFeedback;
         SaveToHistoryEnabled = settings.SaveToHistoryEnabled;
         SelectedAutoUnloadOption = AutoUnloadOptions.FirstOrDefault(option => option.Seconds == settings.ModelAutoUnloadSeconds)
             ?? AutoUnloadOptions[0];
@@ -54,6 +87,12 @@ public partial class AdvancedSectionViewModel : ObservableObject
     {
         if (_settings.Current.MemoryEnabled == value)
             return;
+
+        if (value && !CanUseMemory)
+        {
+            MemoryEnabled = false;
+            return;
+        }
 
         _settings.Save(_settings.Current with { MemoryEnabled = value });
     }
@@ -70,6 +109,12 @@ public partial class AdvancedSectionViewModel : ObservableObject
     {
         if (_settings.Current.SpokenFeedbackEnabled == value)
             return;
+
+        if (value && !CanUseSpokenFeedback)
+        {
+            SpokenFeedbackEnabled = false;
+            return;
+        }
 
         _settings.Save(_settings.Current with { SpokenFeedbackEnabled = value });
     }

@@ -32,7 +32,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             DefaultLlmProvider = "plugin:com.test.default:model-a"
         });
 
-        var sut = new PromptProcessingService(pluginManager, settings.Object);
+        var sut = new PromptProcessingService(pluginManager, settings.Object, new MemoryService(pluginManager));
 
         var result = await sut.ProcessAsync(new PromptAction
         {
@@ -61,7 +61,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             DefaultLlmProvider = "plugin:com.test.default:model-a"
         });
 
-        var sut = new PromptProcessingService(pluginManager, settings.Object);
+        var sut = new PromptProcessingService(pluginManager, settings.Object, new MemoryService(pluginManager));
 
         var result = await sut.ProcessAsync(new PromptAction
         {
@@ -83,7 +83,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             loadedPlugins: [CreateLoadedPlugin(provider.PluginId, provider)]);
         var settings = CreateSettings(new AppSettings());
 
-        var sut = new PromptProcessingService(pluginManager, settings.Object);
+        var sut = new PromptProcessingService(pluginManager, settings.Object, new MemoryService(pluginManager));
 
         var result = await sut.ProcessAsync(new PromptAction
         {

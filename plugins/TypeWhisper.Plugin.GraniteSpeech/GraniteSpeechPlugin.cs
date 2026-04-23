@@ -77,6 +77,22 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     public bool IsModelDownloaded(string modelId) =>
         File.Exists(Path.Combine(GetDataDirectory(), ".setup-complete"));
 
+    public Task DeleteModelAsync(string modelId, CancellationToken ct)
+    {
+        if (modelId != ModelId)
+            throw new ArgumentException($"Unknown model: {modelId}");
+
+        StopSidecar();
+        _loadedModelId = null;
+        _selectedModelId = null;
+
+        var dataDir = GetDataDirectory();
+        if (Directory.Exists(dataDir))
+            Directory.Delete(dataDir, recursive: true);
+
+        return Task.CompletedTask;
+    }
+
     public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
     {
         var dataDir = GetDataDirectory();

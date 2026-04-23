@@ -4,7 +4,9 @@
 [![Linux](https://img.shields.io/badge/Linux-Desktop-FCC624.svg)](https://kernel.org)
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4.svg)](https://dotnet.microsoft.com)
 
-Speech-to-text and AI text processing for Linux desktop. This repository is the Linux desktop port of the Windows branch, adapted around Avalonia, Linux desktop services, and Linux-friendly install and startup behavior.
+Speech-to-text and AI text processing for Linux desktop. This repository is a Linux desktop port forked from the TypeWhisper project, which provides macOS and Windows versions. I ported it so I could use TypeWhisper on Linux, and I am making this branch available for other Linux users who want the same.
+
+If the TypeWhisper project releases an official Linux version, or if this port is merged into the main TypeWhisper branch, I plan to use the upstream Linux version instead. Until then, this branch exists as a practical Linux port adapted around Avalonia, Linux desktop services, and Linux-friendly install and startup behavior.
 
 TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary and snippet post-processing, and run prompt-based AI text actions through plugins.
 
@@ -73,6 +75,7 @@ When one of those tools is missing, the Linux UI disables that control and shows
   - `pactl` for audio ducking
   - `playerctl` for media pause during recording
   - `canberra-gtk-play` for sound feedback
+  - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
 
 ## Tested On
 
@@ -126,6 +129,78 @@ To remove that user-level install:
 ./scripts/uninstall-linux-app.sh
 ```
 
+## Models
+
+TypeWhisper uses plugin-provided transcription models. In this Linux branch, models appear in the Dictation page after the bundled or installed transcription plugins are loaded.
+
+Current model behavior:
+
+- The selected transcription model is saved in settings.
+- The Dictation page can load the selected model through the active transcription plugin.
+- File transcription and recorder transcription use the same selected model.
+- Model auto-unload is exposed in Advanced settings.
+
+Known model gaps:
+
+- Model download and marketplace-style model management are not fully wired in the Linux UI yet.
+- Available models depend on which bundled or manually installed plugins are present and enabled.
+- Local model availability depends on the Linux-compatible plugin implementation and any files it requires under the user data directory.
+
+## HTTP API
+
+The Linux app includes a local HTTP API for integrations and automation. Configure it in the General page:
+
+- `Enable local API`
+- `Port`, defaulting to `9876`
+
+When enabled, TypeWhisper listens on `http://localhost:<port>/`.
+
+Available endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/status` | GET | App status and active model |
+| `/v1/models` | GET | List available models |
+| `/v1/transcribe` | POST | Transcribe uploaded audio. Optional query params: `filename`, `language`, `task`, `model` |
+| `/v1/history` | GET | Search history |
+| `/v1/history` | DELETE | Delete history entries |
+| `/v1/profiles` | GET | List profiles |
+| `/v1/profiles/toggle` | PUT | Toggle a profile on or off |
+| `/v1/dictation/start` | POST | Start recording |
+| `/v1/dictation/stop` | POST | Stop recording |
+| `/v1/dictation/status` | GET | Check dictation state |
+
+Current API limitations:
+
+- `/v1/transcribe` returns text, language, duration, and no-speech probability when available. Segment-level subtitle timing is not exposed by the current Linux plugin result contract.
+- Uploaded audio conversion uses the same `ffmpeg`-based importer as the File transcription page.
+- The API binds to `localhost` only.
+
+## Profiles
+
+Profiles let TypeWhisper apply different settings based on the active application or URL pattern.
+
+In the Linux branch, profiles support:
+
+- Profile creation, editing, enable/disable, save, and delete
+- Process/app matching fields
+- URL pattern fields
+- Priority
+- Language, task, translation, model, whisper mode, and prompt action overrides
+- A live-context view for checking what app context TypeWhisper sees
+
+Example profile uses:
+
+- Use a specific language for one editor or browser
+- Enable whisper mode for a quiet-room workflow
+- Use a different transcription model for one app
+- Run a specific prompt action for text captured in a matching context
+
+Known profile gaps:
+
+- Active-window and URL detection can vary by desktop environment, browser, and display server.
+- Some Wayland sessions may restrict app/window metadata more than X11.
+
 ## Project Layout
 
 ```text
@@ -164,13 +239,46 @@ The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin
 
 The Linux build currently deploys bundled plugins from `plugins/` into the app output, then copies them into the user plugin directory on first run if they are missing.
 
+Plugins are loaded from the user plugin directory:
+
+- `~/.local/share/TypeWhisper/Plugins/` on typical Linux setups
+
+Bundled plugin deployment:
+
+- Release builds run `scripts/deploy-linux-plugins.sh`.
+- The install script also bundles plugins into the published app.
+- On first run, bundled plugins are copied into the user plugin directory if they are missing.
+
+Known plugin gaps:
+
+- Marketplace/store browsing is intentionally not active in the Linux UI right now.
+- Plugin update handling is limited compared with the intended full marketplace workflow.
+- Some plugins may depend on external binaries, API keys, local model files, or services that must be configured separately.
+
+## Plugin SDK
+
+Plugin projects use `TypeWhisper.PluginSDK`.
+
+The SDK defines the shared plugin contracts used by the Linux app:
+
+| Interface | Purpose |
+|-----------|---------|
+| `ITranscriptionEnginePlugin` | Add a local, cloud, or custom transcription engine |
+| `ILlmProviderPlugin` | Add an LLM provider for prompt processing |
+| `IPostProcessorPlugin` | Add text cleanup or transformation steps after transcription |
+| `IActionPlugin` | Run custom actions from transcriptions or prompt results |
+| `ITypeWhisperPlugin` | Observe app/plugin events |
+
+The SDK also includes helper types for plugin manifests, plugin events, transcription results, LLM requests, and action contexts.
+
+Plugin source projects live under `plugins/`. The Linux app expects each deployed plugin to include its manifest and runtime assemblies in its plugin folder.
+
 ## Known Linux Gaps and Planned Work
 
 These items appeared in the earlier project README or settings surface, but they are not fully implemented in this Linux branch yet and should be treated as planned work:
 
 - Interface language switching is not implemented yet. The setting is visible, but the Linux UI does not currently live-switch translations.
 - App self-update is not configured yet. The `Check for Updates` button in the About page is currently a placeholder.
-- The local HTTP API is exposed in settings, but there is no Linux HTTP API service wired up yet.
 - Marketplace/store browsing is intentionally not active in the Linux UI right now.
 - Subtitle export formats such as SRT and WebVTT are not currently wired up in the Linux file transcription flow.
 - The old README described broader platform feature coverage than this branch currently ships. Any feature not described as active above should be treated as pending until it is implemented in this repository.

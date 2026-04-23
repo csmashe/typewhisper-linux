@@ -18,6 +18,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly SystemCommandAvailabilityService _commands;
     private bool _previewAttached;
+    private CancellationTokenSource? _modelSelectionCts;
 
     public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
     public ObservableCollection<AudioInputDevice> Devices { get; } = [];
@@ -73,6 +74,7 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool CanUseSoundFeedback => _commands.HasCanberraGtkPlay;
     public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
     public string SoundFeedbackUnavailableReason => "Unavailable: canberra-gtk-play is not installed on this system.";
+    public bool CanDeleteSelectedModel => SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
 
     public TranslationTargetOption? SelectedTranslationTargetOption
     {
@@ -220,12 +222,12 @@ public partial class DictationSectionViewModel : ObservableObject
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
         AutoPaste = settings.AutoPaste;
         WhisperModeEnabled = settings.WhisperModeEnabled;
-        SoundFeedbackEnabled = settings.SoundFeedbackEnabled;
+        SoundFeedbackEnabled = settings.SoundFeedbackEnabled && CanUseSoundFeedback;
         SilenceAutoStopEnabled = settings.SilenceAutoStopEnabled;
         SilenceAutoStopSeconds = settings.SilenceAutoStopSeconds;
-        AudioDuckingEnabled = settings.AudioDuckingEnabled;
+        AudioDuckingEnabled = settings.AudioDuckingEnabled && CanUseAudioDucking;
         AudioDuckingLevel = settings.AudioDuckingLevel;
-        PauseMediaDuringRecording = settings.PauseMediaDuringRecording;
+        PauseMediaDuringRecording = settings.PauseMediaDuringRecording && CanUseMediaPause;
 
         SelectedDevice = _audio.ResolveConfiguredDevice(
             settings.SelectedMicrophoneDevice,
@@ -248,6 +250,7 @@ public partial class DictationSectionViewModel : ObservableObject
             EngineName = "No engine selected";
             ModelStatusText = "Not selected";
             ModelReady = false;
+            OnPropertyChanged(nameof(CanDeleteSelectedModel));
             return;
         }
 
@@ -262,6 +265,7 @@ public partial class DictationSectionViewModel : ObservableObject
             ModelStatusType.Error => status.ErrorMessage ?? "Error",
             _ => "Not ready"
         };
+        OnPropertyChanged(nameof(CanDeleteSelectedModel));
     }
 
     partial void OnSelectedModelChanged(DictationModelOption? value)
@@ -274,6 +278,73 @@ public partial class DictationSectionViewModel : ObservableObject
 
         _settings.Save(_settings.Current with { SelectedModelId = value.ModelId });
         RefreshModelState();
+        _ = DownloadAndLoadSelectedModelAsync(value);
+    }
+
+    private async Task DownloadAndLoadSelectedModelAsync(DictationModelOption selected)
+    {
+        _modelSelectionCts?.Cancel();
+        _modelSelectionCts?.Dispose();
+        var cts = _modelSelectionCts = new CancellationTokenSource();
+
+        try
+        {
+            StatusText = _models.IsDownloaded(selected.ModelId)
+                ? $"Loading {selected.DisplayLabel}..."
+                : $"Downloading {selected.DisplayLabel}...";
+
+            await _models.DownloadAndLoadModelAsync(selected.ModelId, cts.Token);
+
+            if (cts.IsCancellationRequested || SelectedModel?.ModelId != selected.ModelId)
+                return;
+
+            StatusText = $"{selected.DisplayLabel} is ready.";
+            RefreshModelState();
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer model selection replaced this request.
+        }
+        catch (Exception ex)
+        {
+            if (SelectedModel?.ModelId == selected.ModelId)
+                StatusText = $"Model setup failed: {ex.Message}";
+            RefreshModelState();
+        }
+        finally
+        {
+            if (ReferenceEquals(_modelSelectionCts, cts))
+                _modelSelectionCts = null;
+            cts.Dispose();
+        }
+    }
+
+    public async Task DeleteSelectedModelAsync()
+    {
+        var selected = SelectedModel;
+        if (selected is null || !CanDeleteSelectedModel)
+            return;
+
+        _modelSelectionCts?.Cancel();
+        StatusText = $"Deleting {selected.DisplayLabel}...";
+
+        try
+        {
+            await _models.DeleteModelAsync(selected.ModelId);
+            if (_settings.Current.SelectedModelId == selected.ModelId)
+                _settings.Save(_settings.Current with { SelectedModelId = null });
+
+            SelectedModel = null;
+            StatusText = $"{selected.DisplayLabel} was deleted from disk.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Model delete failed: {ex.Message}";
+        }
+        finally
+        {
+            RefreshModelState();
+        }
     }
 
     partial void OnSelectedDeviceChanged(AudioInputDevice? value)
@@ -308,7 +379,15 @@ public partial class DictationSectionViewModel : ObservableObject
         => _settings.Save(_settings.Current with { WhisperModeEnabled = value });
 
     partial void OnSoundFeedbackEnabledChanged(bool value)
-        => _settings.Save(_settings.Current with { SoundFeedbackEnabled = value });
+    {
+        if (value && !CanUseSoundFeedback)
+        {
+            SoundFeedbackEnabled = false;
+            return;
+        }
+
+        _settings.Save(_settings.Current with { SoundFeedbackEnabled = value });
+    }
 
     partial void OnSilenceAutoStopEnabledChanged(bool value)
         => _settings.Save(_settings.Current with { SilenceAutoStopEnabled = value });
@@ -322,13 +401,29 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 
     partial void OnAudioDuckingEnabledChanged(bool value)
-        => _settings.Save(_settings.Current with { AudioDuckingEnabled = value });
+    {
+        if (value && !CanUseAudioDucking)
+        {
+            AudioDuckingEnabled = false;
+            return;
+        }
+
+        _settings.Save(_settings.Current with { AudioDuckingEnabled = value });
+    }
 
     partial void OnAudioDuckingLevelChanged(double value)
         => _settings.Save(_settings.Current with { AudioDuckingLevel = (float)Math.Clamp(value, 0d, 0.5d) });
 
     partial void OnPauseMediaDuringRecordingChanged(bool value)
-        => _settings.Save(_settings.Current with { PauseMediaDuringRecording = value });
+    {
+        if (value && !CanUseMediaPause)
+        {
+            PauseMediaDuringRecording = false;
+            return;
+        }
+
+        _settings.Save(_settings.Current with { PauseMediaDuringRecording = value });
+    }
 
     private void OnLevelChanged(object? sender, float level)
     {

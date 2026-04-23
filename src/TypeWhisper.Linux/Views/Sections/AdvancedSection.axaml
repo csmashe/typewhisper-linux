@@ -35,6 +35,7 @@
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding MemoryEnabled}"
+                                          IsEnabled="{Binding CanUseMemory}"
                                           VerticalAlignment="Center" />
                         </Grid>
                     </Border>
@@ -42,7 +43,7 @@
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
-                        <TextBlock Text="Automatically extracts facts from transcriptions with the configured LLM and injects them into prompt context."
+                        <TextBlock Text="{Binding MemoryHint}"
                                    FontSize="12"
                                    Foreground="#8A9AAE" />
                     </Border>
@@ -82,6 +83,7 @@
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding SpokenFeedbackEnabled}"
+                                          IsEnabled="{Binding CanUseSpokenFeedback}"
                                           VerticalAlignment="Center" />
                         </Grid>
                     </Border>
@@ -90,7 +92,7 @@
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
-                        <TextBlock Text="Local models can be unloaded after inactivity, and spoken feedback reads the final transcription aloud."
+                        <TextBlock Text="{Binding SpokenFeedbackHint}"
                                    FontSize="12"
                                    Foreground="#8A9AAE" />
                     </Border>

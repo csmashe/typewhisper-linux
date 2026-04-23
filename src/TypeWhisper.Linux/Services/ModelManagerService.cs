@@ -131,15 +131,23 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             .FirstOrDefault(e => e.PluginId == pluginId)
             ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
 
-        if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
+        try
         {
-            SetStatus(modelId, ModelStatus.DownloadingModel(0));
+            if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
+            {
+                SetStatus(modelId, ModelStatus.DownloadingModel(0));
 
-            var progress = new Progress<double>(p => SetStatus(modelId, ModelStatus.DownloadingModel(p)));
-            await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
+                var progress = new Progress<double>(p => SetStatus(modelId, ModelStatus.DownloadingModel(p)));
+                await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
+            }
+
+            await LoadModelAsync(modelId, cancellationToken);
         }
-
-        await LoadModelAsync(modelId, cancellationToken);
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            SetStatus(modelId, ModelStatus.Failed(ex.Message));
+            throw;
+        }
     }
 
     public async Task LoadModelAsync(string modelId, CancellationToken cancellationToken = default)
@@ -217,13 +225,44 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         _autoUnloadTimer = null;
     }
 
-    public void DeleteModel(string modelId)
+    public bool CanDeleteModel(string modelId)
+    {
+        if (!IsPluginModel(modelId))
+            return false;
+
+        var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
+        var plugin = _pluginManager.TranscriptionEngines
+            .FirstOrDefault(e => e.PluginId == pluginId);
+
+        return plugin is { SupportsModelDownload: true } && plugin.IsModelDownloaded(pluginModelId);
+    }
+
+    public async Task DeleteModelAsync(string modelId, CancellationToken cancellationToken = default)
     {
         if (ActiveModelId == modelId)
-            UnloadModel();
+        {
+            var plugin = ActiveTranscriptionPlugin;
+            if (plugin is not null)
+                await plugin.UnloadModelAsync();
+
+            ActiveModelId = null;
+        }
+
+        if (IsPluginModel(modelId))
+        {
+            var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
+            var plugin = _pluginManager.TranscriptionEngines
+                .FirstOrDefault(e => e.PluginId == pluginId);
+
+            if (plugin is { SupportsModelDownload: true })
+                await plugin.DeleteModelAsync(pluginModelId, cancellationToken);
+        }
 
         SetStatus(modelId, ModelStatus.NotDownloaded);
     }
+
+    public void DeleteModel(string modelId) =>
+        _ = DeleteModelAsync(modelId);
 
     public async Task<bool> EnsureModelLoadedAsync(string? modelId = null, CancellationToken cancellationToken = default)
     {
@@ -238,9 +277,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
 
         if (!IsDownloaded(targetModelId))
-            return false;
+            await DownloadAndLoadModelAsync(targetModelId, cancellationToken);
+        else
+            await LoadModelAsync(targetModelId, cancellationToken);
 
-        await LoadModelAsync(targetModelId, cancellationToken);
         return true;
     }
 

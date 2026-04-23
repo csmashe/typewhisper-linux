@@ -237,6 +237,32 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         }
     }
 
+    public async Task DeleteModelAsync(string modelId, CancellationToken ct)
+    {
+        var modelPath = GetModelPath(modelId);
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_loadedModelId == modelId)
+            {
+                DisposeFactoryUnsafe();
+                _loadedModelId = null;
+            }
+
+            if (_selectedModelId == modelId)
+            {
+                _selectedModelId = null;
+                _host?.SetSetting("selectedModel", "");
+            }
+
+            TryDeleteFile(modelPath);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public void Dispose()
     {
         DisposeFactoryUnsafe();

@@ -95,6 +95,26 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         return model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName)));
     }
 
+    public Task DeleteModelAsync(string modelId, CancellationToken ct)
+    {
+        _ = GetModelDefinition(modelId);
+        var dir = GetModelDirectory(modelId);
+
+        lock (_sync)
+        {
+            if (_loadedModelId == modelId)
+                UnloadRecognizerUnsafe();
+
+            if (_selectedModelId == modelId)
+                _selectedModelId = null;
+        }
+
+        if (Directory.Exists(dir))
+            Directory.Delete(dir, recursive: true);
+
+        return Task.CompletedTask;
+    }
+
     public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
     {
         var model = GetModelDefinition(modelId);

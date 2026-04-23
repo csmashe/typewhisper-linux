@@ -122,7 +122,7 @@
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
-                        <TextBlock Text="Expose the local REST endpoint for integrations and automation."
+                        <TextBlock Text="{Binding ApiStatusText}"
                                    FontSize="12"
                                    Foreground="#8A9AAE" />
                     </Border>

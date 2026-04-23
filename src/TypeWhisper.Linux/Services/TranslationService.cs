@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using TypeWhisper.Core;
@@ -13,6 +14,8 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class TranslationService : ITranslationService, IDisposable
 {
+    private static int _onnxResolverRegistered;
+
     private readonly PluginManager _pluginManager;
     private readonly HttpClient _httpClient = new();
     private readonly SemaphoreSlim _downloadSemaphore = new(1, 1);
@@ -26,6 +29,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
     public TranslationService(PluginManager pluginManager)
     {
+        RegisterOnnxRuntimeResolver();
         _pluginManager = pluginManager;
     }
 
@@ -157,6 +161,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
     private static LoadedTranslationModel LoadModel(string modelDir)
     {
+        RegisterOnnxRuntimeResolver();
         var config = MarianConfig.Load(Path.Combine(modelDir, "config.json"));
         var tokenizer = MarianTokenizer.Load(Path.Combine(modelDir, "tokenizer.json"), config.EosTokenId);
 
@@ -236,6 +241,29 @@ public sealed class TranslationService : ITranslationService, IDisposable
     }
 
     private static string ModelKey(string sourceLang, string targetLang) => $"{sourceLang}-{targetLang}";
+
+    private static void RegisterOnnxRuntimeResolver()
+    {
+        if (Interlocked.Exchange(ref _onnxResolverRegistered, 1) == 1)
+            return;
+
+        NativeLibrary.SetDllImportResolver(typeof(InferenceSession).Assembly, (libraryName, assembly, searchPath) =>
+        {
+            if (!libraryName.Contains("onnxruntime", StringComparison.OrdinalIgnoreCase))
+                return IntPtr.Zero;
+
+            var rid = RuntimeInformation.ProcessArchitecture switch
+            {
+                Architecture.Arm64 => "linux-arm64",
+                _ => "linux-x64"
+            };
+
+            var candidate = Path.Combine(AppContext.BaseDirectory, "runtimes", rid, "native", "libonnxruntime.so");
+            return File.Exists(candidate)
+                ? NativeLibrary.Load(candidate)
+                : IntPtr.Zero;
+        });
+    }
 
     public void Dispose()
     {

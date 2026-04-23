@@ -45,6 +45,9 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     /// <summary>Loads a downloaded model into memory, preparing it for transcription.</summary>
     Task LoadModelAsync(string modelId, CancellationToken ct) => Task.CompletedTask;
 
+    /// <summary>Deletes downloaded model files for the given model ID.</summary>
+    Task DeleteModelAsync(string modelId, CancellationToken ct) => Task.CompletedTask;
+
     /// <summary>Whether this engine supports real-time streaming transcription via <see cref="IStreamingSession"/>.</summary>
     bool SupportsStreaming => false;
 

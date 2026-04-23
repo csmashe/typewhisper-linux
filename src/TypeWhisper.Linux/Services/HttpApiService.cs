@@ -1,0 +1,414 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Services;
+using TypeWhisper.PluginSDK.Models;
+
+namespace TypeWhisper.Linux.Services;
+
+public sealed class HttpApiService : IDisposable
+{
+    private readonly ModelManagerService _models;
+    private readonly ISettingsService _settings;
+    private readonly AudioFileService _audioFiles;
+    private readonly IHistoryService _history;
+    private readonly IProfileService _profiles;
+    private readonly IDictionaryService _dictionary;
+    private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly IPostProcessingPipeline _pipeline;
+    private readonly DictationOrchestrator _dictation;
+
+    private HttpListener? _listener;
+    private CancellationTokenSource? _cts;
+    private Task? _listenTask;
+    private int _port;
+    private bool _disposed;
+
+    public event Action? StateChanged;
+
+    public string StatusText { get; private set; } = "Local API is disabled.";
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        WriteIndented = false
+    };
+
+    public bool IsRunning => _listener?.IsListening == true;
+
+    public HttpApiService(
+        ModelManagerService models,
+        ISettingsService settings,
+        AudioFileService audioFiles,
+        IHistoryService history,
+        IProfileService profiles,
+        IDictionaryService dictionary,
+        IVocabularyBoostingService vocabularyBoosting,
+        IPostProcessingPipeline pipeline,
+        DictationOrchestrator dictation)
+    {
+        _models = models;
+        _settings = settings;
+        _audioFiles = audioFiles;
+        _history = history;
+        _profiles = profiles;
+        _dictionary = dictionary;
+        _vocabularyBoosting = vocabularyBoosting;
+        _pipeline = pipeline;
+        _dictation = dictation;
+    }
+
+    public void Start(int port)
+    {
+        if (IsRunning && _port == port)
+        {
+            SetStatus($"Local API is running at http://localhost:{port}/");
+            return;
+        }
+
+        if (port <= 0 || port > 65535)
+        {
+            Stop(updateStatus: false);
+            SetStatus("Local API failed to start: port must be between 1 and 65535.");
+            return;
+        }
+
+        Stop(updateStatus: false);
+
+        try
+        {
+            _port = port;
+            _cts = new CancellationTokenSource();
+            _listener = new HttpListener();
+            _listener.Prefixes.Add($"http://localhost:{port}/");
+            _listener.Start();
+            _listenTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+            SetStatus($"Local API is running at http://localhost:{port}/");
+        }
+        catch (Exception ex)
+        {
+            Stop(updateStatus: false);
+            SetStatus($"Local API failed to start: {ex.Message}");
+        }
+    }
+
+    public void Stop() => Stop(updateStatus: true);
+
+    private void Stop(bool updateStatus)
+    {
+        _cts?.Cancel();
+        _listener?.Stop();
+        _listener?.Close();
+        _listener = null;
+        _port = 0;
+        if (updateStatus)
+            SetStatus("Local API is disabled.");
+    }
+
+    public void ApplySettings()
+    {
+        var settings = _settings.Current;
+        if (settings.ApiServerEnabled)
+            Start(settings.ApiServerPort);
+        else
+            Stop();
+    }
+
+    private void SetStatus(string status)
+    {
+        if (StatusText == status)
+            return;
+
+        StatusText = status;
+        StateChanged?.Invoke();
+    }
+
+    private async Task ListenLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && _listener is { IsListening: true } listener)
+        {
+            try
+            {
+                var context = await listener.GetContextAsync();
+                _ = Task.Run(() => HandleRequestAsync(context, ct), ct);
+            }
+            catch (HttpListenerException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+            catch
+            {
+                // Keep the local API alive after malformed requests.
+            }
+        }
+    }
+
+    private async Task HandleRequestAsync(HttpListenerContext context, CancellationToken ct)
+    {
+        var response = context.Response;
+        try
+        {
+            var request = context.Request;
+            var path = request.Url?.AbsolutePath ?? "";
+            var method = request.HttpMethod;
+
+            var (statusCode, body) = (path, method) switch
+            {
+                ("/v1/status", "GET") => HandleStatus(),
+                ("/v1/models", "GET") => HandleModels(),
+                ("/v1/transcribe", "POST") => await HandleTranscribeAsync(request, ct),
+                ("/v1/history", "GET") => HandleHistorySearch(request),
+                ("/v1/history", "DELETE") => HandleHistoryDelete(request),
+                ("/v1/profiles", "GET") => HandleProfilesList(),
+                ("/v1/profiles/toggle", "PUT") => HandleProfileToggle(request),
+                ("/v1/dictation/start", "POST") => await HandleDictationStartAsync(),
+                ("/v1/dictation/stop", "POST") => await HandleDictationStopAsync(),
+                ("/v1/dictation/status", "GET") => HandleDictationStatus(),
+                _ => (404, Serialize(new { error = "Not found" }))
+            };
+
+            await WriteJsonAsync(response, statusCode, body, ct);
+        }
+        catch (Exception ex)
+        {
+            await WriteJsonAsync(response, 500, Serialize(new { error = ex.Message }), ct);
+        }
+        finally
+        {
+            response.Close();
+        }
+    }
+
+    private (int, string) HandleStatus()
+    {
+        var plugin = _models.ActiveTranscriptionPlugin;
+        return (200, Serialize(new
+        {
+            status = _models.ActiveModelId is not null ? "ready" : "no_model",
+            activeModel = _models.ActiveModelId,
+            apiVersion = "1.0",
+            supportsStreaming = plugin?.SupportsStreaming ?? false,
+            supportsTranslation = plugin?.SupportsTranslation ?? false
+        }));
+    }
+
+    private (int, string) HandleModels()
+    {
+        var models = _models.PluginManager.TranscriptionEngines
+            .SelectMany(engine => engine.TranscriptionModels.Select(model =>
+            {
+                var id = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
+                return new
+                {
+                    id,
+                    name = $"{engine.ProviderDisplayName}: {model.DisplayName}",
+                    size = model.SizeDescription ?? (engine.SupportsModelDownload ? "Local" : "Cloud"),
+                    engine = engine.PluginId,
+                    downloaded = _models.IsDownloaded(id),
+                    active = _models.ActiveModelId == id
+                };
+            }));
+
+        return (200, Serialize(new { models }));
+    }
+
+    private async Task<(int, string)> HandleTranscribeAsync(HttpListenerRequest request, CancellationToken ct)
+    {
+        var modelId = request.QueryString["model"] ?? _settings.Current.SelectedModelId;
+        if (!await _models.EnsureModelLoadedAsync(modelId, ct))
+            return (503, Serialize(new { error = "No model loaded" }));
+
+        var plugin = _models.ActiveTranscriptionPlugin;
+        if (plugin is null)
+            return (503, Serialize(new { error = "No transcription engine loaded" }));
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"typewhisper-api-{Guid.NewGuid():N}{InferExtension(request)}");
+        try
+        {
+            await using (var fs = File.Create(tempPath))
+                await request.InputStream.CopyToAsync(fs, ct);
+
+            var wav = await _audioFiles.LoadAudioAsWavAsync(tempPath, ct);
+            var settings = _settings.Current;
+            var language = request.QueryString["language"] ?? (settings.Language == "auto" ? null : settings.Language);
+            var translate = string.Equals(
+                request.QueryString["task"] ?? settings.TranscriptionTask,
+                "translate",
+                StringComparison.OrdinalIgnoreCase);
+
+            var result = await plugin.TranscribeAsync(wav, language, translate, null, ct);
+            var processed = await _pipeline.ProcessAsync(result.Text, new PipelineOptions
+            {
+                VocabularyBooster = settings.VocabularyBoostingEnabled ? _vocabularyBoosting.Apply : null,
+                DictionaryCorrector = _dictionary.ApplyCorrections
+            }, ct);
+
+            return (200, Serialize(new
+            {
+                text = processed.Text,
+                language = result.DetectedLanguage,
+                duration = result.DurationSeconds,
+                noSpeechProbability = result.NoSpeechProbability
+            }));
+        }
+        finally
+        {
+            try { File.Delete(tempPath); } catch { }
+        }
+    }
+
+    private (int, string) HandleHistorySearch(HttpListenerRequest request)
+    {
+        var query = request.QueryString["q"] ?? "";
+        var limit = int.TryParse(request.QueryString["limit"], out var parsedLimit) ? parsedLimit : 50;
+        var offset = int.TryParse(request.QueryString["offset"], out var parsedOffset) ? parsedOffset : 0;
+
+        var records = string.IsNullOrWhiteSpace(query)
+            ? _history.Records
+            : _history.Search(query);
+
+        var paged = records.Skip(offset).Take(limit).Select(record => new
+        {
+            id = record.Id,
+            timestamp = record.Timestamp.ToString("O"),
+            text = record.FinalText,
+            rawText = record.RawText,
+            app = record.AppProcessName,
+            duration = record.DurationSeconds,
+            language = record.Language,
+            engine = record.EngineUsed,
+            model = record.ModelUsed,
+            profile = record.ProfileName,
+            words = record.WordCount
+        });
+
+        return (200, Serialize(new
+        {
+            total = records.Count,
+            offset,
+            limit,
+            records = paged
+        }));
+    }
+
+    private (int, string) HandleHistoryDelete(HttpListenerRequest request)
+    {
+        var id = request.QueryString["id"];
+        if (string.IsNullOrWhiteSpace(id))
+            return (400, Serialize(new { error = "Missing id parameter" }));
+
+        _history.DeleteRecord(id);
+        return (200, Serialize(new { deleted = true, id }));
+    }
+
+    private (int, string) HandleProfilesList()
+    {
+        var profiles = _profiles.Profiles.Select(profile => new
+        {
+            id = profile.Id,
+            name = profile.Name,
+            isEnabled = profile.IsEnabled,
+            priority = profile.Priority,
+            processNames = profile.ProcessNames,
+            urlPatterns = profile.UrlPatterns,
+            inputLanguage = profile.InputLanguage,
+            translationTarget = profile.TranslationTarget,
+            selectedTask = profile.SelectedTask,
+            modelOverride = profile.TranscriptionModelOverride,
+            promptActionId = profile.PromptActionId
+        });
+
+        return (200, Serialize(new { profiles }));
+    }
+
+    private (int, string) HandleProfileToggle(HttpListenerRequest request)
+    {
+        var id = request.QueryString["id"];
+        if (string.IsNullOrWhiteSpace(id))
+            return (400, Serialize(new { error = "Missing id parameter" }));
+
+        var profile = _profiles.Profiles.FirstOrDefault(item => item.Id == id);
+        if (profile is null)
+            return (404, Serialize(new { error = "Profile not found" }));
+
+        var isEnabled = !profile.IsEnabled;
+        _profiles.UpdateProfile(profile with { IsEnabled = isEnabled });
+        return (200, Serialize(new { id, isEnabled }));
+    }
+
+    private async Task<(int, string)> HandleDictationStartAsync()
+    {
+        if (_dictation.IsRecording)
+            return (409, Serialize(new { error = "Already recording" }));
+
+        await _dictation.StartAsync();
+        return (200, Serialize(new { started = true }));
+    }
+
+    private async Task<(int, string)> HandleDictationStopAsync()
+    {
+        if (!_dictation.IsRecording)
+            return (409, Serialize(new { error = "Not recording" }));
+
+        await _dictation.StopAsync();
+        return (200, Serialize(new { stopped = true }));
+    }
+
+    private (int, string) HandleDictationStatus() =>
+        (200, Serialize(new
+        {
+            state = _dictation.IsRecording ? "recording" : "idle",
+            isRecording = _dictation.IsRecording,
+            activeModel = _models.ActiveModelId
+        }));
+
+    private static async Task WriteJsonAsync(HttpListenerResponse response, int statusCode, string body, CancellationToken ct)
+    {
+        response.StatusCode = statusCode;
+        response.ContentType = "application/json";
+        response.Headers["Access-Control-Allow-Origin"] = "http://localhost";
+
+        var bytes = Encoding.UTF8.GetBytes(body);
+        response.ContentLength64 = bytes.Length;
+        await response.OutputStream.WriteAsync(bytes, ct);
+    }
+
+    private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, JsonOptions);
+
+    private static string InferExtension(HttpListenerRequest request)
+    {
+        var fileName = request.QueryString["filename"];
+        var ext = string.IsNullOrWhiteSpace(fileName) ? null : Path.GetExtension(fileName);
+        if (!string.IsNullOrWhiteSpace(ext))
+            return ext;
+
+        return request.ContentType?.Split(';', 2)[0].Trim().ToLowerInvariant() switch
+        {
+            "audio/mpeg" => ".mp3",
+            "audio/mp3" => ".mp3",
+            "audio/mp4" => ".m4a",
+            "audio/aac" => ".aac",
+            "audio/ogg" => ".ogg",
+            "audio/flac" => ".flac",
+            "video/mp4" => ".mp4",
+            "video/webm" => ".webm",
+            _ => ".wav"
+        };
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        Stop();
+        _cts?.Dispose();
+        try { _listenTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
+        _disposed = true;
+    }
+}

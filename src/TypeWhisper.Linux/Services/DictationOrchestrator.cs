@@ -25,6 +25,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly AudioRecordingService _audio;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly SoundFeedbackService _soundFeedback;
+    private readonly SpeechFeedbackService _speechFeedback;
     private readonly TextInsertionService _textInsertion;
     private readonly IAudioDuckingService _audioDucking;
     private readonly IMediaPauseService _mediaPause;
@@ -40,6 +41,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IPostProcessingPipeline _pipeline;
     private readonly ITranslationService _translation;
     private readonly PromptProcessingService _promptProcessing;
+    private readonly MemoryService _memory;
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
@@ -70,6 +72,7 @@ public sealed class DictationOrchestrator : IDisposable
         AudioRecordingService audio,
         SessionAudioFileService sessionAudioFiles,
         SoundFeedbackService soundFeedback,
+        SpeechFeedbackService speechFeedback,
         TextInsertionService textInsertion,
         IAudioDuckingService audioDucking,
         IMediaPauseService mediaPause,
@@ -84,12 +87,14 @@ public sealed class DictationOrchestrator : IDisposable
         IVocabularyBoostingService vocabularyBoosting,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
-        PromptProcessingService promptProcessing)
+        PromptProcessingService promptProcessing,
+        MemoryService memory)
     {
         _hotkey = hotkey;
         _audio = audio;
         _sessionAudioFiles = sessionAudioFiles;
         _soundFeedback = soundFeedback;
+        _speechFeedback = speechFeedback;
         _textInsertion = textInsertion;
         _audioDucking = audioDucking;
         _mediaPause = mediaPause;
@@ -105,6 +110,7 @@ public sealed class DictationOrchestrator : IDisposable
         _pipeline = pipeline;
         _translation = translation;
         _promptProcessing = promptProcessing;
+        _memory = memory;
     }
 
     public void Initialize()
@@ -147,6 +153,7 @@ public sealed class DictationOrchestrator : IDisposable
                 _mediaPause.PauseMedia();
             if (_settings.Current.SoundFeedbackEnabled)
                 _soundFeedback.PlayRecordingStarted();
+            _speechFeedback.AnnounceRecordingStarted();
             RecordingStateChanged?.Invoke(this, true);
             SetOverlayState(state => state with
             {
@@ -364,6 +371,7 @@ public sealed class DictationOrchestrator : IDisposable
             var finalText = pipelineResult.Text;
 
             TranscriptionCompleted?.Invoke(this, finalText);
+            _speechFeedback.AnnounceTranscriptionComplete(finalText);
             _models.PluginManager.EventBus.Publish(new TranscriptionCompletedEvent
             {
                 RawText = rawText,
@@ -408,6 +416,9 @@ public sealed class DictationOrchestrator : IDisposable
             // Write to history last so stats reflect the just-completed capture.
             if (_settings.Current.SaveToHistoryEnabled)
                 AddHistoryRecord(rawText, finalText, duration, result, wavPath);
+
+            if (_settings.Current.MemoryEnabled)
+                _ = Task.Run(() => _memory.ExtractAndStoreAsync(finalText));
         }
         catch (Exception ex)
         {
@@ -419,6 +430,7 @@ public sealed class DictationOrchestrator : IDisposable
                 AppName = _recordingAppTitle
             });
             ReportStatus($"Transcription failed: {ex.Message}");
+            _speechFeedback.AnnounceError(ex.Message);
             ShowFeedback("Transcription failed.", isError: true);
         }
         finally

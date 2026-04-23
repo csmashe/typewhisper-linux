@@ -9,11 +9,13 @@ public sealed class PromptProcessingService
 {
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
+    private readonly MemoryService _memory;
 
-    public PromptProcessingService(PluginManager pluginManager, ISettingsService settings)
+    public PromptProcessingService(PluginManager pluginManager, ISettingsService settings, MemoryService memory)
     {
         _pluginManager = pluginManager;
         _settings = settings;
+        _memory = memory;
     }
 
     public bool IsAnyProviderAvailable =>
@@ -25,7 +27,22 @@ public sealed class PromptProcessingService
         if (provider is null)
             throw new InvalidOperationException("No enabled LLM provider is available.");
 
-        return await provider.ProcessAsync(action.SystemPrompt, inputText, modelId, ct);
+        var systemPrompt = action.SystemPrompt;
+        if (_settings.Current.MemoryEnabled)
+        {
+            var context = await _memory.GetContextAsync(inputText, ct);
+            if (!string.IsNullOrWhiteSpace(context))
+            {
+                systemPrompt = $"""
+                    {systemPrompt}
+
+                    Relevant remembered context:
+                    {context}
+                    """;
+            }
+        }
+
+        return await provider.ProcessAsync(systemPrompt, inputText, modelId, ct);
     }
 
     private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)

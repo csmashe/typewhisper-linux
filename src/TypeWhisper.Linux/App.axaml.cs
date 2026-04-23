@@ -108,6 +108,10 @@ public partial class App : Application
                 }
             };
 
+            var api = services.GetRequiredService<HttpApiService>();
+            api.ApplySettings();
+            settings.SettingsChanged += _ => api.ApplySettings();
+
             var promptPalette = services.GetRequiredService<PromptPaletteService>();
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
 
@@ -224,6 +228,13 @@ public partial class App : Application
             playback?.Dispose();
         }
         catch (Exception ex) { Debug.WriteLine($"[App] Playback dispose failed: {ex.Message}"); }
+
+        try
+        {
+            var api = services.GetService<HttpApiService>();
+            api?.Dispose();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] HTTP API dispose failed: {ex.Message}"); }
 
         await Task.CompletedTask;
     }

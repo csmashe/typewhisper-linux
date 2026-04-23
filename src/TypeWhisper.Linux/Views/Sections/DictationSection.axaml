@@ -44,7 +44,8 @@
                 <Grid RowDefinitions="Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,320">
+                        <Grid ColumnDefinitions="*,320,Auto"
+                              ColumnSpacing="10">
                             <TextBlock Text="Default model"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
@@ -57,6 +58,10 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <Button Grid.Column="2"
+                                    Content="Delete model files"
+                                    IsEnabled="{Binding CanDeleteSelectedModel}"
+                                    Click="OnDeleteSelectedModel" />
                         </Grid>
                     </Border>
 

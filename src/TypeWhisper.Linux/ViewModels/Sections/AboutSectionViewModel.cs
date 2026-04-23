@@ -25,6 +25,10 @@ public partial class AboutSectionViewModel : ObservableObject
 
     public string UpstreamUrl { get; } = "https://github.com/TypeWhisper/typewhisper-win";
 
+    public bool CanCheckForUpdates => false;
+
+    public string UpdateStatusText => "Automatic updates are not configured in this Linux build yet.";
+
     public ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
     public bool HasErrors => ErrorEntries.Count > 0;
 

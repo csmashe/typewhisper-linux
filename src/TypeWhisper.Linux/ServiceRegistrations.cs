@@ -61,15 +61,18 @@ internal static class ServiceRegistrations
         services.AddSingleton<AudioPlaybackService>();
         services.AddSingleton<SessionAudioFileService>();
         services.AddSingleton<SoundFeedbackService>();
+        services.AddSingleton<SpeechFeedbackService>();
         services.AddSingleton<HotkeyService>();
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<PromptPaletteService>();
+        services.AddSingleton<MemoryService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
+        services.AddSingleton<HttpApiService>();
 
         // ViewModels — section VMs are singletons so state stays consistent
         // across the sidebar nav and the onboarding wizard.

@@ -8,6 +8,20 @@ public sealed class SystemCommandAvailabilityService
     public bool HasPlayerCtl => IsCommandAvailable("playerctl");
     public bool HasCanberraGtkPlay => IsCommandAvailable("canberra-gtk-play");
     public bool HasFfmpeg => IsCommandAvailable("ffmpeg");
+    public bool HasSpeechFeedback => IsCommandAvailable("espeak-ng")
+                                    || IsCommandAvailable("espeak")
+                                    || IsCommandAvailable("spd-say");
+
+    public string? SpeechFeedbackCommand
+    {
+        get
+        {
+            if (IsCommandAvailable("espeak-ng")) return "espeak-ng";
+            if (IsCommandAvailable("espeak")) return "espeak";
+            if (IsCommandAvailable("spd-say")) return "spd-say";
+            return null;
+        }
+    }
 
     private static bool IsCommandAvailable(string commandName)
     {
