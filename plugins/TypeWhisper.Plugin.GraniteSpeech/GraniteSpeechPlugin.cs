@@ -28,6 +28,7 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     private StreamReader? _sidecarOut;
     private string? _selectedModelId;
     private string? _loadedModelId;
+    private string _computeBackend = "cpu";
     private int _requestId;
 
     // ITypeWhisperPlugin
@@ -72,6 +73,17 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         if (modelId != ModelId)
             throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
+    }
+
+    public void ConfigureComputeBackend(string backend)
+    {
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+        if (_computeBackend == normalized)
+            return;
+
+        _computeBackend = normalized;
+        if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
+            StopSidecar();
     }
 
     public bool IsModelDownloaded(string modelId) =>
@@ -237,6 +249,9 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
 
     public async Task LoadModelAsync(string modelId, CancellationToken ct)
     {
+        if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("CUDA is not available for the bundled Granite Speech sidecar. Select a whisper.cpp model for CUDA.");
+
         if (!IsModelDownloaded(modelId))
             throw new FileNotFoundException("Model not set up. Run DownloadModelAsync first.");
 

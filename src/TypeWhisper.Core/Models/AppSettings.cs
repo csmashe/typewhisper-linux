@@ -16,6 +16,7 @@ public record AppSettings
 
     // Model
     public string? SelectedModelId { get; init; }
+    public string ComputeBackend { get; init; } = "cpu";
 
     // Cloud Provider API Keys
     public string? GroqApiKey { get; init; }

@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -11,6 +12,9 @@ public sealed class SystemCommandAvailabilityService
     public bool HasSpeechFeedback => IsCommandAvailable("espeak-ng")
                                     || IsCommandAvailable("espeak")
                                     || IsCommandAvailable("spd-say");
+    public bool HasCudaGpu => IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl");
+    public bool HasCudaRuntimeLibraries => IsLibraryAvailable("libcudart.so.12")
+                                           && IsLibraryAvailable("libcublas.so.12");
 
     public string? SpeechFeedbackCommand
     {
@@ -44,5 +48,57 @@ public sealed class SystemCommandAvailabilityService
         }
 
         return false;
+    }
+
+    private static bool IsLibraryAvailable(string libraryName)
+    {
+        if (FindInLdCache(libraryName))
+            return true;
+
+        foreach (var directory in new[]
+                 {
+                     "/usr/local/cuda/lib64",
+                     "/usr/local/cuda-13.0/lib64",
+                     "/usr/lib/x86_64-linux-gnu",
+                     "/lib/x86_64-linux-gnu"
+                 })
+        {
+            try
+            {
+                if (File.Exists(Path.Combine(directory, libraryName)))
+                    return true;
+            }
+            catch
+            {
+                // Ignore inaccessible library directories.
+            }
+        }
+
+        return false;
+    }
+
+    private static bool FindInLdCache(string libraryName)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("ldconfig", "-p")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+
+            if (process is null)
+                return false;
+
+            var output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(1000);
+            return output.Contains(libraryName, StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

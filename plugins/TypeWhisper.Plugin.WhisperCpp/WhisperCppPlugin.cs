@@ -4,6 +4,7 @@ using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using Whisper.net;
 using Whisper.net.Ggml;
+using Whisper.net.LibraryLoader;
 
 namespace TypeWhisper.Plugin.WhisperCpp;
 
@@ -32,6 +33,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private WhisperFactory? _factory;
     private string? _selectedModelId;
     private string? _loadedModelId;
+    private string _computeBackend = "cpu";
 
     public string PluginId => "com.typewhisper.whisper-cpp";
     public string PluginName => "whisper.cpp (Local)";
@@ -73,6 +75,20 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _ = GetModel(modelId);
         _selectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
+    }
+
+    public void ConfigureComputeBackend(string backend)
+    {
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+        if (_computeBackend == normalized)
+            return;
+
+        _computeBackend = normalized;
+        if (_factory is not null)
+        {
+            DisposeFactoryUnsafe();
+            _loadedModelId = null;
+        }
     }
 
     public bool IsModelDownloaded(string modelId) => File.Exists(GetModelPath(modelId));
@@ -150,11 +166,11 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         try
         {
             DisposeFactoryUnsafe();
-            _factory = WhisperFactory.FromPath(modelPath);
+            _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
             _loadedModelId = modelId;
             _selectedModelId = modelId;
             _host?.SetSetting("selectedModel", modelId);
-            _host?.Log(PluginLogLevel.Info, $"Loaded model {modelId}");
+            _host?.Log(PluginLogLevel.Info, $"Loaded model {modelId} using {_computeBackend.ToUpperInvariant()}");
         }
         finally
         {
@@ -283,6 +299,18 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     {
         _factory?.Dispose();
         _factory = null;
+    }
+
+    private WhisperFactoryOptions CreateFactoryOptions()
+    {
+        RuntimeOptions.RuntimeLibraryOrder = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? [RuntimeLibrary.Cuda]
+            : [RuntimeLibrary.Cpu];
+
+        return new WhisperFactoryOptions
+        {
+            UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+        };
     }
 
     private static void TryDeleteFile(string path)

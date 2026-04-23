@@ -39,6 +39,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string? _loadedModelId;
     private string? _loadedModelDir;
     private string? _selectedModelId;
+    private string _computeBackend = "cpu";
 
     // Canary-specific state
     private string _canarySrcLang = "en";
@@ -86,6 +87,17 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     {
         _ = GetModelDefinition(modelId);
         _selectedModelId = modelId;
+    }
+
+    public void ConfigureComputeBackend(string backend)
+    {
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+        if (_computeBackend == normalized)
+            return;
+
+        _computeBackend = normalized;
+        if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
+            UnloadRecognizer();
     }
 
     public bool IsModelDownloaded(string modelId)
@@ -168,6 +180,9 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     {
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
+
+        if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA.");
 
         if (!model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName))))
             throw new FileNotFoundException($"Model files not found for: {modelId}");

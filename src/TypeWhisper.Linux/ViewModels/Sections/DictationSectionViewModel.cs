@@ -22,6 +22,11 @@ public partial class DictationSectionViewModel : ObservableObject
 
     public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
     public ObservableCollection<AudioInputDevice> Devices { get; } = [];
+    public ObservableCollection<ComputeBackendOption> ComputeBackendOptions { get; } =
+    [
+        new("cpu", "CPU"),
+        new("cuda", "CUDA")
+    ];
     public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
     [
         new("auto", "Auto detect"),
@@ -49,6 +54,7 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty] private string _modelStatusText = "Not ready";
     [ObservableProperty] private bool _modelReady;
     [ObservableProperty] private DictationModelOption? _selectedModel;
+    [ObservableProperty] private string _computeBackend = "cpu";
     [ObservableProperty] private AudioInputDevice? _selectedDevice;
     [ObservableProperty] private string _language = "auto";
     [ObservableProperty] private string? _translationTargetLanguage;
@@ -75,6 +81,27 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
     public string SoundFeedbackUnavailableReason => "Unavailable: canberra-gtk-play is not installed on this system.";
     public bool CanDeleteSelectedModel => SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
+    public bool CanUseCuda => _commands.HasCudaGpu && _commands.HasCudaRuntimeLibraries;
+    public string ComputeBackendHint => CanUseCuda
+        ? "CUDA uses the whisper.cpp CUDA Linux runtime for compatible NVIDIA GPUs. Other local plugins use CPU."
+        : _commands.HasCudaGpu
+            ? "CUDA unavailable: NVIDIA is detected, but libcudart.so.12 and libcublas.so.12 are missing. Install the CUDA 12 runtime/toolkit, then restart TypeWhisper."
+            : "CUDA unavailable: no NVIDIA GPU/driver was detected. CPU is used.";
+
+    public ComputeBackendOption? SelectedComputeBackendOption
+    {
+        get => ComputeBackendOptions.FirstOrDefault(option =>
+            string.Equals(option.Value, ComputeBackend, StringComparison.OrdinalIgnoreCase));
+        set
+        {
+            var selected = value?.Value ?? "cpu";
+            if (string.Equals(selected, ComputeBackend, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            ComputeBackend = selected;
+            OnPropertyChanged();
+        }
+    }
 
     public TranslationTargetOption? SelectedTranslationTargetOption
     {
@@ -220,6 +247,7 @@ public partial class DictationSectionViewModel : ObservableObject
     {
         Language = string.IsNullOrWhiteSpace(settings.Language) ? "auto" : settings.Language;
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
+        ComputeBackend = NormalizeComputeBackend(settings.ComputeBackend);
         AutoPaste = settings.AutoPaste;
         WhisperModeEnabled = settings.WhisperModeEnabled;
         SoundFeedbackEnabled = settings.SoundFeedbackEnabled && CanUseSoundFeedback;
@@ -236,6 +264,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
         OnPropertyChanged(nameof(SelectedLanguageOption));
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
+        OnPropertyChanged(nameof(SelectedComputeBackendOption));
         RefreshModelState();
     }
 
@@ -281,6 +310,27 @@ public partial class DictationSectionViewModel : ObservableObject
         _ = DownloadAndLoadSelectedModelAsync(value);
     }
 
+    partial void OnComputeBackendChanged(string value)
+    {
+        var normalized = NormalizeComputeBackend(value);
+        if (normalized == "cuda" && !CanUseCuda)
+        {
+            ComputeBackend = "cpu";
+            StatusText = _commands.HasCudaGpu
+                ? "CUDA runtime libraries are missing. Install libcudart.so.12 and libcublas.so.12, then restart TypeWhisper."
+                : "CUDA is not available on this system. Using CPU.";
+            return;
+        }
+
+        if (_settings.Current.ComputeBackend != normalized)
+            _settings.Save(_settings.Current with { ComputeBackend = normalized });
+
+        OnPropertyChanged(nameof(SelectedComputeBackendOption));
+
+        if (SelectedModel is { } selected && _models.IsDownloaded(selected.ModelId))
+            _ = DownloadAndLoadSelectedModelAsync(selected);
+    }
+
     private async Task DownloadAndLoadSelectedModelAsync(DictationModelOption selected)
     {
         _modelSelectionCts?.Cancel();
@@ -318,6 +368,9 @@ public partial class DictationSectionViewModel : ObservableObject
             cts.Dispose();
         }
     }
+
+    private static string NormalizeComputeBackend(string? backend) =>
+        string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
 
     public async Task DeleteSelectedModelAsync()
     {
@@ -441,6 +494,8 @@ public sealed record DictationModelOption(
 {
     public string DisplayLabel => $"{EngineName} / {DisplayName}";
 }
+
+public sealed record ComputeBackendOption(string Value, string DisplayName);
 
 public sealed record SpokenLanguageOption(
     string Code,

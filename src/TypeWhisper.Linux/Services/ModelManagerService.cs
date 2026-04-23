@@ -168,6 +168,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
+            plugin.ConfigureComputeBackend(_settings.Current.ComputeBackend);
+
             if (plugin.SupportsModelDownload)
                 await plugin.LoadModelAsync(pluginModelId, cancellationToken);
 

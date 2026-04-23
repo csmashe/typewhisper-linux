@@ -41,7 +41,7 @@
             <TextBlock Text="Engine"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,320,Auto"
@@ -98,6 +98,37 @@
                                            Foreground="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#39B980|False=#F5F8FC'}" />
                             </Border>
                         </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="6"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,320">
+                            <TextBlock Text="Compute backend"
+                                       Classes="row-label" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding ComputeBackendOptions}"
+                                      SelectedItem="{Binding SelectedComputeBackendOption}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ComputeBackendOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="7"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="{Binding ComputeBackendHint}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
                     </Border>
                 </Grid>
             </Border>

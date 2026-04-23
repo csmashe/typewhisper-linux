@@ -24,6 +24,16 @@ The Linux branch currently includes:
 - Tray integration and XDG autostart support
 - A user-level installer script that creates a desktop launcher and app icon
 
+## Linux Branch Additions
+
+This branch contains Linux-specific work that is not part of the original branch or the Windows branch:
+
+- CUDA GPU support for the bundled whisper.cpp transcription engine on compatible NVIDIA systems
+- Linux desktop integration through Avalonia, XDG autostart, Linux tray behavior, and a user-level desktop launcher
+- Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `canberra-gtk-play`, or CUDA runtime libraries
+- Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
+- Linux session audio handling for dictation, file transcription, and recorder workflows
+
 ## Features
 
 ### Transcription
@@ -76,6 +86,10 @@ When one of those tools is missing, the Linux UI disables that control and shows
   - `playerctl` for media pause during recording
   - `canberra-gtk-play` for sound feedback
   - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
+- Optional CUDA backend:
+  - NVIDIA GPU and driver
+  - CUDA 12 runtime/toolkit libraries providing `libcudart.so.12` and `libcublas.so.12`
+  - CUDA currently applies to the bundled whisper.cpp engine; other bundled local engines stay on CPU
 
 ## Tested On
 
