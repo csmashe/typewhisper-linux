@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Windows;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Windows.ViewModels;
 
 namespace TypeWhisper.Windows.Services;
@@ -18,6 +19,7 @@ public sealed class HttpApiService : IDisposable
     private readonly IDictionaryService _dictionary;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
     private readonly IPostProcessingPipeline _pipeline;
+    private readonly ITranslationService _translation;
     private readonly DictationViewModel _dictation;
 
     private HttpListener? _listener;
@@ -28,6 +30,7 @@ public sealed class HttpApiService : IDisposable
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true,
         WriteIndented = false
     };
 
@@ -42,6 +45,7 @@ public sealed class HttpApiService : IDisposable
         IDictionaryService dictionary,
         IVocabularyBoostingService vocabularyBoosting,
         IPostProcessingPipeline pipeline,
+        ITranslationService translation,
         DictationViewModel dictation)
     {
         _modelManager = modelManager;
@@ -52,6 +56,7 @@ public sealed class HttpApiService : IDisposable
         _dictionary = dictionary;
         _vocabularyBoosting = vocabularyBoosting;
         _pipeline = pipeline;
+        _translation = translation;
         _dictation = dictation;
     }
 
@@ -92,15 +97,46 @@ public sealed class HttpApiService : IDisposable
 
     private async Task HandleRequest(HttpListenerContext context, CancellationToken ct)
     {
-        var request = context.Request;
         var response = context.Response;
 
         try
         {
-            var path = request.Url?.AbsolutePath ?? "";
-            var method = request.HttpMethod;
+            var request = await HttpApiRequest.FromListenerRequestAsync(context.Request, ct);
+            var apiResponse = await HandleRequestAsync(request, ct);
 
-            var (statusCode, body) = (path, method) switch
+            response.StatusCode = apiResponse.StatusCode;
+            response.ContentType = apiResponse.ContentType;
+            response.Headers["Access-Control-Allow-Origin"] = "*";
+            response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+            response.Headers["Access-Control-Allow-Headers"] = "Content-Type, X-Language, X-Language-Hints, X-Task, X-Target-Language, X-Response-Format, X-Prompt, X-Engine, X-Model";
+
+            var bytes = Encoding.UTF8.GetBytes(apiResponse.Body);
+            response.ContentLength64 = bytes.Length;
+            await response.OutputStream.WriteAsync(bytes, ct);
+        }
+        catch (Exception ex)
+        {
+            var apiResponse = Error(500, ex.Message);
+            response.StatusCode = apiResponse.StatusCode;
+            response.ContentType = apiResponse.ContentType;
+            var errorBytes = Encoding.UTF8.GetBytes(apiResponse.Body);
+            response.ContentLength64 = errorBytes.Length;
+            await response.OutputStream.WriteAsync(errorBytes, ct);
+        }
+        finally
+        {
+            response.Close();
+        }
+    }
+
+    internal async Task<HttpApiResponse> HandleRequestAsync(HttpApiRequest request, CancellationToken ct)
+    {
+        if (request.Method == "OPTIONS")
+            return Json(new { ok = true });
+
+        try
+        {
+            return (request.Path, request.Method) switch
             {
                 ("/v1/status", "GET") => HandleStatus(),
                 ("/v1/models", "GET") => HandleModels(),
@@ -112,106 +148,169 @@ public sealed class HttpApiService : IDisposable
                 ("/v1/dictation/start", "POST") => await HandleDictationStart(),
                 ("/v1/dictation/stop", "POST") => await HandleDictationStop(),
                 ("/v1/dictation/status", "GET") => HandleDictationStatus(),
-                _ => (404, JsonSerializer.Serialize(new { error = "Not found" }))
+                ("/v1/dictation/transcription", "GET") => HandleDictationTranscription(request),
+                ("/v1/dictionary/terms", "GET") => HandleGetDictionaryTerms(),
+                ("/v1/dictionary/terms", "PUT") => await HandlePutDictionaryTerms(request),
+                ("/v1/dictionary/terms", "DELETE") => await HandleDeleteDictionaryTerms(),
+                _ => Error(404, "Not found")
             };
-
-            response.StatusCode = statusCode;
-            response.ContentType = "application/json";
-            var bytes = Encoding.UTF8.GetBytes(body);
-            response.ContentLength64 = bytes.Length;
-            await response.OutputStream.WriteAsync(bytes, ct);
+        }
+        catch (HttpApiRequestException ex)
+        {
+            return Error(ex.StatusCode, ex.Message);
+        }
+        catch (ModelManagerRequestException ex)
+        {
+            return Error(ex.StatusCode, ex.Message);
         }
         catch (Exception ex)
         {
-            response.StatusCode = 500;
-            response.ContentType = "application/json";
-            var errorBytes = Encoding.UTF8.GetBytes(
-                JsonSerializer.Serialize(new { error = ex.Message }));
-            response.ContentLength64 = errorBytes.Length;
-            await response.OutputStream.WriteAsync(errorBytes, ct);
-        }
-        finally
-        {
-            response.Close();
+            return Error(500, ex.Message);
         }
     }
 
-    private (int, string) HandleStatus()
+    private HttpApiResponse HandleStatus()
     {
         var activePlugin = _modelManager.ActiveTranscriptionPlugin;
-        var result = new
+        var activeModel = _modelManager.ActiveModelId is { } activeModelId && ModelManagerService.IsPluginModel(activeModelId)
+            ? ModelManagerService.ParsePluginModelId(activeModelId).ModelId
+            : activePlugin?.SelectedModelId;
+
+        return Json(new
         {
-            status = _modelManager.ActiveModelId is not null ? "ready" : "no_model",
-            activeModel = _modelManager.ActiveModelId,
-            apiVersion = "1.0",
+            status = activePlugin is not null && _modelManager.Engine.IsModelLoaded ? "ready" : "no_model",
+            engine = activePlugin?.ProviderId,
+            model = activeModel,
+            active_model = _modelManager.ActiveModelId,
+            api_version = "1.0",
             supports_streaming = activePlugin?.SupportsStreaming ?? false,
             supports_translation = activePlugin?.SupportsTranslation ?? false
-        };
-        return (200, JsonSerializer.Serialize(result));
+        });
     }
 
-    private (int, string) HandleModels()
+    private HttpApiResponse HandleModels()
     {
+        var selectedModelId = _settings.Current.SelectedModelId;
         var models = _modelManager.PluginManager.TranscriptionEngines
-            .SelectMany(e => e.TranscriptionModels.Select(m =>
+            .SelectMany(engine => engine.TranscriptionModels.Select(model =>
             {
-                var fullId = ModelManagerService.GetPluginModelId(e.PluginId, m.Id);
+                var fullId = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
+                var downloaded = _modelManager.IsDownloaded(fullId);
+                var status = engine.SupportsModelDownload
+                    ? downloaded ? "ready" : "not_downloaded"
+                    : engine.IsConfigured ? "ready" : "not_configured";
+
                 return new
                 {
-                    id = fullId,
-                    name = $"{e.ProviderDisplayName}: {m.DisplayName}",
-                    size = m.SizeDescription ?? (e.SupportsModelDownload ? "Local" : "Cloud"),
-                    engine = e.PluginId,
-                    downloaded = _modelManager.IsDownloaded(fullId),
-                    active = _modelManager.ActiveModelId == fullId
+                    id = model.Id,
+                    full_id = fullId,
+                    engine = engine.ProviderId,
+                    name = model.DisplayName,
+                    size_description = model.SizeDescription ?? (engine.SupportsModelDownload ? "Local" : "Cloud"),
+                    language_count = model.LanguageCount,
+                    status,
+                    selected = selectedModelId == fullId,
+                    active = _modelManager.ActiveModelId == fullId,
+                    downloaded,
+                    loaded = _modelManager.ActiveModelId == fullId
                 };
-            }));
-        return (200, JsonSerializer.Serialize(new { models }));
+            }))
+            .ToList();
+
+        return Json(new { models });
     }
 
-    private async Task<(int, string)> HandleTranscribe(HttpListenerRequest request, CancellationToken ct)
+    private async Task<HttpApiResponse> HandleTranscribe(HttpApiRequest request, CancellationToken ct)
     {
-        if (!await _modelManager.EnsureModelLoadedAsync(cancellationToken: ct))
-            return (503, JsonSerializer.Serialize(new { error = "No model loaded" }));
+        var transcribeRequest = HttpApiRequestParser.ParseTranscribe(request);
 
-        var tempPath = Path.Combine(Path.GetTempPath(), $"tw_api_{Guid.NewGuid()}.tmp");
+        await using var modelScope = await _modelManager.BeginTranscriptionRequestAsync(
+            transcribeRequest.Engine,
+            transcribeRequest.Model,
+            transcribeRequest.AwaitDownload,
+            ct);
+
+        var tempPath = Path.Combine(
+            Path.GetTempPath(),
+            $"tw_api_{Guid.NewGuid():N}.{SanitizeExtension(transcribeRequest.FileExtension)}");
+
         try
         {
-            await using (var fs = File.Create(tempPath))
-            {
-                await request.InputStream.CopyToAsync(fs, ct);
-            }
-
+            await File.WriteAllBytesAsync(tempPath, transcribeRequest.AudioData, ct);
             var samples = await _audioFile.LoadAudioAsync(tempPath, ct);
 
-            var s = _settings.Current;
-            var language = request.QueryString["language"] ?? (s.Language == "auto" ? null : s.Language);
-            var taskStr = request.QueryString["task"] ?? s.TranscriptionTask;
-            var task = taskStr == "translate" ? TranscriptionTask.Translate : TranscriptionTask.Transcribe;
-            var responseFormat = request.QueryString["response_format"] ?? "json";
+            var prompt = MergePrompt(
+                transcribeRequest.Prompt,
+                BuildLanguageHintsPrompt(transcribeRequest.LanguageHints),
+                _dictionary.GetTermsForPrompt());
 
-            var result = await _modelManager.Engine.TranscribeAsync(samples, language, task, ct);
+            var activeResult = await _modelManager.TranscribeActiveAsync(
+                samples,
+                transcribeRequest.Language,
+                transcribeRequest.Task,
+                prompt,
+                ct);
+
+            var result = activeResult.Result;
             var pipelineResult = await _pipeline.ProcessAsync(result.Text, new PipelineOptions
             {
                 VocabularyBooster = GetVocabularyBooster(),
                 DictionaryCorrector = _dictionary.ApplyCorrections
             }, ct);
 
-            var response = new
+            var finalText = pipelineResult.Text;
+            if (!string.IsNullOrWhiteSpace(transcribeRequest.TargetLanguage))
             {
-                text = pipelineResult.Text,
+                var sourceLanguage = result.DetectedLanguage
+                    ?? transcribeRequest.Language
+                    ?? "en";
+
+                try
+                {
+                    finalText = await _translation.TranslateAsync(
+                        finalText,
+                        sourceLanguage,
+                        transcribeRequest.TargetLanguage,
+                        ct);
+                }
+                catch (NotSupportedException ex)
+                {
+                    return Error(501, ex.Message);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Error(501, ex.Message);
+                }
+            }
+
+            if (transcribeRequest.ResponseFormat.Equals("verbose_json", StringComparison.OrdinalIgnoreCase))
+            {
+                return Json(new
+                {
+                    text = finalText,
+                    language = result.DetectedLanguage,
+                    duration = result.Duration,
+                    processing_time = result.ProcessingTime,
+                    engine = activeResult.EngineId,
+                    model = activeResult.ModelId,
+                    segments = result.Segments.Select(seg => new
+                    {
+                        text = seg.Text,
+                        start = seg.Start,
+                        end = seg.End
+                    })
+                });
+            }
+
+            return Json(new
+            {
+                text = finalText,
                 language = result.DetectedLanguage,
                 duration = result.Duration,
                 processing_time = result.ProcessingTime,
-                segments = result.Segments.Select(seg => new
-                {
-                    text = seg.Text,
-                    start = seg.Start,
-                    end = seg.End
-                })
-            };
-
-            return (200, JsonSerializer.Serialize(response));
+                engine = activeResult.EngineId,
+                model = activeResult.ModelId
+            });
         }
         finally
         {
@@ -219,15 +318,11 @@ public sealed class HttpApiService : IDisposable
         }
     }
 
-    // GET /v1/history?q=&limit=&offset=
-    private (int, string) HandleHistorySearch(HttpListenerRequest request)
+    private HttpApiResponse HandleHistorySearch(HttpApiRequest request)
     {
         var query = request.QueryString["q"] ?? "";
-        var limitStr = request.QueryString["limit"];
-        var offsetStr = request.QueryString["offset"];
-
-        var limit = int.TryParse(limitStr, out var l) ? l : 50;
-        var offset = int.TryParse(offsetStr, out var o) ? o : 0;
+        var limit = Math.Min(ParseInt(request.QueryString["limit"], 50), 200);
+        var offset = Math.Max(ParseInt(request.QueryString["offset"], 0), 0);
 
         var records = string.IsNullOrWhiteSpace(query)
             ? _history.Records
@@ -236,7 +331,7 @@ public sealed class HttpApiService : IDisposable
         var paged = records.Skip(offset).Take(limit).Select(r => new
         {
             id = r.Id,
-            timestamp = r.Timestamp.ToString("o"),
+            timestamp = r.Timestamp,
             text = r.FinalText,
             raw_text = r.RawText,
             app = r.AppProcessName,
@@ -248,29 +343,26 @@ public sealed class HttpApiService : IDisposable
             words = r.WordCount
         });
 
-        var result = new
+        return Json(new
         {
             total = records.Count,
             offset,
             limit,
             records = paged
-        };
-        return (200, JsonSerializer.Serialize(result));
+        });
     }
 
-    // DELETE /v1/history?id=
-    private (int, string) HandleHistoryDelete(HttpListenerRequest request)
+    private HttpApiResponse HandleHistoryDelete(HttpApiRequest request)
     {
         var id = request.QueryString["id"];
         if (string.IsNullOrEmpty(id))
-            return (400, JsonSerializer.Serialize(new { error = "Missing id parameter" }));
+            return Error(400, "Missing id parameter");
 
         _history.DeleteRecord(id);
-        return (200, JsonSerializer.Serialize(new { deleted = true, id }));
+        return Json(new { deleted = true, id });
     }
 
-    // GET /v1/profiles
-    private (int, string) HandleProfilesList()
+    private HttpApiResponse HandleProfilesList()
     {
         var profiles = _profiles.Profiles.Select(p => new
         {
@@ -287,57 +379,136 @@ public sealed class HttpApiService : IDisposable
             prompt_action_id = p.PromptActionId
         });
 
-        return (200, JsonSerializer.Serialize(new { profiles }));
+        return Json(new { profiles });
     }
 
-    // PUT /v1/profiles/toggle?id=
-    private (int, string) HandleProfileToggle(HttpListenerRequest request)
+    private HttpApiResponse HandleProfileToggle(HttpApiRequest request)
     {
         var id = request.QueryString["id"];
         if (string.IsNullOrEmpty(id))
-            return (400, JsonSerializer.Serialize(new { error = "Missing id parameter" }));
+            return Error(400, "Missing id parameter");
 
         var profile = _profiles.Profiles.FirstOrDefault(p => p.Id == id);
         if (profile is null)
-            return (404, JsonSerializer.Serialize(new { error = "Profile not found" }));
+            return Error(404, "Profile not found");
 
         _profiles.UpdateProfile(profile with { IsEnabled = !profile.IsEnabled });
-        return (200, JsonSerializer.Serialize(new { id, is_enabled = !profile.IsEnabled }));
+        return Json(new { id, is_enabled = !profile.IsEnabled });
     }
 
-    // POST /v1/dictation/start
-    private async Task<(int, string)> HandleDictationStart()
+    private async Task<HttpApiResponse> HandleDictationStart()
     {
         if (_dictation.IsRecording)
-            return (409, JsonSerializer.Serialize(new { error = "Already recording" }));
+            return Error(409, "Already recording");
 
-        await Application.Current.Dispatcher.InvokeAsync(
-            () => _dictation.StartRecordingAsync());
-        return (200, JsonSerializer.Serialize(new { started = true }));
+        var id = await InvokeOnDispatcherAsync(() => _dictation.StartRecordingForApiAsync());
+        var session = _dictation.GetApiDictationSession(id);
+        if (session?.Status == ApiDictationSessionStatus.Failed)
+            return Error(409, session.Error ?? "Failed to start dictation");
+
+        return Json(new { id, status = "recording" });
     }
 
-    // POST /v1/dictation/stop
-    private async Task<(int, string)> HandleDictationStop()
+    private async Task<HttpApiResponse> HandleDictationStop()
     {
         if (!_dictation.IsRecording)
-            return (409, JsonSerializer.Serialize(new { error = "Not recording" }));
+            return Error(409, "Not recording");
 
-        await Application.Current.Dispatcher.InvokeAsync(
-            () => _dictation.StopRecordingAsync());
-        return (200, JsonSerializer.Serialize(new { stopped = true }));
+        var id = await InvokeOnDispatcherAsync(() => _dictation.StopRecordingForApiAsync());
+        if (id is null)
+            return Error(500, "Missing active dictation session");
+
+        return Json(new { id, status = "stopped" });
     }
 
-    // GET /v1/dictation/status
-    private (int, string) HandleDictationStatus()
+    private HttpApiResponse HandleDictationStatus()
     {
-        var result = new
+        return Json(new
         {
             state = _dictation.State.ToString().ToLowerInvariant(),
             is_recording = _dictation.IsRecording,
             active_model = _modelManager.ActiveModelId,
             active_profile = _dictation.ActiveProfileName
-        };
-        return (200, JsonSerializer.Serialize(result));
+        });
+    }
+
+    private HttpApiResponse HandleDictationTranscription(HttpApiRequest request)
+    {
+        var idString = request.QueryString["id"];
+        if (!Guid.TryParse(idString, out var id))
+            return Error(400, "Missing or invalid 'id' query parameter");
+
+        var session = _dictation.GetApiDictationSession(id);
+        if (session is null)
+            return Error(404, "Dictation session not found");
+
+        var transcription = session.Transcription is null
+            ? null
+            : new
+            {
+                text = session.Transcription.Text,
+                raw_text = session.Transcription.RawText,
+                timestamp = session.Transcription.Timestamp,
+                app_name = session.Transcription.AppName,
+                app_process_name = session.Transcription.AppProcessName,
+                duration = session.Transcription.Duration,
+                language = session.Transcription.Language,
+                engine = session.Transcription.Engine,
+                model = session.Transcription.Model,
+                words_count = session.Transcription.WordsCount
+            };
+
+        return Json(new
+        {
+            id = session.Id,
+            status = session.Status.ToString().ToLowerInvariant(),
+            transcription,
+            error = session.Error
+        });
+    }
+
+    private HttpApiResponse HandleGetDictionaryTerms()
+    {
+        var terms = _dictionary.GetEnabledTerms();
+        return Json(new { terms, count = terms.Count });
+    }
+
+    private async Task<HttpApiResponse> HandlePutDictionaryTerms(HttpApiRequest request)
+    {
+        if (request.Body.Length == 0)
+            return Error(400, "Missing JSON body");
+
+        DictionaryTermsRequest? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<DictionaryTermsRequest>(request.Body, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return Error(400, "Invalid JSON body");
+        }
+
+        if (payload is null)
+            return Error(400, "Invalid JSON body");
+
+        var terms = await InvokeOnDispatcherAsync(() =>
+        {
+            _dictionary.SetTerms(payload.Terms, payload.Replace ?? false);
+            return Task.FromResult(_dictionary.GetEnabledTerms());
+        });
+
+        return Json(new { terms, count = terms.Count });
+    }
+
+    private async Task<HttpApiResponse> HandleDeleteDictionaryTerms()
+    {
+        await InvokeOnDispatcherAsync(() =>
+        {
+            _dictionary.RemoveAllTerms();
+            return Task.FromResult(true);
+        });
+
+        return Json(new { deleted = true, count = 0 });
     }
 
     public void Dispose()
@@ -352,4 +523,66 @@ public sealed class HttpApiService : IDisposable
 
     private Func<string, string>? GetVocabularyBooster() =>
         _settings.Current.VocabularyBoostingEnabled ? _vocabularyBoosting.Apply : null;
+
+    private static HttpApiResponse Json<T>(T value, int statusCode = 200) =>
+        new(statusCode, JsonSerializer.Serialize(value, JsonOptions));
+
+    private static HttpApiResponse Error(int statusCode, string message) =>
+        Json(new
+        {
+            error = new
+            {
+                code = ErrorCode(statusCode),
+                message
+            }
+        }, statusCode);
+
+    private static string ErrorCode(int statusCode) => statusCode switch
+    {
+        400 => "bad_request",
+        404 => "not_found",
+        409 => "conflict",
+        413 => "payload_too_large",
+        501 => "not_implemented",
+        503 => "service_unavailable",
+        _ => "error"
+    };
+
+    private static int ParseInt(string? value, int fallback) =>
+        int.TryParse(value, out var parsed) ? parsed : fallback;
+
+    private static string SanitizeExtension(string extension)
+    {
+        var sanitized = new string(extension.Where(char.IsLetterOrDigit).ToArray());
+        return string.IsNullOrWhiteSpace(sanitized) ? "tmp" : sanitized.ToLowerInvariant();
+    }
+
+    private static string? BuildLanguageHintsPrompt(IReadOnlyList<string> languageHints) =>
+        languageHints.Count == 0 ? null : "Language hints: " + string.Join(", ", languageHints);
+
+    private static string? MergePrompt(params string?[] prompts)
+    {
+        var parts = prompts
+            .Select(p => p?.Trim())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+
+        return parts.Count == 0 ? null : string.Join("\n", parts);
+    }
+
+    private static async Task<T> InvokeOnDispatcherAsync<T>(Func<Task<T>> action)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            return await action();
+
+        var operation = dispatcher.InvokeAsync(action);
+        return await await operation.Task;
+    }
+
+    private sealed record DictionaryTermsRequest
+    {
+        public IReadOnlyList<string> Terms { get; init; } = [];
+        public bool? Replace { get; init; }
+    }
 }
