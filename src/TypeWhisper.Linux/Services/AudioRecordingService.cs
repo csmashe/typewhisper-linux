@@ -27,9 +27,9 @@ public sealed class AudioRecordingService : IDisposable
     private readonly List<float> _samples = [];
     private readonly object _sampleLock = new();
     private PaStream? _stream;
-    private PaStream? _previewStream;
     private bool _isRecording;
     private bool _isPreviewing;
+    private int? _selectedDeviceIndex;
     private float _currentRmsLevel;
     private bool _disposed;
 
@@ -37,7 +37,17 @@ public sealed class AudioRecordingService : IDisposable
     public bool IsPreviewing => _isPreviewing;
     public float CurrentRmsLevel => _currentRmsLevel;
     public bool HasSpeechEnergy => _currentRmsLevel >= SpeechEnergyThreshold;
-    public int? SelectedDeviceIndex { get; set; }
+    public int? SelectedDeviceIndex
+    {
+        get => _selectedDeviceIndex;
+        set
+        {
+            if (_selectedDeviceIndex == value)
+                return;
+
+            _selectedDeviceIndex = value;
+        }
+    }
     public bool WhisperModeEnabled { get; set; }
 
     public event EventHandler<float>? LevelChanged;
@@ -75,14 +85,11 @@ public sealed class AudioRecordingService : IDisposable
     {
         if (_isRecording || _disposed) return;
 
-        StopPreview();
         lock (_sampleLock) { _samples.Clear(); }
 
-        var deviceIndex = ResolveSelectedDeviceIndex();
-        if (deviceIndex is null) return;
+        if (!EnsureInputStreamStarted())
+            return;
 
-        _stream = CreateInputStream(deviceIndex.Value, CaptureAudioCallback);
-        _stream.Start();
         _isRecording = true;
     }
 
@@ -91,9 +98,8 @@ public sealed class AudioRecordingService : IDisposable
         if (!_isRecording) return [];
         _isRecording = false;
 
-        try { _stream?.Stop(); } catch { /* best effort */ }
-        _stream?.Dispose();
-        _stream = null;
+        if (!_isPreviewing)
+            StopAndDisposeInputStream();
 
         float[] floats;
         lock (_sampleLock) { floats = [.. _samples]; }
@@ -123,49 +129,40 @@ public sealed class AudioRecordingService : IDisposable
         if (_disposed || _isRecording || _isPreviewing)
             return false;
 
-        var deviceIndex = ResolveSelectedDeviceIndex();
-        if (deviceIndex is null) return false;
-
         try
         {
-            _previewStream = CreateInputStream(deviceIndex.Value, PreviewAudioCallback);
-            _previewStream.Start();
+            if (!EnsureInputStreamStarted())
+                return false;
+
             _isPreviewing = true;
             return true;
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
-            _previewStream?.Dispose();
-            _previewStream = null;
             _isPreviewing = false;
+            if (!_isRecording)
+                StopAndDisposeInputStream();
             return false;
         }
     }
 
     public void StopPreview()
     {
-        if (!_isPreviewing && _previewStream is null)
+        if (!_isPreviewing)
             return;
 
         _isPreviewing = false;
-        try { _previewStream?.Stop(); } catch { /* best effort */ }
-        _previewStream?.Dispose();
-        _previewStream = null;
+        if (!_isRecording)
+            StopAndDisposeInputStream();
         UpdateLevel(0f);
     }
 
-    private StreamCallbackResult CaptureAudioCallback(
+    private StreamCallbackResult InputAudioCallback(
         IntPtr input, IntPtr output, uint frameCount,
         ref StreamCallbackTimeInfo timeInfo,
         StreamCallbackFlags statusFlags, IntPtr userData)
-        => ProcessAudioBuffer(input, frameCount, copySamples: true);
-
-    private StreamCallbackResult PreviewAudioCallback(
-        IntPtr input, IntPtr output, uint frameCount,
-        ref StreamCallbackTimeInfo timeInfo,
-        StreamCallbackFlags statusFlags, IntPtr userData)
-        => ProcessAudioBuffer(input, frameCount, copySamples: false);
+        => ProcessAudioBuffer(input, frameCount, copySamples: _isRecording);
 
     private StreamCallbackResult ProcessAudioBuffer(
         IntPtr input,
@@ -257,6 +254,27 @@ public sealed class AudioRecordingService : IDisposable
         return deviceIndex;
     }
 
+    private bool EnsureInputStreamStarted()
+    {
+        if (_stream is not null)
+            return true;
+
+        var deviceIndex = ResolveSelectedDeviceIndex();
+        if (deviceIndex is null)
+            return false;
+
+        _stream = CreateInputStream(deviceIndex.Value, InputAudioCallback);
+        _stream.Start();
+        return true;
+    }
+
+    private void StopAndDisposeInputStream()
+    {
+        try { _stream?.Stop(); } catch { /* best effort */ }
+        _stream?.Dispose();
+        _stream = null;
+    }
+
     private static string GetStableDeviceId(string deviceName, int maxInputChannels) =>
         $"{deviceName}|{maxInputChannels}";
 
@@ -329,9 +347,9 @@ public sealed class AudioRecordingService : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        StopPreview();
-        if (_isRecording)
-            try { StopRecording(); } catch { }
+        _isPreviewing = false;
+        _isRecording = false;
+        StopAndDisposeInputStream();
 
         lock (_paInitLock)
         {

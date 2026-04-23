@@ -97,7 +97,7 @@
                             <StackPanel Margin="0,0,16,0">
                                 <TextBlock Text="Activation mode"
                                            Classes="row-title" />
-                                <TextBlock Text="Toggle starts and stops on repeated presses. Push to talk records while held. Hybrid uses a short press for toggle and a long hold for push-to-talk."
+                                <TextBlock Text="Toggle starts and stops on repeated presses. Push to talk records while held. Hybrid starts immediately, keeps recording after a short press, and stops on release after a long hold."
                                            Classes="row-hint" />
                             </StackPanel>
 

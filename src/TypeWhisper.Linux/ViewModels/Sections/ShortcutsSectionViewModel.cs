@@ -71,7 +71,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         {
             RecordingMode.Toggle => "Press the hotkey to start, press again to stop.",
             RecordingMode.PushToTalk => "Hold the hotkey to record; release to stop and transcribe.",
-            RecordingMode.Hybrid => "Short press: toggle. Hold past ~600 ms: push-to-talk.",
+            RecordingMode.Hybrid => "Starts immediately. Short press keeps recording; hold past ~600 ms stops on release.",
             _ => "",
         };
     }
