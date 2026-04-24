@@ -114,7 +114,7 @@ public sealed class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, BaseUrl, _apiKey!, _selectedApiModelName,
-            wavAudio, language, translate, "verbose_json", ct);
+            wavAudio, language, translate, "verbose_json", ct, prompt);
     }
 
     // ILlmProviderPlugin

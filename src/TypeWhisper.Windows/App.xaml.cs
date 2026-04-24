@@ -149,12 +149,9 @@ public partial class App : Application
         if (!audio.WarmUp())
             System.Diagnostics.Debug.WriteLine("No audio input device available at startup. Polling for device...");
 
-        // Start API server if enabled
-        if (settings.Current.ApiServerEnabled)
-        {
-            var api = _serviceProvider.GetRequiredService<HttpApiService>();
-            api.Start(settings.Current.ApiServerPort);
-        }
+        // Start and keep the API server aligned with settings.
+        var apiServer = _serviceProvider.GetRequiredService<ApiServerController>();
+        apiServer.Initialize();
 
         // Show onboarding if first run (skip when started minimized)
         if (!settings.Current.HasCompletedOnboarding && !Program.StartMinimized)
@@ -185,6 +182,13 @@ public partial class App : Application
                             System.Diagnostics.Debug.WriteLine($"Auto-load model failed: {t.Exception?.Message}");
                     });
             }
+        }
+
+        if (settings.Current.WatchFolderAutoStart
+            && !string.IsNullOrWhiteSpace(settings.Current.WatchFolderPath))
+        {
+            var fileTranscription = _serviceProvider.GetRequiredService<FileTranscriptionViewModel>();
+            fileTranscription.StartWatchFolderFromSettings();
         }
 
         // Check for updates in background
@@ -246,6 +250,12 @@ public partial class App : Application
 
     private void ShowSettingsWindow(SettingsRoute? route = null, bool presentFileImporter = false)
     {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => ShowSettingsWindow(route, presentFileImporter));
+            return;
+        }
+
         if (_settingsWindow is { IsLoaded: true })
         {
             if (_settingsWindow.DataContext is SettingsWindowViewModel existingViewModel)
@@ -299,6 +309,7 @@ public partial class App : Application
 
         // Model manager (plugin-based)
         services.AddSingleton<ModelManagerService>();
+        services.AddSingleton<IFileTranscriptionProcessor, FileTranscriptionProcessor>();
 
         // Audio
         services.AddSingleton<AudioRecordingService>();
@@ -336,6 +347,10 @@ public partial class App : Application
         services.AddSingleton<WindowsAppDiscoveryService>();
         services.AddSingleton<SoundService>();
         services.AddSingleton<HttpApiService>();
+        services.AddSingleton<ILocalApiServer>(sp => sp.GetRequiredService<HttpApiService>());
+        services.AddSingleton<ApiServerController>();
+        services.AddSingleton<CliInstallService>();
+        services.AddSingleton<WatchFolderService>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<UpdateService>();
         services.AddSingleton<PromptProcessingService>();

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using TypeWhisper.Core.Audio;
@@ -9,6 +10,22 @@ using TypeWhisper.Windows.Services.Localization;
 using TypeWhisper.Windows.Services.Plugins;
 
 namespace TypeWhisper.Windows.Services;
+
+internal sealed class ModelManagerRequestException : Exception
+{
+    public int StatusCode { get; }
+
+    public ModelManagerRequestException(int statusCode, string message)
+        : base(message)
+    {
+        StatusCode = statusCode;
+    }
+}
+
+internal sealed record ActiveModelTranscriptionResult(
+    TranscriptionResult Result,
+    string? EngineId,
+    string? ModelId);
 
 public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
@@ -259,6 +276,172 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return true;
     }
 
+    internal async Task<TranscriptionRequestModelScope> BeginTranscriptionRequestAsync(
+        string? engineOverride,
+        string? modelOverride,
+        bool awaitDownload,
+        CancellationToken cancellationToken = default)
+    {
+        var previousActiveModelId = ActiveModelId;
+        var hasOverride = !string.IsNullOrWhiteSpace(engineOverride)
+            || !string.IsNullOrWhiteSpace(modelOverride);
+
+        if (!hasOverride)
+        {
+            var targetModelId = _settings.Current.SelectedModelId;
+            if (string.IsNullOrWhiteSpace(targetModelId))
+                throw new ModelManagerRequestException(503, "No model loaded");
+
+            if (awaitDownload && IsPluginModel(targetModelId))
+            {
+                var (pluginId, pluginModelId) = ParsePluginModelId(targetModelId);
+                var plugin = _pluginManager.TranscriptionEngines
+                    .FirstOrDefault(e => e.PluginId == pluginId);
+
+                if (plugin?.SupportsModelDownload == true && !plugin.IsModelDownloaded(pluginModelId))
+                {
+                    await DownloadAndLoadModelAsync(targetModelId, cancellationToken);
+                    return new TranscriptionRequestModelScope(this, previousActiveModelId, restore: false);
+                }
+            }
+
+            if (!await EnsureModelLoadedAsync(targetModelId, cancellationToken))
+                throw new ModelManagerRequestException(503, "No model loaded");
+
+            return new TranscriptionRequestModelScope(this, previousActiveModelId, restore: false);
+        }
+
+        var resolved = ResolveRequestModel(engineOverride, modelOverride, awaitDownload);
+        var fullModelId = GetPluginModelId(resolved.Plugin.PluginId, resolved.ModelId);
+
+        if (resolved.Plugin.SupportsModelDownload
+            && !resolved.Plugin.IsModelDownloaded(resolved.ModelId)
+            && awaitDownload)
+        {
+            await DownloadAndLoadModelAsync(fullModelId, cancellationToken);
+        }
+        else
+        {
+            if (!await EnsureModelLoadedAsync(fullModelId, cancellationToken))
+                throw new ModelManagerRequestException(503, $"Model '{resolved.ModelId}' could not be loaded");
+        }
+
+        return new TranscriptionRequestModelScope(this, previousActiveModelId, restore: true);
+    }
+
+    internal async Task<ActiveModelTranscriptionResult> TranscribeActiveAsync(
+        float[] audioSamples,
+        string? language = null,
+        TranscriptionTask task = TranscriptionTask.Transcribe,
+        string? prompt = null,
+        CancellationToken cancellationToken = default)
+    {
+        var plugin = ActiveTranscriptionPlugin
+            ?? throw new InvalidOperationException("No active transcription engine");
+
+        var modelId = ActiveModelId is { } activeModelId && IsPluginModel(activeModelId)
+            ? ParsePluginModelId(activeModelId).ModelId
+            : plugin.SelectedModelId;
+
+        var wavBytes = WavEncoder.Encode(audioSamples);
+        var translate = task == TranscriptionTask.Translate;
+        var stopwatch = Stopwatch.StartNew();
+        var result = await plugin.TranscribeAsync(wavBytes, language, translate, prompt, cancellationToken);
+        stopwatch.Stop();
+
+        var transcription = new TranscriptionResult
+        {
+            Text = result.Text,
+            DetectedLanguage = result.DetectedLanguage,
+            Duration = result.DurationSeconds,
+            ProcessingTime = stopwatch.Elapsed.TotalSeconds,
+            NoSpeechProbability = result.NoSpeechProbability,
+            Segments = result.Segments.Select(seg => new TranscriptionSegment(seg.Text, seg.Start, seg.End)).ToList()
+        };
+
+        return new ActiveModelTranscriptionResult(transcription, plugin.ProviderId, modelId);
+    }
+
+    private RequestModel ResolveRequestModel(string? engineOverride, string? modelOverride, bool awaitDownload)
+    {
+        var engines = _pluginManager.TranscriptionEngines;
+        var engine = string.IsNullOrWhiteSpace(engineOverride)
+            ? null
+            : engines.FirstOrDefault(e => e.ProviderId.Equals(engineOverride, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(engineOverride) && engine is null)
+            throw new ModelManagerRequestException(400, $"Unknown engine '{engineOverride}'");
+
+        if (engine is null && !string.IsNullOrWhiteSpace(modelOverride))
+        {
+            var matches = engines
+                .Where(e => e.TranscriptionModels.Any(m => m.Id.Equals(modelOverride, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            if (matches.Count == 0)
+                throw new ModelManagerRequestException(400, $"Unknown model '{modelOverride}'");
+
+            if (matches.Count > 1)
+            {
+                var engineIds = string.Join(", ", matches.Select(e => e.ProviderId));
+                throw new ModelManagerRequestException(
+                    400,
+                    $"Ambiguous model id '{modelOverride}' -- matches engines: {engineIds}. Specify 'engine' too.");
+            }
+
+            engine = matches[0];
+        }
+
+        if (engine is null)
+            throw new ModelManagerRequestException(503, "No engine selected");
+
+        var modelId = string.IsNullOrWhiteSpace(modelOverride)
+            ? engine.SelectedModelId ?? engine.TranscriptionModels.FirstOrDefault()?.Id
+            : engine.TranscriptionModels.FirstOrDefault(m => m.Id.Equals(modelOverride, StringComparison.OrdinalIgnoreCase))?.Id
+                ?? modelOverride;
+
+        if (string.IsNullOrWhiteSpace(modelId))
+            throw new ModelManagerRequestException(400, $"Engine '{engine.ProviderId}' has no available models");
+
+        if (engine.TranscriptionModels.Count > 0
+            && !engine.TranscriptionModels.Any(m => m.Id.Equals(modelId, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ModelManagerRequestException(
+                400,
+                $"Model '{modelId}' is not offered by engine '{engine.ProviderId}'");
+        }
+
+        if (engine.SupportsModelDownload && !engine.IsModelDownloaded(modelId) && !awaitDownload)
+        {
+            throw new ModelManagerRequestException(
+                409,
+                $"Engine '{engine.ProviderId}' is not configured (missing API key or downloaded weights). Pass ?await_download=1 to wait for restore.");
+        }
+
+        if (!engine.SupportsModelDownload && !engine.IsConfigured)
+        {
+            throw new ModelManagerRequestException(
+                409,
+                $"Engine '{engine.ProviderId}' is not configured (missing API key or downloaded weights).");
+        }
+
+        return new RequestModel(engine, modelId);
+    }
+
+    private Task RestoreRequestModelAsync(string? previousActiveModelId)
+    {
+        if (previousActiveModelId is null)
+        {
+            ActiveModelId = null;
+            return Task.CompletedTask;
+        }
+
+        if (ActiveModelId == previousActiveModelId)
+            return Task.CompletedTask;
+
+        return LoadModelAsync(previousActiveModelId);
+    }
+
     /// <summary>
     /// Migrates old local model IDs to plugin-prefixed IDs.
     /// Call on startup before loading models.
@@ -305,6 +488,45 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             CancelAutoUnload();
             _disposed = true;
+        }
+    }
+
+    private sealed record RequestModel(ITranscriptionEnginePlugin Plugin, string ModelId);
+
+    internal sealed class TranscriptionRequestModelScope : IAsyncDisposable
+    {
+        private readonly ModelManagerService _owner;
+        private readonly string? _previousActiveModelId;
+        private readonly bool _restore;
+        private bool _disposed;
+
+        internal TranscriptionRequestModelScope(
+            ModelManagerService owner,
+            string? previousActiveModelId,
+            bool restore)
+        {
+            _owner = owner;
+            _previousActiveModelId = previousActiveModelId;
+            _restore = restore;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            if (!_restore)
+                return;
+
+            try
+            {
+                await _owner.RestoreRequestModelAsync(_previousActiveModelId);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to restore API request model: {ex.Message}");
+            }
         }
     }
 }
@@ -361,7 +583,8 @@ internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
             Text = result.Text,
             DetectedLanguage = result.DetectedLanguage,
             Duration = result.DurationSeconds,
-            NoSpeechProbability = result.NoSpeechProbability
+            NoSpeechProbability = result.NoSpeechProbability,
+            Segments = result.Segments.Select(seg => new TranscriptionSegment(seg.Text, seg.Start, seg.End)).ToList()
         };
     }
 }

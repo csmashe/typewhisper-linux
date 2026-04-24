@@ -10,9 +10,13 @@ public sealed record PluginTranscriptionResult(
     string Text, string? DetectedLanguage, double DurationSeconds,
     float? NoSpeechProbability = null)
 {
+    public IReadOnlyList<PluginTranscriptionSegment> Segments { get; init; } = [];
+
     /// <summary>
     /// Backward-compatible constructor for plugins compiled against SDK &lt; 1.1.
     /// </summary>
     public PluginTranscriptionResult(string text, string detectedLanguage, double durationSeconds)
         : this(text, detectedLanguage, durationSeconds, null) { }
 }
+
+public sealed record PluginTranscriptionSegment(string Text, double Start, double End);

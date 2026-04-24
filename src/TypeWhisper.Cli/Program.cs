@@ -1,4 +1,3 @@
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text.Json;
@@ -7,38 +6,44 @@ namespace TypeWhisper.Cli;
 
 /// <summary>
 /// TypeWhisper CLI - communicates with the running TypeWhisper app via its REST API.
-/// Usage: typewhisper [command] [options]
-/// Commands: status, models, transcribe <file>
 /// </summary>
 static class Program
 {
-    private const int DefaultPort = 9876;
+    private const int DefaultPort = 8978;
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
 
     static async Task<int> Main(string[] args)
     {
-        if (args.Length == 0 || args[0] is "--help" or "-h")
+        var options = CliOptions.Parse(args);
+        if (options.ShowHelp)
         {
             PrintUsage();
             return 0;
         }
 
-        if (args[0] == "--version")
+        if (options.ShowVersion)
         {
             Console.WriteLine($"typewhisper-cli {GetVersion()}");
             return 0;
         }
 
-        var port = GetPort(args);
-        var json = HasFlag(args, "--json");
-        var baseUrl = $"http://127.0.0.1:{port}";
+        if (options.Error is not null)
+            return Error(options.Error);
 
-        return args[0] switch
+        if (options.Command is null)
         {
-            "status" => await StatusAsync(baseUrl, json),
-            "models" => await ModelsAsync(baseUrl, json),
-            "transcribe" => await TranscribeAsync(baseUrl, args, json),
-            _ => Error($"Unknown command: {args[0]}")
+            PrintUsage();
+            return 1;
+        }
+
+        var baseUrl = $"http://localhost:{options.Port}";
+
+        return options.Command switch
+        {
+            "status" => await StatusAsync(baseUrl, options.Json),
+            "models" => await ModelsAsync(baseUrl, options.Json),
+            "transcribe" => await TranscribeAsync(baseUrl, options),
+            _ => Error($"Unknown command: {options.Command}")
         };
     }
 
@@ -47,13 +52,16 @@ static class Program
         try
         {
             var response = await Http.GetStringAsync($"{baseUrl}/v1/status");
-            if (json) { Console.WriteLine(response); return 0; }
+            if (json) { Console.WriteLine(PrettyJson(response)); return 0; }
 
             using var doc = JsonDocument.Parse(response);
             var root = doc.RootElement;
-            Console.WriteLine($"Status: {Prop(root, "status")}");
-            Console.WriteLine($"Model:  {Prop(root, "model")}");
-            Console.WriteLine($"Engine: {Prop(root, "engine")}");
+            var status = Prop(root, "status") == "ready" ? "Ready" : "No model loaded";
+            var engine = Prop(root, "engine");
+            var model = Prop(root, "model");
+            Console.WriteLine(string.IsNullOrEmpty(model)
+                ? $"{status} - {engine}"
+                : $"{status} - {engine} ({model})");
             return 0;
         }
         catch (HttpRequestException)
@@ -67,17 +75,33 @@ static class Program
         try
         {
             var response = await Http.GetStringAsync($"{baseUrl}/v1/models");
-            if (json) { Console.WriteLine(response); return 0; }
+            if (json) { Console.WriteLine(PrettyJson(response)); return 0; }
 
             using var doc = JsonDocument.Parse(response);
-            if (doc.RootElement.TryGetProperty("models", out var models))
+            if (!doc.RootElement.TryGetProperty("models", out var models))
+                return 0;
+
+            var rows = models.EnumerateArray().ToList();
+            if (rows.Count == 0)
             {
-                foreach (var m in models.EnumerateArray())
-                {
-                    var selected = m.TryGetProperty("selected", out var sel) && sel.GetBoolean() ? " *" : "";
-                    Console.WriteLine($"  {Prop(m, "id"),-40} {Prop(m, "name")}{selected}");
-                }
+                Console.WriteLine("No models available.");
+                return 0;
             }
+
+            var idWidth = Math.Max(2, rows.Max(m => Prop(m, "id").Length));
+            var engineWidth = Math.Max(6, rows.Max(m => Prop(m, "engine").Length));
+            var nameWidth = Math.Max(4, rows.Max(m => Prop(m, "name").Length));
+
+            Console.WriteLine($"{Pad("ID", idWidth)}  {Pad("ENGINE", engineWidth)}  {Pad("NAME", nameWidth)}  STATUS");
+            Console.WriteLine(new string('-', idWidth + engineWidth + nameWidth + 10));
+
+            foreach (var m in rows)
+            {
+                var selected = m.TryGetProperty("selected", out var sel) && sel.GetBoolean() ? " *" : "";
+                Console.WriteLine(
+                    $"{Pad(Prop(m, "id"), idWidth)}  {Pad(Prop(m, "engine"), engineWidth)}  {Pad(Prop(m, "name"), nameWidth)}  {Prop(m, "status")}{selected}");
+            }
+
             return 0;
         }
         catch (HttpRequestException)
@@ -86,32 +110,59 @@ static class Program
         }
     }
 
-    static async Task<int> TranscribeAsync(string baseUrl, string[] args, bool json)
+    static async Task<int> TranscribeAsync(string baseUrl, CliOptions options)
     {
-        var file = args.Length > 1 ? args[1] : null;
-        if (file is null || !File.Exists(file))
-            return Error(file is null ? "Usage: typewhisper transcribe <file>" : $"File not found: {file}");
+        if (!string.IsNullOrEmpty(options.Language) && options.LanguageHints.Count > 0)
+            return Error("--language and --language-hint cannot be used together.");
 
-        var language = GetOption(args, "--language");
-        var task = GetOption(args, "--task") ?? "transcribe";
+        var file = options.Positionals.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(file))
+            return Error("Usage: typewhisper transcribe <file|->");
+
+        byte[] audioBytes;
+        var fileName = "audio.wav";
+
+        if (file == "-")
+        {
+            await using var stdin = Console.OpenStandardInput();
+            using var buffer = new MemoryStream();
+            await stdin.CopyToAsync(buffer);
+            audioBytes = buffer.ToArray();
+            if (audioBytes.Length == 0)
+                return Error("No data received from stdin.");
+        }
+        else
+        {
+            if (!File.Exists(file))
+                return Error($"File not found: {file}");
+
+            audioBytes = await File.ReadAllBytesAsync(file);
+            fileName = Path.GetFileName(file);
+        }
 
         try
         {
             using var content = new MultipartFormDataContent();
-            var fileBytes = await File.ReadAllBytesAsync(file);
-            var fileContent = new ByteArrayContent(fileBytes);
-            fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
-            content.Add(fileContent, "file", Path.GetFileName(file));
-            content.Add(new StringContent(task), "task");
-            if (language is not null) content.Add(new StringContent(language), "language");
+            var fileContent = new ByteArrayContent(audioBytes);
+            fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            content.Add(fileContent, "file", fileName);
 
-            var response = await Http.PostAsync($"{baseUrl}/v1/transcribe", content);
+            AddString(content, "language", options.Language);
+            foreach (var hint in options.LanguageHints)
+                AddString(content, "language_hint", hint);
+            AddString(content, "task", options.Task);
+            AddString(content, "target_language", options.TranslateTo);
+            AddString(content, "engine", options.Engine);
+            AddString(content, "model", options.Model);
+
+            var path = options.AwaitDownload ? "/v1/transcribe?await_download=1" : "/v1/transcribe";
+            var response = await Http.PostAsync($"{baseUrl}{path}", content);
             var body = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
-                return Error($"Transcription failed ({(int)response.StatusCode}): {body}");
+                return Error($"Transcription failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}");
 
-            if (json) { Console.WriteLine(body); return 0; }
+            if (options.Json) { Console.WriteLine(PrettyJson(body)); return 0; }
 
             using var doc = JsonDocument.Parse(body);
             Console.WriteLine(Prop(doc.RootElement, "text"));
@@ -133,33 +184,38 @@ static class Program
             Commands:
               status                    Show TypeWhisper status
               models                    List available models
-              transcribe <file>         Transcribe an audio file
+              transcribe <file|->       Transcribe an audio file, or - for stdin
 
-            Options:
-              --port <N>                API server port (default: 9876)
+            Global options:
+              --port <N>                API server port (default: 8978)
               --json                    Output as JSON
-              --language <code>         Source language (e.g. "en", "de")
-              --task <task>             "transcribe" or "translate"
               --version                 Show version
-              --help                    Show this help
+              --help, -h                Show this help
+
+            Transcribe options:
+              --language <code>         Source language (e.g. en, de)
+              --language-hint <code>    Repeatable language hint for auto-detection
+              --task <task>             transcribe (default) or translate
+              --translate-to <code>     Target language for translation
+              --engine <id>             Override the engine for this request
+              --model <id>              Override the model for this request
+              --await-download          Wait for local model restore/download
+
+            Examples:
+              typewhisper status
+              typewhisper transcribe recording.wav
+              typewhisper transcribe recording.wav --language de --json
+              typewhisper transcribe recording.wav --language-hint de --language-hint en
+              typewhisper transcribe recording.wav --engine groq --model whisper-large-v3-turbo
+              typewhisper transcribe - < audio.wav
             """);
     }
 
-    static int GetPort(string[] args)
+    static void AddString(MultipartFormDataContent content, string name, string? value)
     {
-        var idx = Array.IndexOf(args, "--port");
-        if (idx >= 0 && idx + 1 < args.Length && int.TryParse(args[idx + 1], out var port))
-            return port;
-        return DefaultPort;
+        if (!string.IsNullOrWhiteSpace(value))
+            content.Add(new StringContent(value), name);
     }
-
-    static string? GetOption(string[] args, string flag)
-    {
-        var idx = Array.IndexOf(args, flag);
-        return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
-    }
-
-    static bool HasFlag(string[] args, string flag) => Array.IndexOf(args, flag) >= 0;
 
     static string GetVersion()
     {
@@ -179,8 +235,175 @@ static class Program
             .ToString() ?? "dev";
     }
 
-    static string Prop(JsonElement el, string name) =>
-        el.TryGetProperty(name, out var v) ? v.GetString() ?? "" : "";
+    static string Prop(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var value))
+            return "";
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? "",
+            JsonValueKind.Number => value.ToString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => ""
+        };
+    }
+
+    static string PrettyJson(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    static string ExtractErrorMessage(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("error", out var error))
+            {
+                if (error.ValueKind == JsonValueKind.Object
+                    && error.TryGetProperty("message", out var message))
+                    return message.GetString() ?? body;
+
+                if (error.ValueKind == JsonValueKind.String)
+                    return error.GetString() ?? body;
+            }
+        }
+        catch { }
+
+        return body;
+    }
+
+    static string Pad(string value, int width) =>
+        value.PadRight(width);
 
     static int Error(string message) { Console.Error.WriteLine($"Error: {message}"); return 1; }
+
+    private sealed record CliOptions
+    {
+        public string? Command { get; private init; }
+        public List<string> Positionals { get; private init; } = [];
+        public int Port { get; private init; } = DefaultPort;
+        public bool Json { get; private init; }
+        public bool ShowHelp { get; private init; }
+        public bool ShowVersion { get; private init; }
+        public string? Language { get; private init; }
+        public List<string> LanguageHints { get; private init; } = [];
+        public string Task { get; private init; } = "transcribe";
+        public string? TranslateTo { get; private init; }
+        public string? Engine { get; private init; }
+        public string? Model { get; private init; }
+        public bool AwaitDownload { get; private init; }
+        public string? Error { get; private init; }
+
+        public static CliOptions Parse(string[] args)
+        {
+            var options = new CliOptions();
+            var positionals = new List<string>();
+            var languageHints = new List<string>();
+            string? command = null;
+            string? language = null;
+            string task = "transcribe";
+            string? translateTo = null;
+            string? engine = null;
+            string? model = null;
+            var port = DefaultPort;
+            var json = false;
+            var awaitDownload = false;
+
+            for (var i = 0; i < args.Length; i++)
+            {
+                var arg = args[i];
+                switch (arg)
+                {
+                    case "--help":
+                    case "-h":
+                        return options with { ShowHelp = true };
+                    case "--version":
+                        return options with { ShowVersion = true };
+                    case "--json":
+                        json = true;
+                        break;
+                    case "--await-download":
+                        awaitDownload = true;
+                        break;
+                    case "--port":
+                        if (!TryReadValue(args, ref i, out var portValue) || !int.TryParse(portValue, out port))
+                            return options with { Error = "--port requires a number." };
+                        break;
+                    case "--language":
+                        if (!TryReadValue(args, ref i, out language))
+                            return options with { Error = "--language requires a value." };
+                        break;
+                    case "--language-hint":
+                        if (!TryReadValue(args, ref i, out var hint))
+                            return options with { Error = "--language-hint requires a value." };
+                        languageHints.Add(hint);
+                        break;
+                    case "--task":
+                        if (!TryReadValue(args, ref i, out task))
+                            return options with { Error = "--task requires a value." };
+                        break;
+                    case "--translate-to":
+                        if (!TryReadValue(args, ref i, out translateTo))
+                            return options with { Error = "--translate-to requires a value." };
+                        break;
+                    case "--engine":
+                        if (!TryReadValue(args, ref i, out engine))
+                            return options with { Error = "--engine requires a value." };
+                        break;
+                    case "--model":
+                        if (!TryReadValue(args, ref i, out model))
+                            return options with { Error = "--model requires a value." };
+                        break;
+                    default:
+                        if (arg.StartsWith('-') && arg != "-")
+                            return options with { Error = $"Unknown option '{arg}'." };
+
+                        if (command is null)
+                            command = arg;
+                        else
+                            positionals.Add(arg);
+                        break;
+                }
+            }
+
+            return options with
+            {
+                Command = command,
+                Positionals = positionals,
+                Port = port,
+                Json = json,
+                Language = language,
+                LanguageHints = languageHints,
+                Task = task,
+                TranslateTo = translateTo,
+                Engine = engine,
+                Model = model,
+                AwaitDownload = awaitDownload
+            };
+        }
+
+        private static bool TryReadValue(string[] args, ref int index, out string value)
+        {
+            if (index + 1 >= args.Length)
+            {
+                value = "";
+                return false;
+            }
+
+            value = args[++index];
+            return true;
+        }
+    }
 }
