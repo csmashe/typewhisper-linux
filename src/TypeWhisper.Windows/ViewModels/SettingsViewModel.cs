@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -43,7 +45,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _autostartEnabled;
     [ObservableProperty] private string? _translationTargetLanguage;
     [ObservableProperty] private bool _apiServerEnabled;
-    [ObservableProperty] private int _apiServerPort = 9876;
+    [ObservableProperty] private int _apiServerPort = 8978;
     [ObservableProperty] private OverlayWidget _overlayLeftWidget = OverlayWidget.Waveform;
     [ObservableProperty] private OverlayWidget _overlayRightWidget = OverlayWidget.Timer;
     [ObservableProperty] private string _promptPaletteHotkey = "";
@@ -172,7 +174,11 @@ public partial class SettingsViewModel : ObservableObject
         {
             Clipboard.SetText(command);
         }
-        catch
+        catch (COMException)
+        {
+            // Clipboard may be temporarily locked by another process.
+        }
+        catch (ExternalException)
         {
             // Clipboard may be temporarily locked by another process.
         }
@@ -188,7 +194,15 @@ public partial class SettingsViewModel : ObservableObject
         {
             ApplyCliState(_cliInstall.Install());
         }
-        catch (Exception ex)
+        catch (InvalidOperationException ex)
+        {
+            CliStatusText = ex.Message;
+        }
+        catch (IOException ex)
+        {
+            CliStatusText = ex.Message;
+        }
+        catch (UnauthorizedAccessException ex)
         {
             CliStatusText = ex.Message;
         }

@@ -35,7 +35,7 @@ public sealed class CliInstallService
     public CliInstallState GetState()
     {
         var installDirectory = _installDirectoryProvider();
-        var installPath = Path.Combine(installDirectory, CliFileName);
+        var installPath = GetCliInstallPath(installDirectory);
         var bundledPath = _bundledPathProvider();
         var installed = FileExistsWithExactName(installPath);
         var inPath = IsDirectoryInPath(installDirectory);
@@ -101,6 +101,14 @@ public sealed class CliInstallService
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "TypeWhisper",
             "Cli");
+
+    private static string GetCliInstallPath(string installDirectory)
+    {
+        if (Path.IsPathRooted(CliFileName))
+            throw new InvalidOperationException("CLI file name must be relative.");
+
+        return Path.Combine(installDirectory, CliFileName);
+    }
 
     private static string? FindBundledCliPath()
     {

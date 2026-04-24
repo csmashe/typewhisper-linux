@@ -67,11 +67,18 @@ public sealed class ApiServerController : IDisposable
             ActivePort = settings.ApiServerPort;
             ErrorMessage = null;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsRecoverable(ex))
         {
             ActivePort = null;
             ErrorMessage = ex.Message;
-            try { _server.Stop(); } catch { }
+            try
+            {
+                _server.Stop();
+            }
+            catch (Exception stopEx) when (IsRecoverable(stopEx))
+            {
+                ErrorMessage = $"{ErrorMessage}; cleanup failed: {stopEx.Message}";
+            }
         }
 
         NotifyStateChanged();
@@ -90,6 +97,13 @@ public sealed class ApiServerController : IDisposable
     }
 
     private void NotifyStateChanged() => StateChanged?.Invoke();
+
+    private static bool IsRecoverable(Exception ex) =>
+        ex is not OutOfMemoryException
+            and not StackOverflowException
+            and not AccessViolationException
+            and not AppDomainUnloadedException
+            and not BadImageFormatException;
 
     public void Dispose()
     {
