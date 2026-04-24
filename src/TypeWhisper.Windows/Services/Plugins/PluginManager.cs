@@ -15,7 +15,7 @@ public sealed class PluginManager : IDisposable
     private readonly PluginLoader _loader;
     private readonly PluginEventBus _eventBus;
     private readonly IActiveWindowService _activeWindow;
-    private readonly IProfileService _profiles;
+    private readonly IWorkflowService _workflows;
     private readonly ISettingsService _settings;
     private readonly string[] _searchDirectories;
 
@@ -34,9 +34,9 @@ public sealed class PluginManager : IDisposable
         PluginLoader loader,
         PluginEventBus eventBus,
         IActiveWindowService activeWindow,
-        IProfileService profiles,
+        IWorkflowService workflows,
         ISettingsService settings)
-        : this(loader, eventBus, activeWindow, profiles, settings, [TypeWhisperEnvironment.PluginsPath])
+        : this(loader, eventBus, activeWindow, workflows, settings, [TypeWhisperEnvironment.PluginsPath])
     {
     }
 
@@ -44,14 +44,14 @@ public sealed class PluginManager : IDisposable
         PluginLoader loader,
         PluginEventBus eventBus,
         IActiveWindowService activeWindow,
-        IProfileService profiles,
+        IWorkflowService workflows,
         ISettingsService settings,
         IEnumerable<string> searchDirectories)
     {
         _loader = loader;
         _eventBus = eventBus;
         _activeWindow = activeWindow;
-        _profiles = profiles;
+        _workflows = workflows;
         _settings = settings;
         _searchDirectories = searchDirectories.ToArray();
     }
@@ -211,7 +211,7 @@ public sealed class PluginManager : IDisposable
         {
             var hostServices = new PluginHostServices(
                 plugin.Manifest.Id, plugin.PluginDirectory,
-                _activeWindow, _eventBus, _profiles,
+                _activeWindow, _eventBus, _workflows,
                 onCapabilitiesChanged: () =>
                 {
                     RebuildCapabilityIndices();

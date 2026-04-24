@@ -377,14 +377,14 @@ internal static class TestPluginManagerFactory
     public static PluginManager Create(ISettingsService settings)
     {
         var activeWindow = new Mock<IActiveWindowService>();
-        var profiles = new Mock<IProfileService>();
-        profiles.Setup(p => p.Profiles).Returns([]);
+        var workflows = new Mock<IWorkflowService>();
+        workflows.Setup(w => w.Workflows).Returns([]);
 
         return new PluginManager(
             new PluginLoader(),
             new PluginEventBus(),
             activeWindow.Object,
-            profiles.Object,
+            workflows.Object,
             settings,
             []);
     }

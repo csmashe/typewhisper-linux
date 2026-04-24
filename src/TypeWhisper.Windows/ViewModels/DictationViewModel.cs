@@ -56,12 +56,11 @@ public partial class DictationViewModel : ObservableObject, IDisposable
     private readonly IDictionaryService _dictionary;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
     private readonly ISnippetService _snippets;
-    private readonly IProfileService _profiles;
+    private readonly IWorkflowService _workflows;
     private readonly ITranslationService _translation;
     private readonly IAudioDuckingService _audioDucking;
     private readonly IMediaPauseService _mediaPause;
     private readonly PluginEventBus _eventBus;
-    private readonly IPromptActionService _promptActions;
     private readonly PromptProcessingService _promptProcessing;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly IErrorLogService _errorLog;
@@ -83,8 +82,8 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         { FullMode = BoundedChannelFullMode.Wait });
 
     // Captured at recording start for the current session
-    private Profile? _activeProfile;
-    private string? _profileHotkeyOverrideId;
+    private Workflow? _activeWorkflow;
+    private string? _workflowHotkeyOverrideId;
     private string? _capturedProcessName;
     private string? _capturedWindowTitle;
     private string? _capturedUrl;
@@ -105,7 +104,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
     [ObservableProperty] private HotkeyMode? _currentHotkeyMode;
     [ObservableProperty] private bool _isOverlayVisible;
     [ObservableProperty] private string? _activeProcessName;
-    [ObservableProperty] private string? _activeProfileName;
+    [ObservableProperty] private string? _activeWorkflowName;
     [ObservableProperty] private string _partialText = "";
     [ObservableProperty] private bool _isExpanded;
     [ObservableProperty] private string? _feedbackText;
@@ -114,7 +113,6 @@ public partial class DictationViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string? _lastTranscribedText;
     [ObservableProperty] private string? _lastTranscriptionLanguage;
 
-    public PromptPaletteViewModel PromptPalette { get; }
     public bool CanReadBackLastTranscription => !string.IsNullOrWhiteSpace(LastTranscribedText);
 
     public DictationViewModel(
@@ -129,13 +127,11 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         IDictionaryService dictionary,
         IVocabularyBoostingService vocabularyBoosting,
         ISnippetService snippets,
-        IProfileService profiles,
+        IWorkflowService workflows,
         ITranslationService translation,
         IAudioDuckingService audioDucking,
         IMediaPauseService mediaPause,
-        IPromptActionService promptActions,
         PromptProcessingService promptProcessing,
-        PromptPaletteViewModel promptPalette,
         IPostProcessingPipeline pipeline,
         IErrorLogService errorLog,
         SpeechFeedbackService speechFeedback)
@@ -151,13 +147,11 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         _dictionary = dictionary;
         _vocabularyBoosting = vocabularyBoosting;
         _snippets = snippets;
-        _profiles = profiles;
+        _workflows = workflows;
         _translation = translation;
         _audioDucking = audioDucking;
         _mediaPause = mediaPause;
         _eventBus = modelManager.PluginManager.EventBus;
-        PromptPalette = promptPalette;
-        _promptActions = promptActions;
         _promptProcessing = promptProcessing;
         _pipeline = pipeline;
         _errorLog = errorLog;
@@ -211,13 +205,11 @@ public partial class DictationViewModel : ObservableObject, IDisposable
             }
         });
 
-        _hotkey.PromptPaletteRequested += (_, _) => Application.Current?.Dispatcher.InvokeAsync(() =>
-            PromptPalette.TogglePalette());
         _hotkey.CancelRequested += (_, _) => Application.Current?.Dispatcher.InvokeAsync(async () =>
             await AbortActiveOperation());
-        _hotkey.ProfileDictationRequested += (_, profileId) => Application.Current?.Dispatcher.InvokeAsync(async () =>
+        _hotkey.WorkflowDictationRequested += (_, workflowId) => Application.Current?.Dispatcher.InvokeAsync(async () =>
         {
-            _profileHotkeyOverrideId = profileId;
+            _workflowHotkeyOverrideId = workflowId;
             await StartRecording();
         });
     }
@@ -284,20 +276,20 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         _speechFeedback.ReadBack(LastTranscribedText, LastTranscriptionLanguage);
     }
 
-    // Effective settings: profile override → global setting
+    // Effective settings: workflow override -> global setting
     private string? EffectiveLanguage =>
-        _activeProfile?.InputLanguage ?? _settings.Current.Language;
+        _activeWorkflow?.Behavior.InputLanguage ?? _settings.Current.Language;
 
     private TranscriptionTask EffectiveTask =>
-        (_activeProfile?.SelectedTask ?? _settings.Current.TranscriptionTask) == "translate"
+        (_activeWorkflow?.Behavior.SelectedTask ?? _settings.Current.TranscriptionTask) == "translate"
             ? TranscriptionTask.Translate
             : TranscriptionTask.Transcribe;
 
     private bool EffectiveWhisperMode =>
-        _activeProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
+        _activeWorkflow?.Behavior.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
 
     private string? EffectiveModelId =>
-        _activeProfile?.TranscriptionModelOverride;
+        _activeWorkflow?.Behavior.TranscriptionModelOverride;
 
     [RelayCommand]
     /// <summary>Public API for starting recording (used by HTTP API).</summary>
@@ -378,8 +370,8 @@ public partial class DictationViewModel : ObservableObject, IDisposable
     private void ClearCapturedContext()
     {
         ActiveProcessName = null;
-        ActiveProfileName = null;
-        _activeProfile = null;
+        ActiveWorkflowName = null;
+        _activeWorkflow = null;
         _capturedProcessName = null;
         _capturedWindowTitle = null;
         _capturedUrl = null;
@@ -543,14 +535,14 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         _capturedProcessName = _activeWindow.GetActiveWindowProcessName();
         _capturedWindowTitle = _activeWindow.GetActiveWindowTitle();
         _capturedUrl = _activeWindow.GetBrowserUrl();
-        if (_profileHotkeyOverrideId is not null)
+        if (_workflowHotkeyOverrideId is not null)
         {
-            _activeProfile = _profiles.Profiles.FirstOrDefault(p => p.Id == _profileHotkeyOverrideId);
-            _profileHotkeyOverrideId = null;
+            _activeWorkflow = _workflows.ForceMatch(_workflowHotkeyOverrideId)?.Workflow;
+            _workflowHotkeyOverrideId = null;
         }
         else
         {
-            _activeProfile = _profiles.MatchProfile(_capturedProcessName, _capturedUrl);
+            _activeWorkflow = _workflows.MatchWorkflow(_capturedProcessName, _capturedUrl)?.Workflow;
         }
 
         var desiredModelId = EffectiveModelId ?? _settings.Current.SelectedModelId;
@@ -597,7 +589,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         }
 
         ActiveProcessName = _capturedProcessName;
-        ActiveProfileName = _activeProfile?.Name;
+        ActiveWorkflowName = _activeWorkflow?.Name;
 
         _audio.WhisperModeEnabled = EffectiveWhisperMode;
 
@@ -722,7 +714,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         var job = new TranscriptionJob(
             samples,
             partialSnapshot,
-            _activeProfile,
+            _activeWorkflow,
             _capturedProcessName,
             _capturedWindowTitle,
             _capturedUrl,
@@ -833,7 +825,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
                 DetectedLanguage = detectedLanguage,
                 DurationSeconds = audioDuration,
                 ModelId = job.ActiveModelIdAtCapture,
-                ProfileName = job.ActiveProfile?.Name,
+                ProfileName = job.ActiveWorkflow?.Name,
                 AppName = job.CapturedWindowTitle,
                 AppProcessName = job.CapturedProcessName
             });
@@ -844,27 +836,32 @@ public partial class DictationViewModel : ObservableObject, IDisposable
                 SourceLanguage = detectedLanguage ?? job.EffectiveLanguage,
                 ActiveAppName = job.CapturedWindowTitle,
                 ActiveAppProcessName = job.CapturedProcessName,
-                ProfileName = job.ActiveProfile?.Name,
+                ProfileName = job.ActiveWorkflow?.Name,
                 AudioDurationSeconds = audioDuration
             };
 
-            // Build LLM handler if profile has prompt action
+            // Build LLM handler if the active workflow has prompt behavior.
             Func<string, CancellationToken, Task<string>>? llmHandler = null;
-            if (job.ActiveProfile?.PromptActionId is { } promptActionId)
+            if (job.ActiveWorkflow?.SystemPrompt(
+                    fallbackTranslationTarget: job.ActiveWorkflow.Behavior.TranslationTarget,
+                    detectedLanguage: detectedLanguage,
+                    configuredLanguage: job.EffectiveLanguage == "auto" ? null : job.EffectiveLanguage) is { } systemPrompt)
             {
-                var promptAction = _promptActions.Actions.FirstOrDefault(a => a.Id == promptActionId);
-                if (promptAction is not null)
+                if (_promptProcessing.IsAnyProviderAvailable)
                 {
-                    if (_promptProcessing.IsAnyProviderAvailable)
-                    {
-                        llmHandler = (text, token) => _promptProcessing.ProcessAsync(promptAction, text, token);
-                    }
-                    else
-                    {
-                        FeedbackText = Loc.Instance["Error.NoLlmProvider"];
-                        FeedbackIsError = true;
-                        ShowFeedback = true;
-                    }
+                    var behavior = job.ActiveWorkflow.Behavior;
+                    llmHandler = (text, token) => _promptProcessing.ProcessAsync(
+                        systemPrompt,
+                        text,
+                        behavior.ProviderOverride,
+                        behavior.ModelOverride,
+                        token);
+                }
+                else
+                {
+                    FeedbackText = Loc.Instance["Error.NoLlmProvider"];
+                    FeedbackIsError = true;
+                    ShowFeedback = true;
                 }
             }
 
@@ -874,8 +871,9 @@ public partial class DictationViewModel : ObservableObject, IDisposable
                 new PluginPostProcessor(p.Priority,
                     (text, token) => p.ProcessAsync(text, pipelineContext, token))).ToList();
 
-            var translationTarget = job.ActiveProfile?.TranslationTarget
-                ?? _settings.Current.TranslationTargetLanguage;
+            var translationTarget = job.ActiveWorkflow is null
+                ? _settings.Current.TranslationTargetLanguage
+                : null;
 
             var pipelineOptions = new PipelineOptions
             {
@@ -911,12 +909,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
             var finalText = pipelineResult.Text;
 
             // Route to action plugin if configured
-            string? targetActionPluginId = null;
-            if (job.ActiveProfile?.PromptActionId is { } paId)
-            {
-                var pa = _promptActions.Actions.FirstOrDefault(a => a.Id == paId);
-                targetActionPluginId = pa?.TargetActionPluginId;
-            }
+            var targetActionPluginId = job.ActiveWorkflow?.Output.TargetActionPluginId;
 
             InsertionResult insertResult;
             if (!string.IsNullOrEmpty(targetActionPluginId))
@@ -959,7 +952,10 @@ public partial class DictationViewModel : ObservableObject, IDisposable
                         State = DictationState.Inserting;
                         StatusText = Loc.Instance["Status.Inserting"];
                     });
-                    insertResult = await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste);
+                    insertResult = await _textInsertion.InsertTextAsync(
+                        finalText,
+                        _settings.Current.AutoPaste,
+                        job.ActiveWorkflow?.Output.AutoEnter == true);
                 }
             }
             else
@@ -970,7 +966,10 @@ public partial class DictationViewModel : ObservableObject, IDisposable
                     State = DictationState.Inserting;
                     StatusText = Loc.Instance["Status.Inserting"];
                 });
-                insertResult = await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste);
+                insertResult = await _textInsertion.InsertTextAsync(
+                    finalText,
+                    _settings.Current.AutoPaste,
+                    job.ActiveWorkflow?.Output.AutoEnter == true);
             }
 
             _eventBus.Publish(new TextInsertedEvent
@@ -979,7 +978,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
                 TargetApp = job.CapturedProcessName
             });
 
-            // Restore global model if profile override was active
+            // Restore global model if workflow override was active
             if (job.ActiveModelIdAtCapture is not null
                 && job.ActiveModelIdAtCapture != _settings.Current.SelectedModelId
                 && _settings.Current.SelectedModelId is not null)
@@ -1035,7 +1034,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
                     AppUrl = job.CapturedUrl,
                     DurationSeconds = audioDuration,
                     Language = detectedLanguage,
-                    ProfileName = job.ActiveProfile?.Name,
+                    ProfileName = job.ActiveWorkflow?.Name,
                     EngineUsed = engineUsed,
                     ModelUsed = job.ActiveModelIdAtCapture,
                     AudioFileName = audioFileName
@@ -1242,7 +1241,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
     private sealed record TranscriptionJob(
         float[] Samples,
         List<string> PartialSegments,
-        Profile? ActiveProfile,
+        Workflow? ActiveWorkflow,
         string? CapturedProcessName,
         string? CapturedWindowTitle,
         string? CapturedUrl,
