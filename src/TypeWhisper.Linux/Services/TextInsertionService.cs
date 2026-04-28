@@ -11,6 +11,8 @@ public enum InsertionResult
     NoText,
     ActionHandled,
     ActionFailed,
+    MissingClipboardTool,
+    MissingPasteTool,
     Failed,
 }
 
@@ -52,6 +54,12 @@ public sealed class TextInsertionService
     {
         if (string.IsNullOrEmpty(text))
             return InsertionResult.NoText;
+
+        if (!_platform.IsClipboardSetAvailable)
+            return InsertionResult.MissingClipboardTool;
+
+        if (autoPaste && !_platform.IsPasteAvailable)
+            return InsertionResult.MissingPasteTool;
 
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
         if (!await _platform.SetClipboardTextAsync(text))
@@ -146,6 +154,8 @@ public sealed class TextInsertionService
 
 internal interface ITextInsertionPlatform
 {
+    bool IsClipboardSetAvailable { get; }
+    bool IsPasteAvailable { get; }
     Task<string?> TryGetClipboardTextAsync();
     Task<bool> SetClipboardTextAsync(string text);
     Task DelayAsync(TimeSpan delay);
@@ -158,6 +168,12 @@ internal interface ITextInsertionPlatform
 
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
+    public bool IsClipboardSetAvailable => IsWayland()
+        ? IsCommandAvailable("wl-copy")
+        : IsCommandAvailable("xclip");
+
+    public bool IsPasteAvailable => IsCommandAvailable("xdotool");
+
     public async Task<string?> TryGetClipboardTextAsync()
     {
         var psi = IsWayland()
@@ -229,6 +245,30 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private static bool IsWayland() =>
         Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+
+    private static bool IsCommandAvailable(string command)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("sh")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add($"command -v {command}");
+
+            using var p = Process.Start(psi);
+            if (p is null) return false;
+            p.WaitForExit();
+            return p.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static string? RunXdotool(string arguments)
     {

@@ -5,6 +5,12 @@ namespace TypeWhisper.Core.Services;
 
 public sealed partial class CleanupService
 {
+    public const string MediumSystemPrompt =
+        "Improve readability while preserving meaning, facts, tone, and terminology. Do not add new information. Return only the cleaned text.";
+
+    public const string HighSystemPrompt =
+        "Rewrite as concise polished prose while preserving meaning, facts, tone, and terminology. Do not add new information. Return only the rewritten text.";
+
     public string Clean(string text, CleanupLevel level)
     {
         if (level == CleanupLevel.None || string.IsNullOrWhiteSpace(text))
@@ -19,6 +25,14 @@ public sealed partial class CleanupService
             _ => text
         };
     }
+
+    public static string GetLlmSystemPrompt(CleanupLevel level) =>
+        level switch
+        {
+            CleanupLevel.Medium => MediumSystemPrompt,
+            CleanupLevel.High => HighSystemPrompt,
+            _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Only Medium and High cleanup use LLM prompts.")
+        };
 
     private static string CleanLight(string text)
     {

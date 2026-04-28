@@ -62,13 +62,69 @@ public sealed class TextInsertionServiceTests
         Assert.False(platform.PasteSent);
     }
 
+    [Fact]
+    public async Task InsertTextAsync_missing_clipboard_tool_returns_specific_result()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            ClipboardSetAvailable = false,
+            PasteAvailable = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text", autoPaste: true);
+
+        Assert.Equal(InsertionResult.MissingClipboardTool, result);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_missing_paste_tool_returns_specific_result_when_auto_paste_enabled()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            ClipboardSetAvailable = true,
+            PasteAvailable = false
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text", autoPaste: true);
+
+        Assert.Equal(InsertionResult.MissingPasteTool, result);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_missing_paste_tool_allows_copy_only()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ClipboardSetAvailable = true,
+            PasteAvailable = false
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text", autoPaste: false);
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal("new text", platform.Clipboard);
+        Assert.False(platform.PasteSent);
+    }
+
     private sealed class FakeTextInsertionPlatform : ITextInsertionPlatform
     {
         public string? Clipboard { get; set; }
         public string? ActiveWindowId { get; set; }
+        public bool ClipboardSetAvailable { get; set; } = true;
+        public bool PasteAvailable { get; set; } = true;
         public bool ActivateSucceeds { get; set; } = true;
         public bool PasteSucceeds { get; set; } = true;
         public bool PasteSent { get; private set; }
+
+        public bool IsClipboardSetAvailable => ClipboardSetAvailable;
+
+        public bool IsPasteAvailable => PasteAvailable;
 
         public Task<string?> TryGetClipboardTextAsync() => Task.FromResult(Clipboard);
 

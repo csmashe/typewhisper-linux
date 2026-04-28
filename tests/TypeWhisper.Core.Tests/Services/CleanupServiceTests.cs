@@ -51,4 +51,22 @@ public sealed class CleanupServiceTests
         Assert.Equal("Hello", _sut.Clean("um hello", CleanupLevel.Medium));
         Assert.Equal("Hello", _sut.Clean("um hello", CleanupLevel.High));
     }
+
+    [Fact]
+    public void GetLlmSystemPrompt_ReturnsMediumPrompt()
+    {
+        var result = CleanupService.GetLlmSystemPrompt(CleanupLevel.Medium);
+
+        Assert.Contains("Improve readability", result);
+        Assert.Contains("Do not add new information", result);
+    }
+
+    [Fact]
+    public void GetLlmSystemPrompt_ReturnsHighPrompt()
+    {
+        var result = CleanupService.GetLlmSystemPrompt(CleanupLevel.High);
+
+        Assert.Contains("Rewrite as concise polished prose", result);
+        Assert.Contains("Do not add new information", result);
+    }
 }

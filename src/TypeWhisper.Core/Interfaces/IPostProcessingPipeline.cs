@@ -38,8 +38,8 @@ public sealed record PipelineOptions
     /// <summary>Runs LLM prompt processing on text. Returns processed text.</summary>
     public Func<string, CancellationToken, Task<string>>? LlmHandler { get; init; }
 
-    /// <summary>Applies deterministic cleanup before prompt actions and snippets.</summary>
-    public Func<string, string>? CleanupProcessor { get; init; }
+    /// <summary>Applies cleanup before prompt actions and snippets.</summary>
+    public Func<string, CancellationToken, Task<string>>? CleanupHandler { get; init; }
 
     /// <summary>Translates text. Params: text, sourceLang, targetLang. Returns translated text.</summary>
     public Func<string, string, string, CancellationToken, Task<string>>? TranslationHandler { get; init; }

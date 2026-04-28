@@ -38,7 +38,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IDictionaryService _dictionary;
     private readonly ISnippetService _snippets;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
-    private readonly CleanupService _cleanup;
+    private readonly LlmCleanupService _cleanup;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly ITranslationService _translation;
     private readonly PromptProcessingService _promptProcessing;
@@ -93,7 +93,7 @@ public sealed class DictationOrchestrator : IDisposable
         IDictionaryService dictionary,
         ISnippetService snippets,
         IVocabularyBoostingService vocabularyBoosting,
-        CleanupService cleanup,
+        LlmCleanupService cleanup,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
         PromptProcessingService promptProcessing,
@@ -166,9 +166,26 @@ public sealed class DictationOrchestrator : IDisposable
             _recordingStart = DateTime.UtcNow;
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
-            _audio.StartRecording();
-            if (!_audio.IsRecording)
+            try
+            {
+                _audio.StartRecording();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Failed to start recording: {ex}");
+                var message = BuildRecordingStartFailureMessage(ex);
+                ReportStatus(message);
+                ShowFeedback(message, isError: true);
                 return;
+            }
+
+            if (!_audio.IsRecording)
+            {
+                var message = BuildRecordingStartFailureMessage(null);
+                ReportStatus(message);
+                ShowFeedback(message, isError: true);
+                return;
+            }
 
             if (_settings.Current.AudioDuckingEnabled)
                 _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
@@ -410,9 +427,17 @@ public sealed class DictationOrchestrator : IDisposable
                     VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
                         ? _vocabularyBoosting.Apply
                         : null,
-                    CleanupProcessor = _settings.Current.CleanupLevel == CleanupLevel.None
+                    CleanupHandler = _settings.Current.CleanupLevel == CleanupLevel.None
                         ? null
-                        : text => _cleanup.Clean(text, _settings.Current.CleanupLevel),
+                        : (text, token) => _cleanup.CleanAsync(
+                            text,
+                            _settings.Current.CleanupLevel,
+                            message =>
+                            {
+                                ReportStatus(message);
+                                return Task.CompletedTask;
+                            },
+                            token),
                     SnippetExpander = text => _snippets.ApplySnippets(text),
                     LlmHandler = promptAction is not null
                         ? (text, token) => _promptProcessing.ProcessAsync(promptAction, text, token)
@@ -463,10 +488,15 @@ public sealed class DictationOrchestrator : IDisposable
                 InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
                 InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.ActionFailed => "Action failed.",
-                InsertionResult.Failed => "Text insertion failed — is xdotool installed?",
+                InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+                InsertionResult.MissingPasteTool => "Text insertion failed. Install xdotool to enable automatic paste.",
+                InsertionResult.Failed => "Text insertion failed. Dictated text could not be copied or pasted.",
                 _ => "Done.",
             };
-            var isError = insertion is InsertionResult.Failed or InsertionResult.ActionFailed;
+            var isError = insertion is InsertionResult.Failed
+                or InsertionResult.ActionFailed
+                or InsertionResult.MissingClipboardTool
+                or InsertionResult.MissingPasteTool;
             ReportStatus(completionMessage);
             ShowFeedback(
                 isError ? completionMessage : "Dictation completed.",
@@ -524,6 +554,11 @@ public sealed class DictationOrchestrator : IDisposable
 
         return _promptActions.EnabledActions.FirstOrDefault(action => action.Id == promptActionId);
     }
+
+    private static string ClipboardToolMissingMessage() =>
+        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+            ? "Text insertion failed. Install wl-clipboard to enable clipboard insertion."
+            : "Text insertion failed. Install xclip to enable clipboard insertion.";
 
     private IActionPlugin? ResolveActionPlugin(PromptAction? promptAction)
     {
@@ -584,6 +619,42 @@ public sealed class DictationOrchestrator : IDisposable
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
     }
+
+    private string BuildRecordingStartFailureMessage(Exception? ex)
+    {
+        var selectedDevice = ResolveSelectedInputDeviceForMessage();
+        if (selectedDevice is null)
+            return "Could not start recording. No microphone input device is available.";
+
+        var baseMessage = $"Could not start recording from '{selectedDevice.Name}'.";
+        var detail = ex?.Message;
+        if (!string.IsNullOrWhiteSpace(detail))
+            baseMessage += $" {detail}.";
+
+        return IsBluetoothDeviceName(selectedDevice.Name)
+            ? $"{baseMessage} Bluetooth headsets must be in a microphone-capable headset profile; switch the device input profile or choose another microphone."
+            : $"{baseMessage} Choose another microphone or check the device input profile.";
+    }
+
+    private AudioInputDevice? ResolveSelectedInputDeviceForMessage()
+    {
+        try
+        {
+            return _audio.ResolveConfiguredDevice(
+                _settings.Current.SelectedMicrophoneDevice,
+                _settings.Current.SelectedMicrophoneDeviceId);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsBluetoothDeviceName(string name) =>
+        name.Contains("airpod", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("bluetooth", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("bluez", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
 
     private void AddHistoryRecord(string id, DateTime timestamp, string rawText, string finalText, double duration,
         PluginTranscriptionResult? result, string wavPath)

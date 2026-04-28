@@ -152,10 +152,10 @@ public class PostProcessingPipelineTests
                     return Task.FromResult(text + "+P100");
                 })
             ],
-            CleanupProcessor = text =>
+            CleanupHandler = (text, _) =>
             {
                 executionOrder.Add("Cleanup");
-                return text + "+CLEAN";
+                return Task.FromResult(text + "+CLEAN");
             },
             LlmHandler = (text, _) =>
             {

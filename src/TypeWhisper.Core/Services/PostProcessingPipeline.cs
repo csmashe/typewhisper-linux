@@ -77,10 +77,9 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
         }
 
         // Deterministic cleanup at priority 250, before prompt actions/snippets.
-        if (options.CleanupProcessor is not null)
+        if (options.CleanupHandler is not null)
         {
-            steps.Add((CleanupPriority, "Cleanup",
-                (text, _) => Task.FromResult(options.CleanupProcessor(text))));
+            steps.Add((CleanupPriority, "Cleanup", options.CleanupHandler));
         }
 
         // LLM prompt action at priority 300

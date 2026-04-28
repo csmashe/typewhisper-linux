@@ -70,6 +70,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
+        services.AddSingleton<LlmCleanupService>();
         services.AddSingleton<PromptPaletteService>();
         services.AddSingleton<RecentTranscriptionsService>();
         services.AddSingleton<MemoryService>();
