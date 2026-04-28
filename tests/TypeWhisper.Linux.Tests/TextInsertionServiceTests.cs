@@ -16,10 +16,11 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.Equal("previous", platform.Clipboard);
         Assert.True(platform.PasteSent);
+        Assert.Equal(1, platform.PasteAttemptCount);
     }
 
     [Fact]
-    public async Task InsertTextAsync_failed_paste_falls_back_to_clipboard()
+    public async Task InsertTextAsync_retries_failed_paste_before_fallback()
     {
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous", PasteSucceeds = false };
         var sut = new TextInsertionService(platform);
@@ -29,6 +30,24 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.Equal("new text", platform.Clipboard);
         Assert.True(platform.PasteSent);
+        Assert.Equal(3, platform.PasteAttemptCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_successful_retry_restores_previous_clipboard()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteResults = new Queue<bool>(new[] { false, false, true })
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text", autoPaste: true);
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(3, platform.PasteAttemptCount);
     }
 
     [Fact]
@@ -166,6 +185,24 @@ public sealed class TextInsertionServiceTests
         Assert.False(platform.PasteSent);
     }
 
+    [Fact]
+    public async Task InsertTextAsync_empty_text_with_auto_enter_sends_enter_without_clipboard()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteAvailable = false
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("", autoPaste: true, autoEnter: true);
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.EnterSent);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
     private sealed class FakeTextInsertionPlatform : ITextInsertionPlatform
     {
         public string? Clipboard { get; set; }
@@ -174,7 +211,10 @@ public sealed class TextInsertionServiceTests
         public bool PasteAvailable { get; set; } = true;
         public bool ActivateSucceeds { get; set; } = true;
         public bool PasteSucceeds { get; set; } = true;
+        public Queue<bool>? PasteResults { get; set; }
         public bool PasteSent { get; private set; }
+        public int PasteAttemptCount { get; private set; }
+        public bool EnterSent { get; private set; }
         public string? TypedText { get; private set; }
 
         public bool IsClipboardSetAvailable => ClipboardSetAvailable;
@@ -203,7 +243,10 @@ public sealed class TextInsertionServiceTests
         public Task<bool> SendPasteAsync()
         {
             PasteSent = true;
-            return Task.FromResult(PasteSucceeds);
+            PasteAttemptCount++;
+            return Task.FromResult(PasteResults?.Count > 0
+                ? PasteResults.Dequeue()
+                : PasteSucceeds);
         }
 
         public Task<bool> TypeTextAsync(string text)
@@ -214,6 +257,10 @@ public sealed class TextInsertionServiceTests
 
         public Task<bool> SendCopyAsync() => Task.FromResult(true);
 
-        public Task<bool> SendEnterAsync() => Task.FromResult(true);
+        public Task<bool> SendEnterAsync()
+        {
+            EnterSent = true;
+            return Task.FromResult(true);
+        }
     }
 }

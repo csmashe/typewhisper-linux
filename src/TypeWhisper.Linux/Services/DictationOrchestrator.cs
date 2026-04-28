@@ -45,6 +45,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly MemoryService _memory;
     private readonly RecentTranscriptionsService _recentTranscriptions;
     private readonly StreamingTranscriptState _partialTranscriptState = new();
+    private readonly VoiceCommandParser _voiceCommands = new();
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
     private string? _recordingAppProcess;
@@ -459,7 +460,8 @@ public sealed class DictationOrchestrator : IDisposable
                 },
                 CancellationToken.None);
 
-            var finalText = pipelineResult.Text;
+            var commandResult = _voiceCommands.Parse(pipelineResult.Text);
+            var finalText = commandResult.Text;
 
             TranscriptionCompleted?.Invoke(this, finalText);
             _speechFeedback.AnnounceTranscriptionComplete(finalText);
@@ -478,17 +480,21 @@ public sealed class DictationOrchestrator : IDisposable
             });
 
             var actionPlugin = ResolveActionPlugin(promptAction);
-            var insertion = actionPlugin is null
+            var insertion = commandResult.CancelInsertion
+                ? InsertionResult.NoText
+                : actionPlugin is null
                 ? await _textInsertion.InsertTextAsync(
                     finalText,
                     _settings.Current.AutoPaste,
                     _recordingWindowId,
                     _recordingAppProcess,
-                    _recordingAppTitle)
+                    _recordingAppTitle,
+                    commandResult.AutoEnter)
                 : await ExecuteActionPluginAsync(actionPlugin, finalText, rawText, result?.DetectedLanguage);
 
             var completionMessage = insertion switch
             {
+                InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 => "Pressed Enter.",
                 InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
                 InsertionResult.Typed => $"Typed {finalText.Length} char(s).",
                 InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
@@ -497,6 +503,7 @@ public sealed class DictationOrchestrator : IDisposable
                 InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
                 InsertionResult.MissingPasteTool => "Text insertion failed. Install xdotool to enable automatic paste.",
                 InsertionResult.Failed => "Text insertion failed. Dictated text could not be copied or pasted.",
+                InsertionResult.NoText when commandResult.CancelInsertion => "Dictation canceled.",
                 _ => "Done.",
             };
             var isError = insertion is InsertionResult.Failed

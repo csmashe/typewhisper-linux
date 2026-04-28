@@ -27,6 +27,8 @@ public sealed class TextInsertionService
 {
     private static readonly TimeSpan FocusDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan ClipboardRestoreDelay = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan PasteRetryDelay = TimeSpan.FromMilliseconds(75);
+    private const int PasteAttemptCount = 3;
 
     private readonly ITextInsertionPlatform _platform;
     private readonly IErrorLogService? _errorLog;
@@ -56,7 +58,9 @@ public sealed class TextInsertionService
         bool autoEnter = false)
     {
         if (string.IsNullOrEmpty(text))
-            return InsertionResult.NoText;
+            return autoEnter
+                ? await SendEnterOnlyAsync(targetWindowId)
+                : InsertionResult.NoText;
 
         if (autoPaste && !_platform.IsPasteAvailable)
             return InsertionResult.MissingPasteTool;
@@ -81,9 +85,9 @@ public sealed class TextInsertionService
             return InsertionResult.CopiedToClipboard;
         }
 
-        if (!await _platform.SendPasteAsync())
+        if (!await TrySendPasteAsync())
         {
-            LogInsertionFallback("Auto paste fell back to clipboard: Ctrl+V could not be sent.");
+            LogInsertionFallback("Auto paste fell back to clipboard: Ctrl+V could not be sent after retries.");
             return InsertionResult.CopiedToClipboard;
         }
 
@@ -145,6 +149,20 @@ public sealed class TextInsertionService
         }
     }
 
+    private async Task<bool> TrySendPasteAsync()
+    {
+        for (var attempt = 1; attempt <= PasteAttemptCount; attempt++)
+        {
+            if (await _platform.SendPasteAsync())
+                return true;
+
+            if (attempt < PasteAttemptCount)
+                await _platform.DelayAsync(PasteRetryDelay);
+        }
+
+        return false;
+    }
+
     private async Task<InsertionResult> TypeTextAsync(string text, string? targetWindowId, bool autoEnter)
     {
         if (!await FocusTargetWindowAsync(targetWindowId))
@@ -163,6 +181,19 @@ public sealed class TextInsertionService
             LogInsertionFallback("Direct typing succeeded, but Enter could not be sent.");
 
         return InsertionResult.Typed;
+    }
+
+    private async Task<InsertionResult> SendEnterOnlyAsync(string? targetWindowId)
+    {
+        if (!await FocusTargetWindowAsync(targetWindowId))
+        {
+            LogInsertionFallback("Enter command failed: target window could not be focused.");
+            return InsertionResult.Failed;
+        }
+
+        return await _platform.SendEnterAsync()
+            ? InsertionResult.Pasted
+            : InsertionResult.Failed;
     }
 
     private static bool ShouldTypeDirectly(string? processName, string? windowTitle)
