@@ -30,6 +30,7 @@ public sealed class PluginManager : IDisposable
     private List<ITranscriptionEnginePlugin> _transcriptionEngines = [];
     private List<IPostProcessorPlugin> _postProcessors = [];
     private List<IActionPlugin> _actionPlugins = [];
+    private List<ITtsProviderPlugin> _ttsProviders = [];
 
     public PluginManager(
         PluginLoader loader,
@@ -80,6 +81,11 @@ public sealed class PluginManager : IDisposable
     public IReadOnlyList<IActionPlugin> ActionPlugins
     {
         get { lock (_lock) return [.. _actionPlugins]; }
+    }
+
+    public IReadOnlyList<ITtsProviderPlugin> TtsProviders
+    {
+        get { lock (_lock) return [.. _ttsProviders]; }
     }
 
     public IReadOnlyList<PluginLoadFailure> LoadFailures => _loader.LastLoadFailures;
@@ -275,6 +281,7 @@ public sealed class PluginManager : IDisposable
                 .OrderBy(p => p.Priority)
                 .ToList();
             _actionPlugins = activePlugins.OfType<IActionPlugin>().ToList();
+            _ttsProviders = activePlugins.OfType<ITtsProviderPlugin>().ToList();
         }
 
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
@@ -480,6 +487,16 @@ public sealed class PluginManager : IDisposable
             _transcriptionEngines.Clear();
             _postProcessors.Clear();
             _actionPlugins.Clear();
+            _ttsProviders.Clear();
+        }
+    }
+
+    public ITtsProviderPlugin? GetTtsProvider(string providerId)
+    {
+        lock (_lock)
+        {
+            return _ttsProviders.FirstOrDefault(provider =>
+                string.Equals(provider.ProviderId, providerId, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

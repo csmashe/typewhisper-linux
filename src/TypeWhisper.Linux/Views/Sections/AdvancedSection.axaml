@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:svc="using:TypeWhisper.Linux.Services"
              x:Class="TypeWhisper.Linux.Views.Sections.AdvancedSection"
              x:DataType="vm:AdvancedSectionViewModel">
     <UserControl.Styles>
@@ -54,7 +55,7 @@
                        Classes="section-title" />
 
             <Border Classes="panel">
-                <Grid RowDefinitions="Auto,1,Auto,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,Auto">
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
@@ -88,7 +89,49 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="3"
+                    <Border Grid.Row="3" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="4" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Spoken feedback provider"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding SpokenFeedbackProviders}"
+                                      SelectedItem="{Binding SelectedSpokenFeedbackProviderOption}"
+                                      IsEnabled="{Binding CanUseSpokenFeedback}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="svc:TtsProviderOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="6" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Voice"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding SpokenFeedbackVoices}"
+                                      SelectedItem="{Binding SelectedSpokenFeedbackVoiceOption}"
+                                      IsEnabled="{Binding CanUseSpokenFeedback}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="svc:TtsVoiceOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="7"
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
