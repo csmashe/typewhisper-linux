@@ -42,6 +42,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly ITranslationService _translation;
     private readonly PromptProcessingService _promptProcessing;
     private readonly MemoryService _memory;
+    private readonly RecentTranscriptionsService _recentTranscriptions;
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
@@ -94,7 +95,8 @@ public sealed class DictationOrchestrator : IDisposable
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
         PromptProcessingService promptProcessing,
-        MemoryService memory)
+        MemoryService memory,
+        RecentTranscriptionsService recentTranscriptions)
     {
         _hotkey = hotkey;
         _audio = audio;
@@ -117,6 +119,7 @@ public sealed class DictationOrchestrator : IDisposable
         _translation = translation;
         _promptProcessing = promptProcessing;
         _memory = memory;
+        _recentTranscriptions = recentTranscriptions;
     }
 
     public void Initialize()
@@ -472,9 +475,18 @@ public sealed class DictationOrchestrator : IDisposable
                 });
             }
 
+            var transcriptionId = Guid.NewGuid().ToString();
+            var timestamp = _recordingStart == default ? DateTime.UtcNow : _recordingStart;
+            _recentTranscriptions.RecordTranscription(
+                transcriptionId,
+                finalText,
+                timestamp,
+                _recordingAppTitle,
+                _recordingAppProcess);
+
             // Write to history last so stats reflect the just-completed capture.
             if (_settings.Current.SaveToHistoryEnabled)
-                AddHistoryRecord(rawText, finalText, duration, result, wavPath);
+                AddHistoryRecord(transcriptionId, timestamp, rawText, finalText, duration, result, wavPath);
 
             if (_settings.Current.MemoryEnabled)
                 _ = Task.Run(() => _memory.ExtractAndStoreAsync(finalText));
@@ -567,7 +579,7 @@ public sealed class DictationOrchestrator : IDisposable
             TaskScheduler.Default);
     }
 
-    private void AddHistoryRecord(string rawText, string finalText, double duration,
+    private void AddHistoryRecord(string id, DateTime timestamp, string rawText, string finalText, double duration,
         PluginTranscriptionResult? result, string wavPath)
     {
         try
@@ -579,8 +591,8 @@ public sealed class DictationOrchestrator : IDisposable
 
             _history.AddRecord(new TranscriptionRecord
             {
-                Id = Guid.NewGuid().ToString(),
-                Timestamp = _recordingStart == default ? DateTime.UtcNow : _recordingStart,
+                Id = id,
+                Timestamp = timestamp,
                 RawText = rawText,
                 FinalText = finalText,
                 AppName = _recordingAppTitle,

@@ -13,6 +13,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     [ObservableProperty] private string _hotkeyText = "";
     [ObservableProperty] private string _promptPaletteHotkeyText = "";
+    [ObservableProperty] private string _recentTranscriptionsHotkeyText = "";
+    [ObservableProperty] private string _copyLastTranscriptionHotkeyText = "";
     [ObservableProperty] private string _statusMessage = "";
     [ObservableProperty] private RecordingMode _mode;
 
@@ -25,7 +27,49 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         _settings = settings;
         HotkeyText = _hotkey.CurrentHotkeyString;
         PromptPaletteHotkeyText = settings.Current.PromptPaletteHotkey;
+        RecentTranscriptionsHotkeyText = settings.Current.RecentTranscriptionsHotkey;
+        CopyLastTranscriptionHotkeyText = settings.Current.CopyLastTranscriptionHotkey;
         Mode = settings.Current.Mode;
+    }
+
+    [RelayCommand]
+    private void ApplyRecentTranscriptionsHotkey()
+    {
+        if (_hotkey.TrySetRecentTranscriptionsHotkeyFromString(RecentTranscriptionsHotkeyText))
+        {
+            _settings.Save(_settings.Current with
+            {
+                RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString
+            });
+            StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentRecentTranscriptionsHotkeyString)
+                ? "Recent transcriptions hotkey cleared."
+                : $"Recent transcriptions hotkey set to {_hotkey.CurrentRecentTranscriptionsHotkeyString}.";
+            RecentTranscriptionsHotkeyText = _hotkey.CurrentRecentTranscriptionsHotkeyString;
+        }
+        else
+        {
+            StatusMessage = $"Could not parse '{RecentTranscriptionsHotkeyText}' or it collides with another shortcut.";
+        }
+    }
+
+    [RelayCommand]
+    private void ApplyCopyLastTranscriptionHotkey()
+    {
+        if (_hotkey.TrySetCopyLastTranscriptionHotkeyFromString(CopyLastTranscriptionHotkeyText))
+        {
+            _settings.Save(_settings.Current with
+            {
+                CopyLastTranscriptionHotkey = _hotkey.CurrentCopyLastTranscriptionHotkeyString
+            });
+            StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentCopyLastTranscriptionHotkeyString)
+                ? "Copy last transcription hotkey cleared."
+                : $"Copy last transcription hotkey set to {_hotkey.CurrentCopyLastTranscriptionHotkeyString}.";
+            CopyLastTranscriptionHotkeyText = _hotkey.CurrentCopyLastTranscriptionHotkeyString;
+        }
+        else
+        {
+            StatusMessage = $"Could not parse '{CopyLastTranscriptionHotkeyText}' or it collides with another shortcut.";
+        }
     }
 
     [RelayCommand]

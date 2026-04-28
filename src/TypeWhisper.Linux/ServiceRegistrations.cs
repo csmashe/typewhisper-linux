@@ -31,6 +31,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IErrorLogService>(new ErrorLogService(dataPath));
         services.AddSingleton<IHistoryService>(
             new HistoryService(Path.Combine(dataPath, "history.json"), TypeWhisperEnvironment.AudioPath));
+        services.AddSingleton<RecentTranscriptionStore>();
         services.AddSingleton<IDictionaryService>(
             new DictionaryService(Path.Combine(dataPath, "dictionary.json")));
         services.AddSingleton<IVocabularyBoostingService, VocabularyBoostingService>();
@@ -69,6 +70,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<PromptPaletteService>();
+        services.AddSingleton<RecentTranscriptionsService>();
         services.AddSingleton<MemoryService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
@@ -102,6 +104,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();
         services.AddTransient<PromptPaletteWindow>();
+        services.AddTransient<RecentTranscriptionsPaletteWindow>();
         services.AddTransient<WelcomeWizard>();
     }
 }

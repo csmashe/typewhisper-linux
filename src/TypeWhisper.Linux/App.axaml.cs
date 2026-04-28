@@ -91,6 +91,8 @@ public partial class App : Application
             ReconcileHotkeyOnStartup(hotkey, settings);
             var lastApplied = hotkey.CurrentHotkeyString;
             var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
+            var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
+            var lastCopyLastTranscriptionApplied = hotkey.CurrentCopyLastTranscriptionHotkeyString;
             settings.SettingsChanged += s =>
             {
                 hotkey.Mode = s.Mode;
@@ -106,6 +108,18 @@ public partial class App : Application
                 {
                     lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
                 }
+
+                if (s.RecentTranscriptionsHotkey != lastRecentTranscriptionsApplied
+                    && hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey))
+                {
+                    lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
+                }
+
+                if (s.CopyLastTranscriptionHotkey != lastCopyLastTranscriptionApplied
+                    && hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey))
+                {
+                    lastCopyLastTranscriptionApplied = hotkey.CurrentCopyLastTranscriptionHotkeyString;
+                }
             };
 
             var api = services.GetRequiredService<HttpApiService>();
@@ -114,6 +128,17 @@ public partial class App : Application
 
             var promptPalette = services.GetRequiredService<PromptPaletteService>();
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
+
+            var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
+            recentTranscriptions.FeedbackRequested += (message, isError) =>
+            {
+                // Feed this through the overlay feedback path by reusing
+                // dictation status events rather than creating a second toast
+                // implementation.
+                Debug.WriteLine($"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}");
+            };
+            hotkey.RecentTranscriptionsRequested += (_, _) => recentTranscriptions.TogglePalette();
+            hotkey.CopyLastTranscriptionRequested += (_, _) => _ = recentTranscriptions.CopyLastTranscriptionToClipboardAsync();
 
             // Launch minimized / hidden if --minimized was passed.
             if (Program.StartMinimized)
@@ -143,6 +168,8 @@ public partial class App : Application
         var s = settings.Current;
         hotkey.Mode = s.Mode;
         hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey);
+        hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey);
+        hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey);
 
         // Treat the upstream default as "unset" on Linux and substitute the
         // Linux default (HotkeyService's ctor-time binding — Ctrl+Shift+Space).
