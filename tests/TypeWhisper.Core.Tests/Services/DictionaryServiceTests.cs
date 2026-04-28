@@ -131,6 +131,41 @@ public class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void SetTerms_AppendsNormalizedTerms_WhenReplaceExistingFalse()
+    {
+        _sut.AddEntry(new DictionaryEntry { Id = "1", EntryType = DictionaryEntryType.Term, Original = "React" });
+
+        _sut.SetTerms([" react ", "Vue", "", "vue"], replaceExisting: false);
+
+        Assert.Equal(["React", "Vue"], _sut.GetEnabledTerms());
+    }
+
+    [Fact]
+    public void SetTerms_ReplacesExistingTerms_WhenReplaceExistingTrue()
+    {
+        _sut.AddEntry(new DictionaryEntry { Id = "1", EntryType = DictionaryEntryType.Term, Original = "React" });
+        _sut.AddEntry(new DictionaryEntry { Id = "2", EntryType = DictionaryEntryType.Correction, Original = "teh", Replacement = "the" });
+
+        _sut.SetTerms(["Vue"], replaceExisting: true);
+
+        Assert.Equal(["Vue"], _sut.GetEnabledTerms());
+        Assert.Contains(_sut.Entries, e => e.EntryType == DictionaryEntryType.Correction);
+    }
+
+    [Fact]
+    public void RemoveAllTerms_KeepsCorrections()
+    {
+        _sut.AddEntry(new DictionaryEntry { Id = "1", EntryType = DictionaryEntryType.Term, Original = "React" });
+        _sut.AddEntry(new DictionaryEntry { Id = "2", EntryType = DictionaryEntryType.Correction, Original = "teh", Replacement = "the" });
+
+        _sut.RemoveAllTerms();
+
+        Assert.Empty(_sut.GetEnabledTerms());
+        Assert.Single(_sut.Entries);
+        Assert.Equal(DictionaryEntryType.Correction, _sut.Entries[0].EntryType);
+    }
+
+    [Fact]
     public void GetTermsForPrompt_ReturnsNull_WhenNoTerms()
     {
         Assert.Null(_sut.GetTermsForPrompt());

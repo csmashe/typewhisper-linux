@@ -83,7 +83,7 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, BaseUrl, _apiKey!, _selectedApiModelName,
-            wavAudio, language, translate, _selectedResponseFormat, ct);
+            wavAudio, language, translate, _selectedResponseFormat, ct, prompt);
     }
 
     // ILlmProviderPlugin

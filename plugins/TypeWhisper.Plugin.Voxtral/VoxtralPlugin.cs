@@ -64,7 +64,7 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, BaseUrl, _apiKey!, ModelId,
-            wavAudio, language, translate, "verbose_json", ct);
+            wavAudio, language, translate, "verbose_json", ct, prompt);
     }
 
     internal string? ApiKey => _apiKey;

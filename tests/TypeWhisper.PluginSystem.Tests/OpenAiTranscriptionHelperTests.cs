@@ -13,7 +13,7 @@ public class OpenAiTranscriptionHelperTests
             "language": "en",
             "duration": 2.5,
             "segments": [
-                { "text": "So.", "no_speech_prob": 0.95 }
+                { "text": "So.", "start": 0.0, "end": 0.7, "no_speech_prob": 0.95 }
             ]
         }
         """;
@@ -24,6 +24,9 @@ public class OpenAiTranscriptionHelperTests
         Assert.Equal("en", result.DetectedLanguage);
         Assert.NotNull(result.NoSpeechProbability);
         Assert.True(result.NoSpeechProbability > 0.9f);
+        Assert.Single(result.Segments);
+        Assert.Equal("So.", result.Segments[0].Text);
+        Assert.Equal(0.7, result.Segments[0].End, 0.01);
     }
 
     [Fact]

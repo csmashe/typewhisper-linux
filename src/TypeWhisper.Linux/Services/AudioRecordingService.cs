@@ -21,6 +21,7 @@ public sealed class AudioRecordingService : IDisposable
     private const float AgcTargetRms = 0.1f;
     private const float AgcMaxGain = 20f;
     private const float AgcMinGain = 1f;
+    private static readonly TimeSpan StopDrainDuration = TimeSpan.FromMilliseconds(120);
     public const float SpeechEnergyThreshold = 0.01f;
 
     private static int _paInitCount;
@@ -104,6 +105,22 @@ public sealed class AudioRecordingService : IDisposable
             StopAndDisposeInputStream();
 
         return BuildWavFromRecordedAudio();
+    }
+
+    public async Task<byte[]> StopRecordingAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsRecording) return [];
+
+        try
+        {
+            await Task.Delay(StopDrainDuration, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Still stop and return the samples captured so far.
+        }
+
+        return StopRecording();
     }
 
     public byte[]? GetCurrentBuffer()

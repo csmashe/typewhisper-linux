@@ -238,7 +238,7 @@ public sealed class DictationOrchestrator : IDisposable
         {
             if (!_audio.IsRecording) return;
 
-            var wav = _audio.StopRecording();
+            var wav = await _audio.StopRecordingAsync();
             await StopPartialTranscriptionSessionAsync();
             await AwaitRecordingSnapshotAsync();
             _audioDucking.RestoreAudio();
