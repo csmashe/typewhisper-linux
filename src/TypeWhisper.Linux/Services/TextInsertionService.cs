@@ -7,6 +7,7 @@ namespace TypeWhisper.Linux.Services;
 public enum InsertionResult
 {
     Pasted,
+    Typed,
     CopiedToClipboard,
     NoText,
     ActionHandled,
@@ -50,16 +51,22 @@ public sealed class TextInsertionService
         string text,
         bool autoPaste = true,
         string? targetWindowId = null,
+        string? targetProcessName = null,
+        string? targetWindowTitle = null,
         bool autoEnter = false)
     {
         if (string.IsNullOrEmpty(text))
             return InsertionResult.NoText;
 
-        if (!_platform.IsClipboardSetAvailable)
-            return InsertionResult.MissingClipboardTool;
-
         if (autoPaste && !_platform.IsPasteAvailable)
             return InsertionResult.MissingPasteTool;
+
+        var shouldTypeDirectly = autoPaste && ShouldTypeDirectly(targetProcessName, targetWindowTitle);
+        if (shouldTypeDirectly)
+            return await TypeTextAsync(text, targetWindowId, autoEnter);
+
+        if (!_platform.IsClipboardSetAvailable)
+            return InsertionResult.MissingClipboardTool;
 
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
         if (!await _platform.SetClipboardTextAsync(text))
@@ -138,6 +145,52 @@ public sealed class TextInsertionService
         }
     }
 
+    private async Task<InsertionResult> TypeTextAsync(string text, string? targetWindowId, bool autoEnter)
+    {
+        if (!await FocusTargetWindowAsync(targetWindowId))
+        {
+            LogInsertionFallback("Direct typing fell back: target window could not be focused.");
+            return InsertionResult.Failed;
+        }
+
+        if (!await _platform.TypeTextAsync(text))
+        {
+            LogInsertionFallback("Direct typing failed.");
+            return InsertionResult.Failed;
+        }
+
+        if (autoEnter && !await _platform.SendEnterAsync())
+            LogInsertionFallback("Direct typing succeeded, but Enter could not be sent.");
+
+        return InsertionResult.Typed;
+    }
+
+    private static bool ShouldTypeDirectly(string? processName, string? windowTitle)
+    {
+        return ContainsCodex(processName)
+            || ContainsCodex(windowTitle)
+            || IsTerminalProcess(processName);
+
+        static bool ContainsCodex(string? value) =>
+            !string.IsNullOrWhiteSpace(value)
+            && value.Contains("codex", StringComparison.OrdinalIgnoreCase);
+
+        static bool IsTerminalProcess(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            var process = Path.GetFileNameWithoutExtension(value);
+            return process.Equals("kitty", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("gnome-terminal", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("konsole", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("alacritty", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("wezterm", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("xterm", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("tilix", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     private void LogInsertionFallback(string message)
     {
         Trace.WriteLine($"[TextInsertionService] {message}");
@@ -162,6 +215,7 @@ internal interface ITextInsertionPlatform
     string? GetActiveWindowId();
     Task<bool> ActivateWindowAsync(string windowId);
     Task<bool> SendPasteAsync();
+    Task<bool> TypeTextAsync(string text);
     Task<bool> SendCopyAsync();
     Task<bool> SendEnterAsync();
 }
@@ -236,6 +290,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> SendPasteAsync() =>
         await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+v") == 0;
+
+    public async Task<bool> TypeTextAsync(string text) =>
+        await RunXdotoolAsync("type", "--clearmodifiers", "--delay", "0", text) == 0;
 
     public async Task<bool> SendCopyAsync() =>
         await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+c") == 0;

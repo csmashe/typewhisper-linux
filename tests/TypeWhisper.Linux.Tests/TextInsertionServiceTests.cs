@@ -112,6 +112,60 @@ public sealed class TextInsertionServiceTests
         Assert.False(platform.PasteSent);
     }
 
+    [Fact]
+    public async Task InsertTextAsync_codex_window_uses_direct_typing()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            autoPaste: true,
+            targetWindowTitle: "Codex");
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("new text", platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_codex_process_uses_direct_typing()
+    {
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            autoPaste: true,
+            targetProcessName: "codex");
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("new text", platform.TypedText);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_process_uses_direct_typing()
+    {
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            autoPaste: true,
+            targetProcessName: "kitty",
+            targetWindowTitle: "typewhisper-linux");
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("new text", platform.TypedText);
+        Assert.False(platform.PasteSent);
+    }
+
     private sealed class FakeTextInsertionPlatform : ITextInsertionPlatform
     {
         public string? Clipboard { get; set; }
@@ -121,6 +175,7 @@ public sealed class TextInsertionServiceTests
         public bool ActivateSucceeds { get; set; } = true;
         public bool PasteSucceeds { get; set; } = true;
         public bool PasteSent { get; private set; }
+        public string? TypedText { get; private set; }
 
         public bool IsClipboardSetAvailable => ClipboardSetAvailable;
 
@@ -148,6 +203,12 @@ public sealed class TextInsertionServiceTests
         public Task<bool> SendPasteAsync()
         {
             PasteSent = true;
+            return Task.FromResult(PasteSucceeds);
+        }
+
+        public Task<bool> TypeTextAsync(string text)
+        {
+            TypedText = text;
             return Task.FromResult(PasteSucceeds);
         }
 

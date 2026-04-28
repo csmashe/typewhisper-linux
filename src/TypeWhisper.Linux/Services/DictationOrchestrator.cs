@@ -479,12 +479,18 @@ public sealed class DictationOrchestrator : IDisposable
 
             var actionPlugin = ResolveActionPlugin(promptAction);
             var insertion = actionPlugin is null
-                ? await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste, _recordingWindowId)
+                ? await _textInsertion.InsertTextAsync(
+                    finalText,
+                    _settings.Current.AutoPaste,
+                    _recordingWindowId,
+                    _recordingAppProcess,
+                    _recordingAppTitle)
                 : await ExecuteActionPluginAsync(actionPlugin, finalText, rawText, result?.DetectedLanguage);
 
             var completionMessage = insertion switch
             {
                 InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
+                InsertionResult.Typed => $"Typed {finalText.Length} char(s).",
                 InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
                 InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.ActionFailed => "Action failed.",
