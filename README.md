@@ -17,11 +17,12 @@ The Linux branch currently includes:
 - Global dictation with toggle, push-to-talk, and hybrid activation modes
 - A Linux desktop UI with dashboard, dictation, shortcuts, file transcription, recorder, history, dictionary, snippets, profiles, prompts, extensions, general, appearance, advanced, and about sections
 - Plugin-backed transcription engines and prompt/LLM providers
-- Drag-and-drop file transcription with `ffmpeg`-based import when available
+- Drag-and-drop file transcription with batch queues, watch folders, and `ffmpeg`-based import when available
 - Session recording to WAV with optional transcript sidecar text files
-- Searchable history, dictionary corrections and term packs, snippets, and profiles
+- Searchable history, recent transcriptions, dictionary corrections and term packs, snippets, and profiles
 - Overlay positioning and left/right content widgets
 - Tray integration and XDG autostart support
+- Local HTTP API and installable CLI for desktop automation
 - A user-level installer script that creates a desktop launcher and app icon
 
 ## Linux Branch Additions
@@ -40,6 +41,8 @@ This branch contains Linux-specific work that is not part of the original branch
 
 - Plugin-based transcription engines for local and cloud workflows
 - File transcription page for importing and transcribing audio files
+- Batch file transcription queue with per-file status tracking
+- Watch folders for automatic file transcription and export output
 - Recorder page for saving longer WAV captures and transcribing them after recording stops
 - Dictation pipeline with post-processing through dictionary corrections and vocabulary boosting
 - Bundled Linux plugins deployed on build and auto-copied into the user plugin directory on first run
@@ -49,6 +52,7 @@ This branch contains Linux-specific work that is not part of the original branch
 - One main global dictation hotkey
 - Activation modes: `Toggle`, `Push to talk`, and `Hybrid`
 - Optional prompt palette hotkey
+- Recent transcriptions palette and copy-last-transcription hotkey
 - Auto-paste after transcription
 - Whisper mode, silence auto-stop, sound feedback, audio ducking, and media pause settings in the Linux UI
 - Live microphone preview and recording overlay
@@ -58,6 +62,7 @@ Some Linux dictation features depend on external desktop tools:
 - Sound feedback uses `canberra-gtk-play`
 - Audio ducking uses `pactl`
 - Media pause uses `playerctl`
+- Clipboard-backed auto-paste uses `xclip`, `wl-copy`, `wl-paste`, and `xdotool` when available
 
 When one of those tools is missing, the Linux UI disables that control and shows the reason.
 
@@ -67,7 +72,7 @@ When one of those tools is missing, the Linux UI disables that control and shows
 - Built-in term packs with enable/disable toggles
 - Snippets with placeholder support such as `{date}`, `{time}`, `{datetime}`, `{clipboard}`, `{day}`, and `{year}`
 - Profiles with rule matching, per-profile overrides, enable/disable state, and priority
-- Prompt actions for LLM-driven text processing
+- Prompt actions for LLM-driven text processing, provider overrides, and action plugin routing
 
 ### Desktop Integration
 
@@ -86,6 +91,7 @@ When one of those tools is missing, the Linux UI disables that control and shows
   - `playerctl` for media pause during recording
   - `canberra-gtk-play` for sound feedback
   - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
+  - `xclip`, `wl-copy`, `wl-paste`, and `xdotool` for clipboard-backed auto-paste
 - Optional CUDA backend:
   - NVIDIA GPU and driver
   - CUDA 12 runtime/toolkit libraries providing `libcudart.so.12` and `libcublas.so.12`
@@ -166,6 +172,7 @@ The Linux app includes a local HTTP API for integrations and automation. Configu
 
 - `Enable local API`
 - `Port`, defaulting to `9876`
+- Optional bearer token, when configured
 
 When enabled, TypeWhisper listens on `http://localhost:<port>/`.
 
@@ -175,11 +182,15 @@ Available endpoints:
 |----------|--------|-------------|
 | `/v1/status` | GET | App status and active model |
 | `/v1/models` | GET | List available models |
-| `/v1/transcribe` | POST | Transcribe uploaded audio. Optional query params: `filename`, `language`, `task`, `model` |
+| `/v1/transcribe` | POST | Transcribe uploaded audio. Optional query params include `filename`, `language`, `task`, `model`, `engine`, and `translateTo` |
 | `/v1/history` | GET | Search history |
 | `/v1/history` | DELETE | Delete history entries |
 | `/v1/profiles` | GET | List profiles |
 | `/v1/profiles/toggle` | PUT | Toggle a profile on or off |
+| `/v1/dictionary` | GET | List dictionary entries and term packs |
+| `/v1/dictionary/entries` | POST | Add dictionary correction entries |
+| `/v1/dictionary/entries` | DELETE | Delete dictionary correction entries |
+| `/v1/dictionary/term-packs/toggle` | PUT | Toggle a term pack on or off |
 | `/v1/dictation/start` | POST | Start recording |
 | `/v1/dictation/stop` | POST | Stop recording |
 | `/v1/dictation/status` | GET | Check dictation state |
@@ -189,6 +200,7 @@ Current API limitations:
 - `/v1/transcribe` returns text, language, duration, and no-speech probability when available. Segment-level subtitle timing is not exposed by the current Linux plugin result contract.
 - Uploaded audio conversion uses the same `ffmpeg`-based importer as the File transcription page.
 - The API binds to `localhost` only.
+- The CLI uses the local API and can be installed from the General page.
 
 ## Profiles
 
@@ -223,7 +235,7 @@ typewhisper-linux/
 │   ├── TypeWhisper.Core/        # Shared core logic, data models, persistence, services
 │   ├── TypeWhisper.PluginSDK/   # Plugin SDK for transcription, LLM, actions, and events
 │   ├── TypeWhisper.Linux/       # Avalonia-based Linux desktop application
-│   └── TypeWhisper.Cli/         # CLI client for talking to the local API when it is implemented
+│   └── TypeWhisper.Cli/         # CLI client for talking to the local API
 ├── plugins/                     # Plugin source projects
 ├── scripts/                     # Linux build, deploy, and install scripts
 ├── docs/                        # Planning and release notes
@@ -282,6 +294,7 @@ The SDK defines the shared plugin contracts used by the Linux app:
 | `IPostProcessorPlugin` | Add text cleanup or transformation steps after transcription |
 | `IActionPlugin` | Run custom actions from transcriptions or prompt results |
 | `ITypeWhisperPlugin` | Observe app/plugin events |
+| `ITtsProviderPlugin` | Add spoken-feedback voice providers |
 
 The SDK also includes helper types for plugin manifests, plugin events, transcription results, LLM requests, and action contexts.
 
@@ -295,6 +308,7 @@ These items appeared in the earlier project README or settings surface, but they
 - App self-update is not configured yet. The `Check for Updates` button in the About page is currently a placeholder.
 - Marketplace/store browsing is intentionally not active in the Linux UI right now.
 - Subtitle export formats such as SRT and WebVTT are not currently wired up in the Linux file transcription flow.
+- Windows release channels and Velopack update-channel controls are not used by this Linux branch.
 - The old README described broader platform feature coverage than this branch currently ships. Any feature not described as active above should be treated as pending until it is implemented in this repository.
 
 ## Development Notes

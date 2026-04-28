@@ -14,6 +14,7 @@ public partial class PromptsSectionViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
     private string? _editingActionId;
+    private bool _isRefreshingProviders;
 
     public ObservableCollection<PromptAction> Actions { get; } = [];
     public ObservableCollection<ProviderOption> AvailableProviders { get; } = [];
@@ -49,6 +50,22 @@ public partial class PromptsSectionViewModel : ObservableObject
 
             _settings.Save(_settings.Current with { DefaultLlmProvider = value });
             OnPropertyChanged();
+        }
+    }
+
+    public ProviderOption? SelectedEditProvider
+    {
+        get => AvailableProviders.FirstOrDefault(option => option.Value == EditProviderOverride)
+            ?? AvailableProviders.FirstOrDefault();
+        set
+        {
+            if (_isRefreshingProviders)
+                return;
+
+            if (string.Equals(EditProviderOverride, value?.Value, StringComparison.Ordinal))
+                return;
+
+            EditProviderOverride = value?.Value;
         }
     }
 
@@ -251,20 +268,30 @@ public partial class PromptsSectionViewModel : ObservableObject
         var selectedProvider = EditProviderOverride;
         var selectedActionPlugin = EditTargetActionPluginId;
 
-        AvailableProviders.Clear();
-        AvailableProviders.Add(new ProviderOption(null, "Use default provider"));
-        foreach (var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable))
+        _isRefreshingProviders = true;
+        try
         {
-            var plugin = _pluginManager.AllPlugins.FirstOrDefault(candidate => ReferenceEquals(candidate.Instance, provider));
-            if (plugin is null)
-                continue;
-
-            foreach (var model in provider.SupportedModels)
+            AvailableProviders.Clear();
+            AvailableProviders.Add(new ProviderOption(null, "Use default provider"));
+            foreach (var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable))
             {
-                AvailableProviders.Add(new ProviderOption(
-                    $"plugin:{plugin.Manifest.Id}:{model.Id}",
-                    $"{provider.ProviderName} / {model.DisplayName}"));
+                var plugin = _pluginManager.AllPlugins.FirstOrDefault(candidate => ReferenceEquals(candidate.Instance, provider));
+                if (plugin is null)
+                    continue;
+
+                foreach (var model in provider.SupportedModels)
+                {
+                    AvailableProviders.Add(new ProviderOption(
+                        $"plugin:{plugin.Manifest.Id}:{model.Id}",
+                        $"{provider.ProviderName} / {model.DisplayName}"));
+                }
             }
+
+            EditProviderOverride = AvailableProviders.Any(option => option.Value == selectedProvider) ? selectedProvider : null;
+        }
+        finally
+        {
+            _isRefreshingProviders = false;
         }
 
         ActionPluginOptions.Clear();
@@ -272,8 +299,8 @@ public partial class PromptsSectionViewModel : ObservableObject
         foreach (var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName))
             ActionPluginOptions.Add(new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName));
 
-        EditProviderOverride = AvailableProviders.Any(option => option.Value == selectedProvider) ? selectedProvider : null;
         EditTargetActionPluginId = ActionPluginOptions.Any(option => option.Value == selectedActionPlugin) ? selectedActionPlugin : null;
+        OnPropertyChanged(nameof(SelectedEditProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 
@@ -306,6 +333,7 @@ public partial class PromptsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowEmptyState));
         OnPropertyChanged(nameof(EditorTitle));
         OnPropertyChanged(nameof(CanEditExistingAction));
+        OnPropertyChanged(nameof(SelectedEditProvider));
     }
 }
 
