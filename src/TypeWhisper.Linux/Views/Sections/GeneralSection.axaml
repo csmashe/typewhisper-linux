@@ -144,6 +144,86 @@
                     </Border>
                 </Grid>
             </Border>
+
+            <TextBlock Text="API examples"
+                       Classes="section-title" />
+
+            <Border Classes="panel"
+                    Padding="18,14">
+                <ItemsControl ItemsSource="{Binding CurlExamples}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:CommandExample">
+                            <TextBlock Text="{Binding Command}"
+                                       FontFamily="monospace"
+                                       FontSize="12"
+                                       Foreground="#8A9AAE"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,8" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+
+            <TextBlock Text="Command line"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel>
+                                <TextBlock Text="{Binding CliStatusText}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding CliBundledPathText}"
+                                           FontSize="12"
+                                           Foreground="#8A9AAE"
+                                           TextWrapping="Wrap"
+                                           Margin="0,4,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8">
+                                <Button Content="Refresh"
+                                        Command="{Binding RefreshCliStateCommand}" />
+                                <Button Content="Install"
+                                        Command="{Binding InstallCliCommand}"
+                                        IsEnabled="{Binding CliBundledAvailable}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Padding="18,12">
+                        <TextBlock Text="Installs the bundled CLI launcher to ~/.local/bin/typewhisper. Use the bearer token above through TYPEWHISPER_API_TOKEN or --token."
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Padding="18,14">
+                        <ItemsControl ItemsSource="{Binding CliExamples}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:CommandExample">
+                                    <TextBlock Text="{Binding Command}"
+                                               FontFamily="monospace"
+                                               FontSize="12"
+                                               Foreground="#8A9AAE"
+                                               TextWrapping="Wrap"
+                                               Margin="0,0,0,8" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                </Grid>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

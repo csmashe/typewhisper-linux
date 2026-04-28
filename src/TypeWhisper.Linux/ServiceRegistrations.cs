@@ -73,6 +73,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
         services.AddSingleton<HttpApiService>();
+        services.AddSingleton<CliInstallService>();
 
         // ViewModels — section VMs are singletons so state stays consistent
         // across the sidebar nav and the onboarding wizard.
