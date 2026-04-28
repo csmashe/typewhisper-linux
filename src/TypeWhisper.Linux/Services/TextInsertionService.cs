@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -13,132 +15,152 @@ public enum InsertionResult
 }
 
 /// <summary>
-/// Text insertion on Linux. Default path on X11: xdotool types directly into
-/// the focused window. On Wayland, xdotool will only work under XWayland —
-/// native Wayland requires a compositor portal that's not universally available.
-///
-/// autoPaste=false copies to the clipboard via xclip (X11) or wl-copy (Wayland)
-/// for the user to paste manually.
+/// Text insertion on Linux. The reliable path is clipboard-first: put the
+/// transcription on the clipboard, refocus the captured target window when
+/// available, then ask xdotool to paste. If focus or paste fails, the text is
+/// intentionally left on the clipboard so the user can paste manually.
 /// </summary>
 public sealed class TextInsertionService
 {
+    private static readonly TimeSpan FocusDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan ClipboardRestoreDelay = TimeSpan.FromMilliseconds(200);
+
+    private readonly ITextInsertionPlatform _platform;
+    private readonly IErrorLogService? _errorLog;
+
+    public TextInsertionService()
+        : this(new LinuxTextInsertionPlatform(), null)
+    {
+    }
+
+    public TextInsertionService(IErrorLogService errorLog)
+        : this(new LinuxTextInsertionPlatform(), errorLog)
+    {
+    }
+
+    internal TextInsertionService(ITextInsertionPlatform platform, IErrorLogService? errorLog = null)
+    {
+        _platform = platform;
+        _errorLog = errorLog;
+    }
+
     public async Task<InsertionResult> InsertTextAsync(
         string text,
         bool autoPaste = true,
-        string? targetWindowId = null)
+        string? targetWindowId = null,
+        bool autoEnter = false)
     {
         if (string.IsNullOrEmpty(text))
             return InsertionResult.NoText;
 
-        if (autoPaste)
+        var previousClipboard = await _platform.TryGetClipboardTextAsync();
+        if (!await _platform.SetClipboardTextAsync(text))
+            return InsertionResult.Failed;
+
+        if (!autoPaste)
+            return InsertionResult.CopiedToClipboard;
+
+        if (!await FocusTargetWindowAsync(targetWindowId))
         {
-            return await TryXdotoolTypeAsync(text, targetWindowId);
+            LogInsertionFallback("Auto paste fell back to clipboard: target window could not be focused.");
+            return InsertionResult.CopiedToClipboard;
         }
 
-        return await TryCopyToClipboardAsync(text);
+        if (!await _platform.SendPasteAsync())
+        {
+            LogInsertionFallback("Auto paste fell back to clipboard: Ctrl+V could not be sent.");
+            return InsertionResult.CopiedToClipboard;
+        }
+
+        if (autoEnter && !await _platform.SendEnterAsync())
+            LogInsertionFallback("Auto paste sent Ctrl+V, but Enter could not be sent.");
+
+        await RestorePreviousClipboardAsync(previousClipboard);
+        return InsertionResult.Pasted;
     }
 
     public async Task<string> CaptureSelectedTextAsync()
     {
-        var previousClipboard = await TryReadClipboardAsync();
+        var previousClipboard = await _platform.TryGetClipboardTextAsync();
 
-        if (!await TrySendCopyShortcutAsync())
+        if (!await _platform.SendCopyAsync())
             return "";
 
-        await Task.Delay(150);
-        var selectedText = await TryReadClipboardAsync() ?? "";
+        await _platform.DelayAsync(TimeSpan.FromMilliseconds(150));
+        var selectedText = await _platform.TryGetClipboardTextAsync() ?? "";
 
         if (previousClipboard is not null)
-            await TryWriteClipboardTextAsync(previousClipboard);
+            await _platform.SetClipboardTextAsync(previousClipboard);
 
         return selectedText;
     }
 
-    private static async Task<InsertionResult> TryXdotoolTypeAsync(string text, string? targetWindowId)
+    private async Task<bool> FocusTargetWindowAsync(string? targetWindowId)
     {
+        if (string.IsNullOrWhiteSpace(targetWindowId))
+        {
+            await _platform.DelayAsync(FocusDelay);
+            return true;
+        }
+
+        if (_platform.GetActiveWindowId() == targetWindowId)
+        {
+            await _platform.DelayAsync(FocusDelay);
+            return true;
+        }
+
+        var focusRequested = await _platform.ActivateWindowAsync(targetWindowId);
+        await _platform.DelayAsync(FocusDelay);
+        return focusRequested || _platform.GetActiveWindowId() == targetWindowId;
+    }
+
+    private async Task RestorePreviousClipboardAsync(string? previousClipboard)
+    {
+        await _platform.DelayAsync(ClipboardRestoreDelay);
+        if (previousClipboard is null)
+            return;
+
         try
         {
-            var psi = new ProcessStartInfo("xdotool")
-            {
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            if (!string.IsNullOrWhiteSpace(targetWindowId))
-            {
-                psi.ArgumentList.Add("windowactivate");
-                psi.ArgumentList.Add("--sync");
-                psi.ArgumentList.Add(targetWindowId);
-                psi.ArgumentList.Add("type");
-            }
-            else
-            {
-                psi.ArgumentList.Add("type");
-            }
-            psi.ArgumentList.Add("--clearmodifiers");
-            psi.ArgumentList.Add("--delay");
-            psi.ArgumentList.Add("5");
-            psi.ArgumentList.Add("--");
-            psi.ArgumentList.Add(text);
-
-            // Let the hotkey-release and overlay UI settle before re-focusing
-            // the original target and typing into it.
-            await Task.Delay(80);
-            using var p = Process.Start(psi);
-            if (p is null) return InsertionResult.Failed;
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0 ? InsertionResult.Pasted : InsertionResult.Failed;
+            await _platform.SetClipboardTextAsync(previousClipboard);
         }
-        catch (Exception ex)
+        catch
         {
-            Trace.WriteLine($"[TextInsertionService] xdotool failed: {ex.Message}");
-            return InsertionResult.Failed;
+            // Best effort restore.
         }
     }
 
-    private static async Task<InsertionResult> TryCopyToClipboardAsync(string text)
+    private void LogInsertionFallback(string message)
     {
+        Trace.WriteLine($"[TextInsertionService] {message}");
         try
         {
-            return await TryWriteClipboardTextAsync(text)
-                ? InsertionResult.CopiedToClipboard
-                : InsertionResult.Failed;
+            _errorLog?.AddEntry(message, ErrorCategory.Insertion);
         }
-        catch (Exception ex)
+        catch
         {
-            Trace.WriteLine($"[TextInsertionService] clipboard failed: {ex.Message}");
-            return InsertionResult.Failed;
+            // Diagnostics must never block dictation output.
         }
     }
+}
 
-    private static async Task<bool> TrySendCopyShortcutAsync()
+internal interface ITextInsertionPlatform
+{
+    Task<string?> TryGetClipboardTextAsync();
+    Task<bool> SetClipboardTextAsync(string text);
+    Task DelayAsync(TimeSpan delay);
+    string? GetActiveWindowId();
+    Task<bool> ActivateWindowAsync(string windowId);
+    Task<bool> SendPasteAsync();
+    Task<bool> SendCopyAsync();
+    Task<bool> SendEnterAsync();
+}
+
+internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
+{
+    public async Task<string?> TryGetClipboardTextAsync()
     {
-        try
-        {
-            var psi = new ProcessStartInfo("xdotool")
-            {
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            psi.ArgumentList.Add("key");
-            psi.ArgumentList.Add("--clearmodifiers");
-            psi.ArgumentList.Add("ctrl+c");
-
-            using var p = Process.Start(psi);
-            if (p is null) return false;
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0;
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[TextInsertionService] copy shortcut failed: {ex.Message}");
-            return false;
-        }
-    }
-
-    private static async Task<string?> TryReadClipboardAsync()
-    {
-        var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
-        var psi = isWayland
+        var psi = IsWayland()
             ? new ProcessStartInfo("wl-paste", "--no-newline")
             : new ProcessStartInfo("xclip", "-selection clipboard -o");
         psi.RedirectStandardOutput = true;
@@ -160,21 +182,98 @@ public sealed class TextInsertionService
         }
     }
 
-    private static async Task<bool> TryWriteClipboardTextAsync(string text)
+    public async Task<bool> SetClipboardTextAsync(string text)
     {
-        var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
-        var psi = isWayland
+        var psi = IsWayland()
             ? new ProcessStartInfo("wl-copy")
             : new ProcessStartInfo("xclip", "-selection clipboard");
         psi.RedirectStandardInput = true;
         psi.RedirectStandardError = true;
         psi.UseShellExecute = false;
 
-        using var p = Process.Start(psi);
-        if (p is null) return false;
-        await p.StandardInput.WriteAsync(text);
-        p.StandardInput.Close();
-        await p.WaitForExitAsync();
-        return p.ExitCode == 0;
+        try
+        {
+            using var p = Process.Start(psi);
+            if (p is null) return false;
+            await p.StandardInput.WriteAsync(text);
+            p.StandardInput.Close();
+            await p.WaitForExitAsync();
+            return p.ExitCode == 0;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[TextInsertionService] clipboard write failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    public Task DelayAsync(TimeSpan delay) => Task.Delay(delay);
+
+    public string? GetActiveWindowId()
+    {
+        var output = RunXdotool("getactivewindow");
+        return string.IsNullOrWhiteSpace(output) ? null : output;
+    }
+
+    public async Task<bool> ActivateWindowAsync(string windowId) =>
+        await RunXdotoolAsync("windowactivate", "--sync", windowId) == 0;
+
+    public async Task<bool> SendPasteAsync() =>
+        await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+v") == 0;
+
+    public async Task<bool> SendCopyAsync() =>
+        await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+c") == 0;
+
+    public async Task<bool> SendEnterAsync() =>
+        await RunXdotoolAsync("key", "--clearmodifiers", "Return") == 0;
+
+    private static bool IsWayland() =>
+        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+
+    private static string? RunXdotool(string arguments)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("xdotool", arguments)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            using var p = Process.Start(psi);
+            if (p is null) return null;
+            var output = p.StandardOutput.ReadToEnd();
+            p.WaitForExit();
+            return p.ExitCode == 0 ? output.Trim() : null;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[TextInsertionService] xdotool failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static async Task<int> RunXdotoolAsync(params string[] args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("xdotool")
+            {
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            using var p = Process.Start(psi);
+            if (p is null) return -1;
+            await p.WaitForExitAsync();
+            return p.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[TextInsertionService] xdotool failed: {ex.Message}");
+            return -1;
+        }
     }
 }
