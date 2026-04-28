@@ -28,6 +28,7 @@ public record AppSettings
     public float AudioDuckingLevel { get; init; } = 0.2f;
     public bool PauseMediaDuringRecording { get; init; }
     public bool SoundFeedbackEnabled { get; init; } = true;
+    public bool TranscribeShortQuietClipsAggressively { get; init; }
 
     // Live transcription (streaming preview while recording)
     public bool LiveTranscriptionEnabled { get; init; } = true;

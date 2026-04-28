@@ -61,6 +61,7 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty] private bool _autoPaste;
     [ObservableProperty] private bool _whisperModeEnabled;
     [ObservableProperty] private bool _soundFeedbackEnabled = true;
+    [ObservableProperty] private bool _transcribeShortQuietClipsAggressively;
     [ObservableProperty] private bool _silenceAutoStopEnabled;
     [ObservableProperty] private int _silenceAutoStopSeconds = 10;
     [ObservableProperty] private bool _audioDuckingEnabled;
@@ -251,6 +252,7 @@ public partial class DictationSectionViewModel : ObservableObject
         AutoPaste = settings.AutoPaste;
         WhisperModeEnabled = settings.WhisperModeEnabled;
         SoundFeedbackEnabled = settings.SoundFeedbackEnabled && CanUseSoundFeedback;
+        TranscribeShortQuietClipsAggressively = settings.TranscribeShortQuietClipsAggressively;
         SilenceAutoStopEnabled = settings.SilenceAutoStopEnabled;
         SilenceAutoStopSeconds = settings.SilenceAutoStopSeconds;
         AudioDuckingEnabled = settings.AudioDuckingEnabled && CanUseAudioDucking;
@@ -441,6 +443,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
         _settings.Save(_settings.Current with { SoundFeedbackEnabled = value });
     }
+
+    partial void OnTranscribeShortQuietClipsAggressivelyChanged(bool value)
+        => _settings.Save(_settings.Current with { TranscribeShortQuietClipsAggressively = value });
 
     partial void OnSilenceAutoStopEnabledChanged(bool value)
         => _settings.Save(_settings.Current with { SilenceAutoStopEnabled = value });
