@@ -40,14 +40,77 @@ public sealed partial class CleanupService
         cleaned = LeadingNoiseRegex().Replace(cleaned, "");
         cleaned = TrailingNoiseRegex().Replace(cleaned, "");
         cleaned = StandaloneFillerRegex().Replace(cleaned, " ");
+        cleaned = ApplyBacktrack(cleaned);
+        cleaned = ApplySmartFormatting(cleaned);
         cleaned = LeadingNoiseRegex().Replace(cleaned, "");
         cleaned = TrailingNoiseRegex().Replace(cleaned, "");
         cleaned = DuplicateCommaRegex().Replace(cleaned, ",");
+        cleaned = WhitespaceBeforeNewlineRegex().Replace(cleaned, "\n");
         cleaned = WhitespaceBeforePunctuationRegex().Replace(cleaned, "$1");
         cleaned = DuplicateCommaRegex().Replace(cleaned, ",");
-        cleaned = RepeatedWhitespaceRegex().Replace(cleaned, " ").Trim();
+        cleaned = RepeatedInlineWhitespaceRegex().Replace(cleaned, " ").Trim();
         return ApplyBasicSentenceCasing(cleaned);
     }
+
+    private static string ApplyBacktrack(string text)
+    {
+        var cleaned = ScratchThatWholeUtteranceRegex().Replace(text, "");
+        cleaned = ScratchThatReplacementRegex().Replace(cleaned, "${replacement}");
+        cleaned = OneWordCorrectionRegex().Replace(cleaned, "${prefix}${replacement}${suffix}");
+        return cleaned;
+    }
+
+    private static string ApplySmartFormatting(string text)
+    {
+        var numbered = TryFormatSpokenNumberedList(text);
+        return numbered ?? text;
+    }
+
+    private static string? TryFormatSpokenNumberedList(string text)
+    {
+        var matches = NumberedListMarkerRegex().Matches(text);
+        if (matches.Count < 2 || matches[0].Index != 0)
+            return null;
+
+        var expected = 1;
+        var items = new List<string>();
+
+        for (var i = 0; i < matches.Count; i++)
+        {
+            var number = SpokenNumberToInt(matches[i].Value);
+            if (number != expected)
+                return null;
+
+            var itemStart = matches[i].Index + matches[i].Length;
+            var itemEnd = i + 1 < matches.Count ? matches[i + 1].Index : text.Length;
+            var item = text[itemStart..itemEnd].Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
+            if (item.Length == 0)
+                return null;
+
+            items.Add(item);
+            expected++;
+        }
+
+        if (items.Count < 2)
+            return null;
+
+        return string.Join('\n', items.Select((item, index) => $"{index + 1}. {item}"));
+    }
+
+    private static int SpokenNumberToInt(string number) =>
+        number.ToLowerInvariant() switch
+        {
+            "one" => 1,
+            "two" => 2,
+            "three" => 3,
+            "four" => 4,
+            "five" => 5,
+            "six" => 6,
+            "seven" => 7,
+            "eight" => 8,
+            "nine" => 9,
+            _ => 0
+        };
 
     private static string ApplyBasicSentenceCasing(string text)
     {
@@ -71,8 +134,11 @@ public sealed partial class CleanupService
     [GeneratedRegex(@"(?i)(^|[\s,.;:!?-])(?:um+|uh+|er+|ah+|you know)(?=$|[\s,.;:!?-])")]
     private static partial Regex StandaloneFillerRegex();
 
-    [GeneratedRegex(@"\s+")]
-    private static partial Regex RepeatedWhitespaceRegex();
+    [GeneratedRegex(@"[ \t]{2,}")]
+    private static partial Regex RepeatedInlineWhitespaceRegex();
+
+    [GeneratedRegex(@"[ \t]+\n")]
+    private static partial Regex WhitespaceBeforeNewlineRegex();
 
     [GeneratedRegex(@"\s+([,.;:!?])")]
     private static partial Regex WhitespaceBeforePunctuationRegex();
@@ -85,4 +151,16 @@ public sealed partial class CleanupService
 
     [GeneratedRegex(@"[\s,;:-]+$")]
     private static partial Regex TrailingNoiseRegex();
+
+    [GeneratedRegex(@"(?i)^\s*scratch\s+that\s*$")]
+    private static partial Regex ScratchThatWholeUtteranceRegex();
+
+    [GeneratedRegex(@"(?is)^.+?\bscratch\s+that\b[\s,.;:!?-]+(?<replacement>(?:i|we|let's|lets|please|the|a|an|this|that)\b.+)$")]
+    private static partial Regex ScratchThatReplacementRegex();
+
+    [GeneratedRegex(@"(?is)\b(?<prefix>.*\s)(?<original>[A-Za-z][A-Za-z'-]*)\s+(?:actually|i\s+mean)\s+(?<replacement>[A-Za-z][A-Za-z'-]*)(?<suffix>[.?!]?)$")]
+    private static partial Regex OneWordCorrectionRegex();
+
+    [GeneratedRegex(@"(?i)\b(?:one|two|three|four|five|six|seven|eight|nine)\b")]
+    private static partial Regex NumberedListMarkerRegex();
 }

@@ -5,6 +5,11 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class SystemCommandAvailabilityService
 {
+    public bool IsWaylandSession => Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+    public bool IsX11Session => Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
+    public bool HasXdotool => IsCommandAvailable("xdotool");
+    public bool HasXclip => IsCommandAvailable("xclip");
+    public bool HasWlClipboard => IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
     public bool HasPactl => IsCommandAvailable("pactl");
     public bool HasPlayerCtl => IsCommandAvailable("playerctl");
     public bool HasCanberraGtkPlay => IsCommandAvailable("canberra-gtk-play");
@@ -15,6 +20,18 @@ public sealed class SystemCommandAvailabilityService
     public bool HasCudaGpu => IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl");
     public bool HasCudaRuntimeLibraries => IsLibraryAvailable("libcudart.so.12")
                                            && IsLibraryAvailable("libcublas.so.12");
+
+    public LinuxCapabilitySnapshot GetSnapshot() =>
+        new(
+            SessionType: IsWaylandSession ? "Wayland" : IsX11Session ? "X11" : "Unknown",
+            HasClipboardTool: IsWaylandSession ? HasWlClipboard : HasXclip,
+            ClipboardToolName: IsWaylandSession ? "wl-clipboard" : "xclip",
+            HasAutomaticPasteTool: HasXdotool,
+            HasFfmpeg: HasFfmpeg,
+            HasSpeechFeedback: HasSpeechFeedback,
+            SpeechFeedbackCommand: SpeechFeedbackCommand,
+            HasCudaGpu: HasCudaGpu,
+            HasCudaRuntimeLibraries: HasCudaRuntimeLibraries);
 
     public string? SpeechFeedbackCommand
     {
@@ -101,4 +118,30 @@ public sealed class SystemCommandAvailabilityService
             return false;
         }
     }
+}
+
+public sealed record LinuxCapabilitySnapshot(
+    string SessionType,
+    bool HasClipboardTool,
+    string ClipboardToolName,
+    bool HasAutomaticPasteTool,
+    bool HasFfmpeg,
+    bool HasSpeechFeedback,
+    string? SpeechFeedbackCommand,
+    bool HasCudaGpu,
+    bool HasCudaRuntimeLibraries)
+{
+    public bool CanAutoPaste => HasClipboardTool && HasAutomaticPasteTool;
+    public bool CanUseCuda => HasCudaGpu && HasCudaRuntimeLibraries;
+    public string ClipboardStatus => HasClipboardTool
+        ? $"{ClipboardToolName} available"
+        : $"Install {ClipboardToolName} to enable clipboard insertion.";
+    public string PasteStatus => HasAutomaticPasteTool
+        ? "xdotool available"
+        : "Install xdotool to enable automatic paste.";
+    public string CudaStatus => CanUseCuda
+        ? "CUDA available"
+        : HasCudaGpu
+            ? "NVIDIA GPU detected, but CUDA 12 runtime libraries are missing."
+            : "No NVIDIA GPU/driver detected.";
 }

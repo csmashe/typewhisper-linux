@@ -82,15 +82,26 @@ public sealed partial class SnippetService : ISnippetService
             if (!text.Contains(snippet.Trigger, comparison)) continue;
 
             var expanded = ExpandPlaceholders(snippet.Replacement, clipboardProvider);
-
-            var pattern = Regex.Escape(snippet.Trigger) + @"[.!?]?";
+            var pattern = BuildTriggerPattern(snippet);
             var options = snippet.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
-            text = Regex.Replace(text, pattern, expanded.Replace("$", "$$"), options);
+            var replaced = Regex.Replace(text, pattern, expanded.Replace("$", "$$"), options);
+            if (string.Equals(replaced, text, StringComparison.Ordinal))
+                continue;
+
+            text = replaced;
 
             IncrementUsageCount(snippet.Id);
         }
 
         return text;
+    }
+
+    private static string BuildTriggerPattern(Snippet snippet)
+    {
+        var escaped = Regex.Escape(snippet.Trigger);
+        return snippet.TriggerMode == SnippetTriggerMode.ExactPhrase
+            ? @"^\s*" + escaped + @"[.!?]?\s*$"
+            : escaped + @"[.!?]?";
     }
 
     public string ExportToJson()
@@ -161,7 +172,11 @@ public sealed partial class SnippetService : ISnippetService
         var idx = _cache.FindIndex(s => s.Id == id);
         if (idx >= 0)
         {
-            _cache[idx] = _cache[idx] with { UsageCount = _cache[idx].UsageCount + 1 };
+            _cache[idx] = _cache[idx] with
+            {
+                UsageCount = _cache[idx].UsageCount + 1,
+                LastUsedAt = DateTime.UtcNow
+            };
             SaveToDisk();
         }
     }

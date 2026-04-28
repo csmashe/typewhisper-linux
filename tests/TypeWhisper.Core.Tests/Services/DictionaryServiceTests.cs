@@ -121,6 +121,49 @@ public class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ApplyCorrections_UpdatesUsageMetadata()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "kubernets",
+            Replacement = "Kubernetes"
+        });
+
+        _sut.ApplyCorrections("kubernets");
+
+        var entry = _sut.Entries[0];
+        Assert.Equal(1, entry.UsageCount);
+        Assert.Equal(1, entry.TimesApplied);
+        Assert.NotNull(entry.LastUsedAt);
+    }
+
+    [Fact]
+    public void ApplyCorrections_PrefersHigherPriorityCorrection()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "low",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "type whisper",
+            Replacement = "Type Whisper"
+        });
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "high",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "type whisper",
+            Replacement = "TypeWhisper",
+            Priority = 10
+        });
+
+        var result = _sut.ApplyCorrections("type whisper");
+
+        Assert.Equal("TypeWhisper", result);
+    }
+
+    [Fact]
     public void GetTermsForPrompt_ReturnsCommaSeparated()
     {
         _sut.AddEntry(new DictionaryEntry { Id = "1", EntryType = DictionaryEntryType.Term, Original = "React" });
@@ -180,6 +223,9 @@ public class DictionaryServiceTests : IDisposable
         Assert.Equal(DictionaryEntryType.Correction, _sut.Entries[0].EntryType);
         Assert.Equal("kubernets", _sut.Entries[0].Original);
         Assert.Equal("Kubernetes", _sut.Entries[0].Replacement);
+        Assert.Equal(1, _sut.Entries[0].TimesCorrected);
+        Assert.NotNull(_sut.Entries[0].LastCorrectedAt);
+        Assert.Equal(DictionaryEntrySource.CorrectionSuggestion, _sut.Entries[0].Source);
     }
 
     [Fact]
@@ -191,6 +237,35 @@ public class DictionaryServiceTests : IDisposable
         Assert.Single(_sut.Entries);
         Assert.Equal("Kubernetes", _sut.Entries[0].Replacement);
         Assert.Equal(1, _sut.Entries[0].UsageCount);
+        Assert.Equal(2, _sut.Entries[0].TimesCorrected);
+        Assert.NotNull(_sut.Entries[0].LastCorrectedAt);
+    }
+
+    [Fact]
+    public void Entries_LoadLegacyJsonWithMetadataDefaults()
+    {
+        File.WriteAllText(_filePath, """
+            [
+              {
+                "Id": "legacy",
+                "EntryType": 0,
+                "Original": "React",
+                "IsEnabled": true
+              }
+            ]
+            """);
+
+        var sut = new DictionaryService(_filePath);
+
+        var entry = Assert.Single(sut.Entries);
+        Assert.Equal("React", entry.Original);
+        Assert.False(entry.IsStarred);
+        Assert.Equal(0, entry.TimesApplied);
+        Assert.Equal(0, entry.TimesCorrected);
+        Assert.Equal(0, entry.Priority);
+        Assert.Null(entry.LastUsedAt);
+        Assert.Null(entry.LastCorrectedAt);
+        Assert.Equal(DictionaryEntrySource.Manual, entry.Source);
     }
 
     [Fact]

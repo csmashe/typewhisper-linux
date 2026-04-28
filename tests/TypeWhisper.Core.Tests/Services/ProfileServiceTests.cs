@@ -99,6 +99,61 @@ public class ProfileServiceTests : IDisposable
         Assert.Null(loaded.HotkeyData);
     }
 
+    [Fact]
+    public void StylePreset_RoundTrips()
+    {
+        var profile = new Profile
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "Email",
+            StylePreset = ProfileStylePreset.FormalEmail
+        };
+
+        _sut.AddProfile(profile);
+
+        var freshService = new ProfileService(_filePath);
+        var loaded = freshService.Profiles.First(p => p.Id == profile.Id);
+        Assert.Equal(ProfileStylePreset.FormalEmail, loaded.StylePreset);
+    }
+
+    [Fact]
+    public void StylePreset_DefaultsToRawForLegacyJson()
+    {
+        File.WriteAllText(_filePath, """
+            [
+              {
+                "Id": "legacy",
+                "Name": "Legacy"
+              }
+            ]
+            """);
+
+        var freshService = new ProfileService(_filePath);
+
+        var loaded = Assert.Single(freshService.Profiles);
+        Assert.Equal(ProfileStylePreset.Raw, loaded.StylePreset);
+    }
+
+    [Fact]
+    public void StylePresetService_ResolvesDeveloperAsTerminalSafe()
+    {
+        var result = ProfileStylePresetService.Resolve(ProfileStylePreset.Developer);
+
+        Assert.Equal(CleanupLevel.None, result.CleanupLevel);
+        Assert.True(result.DeveloperFormattingEnabled);
+        Assert.True(result.TerminalSafe);
+    }
+
+    [Fact]
+    public void StylePresetService_ResolvesCleanWithLightCleanup()
+    {
+        var result = ProfileStylePresetService.Resolve(ProfileStylePreset.Clean);
+
+        Assert.Equal(CleanupLevel.Light, result.CleanupLevel);
+        Assert.True(result.SmartFormattingEnabled);
+        Assert.False(result.TerminalSafe);
+    }
+
     public void Dispose()
     {
         if (File.Exists(_filePath)) File.Delete(_filePath);

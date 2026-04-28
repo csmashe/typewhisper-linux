@@ -46,6 +46,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly RecentTranscriptionsService _recentTranscriptions;
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly VoiceCommandParser _voiceCommands = new();
+    private readonly DeveloperFormattingService _developerFormatting = new();
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
     private string? _recordingAppProcess;
@@ -461,7 +462,7 @@ public sealed class DictationOrchestrator : IDisposable
                 CancellationToken.None);
 
             var commandResult = _voiceCommands.Parse(pipelineResult.Text);
-            var finalText = commandResult.Text;
+            var finalText = ApplyProfileStyleFormatting(commandResult.Text);
 
             TranscriptionCompleted?.Invoke(this, finalText);
             _speechFeedback.AnnounceTranscriptionComplete(finalText);
@@ -566,6 +567,17 @@ public sealed class DictationOrchestrator : IDisposable
             return null;
 
         return _promptActions.EnabledActions.FirstOrDefault(action => action.Id == promptActionId);
+    }
+
+    private string ApplyProfileStyleFormatting(string text)
+    {
+        if (_recordingProfile is null)
+            return text;
+
+        var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
+        return style.DeveloperFormattingEnabled
+            ? _developerFormatting.Format(text)
+            : text;
     }
 
     private static string ClipboardToolMissingMessage() =>

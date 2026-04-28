@@ -72,6 +72,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();
         services.AddSingleton<PromptPaletteService>();
+        services.AddSingleton<TransformSelectionService>();
         services.AddSingleton<RecentTranscriptionsService>();
         services.AddSingleton<MemoryService>();
         services.AddSingleton<BundledPluginDeployer>();

@@ -219,6 +219,58 @@ public class SnippetServiceTests : IDisposable
     }
 
     [Fact]
+    public void ApplySnippets_ExactPhraseTrigger_ReplacesWholeUtteranceOnly()
+    {
+        _sut.AddSnippet(new Snippet
+        {
+            Id = "1",
+            Trigger = "sig",
+            Replacement = "Signature",
+            TriggerMode = SnippetTriggerMode.ExactPhrase
+        });
+
+        Assert.Equal("Signature", _sut.ApplySnippets("sig."));
+        Assert.Equal("please use sig", _sut.ApplySnippets("please use sig"));
+    }
+
+    [Fact]
+    public void ApplySnippets_UpdatesLastUsedAt()
+    {
+        _sut.AddSnippet(new Snippet
+        {
+            Id = "1",
+            Trigger = "sig",
+            Replacement = "Signature"
+        });
+
+        _sut.ApplySnippets("sig");
+
+        Assert.Equal(1, _sut.Snippets[0].UsageCount);
+        Assert.NotNull(_sut.Snippets[0].LastUsedAt);
+    }
+
+    [Fact]
+    public void Snippets_LoadLegacyJsonWithTriggerModeDefaults()
+    {
+        File.WriteAllText(_filePath, """
+            [
+              {
+                "Id": "legacy",
+                "Trigger": "sig",
+                "Replacement": "Signature",
+                "IsEnabled": true
+              }
+            ]
+            """);
+
+        var sut = new SnippetService(_filePath);
+
+        var snippet = Assert.Single(sut.Snippets);
+        Assert.Equal(SnippetTriggerMode.Anywhere, snippet.TriggerMode);
+        Assert.Null(snippet.LastUsedAt);
+    }
+
+    [Fact]
     public void UpdateSnippet_WithTags_PersistsChanges()
     {
         _sut.AddSnippet(new Snippet { Id = "1", Trigger = "mfg", Replacement = "Grüße", Tags = "Alt" });

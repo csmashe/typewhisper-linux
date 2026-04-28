@@ -74,7 +74,9 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
         var corrections = _cache
             .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Correction && e.Replacement is not null)
-            .OrderByDescending(e => e.Original.Length);
+            .OrderByDescending(e => e.Priority)
+            .ThenByDescending(e => e.IsStarred)
+            .ThenByDescending(e => e.Original.Length);
 
         foreach (var entry in corrections)
         {
@@ -168,7 +170,13 @@ public sealed class DictionaryService : IDictionaryService
 
         if (existing is not null)
         {
-            UpdateEntry(existing with { Replacement = replacement, UsageCount = existing.UsageCount + 1 });
+            UpdateEntry(existing with
+            {
+                Replacement = replacement,
+                UsageCount = existing.UsageCount + 1,
+                TimesCorrected = existing.TimesCorrected + 1,
+                LastCorrectedAt = DateTime.UtcNow
+            });
         }
         else
         {
@@ -177,7 +185,10 @@ public sealed class DictionaryService : IDictionaryService
                 Id = Guid.NewGuid().ToString(),
                 EntryType = DictionaryEntryType.Correction,
                 Original = original,
-                Replacement = replacement
+                Replacement = replacement,
+                TimesCorrected = 1,
+                LastCorrectedAt = DateTime.UtcNow,
+                Source = DictionaryEntrySource.CorrectionSuggestion
             });
         }
     }
@@ -228,7 +239,12 @@ public sealed class DictionaryService : IDictionaryService
         var idx = _cache.FindIndex(e => e.Id == id);
         if (idx >= 0)
         {
-            _cache[idx] = _cache[idx] with { UsageCount = _cache[idx].UsageCount + 1 };
+            _cache[idx] = _cache[idx] with
+            {
+                UsageCount = _cache[idx].UsageCount + 1,
+                TimesApplied = _cache[idx].TimesApplied + 1,
+                LastUsedAt = DateTime.UtcNow
+            };
             SaveToDisk();
         }
     }

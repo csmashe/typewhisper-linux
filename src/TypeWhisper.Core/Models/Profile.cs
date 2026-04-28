@@ -15,6 +15,28 @@ public sealed record Profile
     public string? TranscriptionModelOverride { get; init; }
     public string? PromptActionId { get; init; }
     public string? HotkeyData { get; init; }
+    public ProfileStylePreset StylePreset { get; init; } = ProfileStylePreset.Raw;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
+}
+
+public enum ProfileStylePreset
+{
+    Raw,
+    Clean,
+    Concise,
+    FormalEmail,
+    CasualMessage,
+    Developer,
+    TerminalSafe,
+    MeetingNotes
+}
+
+public sealed record ProfileStyleSettings
+{
+    public required ProfileStylePreset Preset { get; init; }
+    public CleanupLevel CleanupLevel { get; init; }
+    public bool SmartFormattingEnabled { get; init; }
+    public bool DeveloperFormattingEnabled { get; init; }
+    public bool TerminalSafe { get; init; }
 }

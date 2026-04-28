@@ -15,6 +15,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     [ObservableProperty] private string _promptPaletteHotkeyText = "";
     [ObservableProperty] private string _recentTranscriptionsHotkeyText = "";
     [ObservableProperty] private string _copyLastTranscriptionHotkeyText = "";
+    [ObservableProperty] private string _transformSelectionHotkeyText = "";
     [ObservableProperty] private string _statusMessage = "";
     [ObservableProperty] private RecordingMode _mode;
 
@@ -29,6 +30,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         PromptPaletteHotkeyText = settings.Current.PromptPaletteHotkey;
         RecentTranscriptionsHotkeyText = settings.Current.RecentTranscriptionsHotkey;
         CopyLastTranscriptionHotkeyText = settings.Current.CopyLastTranscriptionHotkey;
+        TransformSelectionHotkeyText = settings.Current.TransformSelectionHotkey;
         Mode = settings.Current.Mode;
     }
 
@@ -69,6 +71,26 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         else
         {
             StatusMessage = $"Could not parse '{CopyLastTranscriptionHotkeyText}' or it collides with another shortcut.";
+        }
+    }
+
+    [RelayCommand]
+    private void ApplyTransformSelectionHotkey()
+    {
+        if (_hotkey.TrySetTransformSelectionHotkeyFromString(TransformSelectionHotkeyText))
+        {
+            _settings.Save(_settings.Current with
+            {
+                TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString
+            });
+            StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentTransformSelectionHotkeyString)
+                ? "Transform selection hotkey cleared."
+                : $"Transform selection hotkey set to {_hotkey.CurrentTransformSelectionHotkeyString}.";
+            TransformSelectionHotkeyText = _hotkey.CurrentTransformSelectionHotkeyString;
+        }
+        else
+        {
+            StatusMessage = $"Could not parse '{TransformSelectionHotkeyText}' or it collides with another shortcut.";
         }
     }
 

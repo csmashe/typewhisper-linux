@@ -45,6 +45,50 @@ public sealed class CleanupServiceTests
         Assert.Equal("Hello world.", result);
     }
 
+    [Theory]
+    [InlineData("send it to John actually Jane", "Send it to Jane")]
+    [InlineData("set the color to red I mean blue", "Set the color to blue")]
+    public void Clean_Light_AppliesConservativeOneWordBacktrackCorrections(string input, string expected)
+    {
+        var result = _sut.Clean(input, CleanupLevel.Light);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void Clean_Light_AppliesScratchThatReplacementWhenReplacementLooksLikeNewDictation()
+    {
+        var result = _sut.Clean("send the first draft scratch that please send the final draft", CleanupLevel.Light);
+
+        Assert.Equal("Please send the final draft", result);
+    }
+
+    [Theory]
+    [InlineData("please scratch that surface carefully", "Please scratch that surface carefully")]
+    [InlineData("we meet Tuesday actually Wednesday then review notes", "We meet Tuesday actually Wednesday then review notes")]
+    public void Clean_Light_LeavesAmbiguousBacktrackTextAlone(string input, string expected)
+    {
+        var result = _sut.Clean(input, CleanupLevel.Light);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void Clean_Light_FormatsClearSpokenNumberedList()
+    {
+        var result = _sut.Clean("one apples two bananas three oranges", CleanupLevel.Light);
+
+        Assert.Equal("1. Apples\n2. bananas\n3. oranges", result);
+    }
+
+    [Fact]
+    public void Clean_Light_DoesNotFormatOutOfOrderNumberedList()
+    {
+        var result = _sut.Clean("one apples three oranges", CleanupLevel.Light);
+
+        Assert.Equal("One apples three oranges", result);
+    }
+
     [Fact]
     public void Clean_MediumAndHigh_DegradeToLightForNow()
     {
