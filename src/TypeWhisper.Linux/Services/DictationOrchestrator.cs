@@ -38,6 +38,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IDictionaryService _dictionary;
     private readonly ISnippetService _snippets;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly CleanupService _cleanup;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly ITranslationService _translation;
     private readonly PromptProcessingService _promptProcessing;
@@ -92,6 +93,7 @@ public sealed class DictationOrchestrator : IDisposable
         IDictionaryService dictionary,
         ISnippetService snippets,
         IVocabularyBoostingService vocabularyBoosting,
+        CleanupService cleanup,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
         PromptProcessingService promptProcessing,
@@ -115,6 +117,7 @@ public sealed class DictationOrchestrator : IDisposable
         _dictionary = dictionary;
         _snippets = snippets;
         _vocabularyBoosting = vocabularyBoosting;
+        _cleanup = cleanup;
         _pipeline = pipeline;
         _translation = translation;
         _promptProcessing = promptProcessing;
@@ -407,6 +410,9 @@ public sealed class DictationOrchestrator : IDisposable
                     VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
                         ? _vocabularyBoosting.Apply
                         : null,
+                    CleanupProcessor = _settings.Current.CleanupLevel == CleanupLevel.None
+                        ? null
+                        : text => _cleanup.Clean(text, _settings.Current.CleanupLevel),
                     SnippetExpander = text => _snippets.ApplySnippets(text),
                     LlmHandler = promptAction is not null
                         ? (text, token) => _promptProcessing.ProcessAsync(promptAction, text, token)

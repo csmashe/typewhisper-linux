@@ -138,6 +138,44 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_Cleanup_RunsBeforeLlmAndSnippets()
+    {
+        var executionOrder = new List<string>();
+
+        var options = new PipelineOptions
+        {
+            PluginPostProcessors =
+            [
+                new PluginPostProcessor(100, (text, _) =>
+                {
+                    executionOrder.Add("Plugin100");
+                    return Task.FromResult(text + "+P100");
+                })
+            ],
+            CleanupProcessor = text =>
+            {
+                executionOrder.Add("Cleanup");
+                return text + "+CLEAN";
+            },
+            LlmHandler = (text, _) =>
+            {
+                executionOrder.Add("LLM");
+                return Task.FromResult(text + "+LLM");
+            },
+            SnippetExpander = text =>
+            {
+                executionOrder.Add("Snippets");
+                return text + "+SNP";
+            }
+        };
+
+        var result = await _sut.ProcessAsync("start", options);
+
+        Assert.Equal(["Plugin100", "Cleanup", "LLM", "Snippets"], executionOrder);
+        Assert.Equal("start+P100+CLEAN+LLM+SNP", result.Text);
+    }
+
+    [Fact]
     public async Task ProcessAsync_MultiplePlugins_SortedByPriority()
     {
         var executionOrder = new List<string>();

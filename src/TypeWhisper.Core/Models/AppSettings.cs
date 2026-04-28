@@ -12,6 +12,7 @@ public record AppSettings
     public string CopyLastTranscriptionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
     public bool AutoPaste { get; init; } = true;
+    public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
     public RecordingMode Mode { get; init; } = RecordingMode.Toggle;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
     public int HistoryRetentionMinutes { get; init; } = 90 * 24 * 60;
@@ -112,6 +113,14 @@ public enum RecordingMode
     Toggle,
     PushToTalk,
     Hybrid
+}
+
+public enum CleanupLevel
+{
+    None,
+    Light,
+    Medium,
+    High
 }
 
 public enum HistoryRetentionMode

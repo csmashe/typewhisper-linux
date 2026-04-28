@@ -327,6 +327,7 @@ public partial class App : Application
             new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
 
         // Post-processing pipeline
+        services.AddSingleton<CleanupService>();
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
 
         // Translation (uses plugin manager for LLM providers)

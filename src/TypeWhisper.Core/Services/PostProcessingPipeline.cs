@@ -6,6 +6,7 @@ namespace TypeWhisper.Core.Services;
 /// Priority-based post-processing pipeline. Steps are sorted by priority (ascending)
 /// and executed sequentially. Built-in priorities:
 ///   Plugin PostProcessors: their own Priority value
+///   Cleanup: 250
 ///   LLM Prompt Action: 300
 ///   Snippet Expansion: 500
 ///   Vocabulary Boosting: 550
@@ -15,6 +16,7 @@ namespace TypeWhisper.Core.Services;
 public sealed class PostProcessingPipeline : IPostProcessingPipeline
 {
     private const int FormattingPriority = 150;
+    private const int CleanupPriority = 250;
     private const int LlmPriority = 300;
     private const int SnippetPriority = 500;
     private const int VocabularyBoostingPriority = 550;
@@ -72,6 +74,13 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
                 var p = processor;
                 steps.Add((p.Priority, $"Plugin({p.Priority})", p.ProcessAsync));
             }
+        }
+
+        // Deterministic cleanup at priority 250, before prompt actions/snippets.
+        if (options.CleanupProcessor is not null)
+        {
+            steps.Add((CleanupPriority, "Cleanup",
+                (text, _) => Task.FromResult(options.CleanupProcessor(text))));
         }
 
         // LLM prompt action at priority 300

@@ -41,6 +41,7 @@ internal static class ServiceRegistrations
             new ProfileService(Path.Combine(dataPath, "profiles.json")));
         services.AddSingleton<IPromptActionService>(
             new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
+        services.AddSingleton<CleanupService>();
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
         services.AddSingleton<ITranslationService, TranslationService>();
 

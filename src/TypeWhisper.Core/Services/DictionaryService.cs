@@ -123,11 +123,11 @@ public sealed class DictionaryService : IDictionaryService
         foreach (var entry in existingTerms)
         {
             var key = TermKey(entry.Original);
-            if (desiredByKey.TryGetValue(key, out var desiredTerm))
+            if (desiredByKey.ContainsKey(key))
             {
                 var idx = _cache.FindIndex(e => e.Id == entry.Id);
                 if (idx >= 0)
-                    _cache[idx] = entry with { Original = desiredTerm, IsEnabled = true };
+                    _cache[idx] = entry with { IsEnabled = true };
             }
             else if (replaceExisting)
             {

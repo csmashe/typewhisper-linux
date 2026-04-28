@@ -16,6 +16,7 @@ TestResults/
 releases/
 !docs/releases/
 !docs/releases/*.md
+docs/local/
 publish/
 .agents/
 .claude/
@@ -23,3 +24,4 @@ publish/
 granite-speech-onnx/
 granite-speech-onnx-int8/
 granite-speech-genai/
+src/TypeWhisper.Linux/.codex

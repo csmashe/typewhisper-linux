@@ -44,6 +44,13 @@ public partial class DictationSectionViewModel : ObservableObject
         new("fi", "Suomi"),
     ];
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
+    public ObservableCollection<CleanupLevelOption> CleanupLevelOptions { get; } =
+    [
+        new(CleanupLevel.None, "None"),
+        new(CleanupLevel.Light, "Light"),
+        new(CleanupLevel.Medium, "Medium"),
+        new(CleanupLevel.High, "High")
+    ];
 
     [ObservableProperty] private string _statusText = "Press your hotkey or click Toggle to start recording.";
     [ObservableProperty] private bool _isRecording;
@@ -58,6 +65,7 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty] private AudioInputDevice? _selectedDevice;
     [ObservableProperty] private string _language = "auto";
     [ObservableProperty] private string? _translationTargetLanguage;
+    [ObservableProperty] private CleanupLevel _cleanupLevel = CleanupLevel.None;
     [ObservableProperty] private bool _autoPaste;
     [ObservableProperty] private bool _whisperModeEnabled;
     [ObservableProperty] private bool _soundFeedbackEnabled = true;
@@ -130,6 +138,20 @@ public partial class DictationSectionViewModel : ObservableObject
                 return;
 
             Language = code;
+            OnPropertyChanged();
+        }
+    }
+
+    public CleanupLevelOption? SelectedCleanupLevelOption
+    {
+        get => CleanupLevelOptions.FirstOrDefault(option => option.Value == CleanupLevel);
+        set
+        {
+            var selected = value?.Value ?? CleanupLevel.None;
+            if (selected == CleanupLevel)
+                return;
+
+            CleanupLevel = selected;
             OnPropertyChanged();
         }
     }
@@ -248,6 +270,7 @@ public partial class DictationSectionViewModel : ObservableObject
     {
         Language = string.IsNullOrWhiteSpace(settings.Language) ? "auto" : settings.Language;
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
+        CleanupLevel = settings.CleanupLevel;
         ComputeBackend = NormalizeComputeBackend(settings.ComputeBackend);
         AutoPaste = settings.AutoPaste;
         WhisperModeEnabled = settings.WhisperModeEnabled;
@@ -266,6 +289,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
         OnPropertyChanged(nameof(SelectedLanguageOption));
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
+        OnPropertyChanged(nameof(SelectedCleanupLevelOption));
         OnPropertyChanged(nameof(SelectedComputeBackendOption));
         RefreshModelState();
     }
@@ -427,6 +451,12 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
     }
 
+    partial void OnCleanupLevelChanged(CleanupLevel value)
+    {
+        _settings.Save(_settings.Current with { CleanupLevel = value });
+        OnPropertyChanged(nameof(SelectedCleanupLevelOption));
+    }
+
     partial void OnAutoPasteChanged(bool value)
         => _settings.Save(_settings.Current with { AutoPaste = value });
 
@@ -504,4 +534,8 @@ public sealed record ComputeBackendOption(string Value, string DisplayName);
 
 public sealed record SpokenLanguageOption(
     string Code,
+    string DisplayName);
+
+public sealed record CleanupLevelOption(
+    CleanupLevel Value,
     string DisplayName);
