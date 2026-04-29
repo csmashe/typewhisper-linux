@@ -1,0 +1,194 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:svc="using:TypeWhisper.Linux.Services"
+             x:Class="TypeWhisper.Linux.Views.Sections.AdvancedSection"
+             x:DataType="vm:AdvancedSectionViewModel">
+    <UserControl.Styles>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+        <Style Selector="TextBlock.section-title">
+            <Setter Property="FontSize" Value="14.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,4,0,10" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28"
+                    MaxWidth="980"
+                    Spacing="18">
+            <TextBlock Text="Memory"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Enable memory"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding MemoryEnabled}"
+                                          IsEnabled="{Binding CanUseMemory}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="{Binding MemoryHint}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Recording"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Auto-unload model"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding AutoUnloadOptions}"
+                                      SelectedItem="{Binding SelectedAutoUnloadOption}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:AutoUnloadOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="2" Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Spoken feedback"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding SpokenFeedbackEnabled}"
+                                          IsEnabled="{Binding CanUseSpokenFeedback}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="4" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Spoken feedback provider"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding SpokenFeedbackProviders}"
+                                      SelectedItem="{Binding SelectedSpokenFeedbackProviderOption}"
+                                      IsEnabled="{Binding CanUseSpokenFeedback}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="svc:TtsProviderOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="6" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Voice"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding SpokenFeedbackVoices}"
+                                      SelectedItem="{Binding SelectedSpokenFeedbackVoiceOption}"
+                                      IsEnabled="{Binding CanUseSpokenFeedback}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="svc:TtsVoiceOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="7"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="{Binding SpokenFeedbackHint}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Data"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,1,Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Save transcriptions to history"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding SaveToHistoryEnabled}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="2" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="History retention"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding HistoryRetentionOptions}"
+                                      SelectedItem="{Binding SelectedHistoryRetention}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:HistoryRetentionOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="When history is disabled, transcriptions are still inserted but not stored."
+                                   FontSize="12"
+                                   Foreground="#8A9AAE" />
+                    </Border>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

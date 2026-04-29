@@ -1,0 +1,93 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+        x:Class="TypeWhisper.Linux.Views.ProfilesContextWindow"
+        x:DataType="vm:ProfilesSectionViewModel"
+        Title="Live Context"
+        Width="460"
+        Height="320"
+        MinWidth="420"
+        MinHeight="280"
+        Topmost="True"
+        ShowInTaskbar="False"
+        CanResize="True">
+    <Border Padding="18">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="0,0,0,14">
+                <StackPanel Spacing="4">
+                    <TextBlock Text="{Binding SelectedProfileDisplayName}"
+                               FontSize="18"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding SelectedProfileSummary}"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+                <Border Grid.Column="1"
+                        Padding="10,6"
+                        CornerRadius="999"
+                        Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                        VerticalAlignment="Center">
+                    <TextBlock Text="{Binding MatchStatusText}"
+                               FontSize="11"
+                               FontWeight="SemiBold" />
+                </Border>
+            </Grid>
+
+            <TextBlock Grid.Row="1"
+                       Text="Select a profile first to apply the current app or URL as a rule."
+                       Margin="0,0,0,14"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       IsVisible="{Binding ShowLiveContextProfileHint}" />
+
+            <Border Grid.Row="2"
+                    Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                    CornerRadius="10"
+                    Padding="12"
+                    Margin="0,0,0,10">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Current App" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding CurrentProcessName}" />
+                        <TextBlock Text="{Binding CurrentWindowTitle}"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   IsVisible="{Binding HasCurrentWindowTitle}" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            Content="Use current app"
+                            Command="{Binding AddCurrentProcessRuleCommand}"
+                            IsEnabled="{Binding HasSelectedProfile}"
+                            IsVisible="{Binding HasCurrentProcess}"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="3"
+                    Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                    CornerRadius="10"
+                    Padding="12">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Current Domain" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding CurrentUrlPattern}"
+                                   IsVisible="{Binding HasCurrentUrl}" />
+                        <TextBlock Text="{Binding CurrentWindowTitle}"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   IsVisible="{Binding HasCurrentWindowTitle}" />
+                        <TextBlock Text="No browser URL available"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   IsVisible="{Binding ShowNoBrowserUrlHint}" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            Content="Use current domain"
+                            Command="{Binding AddCurrentUrlRuleCommand}"
+                            IsEnabled="{Binding HasSelectedProfile}"
+                            IsVisible="{Binding HasCurrentUrl}"
+                            VerticalAlignment="Top" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

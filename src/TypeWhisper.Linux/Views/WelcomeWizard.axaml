@@ -1,0 +1,324 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
+        xmlns:svc="using:TypeWhisper.Linux.Services"
+        xmlns:local="using:TypeWhisper.Linux"
+        mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="720"
+        x:Class="TypeWhisper.Linux.Views.WelcomeWizard"
+        x:DataType="vm:WelcomeWizardViewModel"
+        Title="Welcome to TypeWhisper"
+        Icon="avares://typewhisper/Resources/typewhisper.ico"
+        Width="640" Height="720"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    <Grid RowDefinitions="Auto,*,Auto" Margin="0">
+        <!-- Header -->
+        <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,32,0,20" Spacing="6">
+            <TextBlock Text="TypeWhisper" FontSize="26" FontWeight="SemiBold"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="Speech-to-Text Transcription" FontSize="13"
+                       HorizontalAlignment="Center"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            <!-- step dots -->
+            <ItemsControl Margin="0,10,0,0" HorizontalAlignment="Center"
+                          ItemsSource="{Binding StepDots}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="6" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WelcomeStepDot">
+                        <Ellipse Width="24" Height="6"
+                                 Fill="{Binding IsActive, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=#6F7A86'}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Text="{Binding StepText}"
+                       FontSize="10" HorizontalAlignment="Center" Margin="0,6,0,0"
+                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+        </StackPanel>
+
+        <!-- Content area: simple Carousel approach via SelectedIndex bound to StepIndex -->
+        <TabControl Grid.Row="1" SelectedIndex="{Binding StepIndex}" Margin="32,0">
+            <TabControl.Styles>
+                <!-- Hide the tab strip so only content shows -->
+                <Style Selector="TabItem">
+                    <Setter Property="IsVisible" Value="False" />
+                </Style>
+            </TabControl.Styles>
+
+            <!-- Step 1: pick a model -->
+            <TabItem>
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Choose a transcription model"
+                               FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="The recommended model runs entirely on your computer — no cloud, no API key. You can add cloud providers later from the Plugins tab." />
+                    <TextBlock Text="All models" FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding AvailableModels}"
+                              SelectedItem="{Binding SelectedModel}"
+                              HorizontalAlignment="Stretch">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:WizardModelRow">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding DisplayName}" />
+                                    <TextBlock Text="{Binding SizeDescription}" FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               VerticalAlignment="Center" />
+                                    <TextBlock Text="— Recommended" FontSize="11"
+                                               Foreground="{DynamicResource SystemAccentColorLight2Brush}"
+                                               VerticalAlignment="Center"
+                                               IsVisible="{Binding IsRecommended}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Text="{Binding ModelStatus}" FontSize="11"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </TabItem>
+
+            <!-- Step 2: extensions / plugins -->
+            <TabItem>
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Extensions" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="Enable the plugins you want. Cloud transcription plugins need an API key that you'll enter later from the Plugins tab." />
+                    <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                            CornerRadius="4" Padding="0">
+                        <ScrollViewer MaxHeight="280">
+                            <ItemsControl ItemsSource="{Binding ExtensionPlugins}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vms:PluginRow">
+                                        <Border Padding="12,8" BorderThickness="0,0,0,1"
+                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <StackPanel Grid.Column="0" Spacing="2">
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding Description}" FontSize="11"
+                                                               TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                </StackPanel>
+                                                <ToggleSwitch Grid.Column="1"
+                                                              IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                              Command="{Binding $parent[ItemsControl].((vm:WelcomeWizardViewModel)DataContext).TogglePluginEnabledCommand}"
+                                                              CommandParameter="{Binding}" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Step 3: mic + hotkey -->
+            <TabItem>
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Microphone and shortcut"
+                               FontSize="18" FontWeight="SemiBold" />
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Input device" FontWeight="SemiBold" />
+                        <ComboBox ItemsSource="{Binding Mics}" SelectedItem="{Binding SelectedMic}"
+                                  HorizontalAlignment="Stretch">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="svc:AudioInputDevice">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="{Binding Name}" />
+                                        <TextBlock Text="(default)" FontStyle="Italic"
+                                                   IsVisible="{Binding IsDefault}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Toggle-dictation hotkey" FontWeight="SemiBold" />
+                        <TextBox Text="{Binding HotkeyText}" PlaceholderText="Ctrl+Shift+Space" />
+                        <TextBlock FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Accepts Ctrl / Shift / Alt / Meta plus a letter, digit, F-key, Space, Enter, Tab, arrows, etc." />
+                        <TextBlock Text="{Binding HotkeyStatus}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Step 4: system check -->
+            <TabItem>
+                <StackPanel Spacing="14">
+                    <TextBlock Text="System check"
+                               FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding DiagnosticsSummary}"
+                               TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                            CornerRadius="4" Padding="0">
+                        <ScrollViewer MaxHeight="280">
+                            <ItemsControl ItemsSource="{Binding Diagnostics}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:WelcomeDiagnosticRow">
+                                        <Border Padding="12,9" BorderThickness="0,0,0,1"
+                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                                <CheckBox Grid.Column="0"
+                                                          IsChecked="{Binding IsReady, Mode=OneWay}"
+                                                          IsEnabled="False"
+                                                          VerticalAlignment="Top" />
+                                                <StackPanel Grid.Column="1" Spacing="3">
+                                                    <TextBlock Text="{Binding Title}"
+                                                               FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding Status}"
+                                                               TextWrapping="Wrap"
+                                                               FontSize="12"
+                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                    <TextBlock Text="{Binding Hint}"
+                                                               TextWrapping="Wrap"
+                                                               FontSize="11"
+                                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                    <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                            CornerRadius="4" Padding="12">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel Grid.Column="0" Spacing="3">
+                                <TextBlock Text="CUDA check"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding CudaBenchmarkStatus}"
+                                           TextWrapping="Wrap"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="Run"
+                                    Command="{Binding RunCudaBenchmarkCommand}"
+                                    IsEnabled="{Binding CudaBenchmarkButtonEnabled}"
+                                    VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Step 5: first dictation check -->
+            <TabItem>
+                <ScrollViewer>
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="First dictation check"
+                                   FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Verify the microphone, paste path, and selected model before finishing setup." />
+
+                        <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock Grid.Column="0"
+                                               Text="Microphone"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="{Binding MicTestButtonText}"
+                                            Command="{Binding ToggleMicTestCommand}" />
+                                </Grid>
+                                <ProgressBar Minimum="0"
+                                             Maximum="1"
+                                             Value="{Binding MicLevel}"
+                                             Height="8" />
+                                <TextBlock Text="{Binding MicTestStatus}"
+                                           TextWrapping="Wrap"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock Grid.Column="0"
+                                               Text="Paste"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="Run paste test"
+                                            Click="RunPasteSmokeButton_OnClick" />
+                                </Grid>
+                                <TextBox x:Name="PasteSmokeBox"
+                                         Text="{Binding PasteSmokeText}"
+                                         PlaceholderText="Paste test output" />
+                                <TextBlock Text="{Binding PasteTestStatus}"
+                                           TextWrapping="Wrap"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock Grid.Column="0"
+                                               Text="Dictation"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="{Binding FirstDictationButtonText}"
+                                            Command="{Binding ToggleFirstDictationCommand}" />
+                                </Grid>
+                                <TextBlock Text="{Binding FirstDictationStatus}"
+                                           TextWrapping="Wrap"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                <TextBox Text="{Binding FirstDictationText}"
+                                         IsReadOnly="True"
+                                         MinHeight="54"
+                                         TextWrapping="Wrap"
+                                         PlaceholderText="Recognized text" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Step 6: done -->
+            <TabItem>
+                <StackPanel Spacing="12" VerticalAlignment="Center">
+                    <TextBlock Text="You're ready" FontSize="22" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock TextWrapping="Wrap" HorizontalAlignment="Center" MaxWidth="480"
+                               TextAlignment="Center"
+                               Text="Open any text field, press your hotkey, speak a sentence, then press the hotkey again. TypeWhisper will transcribe locally and type the result into the focused window." />
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+
+        <!-- Footer buttons -->
+        <Grid Grid.Row="2" Margin="32,16,32,24" ColumnDefinitions="Auto,*,Auto,Auto">
+            <Button Grid.Column="0" Content="Back"
+                    Command="{Binding BackCommand}"
+                    IsEnabled="{Binding !IsFirstStep}" />
+            <Button Grid.Column="2" Content="Skip"
+                    Command="{Binding SkipCommand}"
+                    Margin="0,0,8,0" />
+            <Button Grid.Column="3" Content="{Binding NextLabel}"
+                    Command="{Binding NextCommand}"
+                    Classes="accent" />
+        </Grid>
+    </Grid>
+</Window>

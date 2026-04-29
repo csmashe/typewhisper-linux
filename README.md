@@ -1,235 +1,322 @@
-# TypeWhisper for Windows
+# TypeWhisper for Linux
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Windows](https://img.shields.io/badge/Windows-10%2B-0078D4.svg)](https://www.microsoft.com/windows)
+[![Linux](https://img.shields.io/badge/Linux-Desktop-FCC624.svg)](https://kernel.org)
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4.svg)](https://dotnet.microsoft.com)
 
-Speech-to-text and AI text processing for Windows. Transcribe audio using on-device AI models or cloud APIs via extensions, then process the result with custom LLM prompts. Your voice data stays on your PC with local models — or use cloud APIs for faster processing.
+Speech-to-text and AI text processing for Linux desktop. This repository is a Linux desktop port forked from the TypeWhisper project, which provides macOS and Windows versions. I ported it so I could use TypeWhisper on Linux, and I am making this branch available for other Linux users who want the same.
+
+If the TypeWhisper project releases an official Linux version, or if this port is merged into the main TypeWhisper branch, I plan to use the upstream Linux version instead. Until then, this branch exists as a practical Linux port adapted around Avalonia, Linux desktop services, and Linux-friendly install and startup behavior.
+
+TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary and snippet post-processing, and run prompt-based AI text actions through plugins.
+
+## Current Linux Scope
+
+The Linux branch currently includes:
+
+- Global dictation with toggle, push-to-talk, and hybrid activation modes
+- A Linux desktop UI with dashboard, dictation, shortcuts, file transcription, recorder, history, dictionary, snippets, profiles, prompts, extensions, general, appearance, advanced, and about sections
+- Plugin-backed transcription engines and prompt/LLM providers
+- Drag-and-drop file transcription with batch queues, watch folders, and `ffmpeg`-based import when available
+- Session recording to WAV with optional transcript sidecar text files
+- Searchable history, recent transcriptions, dictionary corrections and term packs, snippets, and profiles
+- Overlay positioning and left/right content widgets
+- Tray integration and XDG autostart support
+- Local HTTP API and installable CLI for desktop automation
+- A user-level installer script that creates a desktop launcher and app icon
+
+## Linux Branch Additions
+
+This branch contains Linux-specific work that is not part of the original branch or the Windows branch:
+
+- CUDA GPU support for the bundled whisper.cpp transcription engine on compatible NVIDIA systems
+- Linux desktop integration through Avalonia, XDG autostart, Linux tray behavior, and a user-level desktop launcher
+- Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `canberra-gtk-play`, or CUDA runtime libraries
+- Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
+- Linux session audio handling for dictation, file transcription, and recorder workflows
 
 ## Features
 
 ### Transcription
 
-- **On-device models** — Parakeet TDT 0.6B (25+ languages, fast) and Canary 180M Flash (EN/DE/FR/ES with translation), running on CPU via SherpaOnnx with int8 quantization — no GPU required
-- **Cloud transcription** — Groq Whisper, OpenAI Whisper, AssemblyAI, Deepgram, and any OpenAI-compatible server (Ollama, LM Studio, vLLM). API keys encrypted at rest via DPAPI
-- **Streaming preview** — Silero VAD detects speech segments during recording and transcribes them in real time, showing partial results in the overlay before recording stops
-- **Live transcription** — Floating window with real-time continuous transcription (via LiveTranscript plugin)
-- **File transcription** — Drag-and-drop audio/video files. Supports WAV, MP3, M4A, AAC, OGG, FLAC, WMA, MP4, MKV, AVI, MOV, WebM
-- **Subtitle export** — Export transcriptions as TXT, SRT, or WebVTT
+- Plugin-based transcription engines for local and cloud workflows
+- File transcription page for importing and transcribing audio files
+- Batch file transcription queue with per-file status tracking
+- Watch folders for automatic file transcription and export output
+- Recorder page for saving longer WAV captures and transcribing them after recording stops
+- Dictation pipeline with post-processing through dictionary corrections and vocabulary boosting
+- Bundled Linux plugins deployed on build and auto-copied into the user plugin directory on first run
 
 ### Dictation
 
-- **System-wide** — Three independent hotkeys: Hybrid (short press toggles, long press is push-to-talk), Toggle-only, and Hold-only. Per-profile hotkeys for direct profile activation. Auto-pastes into any app
-- **Non-blocking pipeline** — Multiple recordings can be queued while transcription runs in the background
-- **Sound feedback** — Audio cues for recording start and stop
-- **Silence detection** — Automatically stops recording after configurable silence period
-- **Whisper mode** — Boosted microphone gain for quiet speech
-- **Audio normalization** — Automatic gain control for consistent input levels
-- **Media pause** — Automatically pauses media playback during recording
-- **Audio ducking** — Reduces system volume while recording
+- One main global dictation hotkey
+- Activation modes: `Toggle`, `Push to talk`, and `Hybrid`
+- Optional prompt palette hotkey
+- Recent transcriptions palette and copy-last-transcription hotkey
+- Auto-paste after transcription
+- Whisper mode, silence auto-stop, sound feedback, audio ducking, and media pause settings in the Linux UI
+- Live microphone preview and recording overlay
 
-### AI Processing
+Some Linux dictation features depend on external desktop tools:
 
-- **Custom prompts** — Process transcriptions (or any text) with LLM prompts. Standalone Prompt Palette via global hotkey — a floating panel for AI text processing independent of dictation
-- **LLM providers** — Groq, OpenAI, Google Gemini, and any OpenAI-compatible server (Ollama, LM Studio, vLLM) — all via plugins
-- **Translation** — Cloud LLM translation with local Marian ONNX model fallback. 20 target languages: EN, DE, FR, ES, IT, NL, PL, SV, DA, FI, CS, RU, UK, HU, JA, ZH, AR, HI, VI, ID
+- Sound feedback uses `canberra-gtk-play`
+- Audio ducking uses `pactl`
+- Media pause uses `playerctl`
+- Clipboard-backed auto-paste uses `xclip`, `wl-copy`, `wl-paste`, and `xdotool` when available
+
+When one of those tools is missing, the Linux UI disables that control and shows the reason.
 
 ### Personalization
 
-- **Profiles** — Per-app and per-website overrides for language, task, transcription model, and whisper mode. Match by process name and/or URL pattern with wildcard support. Automatically activates when dictating in a matched application or website
-- **Dictionary** — Custom term corrections applied after transcription (e.g., fix names, jargon, or recurring misrecognitions). Regex support. 13 built-in term packs: Web Dev, .NET/C#, DevOps, Data & AI, Design, Game Dev, Mobile, Security, Databases, Medical, Legal, Finance, Music Production
-- **Snippets** — Text shortcuts with trigger→replacement. Placeholders: `{date}`, `{time}`, `{datetime}`, `{clipboard}`, `{day}`, `{year}`. Date/time support custom formats (e.g. `{date:dd.MM.yyyy}`)
-- **History** — Searchable transcription history with raw/final text tracking, app context, inline editing, and export (TXT, CSV, Markdown, JSON)
+- Dictionary entries for corrections and terms
+- Built-in term packs with enable/disable toggles
+- Snippets with placeholder support such as `{date}`, `{time}`, `{datetime}`, `{clipboard}`, `{day}`, and `{year}`
+- Profiles with rule matching, per-profile overrides, enable/disable state, and priority
+- Prompt actions for LLM-driven text processing, provider overrides, and action plugin routing
 
-### Integration & Extensibility
+### Desktop Integration
 
-- **Plugin system** — Extensible plugin architecture with SDK and marketplace. Create custom plugins for transcription engines, LLM providers, post-processors, or action plugins
-- **Plugin marketplace** — Browse, install, update, and uninstall plugins directly from Settings. Auto-installs recommended extensions on first run
-- **Action plugins** — Linear (create issues), Obsidian (create notes), Script (run custom scripts), Webhook (HTTP notifications)
-- **HTTP API** — Local REST server for integration with external tools (status, models, transcription, history, profiles, dictation control)
-- **Model auto-unload** — Automatically unloads models after configurable idle timeout to save memory
+- Tray icon support where the current desktop environment exposes a compatible system tray
+- XDG autostart integration through `~/.config/autostart/typewhisper.desktop`
+- Single-instance lock using `XDG_RUNTIME_DIR`
+- Set `TYPEWHISPER_DISABLE_IME=1` to disable Avalonia X11 IME integration when debugging input-method issues
+- Desktop install script that publishes the app, installs it under the user profile, and creates a launcher icon
 
-### General
+## Linux Requirements
 
-- **Fluent Design** — WPF-UI with Mica backdrop, native title bar, and Fluent controls
-- **Dynamic Island overlay** — Configurable widgets (LED, timer, waveform) with multi-monitor support and real-time microphone level meter
-- **Home dashboard** — Usage statistics (words, WPM, apps, time saved) with activity chart
-- **Welcome wizard** — Guided 4-step onboarding: extension installation & model download, microphone test, hotkey setup. Re-accessible from the dashboard
-- **Auto-update** — Built-in updates via Velopack
-- **Windows autostart** — Optional start with Windows (via registry)
-- **System tray** — Minimizes to tray with quick access
-- **Localization** — English, German, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Swedish, Danish, Finnish
+- A modern Linux desktop session
+- .NET 10 SDK to build from source
+- `ffmpeg` for file transcription imports beyond already-supported direct formats
+- Optional desktop helpers:
+  - `pactl` for audio ducking
+  - `playerctl` for media pause during recording
+  - `canberra-gtk-play` for sound feedback
+  - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
+  - `xclip`, `wl-copy`, `wl-paste`, and `xdotool` for clipboard-backed auto-paste
+- Optional CUDA backend:
+  - NVIDIA GPU and driver
+  - CUDA 12 runtime/toolkit libraries providing `libcudart.so.12` and `libcublas.so.12`
+  - CUDA currently applies to the bundled whisper.cpp engine; other bundled local engines stay on CPU
 
-## System Requirements
+## Tested On
 
-- Windows 10 or later (x64 or ARM64)
-- 8 GB RAM minimum, 16 GB+ recommended for larger models
-- ~700 MB disk space for the Parakeet model, ~200 MB for Canary
+This Linux branch has only been tested on the maintainer's current setup so far:
 
-## Models
+- Pop!_OS 22.04 LTS
+- GNOME 42.9
+- X11 session
 
-### Local Models
+Linux desktop behavior can vary by distribution, compositor, desktop environment, and especially Wayland implementation. Wayland support paths are included where possible, but they may not behave the same across all setups.
 
-| Use Case | Model | Size |
-|----------|-------|------|
-| General transcription (25+ languages) | Parakeet TDT 0.6B | 670 MB, int8 |
-| Multilingual with translation (EN/DE/FR/ES) | Canary 180M Flash | 198 MB, int8 |
+If you run into a setup-specific issue, please create an issue or open a pull request with the distribution, desktop environment, display server, reproduction steps, and any relevant logs.
 
-Both models run on CPU with int8 quantization — no GPU required. Local models are provided by the SherpaOnnx plugin, installed via the built-in marketplace.
-
-### Cloud Models (optional)
-
-| Provider | Model | Notes |
-|----------|-------|-------|
-| Groq | whisper-large-v3 | Fast cloud transcription, supports translation |
-| Groq | whisper-large-v3-turbo | Fastest, no translation |
-| OpenAI | gpt-4o-transcribe | Highest accuracy |
-| OpenAI | gpt-4o-mini-transcribe | Lower cost, good quality |
-| OpenAI | whisper-1 | Classic, supports translation |
-| AssemblyAI | various | Real-time and batch transcription |
-| Deepgram | nova-3 | Fast, accurate cloud ASR |
-| OpenAI Compatible | Any model | Local LLM servers (Ollama, LM Studio, vLLM) |
-
-Cloud providers are available as plugins and can be configured in Settings > Extensions.
-
-## Build
+## Build and Run
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/TypeWhisper/typewhisper-win.git
-   cd typewhisper-win
+   git clone https://github.com/TypeWhisper/typewhisper-linux.git
+   cd typewhisper-linux
    ```
 
-2. Build with .NET 10:
+2. Build:
    ```bash
    dotnet build
    ```
 
-3. Run the app:
+3. Run from source:
    ```bash
-   dotnet run --project src/TypeWhisper.Windows
+   dotnet run --project src/TypeWhisper.Linux
    ```
 
-4. The app appears in the system tray — the welcome wizard guides you through extension installation, model download, and setup.
+## Install as a Desktop App
+
+To install a clickable launcher with an icon for the current user:
+
+```bash
+./scripts/install-linux-app.sh
+```
+
+This script:
+
+- publishes `src/TypeWhisper.Linux` as a self-contained Linux app
+- bundles Linux plugins into the published output
+- installs the app into `~/.local/share/TypeWhisper`
+- creates `~/.local/share/applications/typewhisper.desktop`
+- registers the application icon under the user icon theme
+
+To remove that user-level install:
+
+```bash
+./scripts/uninstall-linux-app.sh
+```
+
+## Models
+
+TypeWhisper uses plugin-provided transcription models. In this Linux branch, models appear in the Dictation page after the bundled or installed transcription plugins are loaded.
+
+Current model behavior:
+
+- The selected transcription model is saved in settings.
+- The Dictation page can load the selected model through the active transcription plugin.
+- File transcription and recorder transcription use the same selected model.
+- Model auto-unload is exposed in Advanced settings.
+
+Known model gaps:
+
+- Model download and marketplace-style model management are not fully wired in the Linux UI yet.
+- Available models depend on which bundled or manually installed plugins are present and enabled.
+- Local model availability depends on the Linux-compatible plugin implementation and any files it requires under the user data directory.
 
 ## HTTP API
 
-TypeWhisper can run a local HTTP server (default port 9876, configurable in Settings) for integration with external tools.
+The Linux app includes a local HTTP API for integrations and automation. Configure it in the General page:
+
+- `Enable local API`
+- `Port`, defaulting to `9876`
+- Optional bearer token, when configured
+
+When enabled, TypeWhisper listens on `http://localhost:<port>/`.
+
+Available endpoints:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/v1/status` | GET | App status and active model |
-| `/v1/models` | GET | List all available models (local + cloud) |
-| `/v1/transcribe` | POST | Transcribe audio from request body. Query params: `language`, `task` (transcribe/translate) |
-| `/v1/history` | GET | Search history with pagination. Query params: `q`, `limit`, `offset` |
-| `/v1/history` | DELETE | Delete history entries by ID |
-| `/v1/profiles` | GET | List all profiles |
-| `/v1/profiles/toggle` | PUT | Toggle a profile on/off by ID |
+| `/v1/models` | GET | List available models |
+| `/v1/transcribe` | POST | Transcribe uploaded audio. Optional query params include `filename`, `language`, `task`, `model`, `engine`, and `translateTo` |
+| `/v1/history` | GET | Search history |
+| `/v1/history` | DELETE | Delete history entries |
+| `/v1/profiles` | GET | List profiles |
+| `/v1/profiles/toggle` | PUT | Toggle a profile on or off |
+| `/v1/dictionary` | GET | List dictionary entries and term packs |
+| `/v1/dictionary/entries` | POST | Add dictionary correction entries |
+| `/v1/dictionary/entries` | DELETE | Delete dictionary correction entries |
+| `/v1/dictionary/term-packs/toggle` | PUT | Toggle a term pack on or off |
 | `/v1/dictation/start` | POST | Start recording |
 | `/v1/dictation/stop` | POST | Stop recording |
-| `/v1/dictation/status` | GET | Check current dictation state |
+| `/v1/dictation/status` | GET | Check dictation state |
+
+Current API limitations:
+
+- `/v1/transcribe` returns text, language, duration, and no-speech probability when available. Segment-level subtitle timing is not exposed by the current Linux plugin result contract.
+- Uploaded audio conversion uses the same `ffmpeg`-based importer as the File transcription page.
+- The API binds to `localhost` only.
+- The CLI uses the local API and can be installed from the General page.
 
 ## Profiles
 
-Profiles let you configure transcription settings per application or website. For example:
+Profiles let TypeWhisper apply different settings based on the active application or URL pattern.
 
-- **Outlook** — German language
-- **Slack** — English language
-- **Terminal** — Whisper mode always on
-- **github.com** — English language (matches in any browser)
-- **docs.google.com** — German language, translate to English
+In the Linux branch, profiles support:
 
-Create profiles in Settings > Profiles. Assign process names and/or URL patterns, set language/task/model overrides, and adjust priority. URL patterns support wildcard matching — e.g. `*.github.com` matches `gist.github.com`.
+- Profile creation, editing, enable/disable, save, and delete
+- Process/app matching fields
+- URL pattern fields
+- Priority
+- Language, task, translation, model, whisper mode, and prompt action overrides
+- A live-context view for checking what app context TypeWhisper sees
 
-When you start dictating, TypeWhisper matches the active window and browser URL against your profiles with the following priority:
-1. **Process + URL match** — highest specificity (e.g. chrome.exe + github.com)
-2. **URL-only match** — cross-browser profiles (e.g. github.com in any browser)
-3. **Process-only match** — generic app profiles (e.g. all of Chrome)
+Example profile uses:
 
-The active profile is shown in the recording overlay.
+- Use a specific language for one editor or browser
+- Enable whisper mode for a quiet-room workflow
+- Use a different transcription model for one app
+- Run a specific prompt action for text captured in a matching context
+
+Known profile gaps:
+
+- Active-window and URL detection can vary by desktop environment, browser, and display server.
+- Some Wayland sessions may restrict app/window metadata more than X11.
+
+## Project Layout
+
+```text
+typewhisper-linux/
+├── src/
+│   ├── TypeWhisper.Core/        # Shared core logic, data models, persistence, services
+│   ├── TypeWhisper.PluginSDK/   # Plugin SDK for transcription, LLM, actions, and events
+│   ├── TypeWhisper.Linux/       # Avalonia-based Linux desktop application
+│   └── TypeWhisper.Cli/         # CLI client for talking to the local API
+├── plugins/                     # Plugin source projects
+├── scripts/                     # Linux build, deploy, and install scripts
+├── docs/                        # Planning and release notes
+└── tests/                       # Automated tests
+```
+
+## Data and Paths
+
+TypeWhisper stores its Linux data under the user-local application data directory exposed by .NET:
+
+- Base path: `~/.local/share/TypeWhisper` on typical Linux setups
+- Settings: `settings.json`
+- Database: `Data/typewhisper.db`
+- Logs: `Logs/`
+- Plugins: `Plugins/`
+- Audio: `Audio/`
+- Plugin data: `PluginData/`
 
 ## Plugins
 
-TypeWhisper supports plugins for adding custom transcription engines, LLM providers, post-processors, and action plugins. Plugins are .NET class libraries with a `manifest.json`, installed to `%LocalAppData%/TypeWhisper/Plugins/`.
+The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin categories used by this branch include:
 
-The built-in marketplace provides the following plugins:
+- Transcription engines
+- LLM providers
+- Action plugins
+- Event and post-processing plugins
 
-| Plugin | Type | Description |
-|--------|------|-------------|
-| SherpaOnnx | Transcription | Local ASR with Parakeet and Canary models |
-| OpenAI | Transcription + LLM | OpenAI Whisper and GPT models |
-| Groq | Transcription + LLM | Groq Whisper and Llama models |
-| Google Gemini | LLM | Gemini 2.5 Flash, Pro, and Flash Lite |
-| AssemblyAI | Transcription | AssemblyAI speech-to-text |
-| Deepgram | Transcription | Deepgram Nova ASR |
-| OpenAI Compatible | Transcription + LLM | Any OpenAI-compatible server (Ollama, LM Studio, vLLM) |
-| Linear | Action | Create Linear issues from transcriptions |
-| Obsidian | Action | Create Obsidian notes from transcriptions |
-| Script | Action | Run custom scripts with transcription data |
-| LiveTranscript | Action | Floating live transcription window |
-| Webhook | Event | HTTP notifications for transcription events |
+The Linux build currently deploys bundled plugins from `plugins/` into the app output, then copies them into the user plugin directory on first run if they are missing.
 
-### Plugin Types
+Plugins are loaded from the user plugin directory:
+
+- `~/.local/share/TypeWhisper/Plugins/` on typical Linux setups
+
+Bundled plugin deployment:
+
+- Release builds run `scripts/deploy-linux-plugins.sh`.
+- The install script also bundles plugins into the published app.
+- On first run, bundled plugins are copied into the user plugin directory if they are missing.
+
+Known plugin gaps:
+
+- Marketplace/store browsing is intentionally not active in the Linux UI right now.
+- Plugin update handling is limited compared with the intended full marketplace workflow.
+- Some plugins may depend on external binaries, API keys, local model files, or services that must be configured separately.
+
+## Plugin SDK
+
+Plugin projects use `TypeWhisper.PluginSDK`.
+
+The SDK defines the shared plugin contracts used by the Linux app:
 
 | Interface | Purpose |
 |-----------|---------|
-| `ITranscriptionEnginePlugin` | Cloud/custom transcription (e.g., Whisper API) |
-| `ILlmProviderPlugin` | LLM chat completions (e.g., translation, course correction) |
-| `IPostProcessorPlugin` | Post-processing pipeline (text cleanup, formatting) |
-| `IActionPlugin` | Custom actions triggered by transcription events |
-| `ITypeWhisperPlugin` | Event observer (e.g., webhook, logging) |
+| `ITranscriptionEnginePlugin` | Add a local, cloud, or custom transcription engine |
+| `ILlmProviderPlugin` | Add an LLM provider for prompt processing |
+| `IPostProcessorPlugin` | Add text cleanup or transformation steps after transcription |
+| `IActionPlugin` | Run custom actions from transcriptions or prompt results |
+| `ITypeWhisperPlugin` | Observe app/plugin events |
+| `ITtsProviderPlugin` | Add spoken-feedback voice providers |
 
-### SDK Helpers
+The SDK also includes helper types for plugin manifests, plugin events, transcription results, LLM requests, and action contexts.
 
-The SDK includes helpers for OpenAI-compatible APIs:
-- `OpenAiTranscriptionHelper` — multipart/form-data upload for Whisper-compatible endpoints
-- `OpenAiChatHelper` — chat completion requests
-- `OpenAiApiHelper` — shared HTTP error handling
+Plugin source projects live under `plugins/`. The Linux app expects each deployed plugin to include its manifest and runtime assemblies in its plugin folder.
 
-## Architecture
+## Known Linux Gaps and Planned Work
 
-```
-typewhisper-win/
-├── src/
-│   ├── TypeWhisper.Core/           # Core logic (net10.0)
-│   │   ├── Data/                   # SQLite database with migrations
-│   │   ├── Interfaces/             # Service contracts
-│   │   ├── Models/                 # Profile, AppSettings, ModelInfo, TermPack, etc.
-│   │   └── Translation/            # MarianTokenizer, MarianConfig (local ONNX translation)
-│   ├── TypeWhisper.PluginSDK/      # Plugin SDK (net10.0-windows)
-│   │   ├── Helpers/                # OpenAiChatHelper, OpenAiTranscriptionHelper
-│   │   └── Models/                 # PluginManifest, PluginEvents, etc.
-│   └── TypeWhisper.Windows/        # WPF UI layer (net10.0-windows, WPF-UI Fluent Design)
-│       ├── Controls/               # HotkeyRecorderControl, MicLevelMeter
-│       ├── Native/                 # P/Invoke, KeyboardHook
-│       ├── Services/
-│       │   ├── Plugins/            # PluginLoader, PluginManager, PluginEventBus, PluginRegistryService
-│       │   └── Providers/          # LocalProviderBase
-│       ├── ViewModels/             # MVVM view models
-│       ├── Views/                  # MainWindow, SettingsWindow, WelcomeWindow, sections
-│       ├── Resources/              # Icons, sounds, silero_vad.onnx
-│       └── App.xaml.cs             # Composition root
-├── plugins/                        # Plugin source (distributed via marketplace)
-│   ├── TypeWhisper.Plugin.OpenAi/           # OpenAI transcription + LLM
-│   ├── TypeWhisper.Plugin.Groq/             # Groq transcription + LLM
-│   ├── TypeWhisper.Plugin.Gemini/           # Google Gemini LLM
-│   ├── TypeWhisper.Plugin.OpenAiCompatible/ # OpenAI-compatible servers
-│   ├── TypeWhisper.Plugin.SherpaOnnx/       # Local ASR (Parakeet, Canary)
-│   ├── TypeWhisper.Plugin.AssemblyAi/       # AssemblyAI transcription
-│   ├── TypeWhisper.Plugin.Deepgram/         # Deepgram transcription
-│   ├── TypeWhisper.Plugin.Linear/           # Linear issue creation
-│   ├── TypeWhisper.Plugin.Obsidian/         # Obsidian note creation
-│   ├── TypeWhisper.Plugin.Script/           # Custom script execution
-│   ├── TypeWhisper.Plugin.LiveTranscript/   # Live transcription window
-│   └── TypeWhisper.Plugin.Webhook/          # Webhook event notifications
-└── tests/
-    ├── TypeWhisper.Core.Tests/           # xUnit + Moq, in-memory SQLite
-    └── TypeWhisper.PluginSystem.Tests/   # Plugin infrastructure tests
-```
+These items appeared in the earlier project README or settings surface, but they are not fully implemented in this Linux branch yet and should be treated as planned work:
 
-**Patterns:** MVVM with CommunityToolkit.Mvvm. `App.xaml.cs` is the composition root. SQLite for persistence with a custom migration pattern. Plugin system with AssemblyLoadContext isolation and manifest-based discovery. Post-processing pipeline with priority-based ordering.
+- Interface language switching is not implemented yet. The setting is visible, but the Linux UI does not currently live-switch translations.
+- App self-update is not configured yet. The `Check for Updates` button in the About page is currently a placeholder.
+- Marketplace/store browsing is intentionally not active in the Linux UI right now.
+- Subtitle export formats such as SRT and WebVTT are not currently wired up in the Linux file transcription flow.
+- Windows release channels and Velopack update-channel controls are not used by this Linux branch.
+- The old README described broader platform feature coverage than this branch currently ships. Any feature not described as active above should be treated as pending until it is implemented in this repository.
 
-**Key dependencies:** NAudio (audio), NHotkey.Wpf (hotkeys), WPF-UI (Fluent Design), Microsoft.ML.OnnxRuntime (local translation), Velopack (updates), H.NotifyIcon.Wpf (system tray).
+## Development Notes
+
+- Release builds run `scripts/deploy-linux-plugins.sh` to publish and bundle the Linux-capable plugins.
+- On startup, the app deploys bundled plugins into the user plugin directory if they are missing.
+- Session audio files are cleaned up on startup and shutdown so history retention preserves text without indefinitely retaining WAV captures.
 
 ## License
 

@@ -1,0 +1,28 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: What problem does this solve? Why is it needed?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this work?
+    validations:
+      required: true
+  - type: textarea
+    id: linux-notes
+    attributes:
+      label: Linux Notes
+      description: Note any distribution, desktop environment, Wayland/X11, packaging, or desktop-integration details that matter.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any other approaches you've thought about?

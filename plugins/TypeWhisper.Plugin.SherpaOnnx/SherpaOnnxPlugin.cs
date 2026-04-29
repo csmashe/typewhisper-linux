@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
-using System.Windows.Controls;
 using SherpaOnnx;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -40,6 +39,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string? _loadedModelId;
     private string? _loadedModelDir;
     private string? _selectedModelId;
+    private string _computeBackend = "cpu";
 
     // Canary-specific state
     private string _canarySrcLang = "en";
@@ -83,12 +83,21 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         return Task.CompletedTask;
     }
 
-    public UserControl? CreateSettingsView() => null;
-
     public void SelectModel(string modelId)
     {
         _ = GetModelDefinition(modelId);
         _selectedModelId = modelId;
+    }
+
+    public void ConfigureComputeBackend(string backend)
+    {
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+        if (_computeBackend == normalized)
+            return;
+
+        _computeBackend = normalized;
+        if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
+            UnloadRecognizer();
     }
 
     public bool IsModelDownloaded(string modelId)
@@ -96,6 +105,26 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
         return model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName)));
+    }
+
+    public Task DeleteModelAsync(string modelId, CancellationToken ct)
+    {
+        _ = GetModelDefinition(modelId);
+        var dir = GetModelDirectory(modelId);
+
+        lock (_sync)
+        {
+            if (_loadedModelId == modelId)
+                UnloadRecognizerUnsafe();
+
+            if (_selectedModelId == modelId)
+                _selectedModelId = null;
+        }
+
+        if (Directory.Exists(dir))
+            Directory.Delete(dir, recursive: true);
+
+        return Task.CompletedTask;
     }
 
     public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
@@ -151,6 +180,9 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     {
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
+
+        if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA.");
 
         if (!model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName))))
             throw new FileNotFoundException($"Model files not found for: {modelId}");

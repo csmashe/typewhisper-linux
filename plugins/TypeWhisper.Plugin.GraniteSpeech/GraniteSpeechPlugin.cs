@@ -4,7 +4,6 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -29,6 +28,7 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     private StreamReader? _sidecarOut;
     private string? _selectedModelId;
     private string? _loadedModelId;
+    private string _computeBackend = "cpu";
     private int _requestId;
 
     // ITypeWhisperPlugin
@@ -68,8 +68,6 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         return Task.CompletedTask;
     }
 
-    public UserControl? CreateSettingsView() => null;
-
     public void SelectModel(string modelId)
     {
         if (modelId != ModelId)
@@ -77,8 +75,35 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         _selectedModelId = modelId;
     }
 
+    public void ConfigureComputeBackend(string backend)
+    {
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+        if (_computeBackend == normalized)
+            return;
+
+        _computeBackend = normalized;
+        if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
+            StopSidecar();
+    }
+
     public bool IsModelDownloaded(string modelId) =>
         File.Exists(Path.Combine(GetDataDirectory(), ".setup-complete"));
+
+    public Task DeleteModelAsync(string modelId, CancellationToken ct)
+    {
+        if (modelId != ModelId)
+            throw new ArgumentException($"Unknown model: {modelId}");
+
+        StopSidecar();
+        _loadedModelId = null;
+        _selectedModelId = null;
+
+        var dataDir = GetDataDirectory();
+        if (Directory.Exists(dataDir))
+            Directory.Delete(dataDir, recursive: true);
+
+        return Task.CompletedTask;
+    }
 
     public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
     {
@@ -224,6 +249,9 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
 
     public async Task LoadModelAsync(string modelId, CancellationToken ct)
     {
+        if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("CUDA is not available for the bundled Granite Speech sidecar. Select a whisper.cpp model for CUDA.");
+
         if (!IsModelDownloaded(modelId))
             throw new FileNotFoundException("Model not set up. Run DownloadModelAsync first.");
 

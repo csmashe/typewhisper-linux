@@ -1,14 +1,13 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAiCompatible;
 
-public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin
+public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, IPluginSettingsProvider
 {
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
     private IPluginHostServices? _host;
@@ -46,8 +45,6 @@ public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmPro
         _host = null;
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => new OpenAiCompatibleSettingsView(this);
 
     // ITranscriptionEnginePlugin
     public string ProviderId => "openai-compatible";
@@ -91,7 +88,7 @@ public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmPro
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, _baseUrl!, _apiKey ?? "", _selectedModelId!,
-            wavAudio, language, translate, "verbose_json", ct);
+            wavAudio, language, translate, "verbose_json", ct, prompt);
     }
 
     // ILlmProviderPlugin
@@ -156,6 +153,8 @@ public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmPro
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", key);
+
+            _host.NotifyCapabilitiesChanged();
         }
     }
 
@@ -235,6 +234,94 @@ public sealed class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmPro
     }
 
     public void Dispose() => _httpClient.Dispose();
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new("baseUrl", "Base URL", false, "http://localhost:8000", "OpenAI-compatible server base URL."),
+        new("api-key", "API key", true, null, "Optional bearer token used when calling the server."),
+        new(
+            "selectedModel",
+            "Transcription model",
+            Description: _fetchedModels.Count > 0
+                ? $"Showing {_fetchedModels.Count} fetched model(s)."
+                : "Click Validate after saving the server settings to fetch available models.",
+            Options: BuildModelOptions()),
+        new(
+            "selectedLlmModel",
+            "LLM model",
+            Description: _fetchedModels.Count > 0
+                ? $"Showing {_fetchedModels.Count} fetched model(s)."
+                : "Click Validate after saving the server settings to fetch available models.",
+            Options: BuildModelOptions())
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key switch
+        {
+            "baseUrl" => _baseUrl,
+            "api-key" => _apiKey,
+            "selectedModel" => _selectedModelId,
+            "selectedLlmModel" => _selectedLlmModelId,
+            _ => null,
+        });
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        switch (key)
+        {
+            case "baseUrl":
+                SetBaseUrl(value ?? string.Empty);
+                break;
+            case "api-key":
+                await SetApiKeyAsync(value ?? string.Empty);
+                break;
+            case "selectedModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectModel(value);
+                break;
+            case "selectedLlmModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectLlmModel(value);
+                break;
+        }
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_baseUrl))
+            return new PluginSettingsValidationResult(false, "Enter a base URL first.");
+
+        var valid = await ValidateConnectionAsync(ct);
+        if (!valid)
+            return new PluginSettingsValidationResult(false, "Could not connect to the server.");
+
+        var models = await FetchModelsAsync(ct);
+        SetFetchedModels(models);
+
+        if (string.IsNullOrWhiteSpace(_selectedModelId) && models.Count > 0)
+            SelectModel(models[0].Id);
+        if (string.IsNullOrWhiteSpace(_selectedLlmModelId) && models.Count > 0)
+            SelectLlmModel(models[0].Id);
+
+        return new PluginSettingsValidationResult(true, $"Connection OK. Fetched {models.Count} model(s).");
+    }
+
+    private IReadOnlyList<PluginSettingOption>? BuildModelOptions()
+    {
+        var models = _fetchedModels
+            .Select(m => new PluginSettingOption(m.Id, m.Id))
+            .ToList();
+
+        if (models.Count == 0)
+        {
+            if (!string.IsNullOrWhiteSpace(_selectedModelId))
+                models.Add(new PluginSettingOption(_selectedModelId, _selectedModelId));
+            if (!string.IsNullOrWhiteSpace(_selectedLlmModelId) && models.All(m => m.Value != _selectedLlmModelId))
+                models.Add(new PluginSettingOption(_selectedLlmModelId, _selectedLlmModelId));
+        }
+
+        return models.Count > 0 ? models : null;
+    }
 }
 
 internal sealed record FetchedModel(string Id, string? OwnedBy);

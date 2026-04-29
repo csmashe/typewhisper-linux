@@ -5,7 +5,7 @@ using Moq;
 using Moq.Protected;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
-using TypeWhisper.Windows.Services.Plugins;
+using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -52,7 +52,7 @@ public class PluginRegistryServiceTests : IDisposable
         {
             new
             {
-                Id = "com.test.plugin",
+                Id = "com.typewhisper.groq",
                 Name = "Test Plugin",
                 Version = "1.0.0",
                 Author = "Tester",
@@ -71,7 +71,7 @@ public class PluginRegistryServiceTests : IDisposable
         var result = await service.FetchRegistryAsync();
 
         Assert.Single(result);
-        Assert.Equal("com.test.plugin", result[0].Id);
+        Assert.Equal("com.typewhisper.groq", result[0].Id);
         Assert.Equal("Test Plugin", result[0].Name);
         Assert.Equal("1.0.0", result[0].Version);
     }
@@ -109,8 +109,8 @@ public class PluginRegistryServiceTests : IDisposable
     {
         var plugins = new[]
         {
-            new { Id = "compatible", Name = "OK", Version = "1.0", MinHostVersion = "0.1.0", Author = "A", Description = "D", Size = 100L, DownloadUrl = "u", RequiresApiKey = false },
-            new { Id = "incompatible", Name = "Nope", Version = "1.0", MinHostVersion = "999.0.0", Author = "A", Description = "D", Size = 100L, DownloadUrl = "u", RequiresApiKey = false }
+            new { Id = "com.typewhisper.groq", Name = "OK", Version = "1.0", MinHostVersion = "0.1.0", Author = "A", Description = "D", Size = 100L, DownloadUrl = "u", RequiresApiKey = false },
+            new { Id = "com.typewhisper.openai", Name = "Nope", Version = "1.0", MinHostVersion = "999.0.0", Author = "A", Description = "D", Size = 100L, DownloadUrl = "u", RequiresApiKey = false }
         };
 
         var json = JsonSerializer.Serialize(plugins);
@@ -121,7 +121,7 @@ public class PluginRegistryServiceTests : IDisposable
         var result = await service.FetchRegistryAsync();
 
         Assert.Single(result);
-        Assert.Equal("compatible", result[0].Id);
+        Assert.Equal("com.typewhisper.groq", result[0].Id);
     }
 
     [Fact]

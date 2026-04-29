@@ -1,0 +1,15 @@
+using System.Globalization;
+using Avalonia.Data.Converters;
+
+namespace TypeWhisper.Linux;
+
+public sealed class InverseBoolConverter : IValueConverter
+{
+    public static readonly InverseBoolConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => value is bool boolValue ? !boolValue : value;
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => value is bool boolValue ? !boolValue : value;
+}

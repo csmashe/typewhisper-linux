@@ -1,13 +1,12 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAi;
 
-public sealed class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin
+public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.openai.com";
     private const string TranslationModel = "gpt-4o-mini";
@@ -44,8 +43,6 @@ public sealed class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugi
         _host = null;
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => new OpenAiSettingsView(this);
 
     // ITranscriptionEnginePlugin
 
@@ -86,7 +83,7 @@ public sealed class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugi
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, BaseUrl, _apiKey!, _selectedApiModelName,
-            wavAudio, language, translate, _selectedResponseFormat, ct);
+            wavAudio, language, translate, _selectedResponseFormat, ct, prompt);
     }
 
     // ILlmProviderPlugin
@@ -120,6 +117,8 @@ public sealed class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugi
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", apiKey);
+
+            _host.NotifyCapabilitiesChanged();
         }
     }
 
@@ -141,6 +140,40 @@ public sealed class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugi
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    // IPluginSettingsProvider
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "api-key",
+            Label: "API key",
+            IsSecret: true,
+            Placeholder: "sk-...",
+            Description: "Required for OpenAI transcription and LLM requests.")
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "api-key" ? _apiKey : null);
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        if (key != "api-key")
+            return;
+
+        await SetApiKeyAsync(value ?? string.Empty);
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        return valid
+            ? new PluginSettingsValidationResult(true, "API key is valid.")
+            : new PluginSettingsValidationResult(false, "API key is invalid.");
     }
 
     private sealed record TranscriptionModelEntry(

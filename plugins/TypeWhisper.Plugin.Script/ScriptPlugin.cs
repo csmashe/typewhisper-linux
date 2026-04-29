@@ -225,7 +225,7 @@ public sealed class ScriptService
     }
 }
 
-public sealed class ScriptPlugin : IPostProcessorPlugin
+public sealed class ScriptPlugin : IPostProcessorPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private IPluginHostServices? _host;
 

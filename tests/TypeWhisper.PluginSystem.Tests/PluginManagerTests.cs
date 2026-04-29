@@ -1,11 +1,10 @@
 using System.IO;
-using System.Windows.Controls;
 using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
-using TypeWhisper.Windows.Services.Plugins;
+using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 

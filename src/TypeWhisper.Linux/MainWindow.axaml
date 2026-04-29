@@ -1,0 +1,174 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        xmlns:local="using:TypeWhisper.Linux"
+        xmlns:icons="using:FluentIcons.Avalonia"
+        xmlns:fluent="using:FluentIcons.Common"
+        xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
+        xmlns:sections="using:TypeWhisper.Linux.Views.Sections"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="760"
+        x:Class="TypeWhisper.Linux.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="TypeWhisper"
+        Icon="avares://typewhisper/Resources/typewhisper.ico"
+        Width="1200" Height="780"
+        RequestedThemeVariant="Dark"
+        Background="#0E131B">
+    <Window.Resources>
+        <DataTemplate x:Key="SectionTemplate_Dashboard" DataType="vms:DashboardSectionViewModel">
+            <sections:DashboardSection />
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid ColumnDefinitions="272,1,*" RowDefinitions="*">
+        <Grid Grid.Column="0" Margin="18,18,0,18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <DockPanel Grid.Row="0" Margin="2,8,14,14">
+                <TextBlock Text="{Binding AppTitle}"
+                           FontSize="15"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                <TextBlock DockPanel.Dock="Right"
+                           Text="{Binding VersionLabel}"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </DockPanel>
+
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Margin="0,0,14,0">
+                <ItemsControl ItemsSource="{Binding NavItems}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NavItem">
+                            <Grid>
+                                <TextBlock Text="{Binding Label}"
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           Foreground="#7D8796"
+                                           Margin="2,14,0,8"
+                                           IsVisible="{Binding IsHeader}"/>
+
+                                <Button IsVisible="{Binding !IsHeader}"
+                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).NavigateToItemCommand}"
+                                        CommandParameter="{Binding}"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        HorizontalContentAlignment="Stretch"
+                                        Padding="0"
+                                        MinHeight="0">
+                                    <Button.Styles>
+                                        <Style Selector="Button">
+                                            <Setter Property="Foreground" Value="#D7DEE8"/>
+                                        </Style>
+                                        <Style Selector="Button:pointerover">
+                                            <Setter Property="Foreground" Value="White"/>
+                                        </Style>
+                                    </Button.Styles>
+                                    <Border CornerRadius="6"
+                                            Padding="12,9"
+                                            Background="{Binding IsSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1C2735|False=Transparent'}"
+                                            BorderBrush="{Binding IsSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2A3C55|False=Transparent'}"
+                                            BorderThickness="1">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                            <icons:SymbolIcon Symbol="{Binding Icon, TargetNullValue={x:Static fluent:Symbol.Home}, FallbackValue={x:Static fluent:Symbol.Home}}"
+                                                              FontSize="14"
+                                                              VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding Label}"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="13"/>
+                                        </Grid>
+                                    </Border>
+                                </Button>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+
+        <Border Grid.Column="1" Background="#283644" Margin="0,18,0,18"/>
+
+        <Grid Grid.Column="2" Margin="0,18,18,18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="52"/>
+                <RowDefinition Height="1"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="28,0,28,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Content="Open Wizard"
+                            Command="{Binding OpenWizardCommand}"/>
+                </StackPanel>
+            </Grid>
+
+            <Border Grid.Row="1" Background="#283644"/>
+
+            <!-- Content area — bind CurrentSection to the right view via DataTemplates -->
+            <ContentControl Grid.Row="2" Content="{Binding CurrentSection}">
+            <ContentControl.DataTemplates>
+                <DataTemplate DataType="vms:DashboardSectionViewModel">
+                    <sections:DashboardSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:DictationSectionViewModel">
+                    <sections:DictationSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:ShortcutsSectionViewModel">
+                    <sections:ShortcutsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:FileTranscriptionSectionViewModel">
+                    <sections:FileTranscriptionSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:RecorderSectionViewModel">
+                    <sections:RecorderSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:HistorySectionViewModel">
+                    <sections:HistorySection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:DictionarySectionViewModel">
+                    <sections:DictionarySection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:SnippetsSectionViewModel">
+                    <sections:SnippetsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:ProfilesSectionViewModel">
+                    <sections:ProfilesSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:PromptsSectionViewModel">
+                    <sections:PromptsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:PluginsSectionViewModel">
+                    <sections:PluginsSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:GeneralSectionViewModel">
+                    <sections:GeneralSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:AppearanceSectionViewModel">
+                    <sections:AppearanceSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:AdvancedSectionViewModel">
+                    <sections:AdvancedSection />
+                </DataTemplate>
+                <DataTemplate DataType="vms:AboutSectionViewModel">
+                    <sections:AboutSection />
+                </DataTemplate>
+            </ContentControl.DataTemplates>
+            </ContentControl>
+        </Grid>
+    </Grid>
+</Window>

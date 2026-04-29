@@ -1,0 +1,68 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        x:Class="TypeWhisper.Linux.Views.RecentTranscriptionsPaletteWindow"
+        x:DataType="vm:RecentTranscriptionsPaletteViewModel"
+        Width="520"
+        Height="360"
+        WindowStartupLocation="CenterScreen"
+        WindowDecorations="None"
+        CanResize="False"
+        Topmost="True"
+        ShowInTaskbar="False"
+        Background="Transparent">
+    <Border CornerRadius="8"
+            Background="#F0141D29"
+            BorderBrush="#35FFFFFF"
+            BorderThickness="1"
+            Padding="14">
+        <Grid RowDefinitions="Auto,Auto,*">
+            <TextBlock Text="Recent transcriptions"
+                       FontSize="14"
+                       FontWeight="SemiBold"
+                       Margin="2,0,0,10" />
+
+            <TextBox x:Name="SearchBox"
+                     Grid.Row="1"
+                     Text="{Binding SearchQuery}"
+                     PlaceholderText="Search"
+                     Margin="0,0,0,10" />
+
+            <Grid Grid.Row="2">
+                <ListBox x:Name="EntriesList"
+                         ItemsSource="{Binding FilteredEntries}"
+                         SelectedItem="{Binding SelectedItem}"
+                         Background="Transparent"
+                         BorderThickness="0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RecentTranscriptionPaletteItem">
+                            <Border Padding="10,8"
+                                    Background="Transparent"
+                                    PointerReleased="Entry_PointerReleased">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding FinalText}"
+                                               Foreground="#F2F6FA"
+                                               FontSize="13"
+                                               FontWeight="SemiBold"
+                                               TextWrapping="Wrap"
+                                               MaxHeight="42" />
+                                    <TextBlock Text="{Binding Subtitle}"
+                                               Foreground="#8A9AAE"
+                                               FontSize="11"
+                                               Margin="0,3,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <TextBlock Text="No recent transcriptions"
+                           Foreground="#8A9AAE"
+                           FontSize="13"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           IsVisible="{Binding !HasFilteredEntries}" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

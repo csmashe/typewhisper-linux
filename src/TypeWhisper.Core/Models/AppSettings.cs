@@ -2,19 +2,39 @@ namespace TypeWhisper.Core.Models;
 
 public record AppSettings
 {
+    public const string DefaultSpokenFeedbackProviderId = "linux-system";
+    private Dictionary<string, TextInsertionStrategy> _appInsertionStrategies = new(StringComparer.OrdinalIgnoreCase);
+
     public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
     public string PushToTalkHotkey { get; init; } = "Ctrl+Shift";
     public string ToggleOnlyHotkey { get; init; } = "";
     public string HoldOnlyHotkey { get; init; } = "";
+    public string RecentTranscriptionsHotkey { get; init; } = "";
+    public string CopyLastTranscriptionHotkey { get; init; } = "";
+    public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
     public bool AutoPaste { get; init; } = true;
+    public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
+    {
+        get => _appInsertionStrategies;
+        init => _appInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
+            value ?? [],
+            StringComparer.OrdinalIgnoreCase);
+    }
+    public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
     public RecordingMode Mode { get; init; } = RecordingMode.Toggle;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
     public int HistoryRetentionMinutes { get; init; } = 90 * 24 * 60;
     public int? SelectedMicrophoneDevice { get; init; }
+    public string? SelectedMicrophoneDeviceId { get; init; }
 
     // Model
     public string? SelectedModelId { get; init; }
+    public string ComputeBackend { get; init; } = "cpu";
+
+    // Manual file transcription
+    public string? FileTranscriptionEngineOverride { get; init; }
+    public string? FileTranscriptionModelOverride { get; init; }
 
     // Cloud Provider API Keys
     public string? GroqApiKey { get; init; }
@@ -26,6 +46,7 @@ public record AppSettings
     public float AudioDuckingLevel { get; init; } = 0.2f;
     public bool PauseMediaDuringRecording { get; init; }
     public bool SoundFeedbackEnabled { get; init; } = true;
+    public bool TranscribeShortQuietClipsAggressively { get; init; }
 
     // Live transcription (streaming preview while recording)
     public bool LiveTranscriptionEnabled { get; init; } = true;
@@ -43,13 +64,25 @@ public record AppSettings
     public string TranscriptionTask { get; init; } = "transcribe";
     public string? TranslationTargetLanguage { get; init; }
 
+    // Watch folder automation
+    public string? WatchFolderPath { get; init; }
+    public string? WatchFolderOutputPath { get; init; }
+    public string WatchFolderOutputFormat { get; init; } = "md";
+    public bool WatchFolderAutoStart { get; init; }
+    public bool WatchFolderDeleteSource { get; init; }
+    public string WatchFolderLanguage { get; init; } = "auto";
+    public string? WatchFolderEngineOverride { get; init; }
+    public string? WatchFolderModelOverride { get; init; }
+
     // API Server
     public bool ApiServerEnabled { get; init; }
     public int ApiServerPort { get; init; } = 9876;
+    public string? ApiServerBearerToken { get; init; }
 
     // Dictionary
     public string[] EnabledPackIds { get; init; } = [];
     public bool VocabularyBoostingEnabled { get; init; }
+    public bool AutoAddDictionaryCorrections { get; init; }
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
@@ -70,12 +103,17 @@ public record AppSettings
 
     // Spoken feedback (TTS readback after transcription)
     public bool SpokenFeedbackEnabled { get; init; }
+    public string SpokenFeedbackProviderId { get; init; } = DefaultSpokenFeedbackProviderId;
+    public string? SpokenFeedbackVoiceId { get; init; }
 
     // Memory extraction
     public bool MemoryEnabled { get; init; }
 
     // UI Language (null = auto-detect from system)
     public string? UiLanguage { get; init; }
+
+    // Dashboard
+    public int DashboardSelectedPeriod { get; init; }
 
     public static AppSettings Default => new();
 }
@@ -85,6 +123,22 @@ public enum RecordingMode
     Toggle,
     PushToTalk,
     Hybrid
+}
+
+public enum CleanupLevel
+{
+    None,
+    Light,
+    Medium,
+    High
+}
+
+public enum TextInsertionStrategy
+{
+    Auto,
+    ClipboardPaste,
+    DirectTyping,
+    CopyOnly
 }
 
 public enum HistoryRetentionMode

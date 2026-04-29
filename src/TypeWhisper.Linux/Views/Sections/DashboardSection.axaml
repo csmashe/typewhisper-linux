@@ -1,0 +1,491 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:shellvm="using:TypeWhisper.Linux.ViewModels"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:local="using:TypeWhisper.Linux"
+             x:Class="TypeWhisper.Linux.Views.Sections.DashboardSection"
+             x:DataType="vm:DashboardSectionViewModel">
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel MaxWidth="860"
+                    Margin="28"
+                    Spacing="0">
+            <StackPanel Spacing="8" Margin="0,0,0,20">
+                <TextBlock Text="Dashboard"
+                           FontSize="24"
+                           FontWeight="SemiBold" />
+                <TextBlock Text="Your usage, recent activity, and the quickest path back into dictation."
+                           FontSize="13"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+        </StackPanel>
+
+        <Border Grid.Row="1"
+                MaxWidth="860"
+                Margin="28,0,28,18"
+                Background="#18212C"
+                BorderBrush="#283644"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="18">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Statistics"
+                               FontSize="16"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="Switch the time range to compare your writing activity."
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            Spacing="6"
+                            VerticalAlignment="Center">
+                    <ToggleButton Content="Weekly"
+                                  IsChecked="{Binding SelectedRange, Mode=OneWay,
+                                                          ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.Weekly},
+                                                          Converter={x:Static local:EnumBoolConverter.Instance}}"
+                                  Command="{Binding ShowWeeklyCommand}" />
+                    <ToggleButton Content="Month"
+                                  IsChecked="{Binding SelectedRange, Mode=OneWay,
+                                                          ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.Month},
+                                                          Converter={x:Static local:EnumBoolConverter.Instance}}"
+                                  Command="{Binding ShowMonthCommand}" />
+                    <ToggleButton Content="All Time"
+                                  IsChecked="{Binding SelectedRange, Mode=OneWay,
+                                                          ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.AllTime},
+                                                          Converter={x:Static local:EnumBoolConverter.Instance}}"
+                                  Command="{Binding ShowAllTimeCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <UniformGrid Grid.Row="2"
+                     MaxWidth="860"
+                     Margin="28,0,28,24"
+                     Rows="1"
+                     Columns="4">
+            <Border Background="#1A2430"
+                    BorderBrush="#2A3950"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16,20"
+                    Margin="0,0,8,0">
+                <StackPanel HorizontalAlignment="Center">
+                    <TextBlock Text="✍"
+                               FontSize="18"
+                               Foreground="#1593F5"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,8" />
+                    <TextBlock Text="{Binding WordCount}"
+                               FontSize="32"
+                               FontWeight="Bold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="Words"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1A2430"
+                    BorderBrush="#2A3950"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16,20"
+                    Margin="0,0,8,0">
+                <StackPanel HorizontalAlignment="Center">
+                    <TextBlock Text="⚡"
+                               FontSize="18"
+                               Foreground="#1593F5"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,8" />
+                    <TextBlock Text="{Binding AverageWpm}"
+                               FontSize="32"
+                               FontWeight="Bold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="Ø WPM"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1A2430"
+                    BorderBrush="#2A3950"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16,20"
+                    Margin="0,0,8,0">
+                <StackPanel HorizontalAlignment="Center">
+                    <TextBlock Text="◻"
+                               FontSize="18"
+                               Foreground="#1593F5"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,8" />
+                    <TextBlock Text="{Binding AppCount}"
+                               FontSize="32"
+                               FontWeight="Bold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="Apps"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1C2038"
+                    BorderBrush="#2A3950"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16,20">
+                <StackPanel HorizontalAlignment="Center">
+                    <TextBlock Text="⏱"
+                               FontSize="18"
+                               Foreground="#1593F5"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,8" />
+                    <TextBlock Text="{Binding TimeSavedLabel}"
+                               FontSize="32"
+                               FontWeight="Bold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="Saved"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <Border Grid.Row="3"
+                MaxWidth="860"
+                Margin="28,0,28,24"
+                Background="#141B24"
+                BorderBrush="#283644"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16">
+            <Grid ColumnDefinitions="*,*"
+                  ColumnSpacing="18">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Insights"
+                               FontSize="16"
+                               FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="*,*"
+                          ColumnSpacing="10">
+                        <Border Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding AverageWordsPerDictationLabel}"
+                                           FontSize="24"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Avg words / dictation"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding AverageDurationLabel}"
+                                           FontSize="24"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Avg duration"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="Insertion reliability"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Margin="0,8,0,0" />
+                    <Grid ColumnDefinitions="*,*"
+                          RowDefinitions="Auto,Auto"
+                          ColumnSpacing="10"
+                          RowSpacing="10">
+                        <Border Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding InsertionSuccessRateLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Inserted"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding ClipboardFallbackCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Clipboard fallback"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding PastedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding InsertedBreakdownLabel}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1"
+                                Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding FailedInsertionCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Failed"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            Spacing="8">
+                    <TextBlock Text="Top apps"
+                               FontSize="16"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="No app usage in this period."
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               IsVisible="{Binding !HasTopApps}" />
+                    <ItemsControl ItemsSource="{Binding TopApps}"
+                                  IsVisible="{Binding HasTopApps}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AppUsageInsightRow">
+                                <Grid ColumnDefinitions="*,Auto"
+                                      Margin="0,0,0,6">
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding AppProcessName}"
+                                               FontSize="13"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Summary}"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               Margin="12,0,0,0" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="Writing assists"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Margin="0,12,0,0" />
+                    <Grid ColumnDefinitions="*,*"
+                          RowDefinitions="Auto,Auto,Auto"
+                          ColumnSpacing="10"
+                          RowSpacing="10">
+                        <Border Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding CleanupAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Cleanups"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding SnippetAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Snippets"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding DictionaryCorrectionAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Corrections"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1"
+                                Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding PromptActionAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Prompt actions"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="2"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding TranslationAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Translations"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <TextBlock Grid.Row="4"
+                   Text="Activity"
+                   MaxWidth="860"
+                   Margin="28,0,28,12"
+                   FontSize="16"
+                   FontWeight="SemiBold" />
+
+        <Border Grid.Row="5"
+                MaxWidth="860"
+                Margin="28,0,28,24"
+                Background="#141B24"
+                BorderBrush="#283644"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16"
+                MinHeight="220">
+            <Grid>
+                <TextBlock Text="No activity in this period."
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontSize="14"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           IsVisible="{Binding !HasRecentActivity}" />
+
+                <ItemsControl ItemsSource="{Binding RecentActivity}"
+                              IsVisible="{Binding HasRecentActivity}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:TranscriptionRecord">
+                            <Border Padding="8,10"
+                                    BorderThickness="0,0,0,1"
+                                    BorderBrush="#283644">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{Binding Preview}"
+                                               FontSize="13"
+                                               TextWrapping="Wrap" />
+                                    <StackPanel Orientation="Horizontal"
+                                                Spacing="10">
+                                        <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm}'}"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Text="{Binding AppName}"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="6"
+                MaxWidth="860"
+                Margin="28,0,28,28"
+                Background="#111822"
+                BorderBrush="#283644"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="18">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Content="Open Wizard"
+                            Command="{Binding $parent[Window].((shellvm:MainWindowViewModel)DataContext).OpenWizardCommand}" />
+                </StackPanel>
+
+                <StackPanel VerticalAlignment="Center"
+                            Spacing="4">
+                    <TextBlock Text="Setup Wizard"
+                               FontSize="14"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="Re-run the initial setup to configure model, microphone and hotkeys."
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+    </Grid>
+    </ScrollViewer>
+</UserControl>

@@ -1,0 +1,93 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        mc:Ignorable="d"
+        x:Class="TypeWhisper.Linux.Views.DictationOverlayWindow"
+        x:DataType="vm:DictationOverlayViewModel"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        WindowDecorations="None"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        CanResize="False"
+        SizeToContent="WidthAndHeight">
+    <Grid Margin="10" IsVisible="{Binding HasVisibleContent}">
+        <Border Background="#F0181818"
+                BorderBrush="#25FFFFFF"
+                BorderThickness="1"
+                CornerRadius="22"
+                MinWidth="320"
+                Padding="14,10"
+                IsVisible="{Binding IsOverlayVisible}">
+            <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                    <Border Width="{Binding AudioMeterWidth}"
+                            Height="10"
+                            CornerRadius="999"
+                            Background="#66E3A2"
+                            VerticalAlignment="Center"
+                            IsVisible="{Binding ShowLeftMeter}" />
+
+                    <TextBlock Text="{Binding LeftText}"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="#99FFFFFF"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="120"
+                               IsVisible="{Binding ShowLeftText}" />
+
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding StatusText}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#CCFFFFFF" />
+
+                    <Border Grid.Column="2"
+                            Width="{Binding AudioMeterWidth}"
+                            Height="10"
+                            CornerRadius="999"
+                            Background="#66E3A2"
+                            VerticalAlignment="Center"
+                            IsVisible="{Binding ShowRightMeter}" />
+
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding RightText}"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="#99FFFFFF"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="120"
+                               IsVisible="{Binding ShowRightText}" />
+                </Grid>
+
+                <TextBlock Text="{Binding PartialText}"
+                           TextWrapping="Wrap"
+                           MaxWidth="420"
+                           FontSize="12"
+                           Foreground="#E6FFFFFF"
+                           IsVisible="{Binding PartialText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </Border>
+
+        <Border Background="#F0181818"
+                BorderBrush="#25FFFFFF"
+                BorderThickness="1"
+                CornerRadius="18"
+                Padding="14,7"
+                IsVisible="{Binding ShowFeedback}">
+            <TextBlock Text="{Binding FeedbackText}"
+                       Foreground="{Binding FeedbackForeground}"
+                       TextTrimming="CharacterEllipsis"
+                       HorizontalAlignment="Center"
+                       FontSize="11" />
+        </Border>
+    </Grid>
+</Window>

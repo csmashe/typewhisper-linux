@@ -1,0 +1,275 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             x:Class="TypeWhisper.Linux.Views.Sections.PluginsSection"
+             x:DataType="vm:PluginsSectionViewModel">
+    <UserControl.Styles>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+        <Style Selector="Border.badge">
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="8,3" />
+        </Style>
+        <Style Selector="TextBlock.group-title">
+            <Setter Property="FontSize" Value="14.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,8,0,10" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28"
+                    MaxWidth="980"
+                    Spacing="16">
+            <Border Classes="panel"
+                    Padding="18,14">
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Extensions"
+                               FontSize="16"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="Plugins extend TypeWhisper with additional transcription engines, LLM providers, and post-processing."
+                               FontSize="12.5"
+                               TextWrapping="Wrap"
+                               Foreground="#8A9AAE" />
+                </StackPanel>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="16,14">
+                <StackPanel Spacing="14">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="18">
+                        <StackPanel Spacing="6">
+                            <StackPanel Orientation="Horizontal"
+                                        Spacing="8">
+                                <TextBlock Text="⌘"
+                                           FontSize="14"
+                                           Foreground="#D6DEE9" />
+                                <TextBlock Text="Installed"
+                                           FontWeight="SemiBold" />
+                            </StackPanel>
+                            <Border Background="#2196F3"
+                                    Height="2"
+                                    Width="114"
+                                    HorizontalAlignment="Left" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <Border Background="#17212B"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="14,10">
+                        <TextBlock Text="{Binding HeaderSummary}"
+                                   FontSize="12.5"
+                                   Foreground="#9BAABC" />
+                    </Border>
+
+                    <Border Background="#4D3B17"
+                            BorderBrush="#6E5625"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="14,10"
+                            IsVisible="{Binding HasLoadFailures}">
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Plugin load failures"
+                                       FontWeight="SemiBold"
+                                       Foreground="#FFF0B8" />
+                            <ItemsControl ItemsSource="{Binding LoadFailures}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PluginFailureRow">
+                                        <StackPanel Spacing="2">
+                                            <TextBlock Text="{Binding FolderName}"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="White" />
+                                            <TextBlock Text="{Binding Message}"
+                                                       FontSize="11.5"
+                                                       TextWrapping="Wrap"
+                                                       Foreground="#E7D8A6" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <ItemsControl ItemsSource="{Binding PluginGroups}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PluginCategoryGroup">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Title}"
+                                               Classes="group-title" />
+
+                                    <ItemsControl ItemsSource="{Binding Plugins}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:PluginRow">
+                                                <Border Classes="panel"
+                                                        Padding="16,14"
+                                                        Margin="0,0,0,12">
+                                                    <StackPanel Spacing="12">
+                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto"
+                                                              ColumnSpacing="14">
+                                                            <Border Width="40"
+                                                                    Height="40"
+                                                                    CornerRadius="10"
+                                                                    Background="#1E88E5"
+                                                                    VerticalAlignment="Top">
+                                                                <TextBlock Text="{Binding Monogram}"
+                                                                           HorizontalAlignment="Center"
+                                                                           VerticalAlignment="Center"
+                                                                           Foreground="White"
+                                                                           FontWeight="Bold" />
+                                                            </Border>
+
+                                                            <StackPanel Grid.Column="1"
+                                                                        Spacing="5">
+                                                                <StackPanel Orientation="Horizontal"
+                                                                            Spacing="8">
+                                                                    <TextBlock Text="{Binding Name}"
+                                                                               FontSize="13.5"
+                                                                               FontWeight="SemiBold" />
+                                                                    <TextBlock Text="{Binding Version, StringFormat='v{0}'}"
+                                                                               FontSize="11.5"
+                                                                               Foreground="#8A9AAE"
+                                                                               VerticalAlignment="Center" />
+                                                                </StackPanel>
+
+                                                                <TextBlock Text="{Binding Description}"
+                                                                           TextWrapping="Wrap"
+                                                                           Foreground="#8A9AAE"
+                                                                           IsVisible="{Binding HasDescription}" />
+
+                                                                <StackPanel Orientation="Horizontal"
+                                                                            Spacing="6">
+                                                                    <Border Classes="badge"
+                                                                            Background="#1A3453"
+                                                                            BorderBrush="#2E5B89"
+                                                                            BorderThickness="1">
+                                                                        <TextBlock Text="{Binding CategoryLabel}"
+                                                                                   FontSize="11"
+                                                                                   Foreground="#D6E7FF" />
+                                                                    </Border>
+                                                                    <Border Classes="badge"
+                                                                            Background="{Binding LocationBadgeBackground}"
+                                                                            BorderBrush="{Binding LocationBadgeBorder}"
+                                                                            BorderThickness="1">
+                                                                        <TextBlock Text="{Binding LocationBadge}"
+                                                                                   FontSize="11"
+                                                                                   Foreground="{Binding LocationBadgeForeground}" />
+                                                                    </Border>
+                                                                    <Border Classes="badge"
+                                                                            Background="{Binding StatusBadgeBackground}"
+                                                                            BorderBrush="{Binding StatusBadgeBorder}"
+                                                                            BorderThickness="1">
+                                                                        <TextBlock Text="{Binding StatusBadge}"
+                                                                                   FontSize="11"
+                                                                                   Foreground="{Binding StatusBadgeForeground}" />
+                                                                    </Border>
+                                                                </StackPanel>
+                                                            </StackPanel>
+
+                                                            <ToggleSwitch Grid.Column="2"
+                                                                          Margin="0,0,2,0"
+                                                                          VerticalAlignment="Center"
+                                                                          IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                                          Command="{Binding Owner.ToggleEnabledCommand}"
+                                                                          CommandParameter="{Binding}" />
+
+                                                            <Button Grid.Column="3"
+                                                                    Width="28"
+                                                                    Height="28"
+                                                                    Padding="0"
+                                                                    VerticalAlignment="Center"
+                                                                    Background="Transparent"
+                                                                    BorderThickness="0"
+                                                                    Command="{Binding Owner.ToggleExpandedCommand}"
+                                                                    CommandParameter="{Binding}"
+                                                                    IsVisible="{Binding HasExpandableSettings}">
+                                                                <TextBlock Text="{Binding ExpansionGlyph}"
+                                                                           FontSize="14"
+                                                                           HorizontalAlignment="Center"
+                                                                           VerticalAlignment="Center"
+                                                                           Foreground="#D6DEE9" />
+                                                            </Button>
+                                                        </Grid>
+
+                                                        <Border IsVisible="{Binding IsExpanded}"
+                                                                Background="#101821"
+                                                                BorderBrush="#1AFFFFFF"
+                                                                BorderThickness="1"
+                                                                CornerRadius="10"
+                                                                Padding="14,14,14,0">
+                                                            <StackPanel Spacing="14">
+                                                                <TextBlock Text="{Binding Status}"
+                                                                           TextWrapping="Wrap"
+                                                                           FontSize="11.5"
+                                                                           Foreground="#8A9AAE" />
+
+                                                                <ItemsControl ItemsSource="{Binding SettingFields}">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:PluginSettingFieldRow">
+                                                                            <StackPanel Spacing="6"
+                                                                                        Margin="0,0,0,14">
+                                                                                <TextBlock Text="{Binding Label}"
+                                                                                           FontWeight="SemiBold" />
+
+                                                                                <TextBlock Text="{Binding Description}"
+                                                                                           FontSize="11"
+                                                                                           TextWrapping="Wrap"
+                                                                                           Foreground="#8A9AAE"
+                                                                                           IsVisible="{Binding HasDescription}" />
+
+                                                                                <ComboBox ItemsSource="{Binding Options}"
+                                                                                          SelectedItem="{Binding SelectedOption}"
+                                                                                          HorizontalAlignment="Stretch"
+                                                                                          IsVisible="{Binding HasOptions}">
+                                                                                    <ComboBox.ItemTemplate>
+                                                                                        <DataTemplate>
+                                                                                            <TextBlock Text="{Binding Label}" />
+                                                                                        </DataTemplate>
+                                                                                    </ComboBox.ItemTemplate>
+                                                                                </ComboBox>
+
+                                                                                <TextBox Text="{Binding Value}"
+                                                                                         PlaceholderText="{Binding Placeholder}"
+                                                                                         HorizontalAlignment="Stretch"
+                                                                                         IsVisible="{Binding !HasOptions}" />
+                                                                            </StackPanel>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+
+                                                                <StackPanel Orientation="Horizontal"
+                                                                            HorizontalAlignment="Right"
+                                                                            Spacing="8"
+                                                                            Margin="0,0,0,14">
+                                                                    <Button Content="Save"
+                                                                            Command="{Binding Owner.SaveSettingsCommand}"
+                                                                            CommandParameter="{Binding}"
+                                                                            IsEnabled="{Binding CanEditSettings}" />
+                                                                    <Button Content="Validate"
+                                                                            Command="{Binding Owner.ValidateSettingsCommand}"
+                                                                            CommandParameter="{Binding}"
+                                                                            IsEnabled="{Binding CanValidateSettings}" />
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

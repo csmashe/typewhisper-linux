@@ -1,0 +1,243 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:local="using:TypeWhisper.Linux"
+             x:Class="TypeWhisper.Linux.Views.Sections.PromptsSection"
+             x:DataType="vm:PromptsSectionViewModel">
+    <UserControl.Styles>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+        <Style Selector="Border.badge">
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="8,3" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28"
+                    MaxWidth="980"
+                    Spacing="18">
+            <Border Classes="panel"
+                    Padding="18,14">
+                <Grid ColumnDefinitions="*,Auto"
+                      ColumnSpacing="16">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Prompts"
+                                   FontSize="16"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Summary}"
+                                   FontSize="12.5"
+                                   Foreground="#9BAABC" />
+                        <TextBlock Text="{Binding PromptsHint}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <Button Grid.Column="1"
+                            Content="+ New"
+                            Command="{Binding StartCreateCommand}"
+                            Padding="18,8"
+                            Background="#2196F3"
+                            BorderBrush="#2196F3"
+                            Foreground="White"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <Border Background="#4D3B17"
+                    BorderBrush="#6E5625"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="14,10"
+                    IsVisible="{Binding ShowProviderWarning}">
+                <StackPanel Orientation="Horizontal"
+                            Spacing="12">
+                    <TextBlock Text="!"
+                               FontWeight="Bold"
+                               Foreground="#FFD400" />
+                    <TextBlock Text="No LLM provider configured"
+                               FontWeight="SemiBold"
+                               Foreground="White" />
+                    <TextBlock Text="{Binding ProviderWarningText}"
+                               Foreground="#F3E1AF" />
+                </StackPanel>
+            </Border>
+
+            <Border Classes="panel">
+                <Grid>
+                    <StackPanel IsVisible="{Binding ShowEmptyState}">
+                        <TextBlock Text="No prompts yet."
+                                   HorizontalAlignment="Center"
+                                   Margin="0,70,0,8"
+                                   FontSize="16"
+                                   FontWeight="SemiBold" />
+                        <Button Content="+ New"
+                                Command="{Binding StartCreateCommand}"
+                                HorizontalAlignment="Center"
+                                Margin="0,0,0,70"
+                                Background="#2196F3"
+                                BorderBrush="#2196F3"
+                                Foreground="White" />
+                    </StackPanel>
+
+                    <ItemsControl ItemsSource="{Binding Actions}"
+                                  IsVisible="{Binding ShowEmptyState, Converter={x:Static local:InverseBoolConverter.Instance}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="models:PromptAction">
+                                <Border Padding="16,14"
+                                        BorderBrush="#1AFFFFFF"
+                                        BorderThickness="0,0,0,1">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto"
+                                          ColumnSpacing="14">
+                                        <Border Width="36"
+                                                Height="36"
+                                                CornerRadius="10"
+                                                Background="#1B2B4B"
+                                                VerticalAlignment="Top">
+                                            <TextBlock Text="{Binding Icon}"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="17" />
+                                        </Border>
+
+                                        <StackPanel Grid.Column="1"
+                                                    Spacing="6">
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="8">
+                                                <TextBlock Text="{Binding Name}"
+                                                           FontSize="13.5"
+                                                           FontWeight="SemiBold" />
+                                                <Border Classes="badge"
+                                                        Background="#1A3453"
+                                                        BorderBrush="#2E5B89"
+                                                        BorderThickness="1">
+                                                    <TextBlock Text="{Binding IsEnabled, Converter={x:Static local:BoolTextConverter.Instance}, ConverterParameter='True=Enabled|False=Disabled'}"
+                                                               FontSize="10.5"
+                                                               Foreground="#D6E7FF" />
+                                                </Border>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding SystemPrompt}"
+                                                       FontSize="12.5"
+                                                       Foreground="#9BAABC"
+                                                       MaxLines="2"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+
+                                        <Button Grid.Column="2"
+                                                Content="Edit"
+                                                Command="{Binding $parent[ItemsControl].((vm:PromptsSectionViewModel)DataContext).EditActionCommand}"
+                                                CommandParameter="{Binding}"
+                                                VerticalAlignment="Center"
+                                                Padding="12,6" />
+                                        <ToggleSwitch Grid.Column="3"
+                                                      IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                      Command="{Binding $parent[ItemsControl].((vm:PromptsSectionViewModel)DataContext).ToggleEnabledCommand}"
+                                                      CommandParameter="{Binding}"
+                                                      VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Grid>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="18,16"
+                    IsVisible="{Binding ShowEditor}">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                      ColumnDefinitions="*,*"
+                      ColumnSpacing="12">
+                    <TextBlock Grid.ColumnSpan="2"
+                               Text="{Binding EditorTitle}"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,10" />
+
+                    <StackPanel Grid.Row="1"
+                                Grid.ColumnSpan="2">
+                        <TextBlock Text="Name"
+                                   Margin="0,0,0,6" />
+                        <TextBox Text="{Binding EditName}" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="2"
+                                Grid.ColumnSpan="2"
+                                Margin="0,14,0,0">
+                        <TextBlock Text="System Prompt"
+                                   Margin="0,0,0,6" />
+                        <TextBox Text="{Binding EditSystemPrompt}"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 MinHeight="120" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="3"
+                                Margin="0,14,0,0">
+                        <TextBlock Text="Provider"
+                                   Margin="0,0,0,6" />
+                        <ComboBox ItemsSource="{Binding AvailableProviders}"
+                                  SelectedItem="{Binding SelectedEditProvider}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ProviderOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="3"
+                                Grid.Column="1"
+                                Margin="0,14,0,0">
+                        <TextBlock Text="Action Plugin"
+                                   Margin="0,0,0,6" />
+                        <ComboBox ItemsSource="{Binding ActionPluginOptions}"
+                                  SelectedValue="{Binding EditTargetActionPluginId}"
+                                  SelectedValueBinding="{Binding Value}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ActionPluginOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="4"
+                                Grid.ColumnSpan="2"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                Spacing="8"
+                                Margin="0,18,0,0">
+                        <Button Content="Up"
+                                Command="{Binding MoveUpCommand}"
+                                CommandParameter="{Binding SelectedAction}"
+                                IsVisible="{Binding CanEditExistingAction}" />
+                        <Button Content="Down"
+                                Command="{Binding MoveDownCommand}"
+                                CommandParameter="{Binding SelectedAction}"
+                                IsVisible="{Binding CanEditExistingAction}" />
+                        <Button Content="Delete"
+                                Command="{Binding DeleteSelectedActionCommand}"
+                                IsVisible="{Binding CanEditExistingAction}" />
+                        <Button Content="Cancel"
+                                Command="{Binding CancelEditCommand}" />
+                        <Button Content="Save"
+                                Command="{Binding SaveActionCommand}"
+                                Background="#2196F3"
+                                BorderBrush="#2196F3"
+                                Foreground="White" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -1,0 +1,487 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:svc="using:TypeWhisper.Linux.Services"
+             xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:local="using:TypeWhisper.Linux"
+             x:Class="TypeWhisper.Linux.Views.Sections.DictationSection"
+             x:DataType="vm:DictationSectionViewModel">
+    <UserControl.Styles>
+        <Style Selector="Border.settings-panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Margin" Value="0,0,0,18" />
+        </Style>
+        <Style Selector="TextBlock.group-title">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style Selector="Border.row">
+            <Setter Property="Padding" Value="18,12" />
+        </Style>
+        <Style Selector="TextBlock.row-label">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.row-value">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28,22,28,28"
+                    MaxWidth="980">
+            <TextBlock Text="Engine"
+                       Classes="group-title" />
+            <Border Classes="settings-panel">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,Auto">
+                    <Border Grid.Row="0"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,320,Auto"
+                              ColumnSpacing="10">
+                            <TextBlock Text="Default model"
+                                       Classes="row-label" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding ModelOptions}"
+                                      SelectedItem="{Binding SelectedModel}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:DictationModelOption">
+                                        <TextBlock Text="{Binding DisplayLabel}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <Button Grid.Column="2"
+                                    Content="Delete model files"
+                                    IsEnabled="{Binding CanDeleteSelectedModel}"
+                                    Click="OnDeleteSelectedModel" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,240">
+                            <TextBlock Text="Engine"
+                                       Classes="row-label" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding EngineName}"
+                                       Classes="row-value" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Classes="row"
+                            Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1439B980|False=Transparent'}">
+                        <Grid ColumnDefinitions="*,240">
+                            <TextBlock Text="Model status"
+                                       Classes="row-label" />
+                            <Border Grid.Column="1"
+                                    HorizontalAlignment="Right"
+                                    CornerRadius="999"
+                                    Padding="12,6"
+                                    Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1E39B980|False=#1A2B3A4B'}">
+                                <TextBlock Text="{Binding ModelStatusText}"
+                                           Classes="row-value"
+                                           Foreground="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#39B980|False=#F5F8FC'}" />
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="6"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,320">
+                            <TextBlock Text="Compute backend"
+                                       Classes="row-label" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding ComputeBackendOptions}"
+                                      SelectedItem="{Binding SelectedComputeBackendOption}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ComputeBackendOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="7"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="{Binding ComputeBackendHint}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Microphone"
+                       Classes="group-title" />
+            <Border Classes="settings-panel">
+                <Grid RowDefinitions="Auto,1,Auto">
+                    <Border Grid.Row="0"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,320">
+                            <TextBlock Text="Input device"
+                                       Classes="row-label" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding Devices}"
+                                      SelectedItem="{Binding SelectedDevice}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="svc:AudioInputDevice">
+                                        <TextBlock Text="{Binding Name}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Classes="row">
+                        <Grid ColumnDefinitions="Auto,*"
+                              ColumnSpacing="12">
+                            <Button Grid.Column="0"
+                                    Content="Refresh"
+                                    Command="{Binding RefreshDevicesCommand}" />
+                            <ProgressBar Grid.Column="1"
+                                         Minimum="0"
+                                         Maximum="1"
+                                         Value="{Binding PreviewLevel}"
+                                         Height="8"
+                                         VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Language"
+                       Classes="group-title" />
+            <Border Classes="settings-panel">
+                <Grid RowDefinitions="Auto,1,Auto">
+                    <Border Grid.Row="0"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,240">
+                            <TextBlock Text="Spoken language"
+                                       Classes="row-label" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding LanguageChoices}"
+                                      SelectedItem="{Binding SelectedLanguageOption}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:SpokenLanguageOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,240">
+                            <TextBlock Text="Target language"
+                                       Classes="row-label" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding TranslationTargetOptions}"
+                                      SelectedItem="{Binding SelectedTranslationTargetOption}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="models:TranslationTargetOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Settings"
+                       Classes="group-title" />
+            <Border Classes="settings-panel">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                    <Border Grid.Row="0"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Auto paste after transcription"
+                                       Classes="row-label" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding AutoPaste}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Classes="row">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="App insertion strategies"
+                                       Classes="row-label" />
+
+                            <Grid ColumnDefinitions="*,180,Auto"
+                                  ColumnSpacing="10">
+                                <TextBox Grid.Column="0"
+                                         PlaceholderText="Process name, e.g. kitty or firefox"
+                                         Text="{Binding NewInsertionAppProcess}" />
+                                <ComboBox Grid.Column="1"
+                                          ItemsSource="{Binding InsertionStrategyOptions}"
+                                          SelectedItem="{Binding SelectedNewInsertionStrategyOption}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:InsertionStrategyOption">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="2"
+                                        Content="Add"
+                                        Command="{Binding AddAppInsertionStrategyCommand}" />
+                            </Grid>
+
+                            <ItemsControl ItemsSource="{Binding AppInsertionStrategies}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:AppInsertionStrategyRow">
+                                        <Grid ColumnDefinitions="*,180,Auto"
+                                              ColumnSpacing="10"
+                                              Margin="0,2,0,0">
+                                            <TextBox Grid.Column="0"
+                                                     Text="{Binding ProcessName}" />
+                                            <ComboBox Grid.Column="1"
+                                                      ItemsSource="{Binding StrategyOptions}"
+                                                      SelectedItem="{Binding SelectedStrategyOption}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:InsertionStrategyOption">
+                                                        <TextBlock Text="{Binding DisplayName}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                            <Button Grid.Column="2"
+                                                    Content="Remove"
+                                                    Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).RemoveAppInsertionStrategyCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Auto-learn approved history corrections"
+                                           Classes="row-label" />
+                                <TextBlock Text="When you edit a history item, clear phrase-level suggestions can be learned immediately."
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding AutoAddDictionaryCorrections}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="6"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,240">
+                            <TextBlock Text="Auto cleanup"
+                                       Classes="row-label" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding CleanupLevelOptions}"
+                                      SelectedItem="{Binding SelectedCleanupLevelOption}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:CleanupLevelOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="7"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="8"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Whisper Mode (AGC)"
+                                       Classes="row-label" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding WhisperModeEnabled}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="9"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="10"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Sound Feedback"
+                                           Classes="row-label" />
+                                <TextBlock Text="{Binding SoundFeedbackUnavailableReason}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           IsVisible="{Binding ShowSoundFeedbackUnavailableReason}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding SoundFeedbackEnabled}"
+                                          IsEnabled="{Binding CanUseSoundFeedback}"
+                                          ToolTip.Tip="{Binding SoundFeedbackUnavailableReason}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="11"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="12"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Transcribe short or quiet clips"
+                                       Classes="row-label" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding TranscribeShortQuietClipsAggressively}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="13"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="14"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Auto-stop on silence"
+                                       Classes="row-label" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding SilenceAutoStopEnabled}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="15"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="16"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Silence timeout (seconds)"
+                                       Classes="row-label" />
+                            <TextBox Grid.Column="1"
+                                     Width="120"
+                                     Text="{Binding SilenceAutoStopSeconds}"
+                                     HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="System audio"
+                       Classes="group-title" />
+            <Border Classes="settings-panel"
+                    Margin="0">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto">
+                    <Border Grid.Row="0"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Reduce other audio while recording"
+                                           Classes="row-label" />
+                                <TextBlock Text="{Binding AudioDuckingUnavailableReason}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           IsVisible="{Binding ShowAudioDuckingUnavailableReason}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding AudioDuckingEnabled}"
+                                          IsEnabled="{Binding CanUseAudioDucking}"
+                                          ToolTip.Tip="{Binding AudioDuckingUnavailableReason}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Classes="row"
+                            IsEnabled="{Binding CanUseAudioDucking}"
+                            ToolTip.Tip="{Binding AudioDuckingUnavailableReason}">
+                        <StackPanel>
+                            <TextBlock Classes="row-label">
+                                <Run Text="Ducking level" />
+                                <Run Text=" " />
+                                <Run Text="{Binding AudioDuckingLevel, StringFormat='{}{0:P0}'}" />
+                            </TextBlock>
+                            <Slider Minimum="0"
+                                    Maximum="0.5"
+                                    TickFrequency="0.05"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding AudioDuckingLevel}"
+                                    Margin="0,12,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Pause media playback while recording"
+                                           Classes="row-label" />
+                                <TextBlock Text="{Binding MediaPauseUnavailableReason}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           IsVisible="{Binding ShowMediaPauseUnavailableReason}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding PauseMediaDuringRecording}"
+                                          IsEnabled="{Binding CanUseMediaPause}"
+                                          ToolTip.Tip="{Binding MediaPauseUnavailableReason}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

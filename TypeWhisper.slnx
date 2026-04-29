@@ -2,10 +2,11 @@
   <Folder Name="/src/">
     <Project Path="src/TypeWhisper.Core/TypeWhisper.Core.csproj" />
     <Project Path="src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" />
-    <Project Path="src/TypeWhisper.Windows/TypeWhisper.Windows.csproj" />
+    <Project Path="src/TypeWhisper.Linux/TypeWhisper.Linux.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj" />
+    <Project Path="tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj" />
     <Project Path="tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj" />
   </Folder>
 </Solution>

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Globalization;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -78,7 +79,6 @@ public sealed class HistoryService : IHistoryService
     public void AddRecord(TranscriptionRecord record)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             _cache.Insert(0, record);
@@ -93,59 +93,70 @@ public sealed class HistoryService : IHistoryService
                 _distinctApps.Sort(StringComparer.OrdinalIgnoreCase);
             }
 
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
-        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
     public void UpdateRecord(string id, string finalText)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
-            if (idx >= 0)
-            {
-                var old = _cache[idx];
-                var updated = old with { FinalText = finalText };
-                _cache[idx] = updated;
-                _totalWords += updated.WordCount - old.WordCount;
-            }
+            if (idx < 0)
+                return;
 
-            snapshot = _cache.ToList();
+            var old = _cache[idx];
+            var updated = old with { FinalText = finalText };
+            _cache[idx] = updated;
+            _totalWords += updated.WordCount - old.WordCount;
+            SaveToDisk(_cache.ToList());
         }
 
-        SaveToDisk(snapshot);
+        RecordsChanged?.Invoke();
+    }
+
+    public void SetPendingCorrectionSuggestions(string id, IReadOnlyList<CorrectionSuggestion> suggestions)
+    {
+        EnsureCacheLoaded();
+        lock (_gate)
+        {
+            var idx = _cache.FindIndex(r => r.Id == id);
+            if (idx < 0)
+                return;
+
+            _cache[idx] = _cache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
+
+            SaveToDisk(_cache.ToList());
+        }
+
         RecordsChanged?.Invoke();
     }
 
     public void DeleteRecord(string id)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         string? removedAudioFileName = null;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
-            if (idx >= 0)
-            {
-                var removed = _cache[idx];
-                _cache.RemoveAt(idx);
-                _totalRecords--;
-                _totalWords -= removed.WordCount;
-                _totalDuration -= removed.DurationSeconds;
-                removedAudioFileName = removed.AudioFileName;
-            }
+            if (idx < 0)
+                return;
+
+            var removed = _cache[idx];
+            _cache.RemoveAt(idx);
+            _totalRecords--;
+            _totalWords -= removed.WordCount;
+            _totalDuration -= removed.DurationSeconds;
+            removedAudioFileName = removed.AudioFileName;
 
             RebuildDistinctApps();
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
         DeleteAudioFile(removedAudioFileName);
-        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
@@ -161,10 +172,10 @@ public sealed class HistoryService : IHistoryService
             _totalWords = 0;
             _totalDuration = 0;
             _distinctApps.Clear();
+            SaveToDisk([]);
         }
 
         DeleteAudioFiles(audioFiles);
-        SaveToDisk([]);
         RecordsChanged?.Invoke();
     }
 
@@ -190,7 +201,7 @@ public sealed class HistoryService : IHistoryService
         EnsureCacheLoaded();
         var cutoff = DateTime.UtcNow - retention.Value;
         List<string?> removedAudioFiles;
-        List<TranscriptionRecord>? snapshot = null;
+        List<TranscriptionRecord> snapshot;
 
         lock (_gate)
         {
@@ -205,10 +216,10 @@ public sealed class HistoryService : IHistoryService
             _cache = _cache.Where(r => r.CreatedAt >= cutoff).ToList();
             RebuildStats();
             snapshot = _cache.ToList();
+            SaveToDisk(snapshot);
         }
 
         DeleteAudioFiles(removedAudioFiles);
-        SaveToDisk(snapshot!);
         RecordsChanged?.Invoke();
     }
 
@@ -236,12 +247,23 @@ public sealed class HistoryService : IHistoryService
     {
         var l = labels ?? ExportLabels.Default;
         var sb = new StringBuilder();
-        sb.AppendLine($"{l.Timestamp},{l.App},{l.Text},{l.Duration},{l.Words},{l.Language}");
+        sb.AppendLine(string.Join(',',
+            CsvEscape(l.Timestamp),
+            CsvEscape(l.App),
+            CsvEscape(l.Text),
+            CsvEscape(l.Duration),
+            CsvEscape(l.Words),
+            CsvEscape(l.Language)));
 
         foreach (var r in records)
         {
-            var text = "\"" + r.FinalText.Replace("\"", "\"\"") + "\"";
-            sb.AppendLine($"{r.Timestamp:yyyy-MM-dd HH:mm:ss},{r.AppProcessName ?? ""},{text},{r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)},{r.WordCount},{r.Language ?? ""}");
+            sb.AppendLine(string.Join(',',
+                CsvEscape(r.Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)),
+                CsvEscape(r.AppProcessName ?? ""),
+                CsvEscape(r.FinalText),
+                CsvEscape(r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)),
+                CsvEscape(r.WordCount.ToString(CultureInfo.InvariantCulture)),
+                CsvEscape(r.Language ?? "")));
         }
 
         return sb.ToString();
@@ -290,6 +312,8 @@ public sealed class HistoryService : IHistoryService
             engine = r.EngineUsed,
             model = r.ModelUsed,
             profile = r.ProfileName,
+            insertion_status = r.InsertionStatus.ToString(),
+            insertion_failure_reason = r.InsertionFailureReason,
             words = r.WordCount
         });
 
@@ -320,15 +344,27 @@ public sealed class HistoryService : IHistoryService
 
     private List<TranscriptionRecord> LoadFromDisk()
     {
+        if (!File.Exists(_filePath)) return [];
+
+        string json;
         try
         {
-            if (!File.Exists(_filePath)) return [];
+            json = File.ReadAllText(_filePath);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HistoryService] Failed to read history from '{_filePath}': {ex}");
+            return [];
+        }
 
-            var json = File.ReadAllText(_filePath);
+        try
+        {
             return JsonSerializer.Deserialize<List<TranscriptionRecord>>(json) ?? [];
         }
-        catch
+        catch (JsonException ex)
         {
+            Trace.WriteLine($"[HistoryService] Failed to parse history from '{_filePath}': {ex}");
+            PreserveBrokenFile(_filePath);
             return [];
         }
     }
@@ -344,7 +380,35 @@ public sealed class HistoryService : IHistoryService
             var json = JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_filePath, json);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HistoryService] Failed to save history to '{_filePath}': {ex}");
+        }
+    }
+
+    private static string CsvEscape(string value)
+    {
+        if (!value.Contains(',') && !value.Contains('"') && !value.Contains('\n') && !value.Contains('\r'))
+            return value;
+
+        return "\"" + value.Replace("\"", "\"\"") + "\"";
+    }
+
+    private static void PreserveBrokenFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return;
+
+            var brokenPath = $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            File.Move(path, brokenPath);
+            System.Diagnostics.Trace.WriteLine($"[HistoryService] Preserved unreadable file as {brokenPath}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"[HistoryService] Could not preserve unreadable file: {ex.Message}");
+        }
     }
 
     private void RebuildStats()

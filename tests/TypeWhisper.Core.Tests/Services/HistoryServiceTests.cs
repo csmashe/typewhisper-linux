@@ -59,6 +59,52 @@ public class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void InsertionMetadata_PersistsCorrectly()
+    {
+        var record = new TranscriptionRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            Timestamp = DateTime.UtcNow,
+            RawText = "hello",
+            FinalText = "hello",
+            InsertionStatus = TextInsertionStatus.MissingPasteTool,
+            InsertionFailureReason = "Automatic paste tool is unavailable."
+        };
+
+        _sut.AddRecord(record);
+
+        var freshService = new HistoryService(_filePath);
+        var loaded = freshService.Records.First(r => r.Id == record.Id);
+        Assert.Equal(TextInsertionStatus.MissingPasteTool, loaded.InsertionStatus);
+        Assert.Equal("Automatic paste tool is unavailable.", loaded.InsertionFailureReason);
+    }
+
+    [Fact]
+    public void PendingCorrectionSuggestions_PersistCorrectly()
+    {
+        var record = new TranscriptionRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            Timestamp = DateTime.UtcNow,
+            RawText = "hello",
+            FinalText = "hello"
+        };
+        _sut.AddRecord(record);
+
+        _sut.SetPendingCorrectionSuggestions(record.Id,
+        [
+            new CorrectionSuggestion("Kubernets", "Kubernetes") { Confidence = 0.9 }
+        ]);
+
+        var freshService = new HistoryService(_filePath);
+        var loaded = freshService.Records.First(r => r.Id == record.Id);
+        var suggestion = Assert.Single(loaded.PendingCorrectionSuggestions);
+        Assert.Equal("Kubernets", suggestion.Original);
+        Assert.Equal("Kubernetes", suggestion.Replacement);
+        Assert.Equal(0.9, suggestion.Confidence);
+    }
+
+    [Fact]
     public void ExportToMarkdown_FormatsCorrectly()
     {
         var records = new List<TranscriptionRecord>
@@ -84,6 +130,30 @@ public class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ExportToCsv_EscapesLabelsAppTextAndLanguage()
+    {
+        var records = new List<TranscriptionRecord>
+        {
+            new()
+            {
+                Id = "1",
+                Timestamp = new DateTime(2026, 3, 15, 10, 30, 0, DateTimeKind.Utc),
+                RawText = "hello",
+                FinalText = "Hello, \"world\"",
+                AppProcessName = "browser, tab",
+                DurationSeconds = 1.5,
+                Language = "en,us"
+            }
+        };
+
+        var result = _sut.ExportToCsv(records);
+
+        Assert.Contains("\"browser, tab\"", result);
+        Assert.Contains("\"Hello, \"\"world\"\"\"", result);
+        Assert.Contains("\"en,us\"", result);
+    }
+
+    [Fact]
     public void ExportToJson_ProducesValidJson()
     {
         var records = new List<TranscriptionRecord>
@@ -96,7 +166,8 @@ public class HistoryServiceTests : IDisposable
                 FinalText = "Hello!",
                 AppProcessName = "code",
                 DurationSeconds = 1.0,
-                Language = "en"
+                Language = "en",
+                InsertionStatus = TextInsertionStatus.Pasted
             }
         };
 
@@ -104,6 +175,7 @@ public class HistoryServiceTests : IDisposable
 
         Assert.Contains("\"text\"", result);
         Assert.Contains("Hello!", result);
+        Assert.Contains("\"insertion_status\": \"Pasted\"", result);
         Assert.StartsWith("[", result.Trim());
         Assert.EndsWith("]", result.Trim());
     }

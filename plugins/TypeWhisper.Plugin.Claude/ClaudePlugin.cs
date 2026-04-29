@@ -2,13 +2,12 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Claude;
 
-public sealed class ClaudePlugin : ILlmProviderPlugin
+public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.anthropic.com";
     private const string AnthropicVersion = "2023-06-01";
@@ -34,24 +33,6 @@ public sealed class ClaudePlugin : ILlmProviderPlugin
     {
         _host = null;
         return Task.CompletedTask;
-    }
-
-    public UserControl? CreateSettingsView()
-    {
-        var panel = new StackPanel { Margin = new System.Windows.Thickness(8) };
-        var label = new TextBlock { Text = "API Key", Margin = new System.Windows.Thickness(0, 0, 0, 4) };
-        var box = new PasswordBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_apiKey)) box.Password = _apiKey;
-        var btn = new Button { Content = "Save", Margin = new System.Windows.Thickness(0, 8, 0, 0), HorizontalAlignment = System.Windows.HorizontalAlignment.Left };
-        btn.Click += async (_, _) =>
-        {
-            _apiKey = box.Password;
-            if (_host is not null) await _host.StoreSecretAsync("api-key", _apiKey);
-        };
-        panel.Children.Add(label);
-        panel.Children.Add(box);
-        panel.Children.Add(btn);
-        return new UserControl { Content = panel };
     }
 
     // ILlmProviderPlugin
@@ -125,6 +106,8 @@ public sealed class ClaudePlugin : ILlmProviderPlugin
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", apiKey);
+
+            _host.NotifyCapabilitiesChanged();
         }
     }
 
@@ -136,5 +119,41 @@ public sealed class ClaudePlugin : ILlmProviderPlugin
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    // IPluginSettingsProvider
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "api-key",
+            Label: "API key",
+            IsSecret: true,
+            Placeholder: "sk-ant-...",
+            Description: "Required for Claude LLM requests.")
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "api-key" ? _apiKey : null);
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        if (key != "api-key")
+            return;
+
+        await SetApiKeyAsync(value ?? string.Empty);
+    }
+
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(false, "Enter an API key first."));
+
+        var valid = ValidateApiKeyFormat(_apiKey);
+        return Task.FromResult<PluginSettingsValidationResult?>(
+            valid
+                ? new PluginSettingsValidationResult(true, "API key format looks valid.")
+                : new PluginSettingsValidationResult(false, "API key format is invalid."));
     }
 }

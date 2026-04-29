@@ -10,7 +10,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GemmaLocal;
 
-public sealed class GemmaLocalPlugin : ILlmProviderPlugin
+public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private static readonly IReadOnlyList<GemmaModelDefinition> Models =
     [

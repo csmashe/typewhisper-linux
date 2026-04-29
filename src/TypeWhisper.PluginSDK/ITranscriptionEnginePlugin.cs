@@ -28,6 +28,9 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     /// <summary>Selects a transcription model by ID.</summary>
     void SelectModel(string modelId);
 
+    /// <summary>Configures the preferred compute backend. Common values: "cpu", "cuda".</summary>
+    void ConfigureComputeBackend(string backend) { }
+
     /// <summary>Transcribes WAV audio data and returns the result.</summary>
     Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct);
@@ -44,6 +47,9 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
 
     /// <summary>Loads a downloaded model into memory, preparing it for transcription.</summary>
     Task LoadModelAsync(string modelId, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>Deletes downloaded model files for the given model ID.</summary>
+    Task DeleteModelAsync(string modelId, CancellationToken ct) => Task.CompletedTask;
 
     /// <summary>Whether this engine supports real-time streaming transcription via <see cref="IStreamingSession"/>.</summary>
     bool SupportsStreaming => false;

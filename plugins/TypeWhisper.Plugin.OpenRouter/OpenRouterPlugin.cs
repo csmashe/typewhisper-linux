@@ -1,13 +1,12 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenRouter;
 
-public sealed class OpenRouterPlugin : ILlmProviderPlugin
+public sealed partial class OpenRouterPlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://openrouter.ai/api";
 
@@ -33,8 +32,6 @@ public sealed class OpenRouterPlugin : ILlmProviderPlugin
         _host = null;
         return Task.CompletedTask;
     }
-
-    public UserControl? CreateSettingsView() => new OpenRouterSettingsView(this);
 
     // ILlmProviderPlugin
 
@@ -71,6 +68,8 @@ public sealed class OpenRouterPlugin : ILlmProviderPlugin
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", apiKey);
+
+            _host.NotifyCapabilitiesChanged();
         }
     }
 
@@ -92,5 +91,39 @@ public sealed class OpenRouterPlugin : ILlmProviderPlugin
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    // IPluginSettingsProvider
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "api-key",
+            Label: "API key",
+            IsSecret: true,
+            Placeholder: "sk-or-...",
+            Description: "Required for OpenRouter LLM requests.")
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "api-key" ? _apiKey : null);
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        if (key != "api-key")
+            return;
+
+        await SetApiKeyAsync(value ?? string.Empty);
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        return valid
+            ? new PluginSettingsValidationResult(true, "API key is valid.")
+            : new PluginSettingsValidationResult(false, "API key is invalid.");
     }
 }

@@ -1,13 +1,12 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.CloudflareAsr;
 
-public sealed class CloudflareAsrPlugin : ITranscriptionEnginePlugin
+public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
 {
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
     private IPluginHostServices? _host;
@@ -31,6 +30,7 @@ public sealed class CloudflareAsrPlugin : ITranscriptionEnginePlugin
         _host = host;
         _apiToken = await host.LoadSecretAsync("api-token");
         _accountId = await host.LoadSecretAsync("account-id");
+        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -38,56 +38,6 @@ public sealed class CloudflareAsrPlugin : ITranscriptionEnginePlugin
     {
         _host = null;
         return Task.CompletedTask;
-    }
-
-    public UserControl? CreateSettingsView()
-    {
-        var panel = new StackPanel { Margin = new System.Windows.Thickness(8) };
-
-        // Account ID field
-        var accountLabel = new TextBlock { Text = "Account ID", Margin = new System.Windows.Thickness(0, 0, 0, 4) };
-        var accountBox = new TextBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_accountId)) accountBox.Text = _accountId;
-
-        // API Token field
-        var tokenLabel = new TextBlock { Text = "API Token", Margin = new System.Windows.Thickness(0, 12, 0, 4) };
-        var tokenBox = new PasswordBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_apiToken)) tokenBox.Password = _apiToken;
-
-        var btn = new Button
-        {
-            Content = "Save",
-            Margin = new System.Windows.Thickness(0, 12, 0, 0),
-            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
-        };
-        btn.Click += async (_, _) =>
-        {
-            var account = accountBox.Text;
-            var token = tokenBox.Password;
-
-            _accountId = string.IsNullOrWhiteSpace(account) ? null : account.Trim();
-            _apiToken = string.IsNullOrWhiteSpace(token) ? null : token;
-
-            if (_host is not null)
-            {
-                if (string.IsNullOrWhiteSpace(account))
-                    await _host.DeleteSecretAsync("account-id");
-                else
-                    await _host.StoreSecretAsync("account-id", account.Trim());
-
-                if (string.IsNullOrWhiteSpace(token))
-                    await _host.DeleteSecretAsync("api-token");
-                else
-                    await _host.StoreSecretAsync("api-token", token);
-            }
-        };
-
-        panel.Children.Add(accountLabel);
-        panel.Children.Add(accountBox);
-        panel.Children.Add(tokenLabel);
-        panel.Children.Add(tokenBox);
-        panel.Children.Add(btn);
-        return new UserControl { Content = panel };
     }
 
     // ITranscriptionEnginePlugin
@@ -107,6 +57,7 @@ public sealed class CloudflareAsrPlugin : ITranscriptionEnginePlugin
         if (Models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
+        _host?.SetSetting("selectedModel", modelId);
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -160,5 +111,80 @@ public sealed class CloudflareAsrPlugin : ITranscriptionEnginePlugin
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    internal async Task SetAccountIdAsync(string accountId)
+    {
+        _accountId = string.IsNullOrWhiteSpace(accountId) ? null : accountId.Trim();
+        if (_host is not null)
+        {
+            if (string.IsNullOrWhiteSpace(accountId))
+                await _host.DeleteSecretAsync("account-id");
+            else
+                await _host.StoreSecretAsync("account-id", accountId.Trim());
+
+            _host.NotifyCapabilitiesChanged();
+        }
+    }
+
+    internal async Task SetApiTokenAsync(string apiToken)
+    {
+        _apiToken = string.IsNullOrWhiteSpace(apiToken) ? null : apiToken;
+        if (_host is not null)
+        {
+            if (string.IsNullOrWhiteSpace(apiToken))
+                await _host.DeleteSecretAsync("api-token");
+            else
+                await _host.StoreSecretAsync("api-token", apiToken);
+
+            _host.NotifyCapabilitiesChanged();
+        }
+    }
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new("account-id", "Account ID", false, null, "Required Cloudflare account identifier."),
+        new("api-token", "API token", true, null, "Cloudflare API token with Workers AI access."),
+        new(
+            "selectedModel",
+            "Transcription model",
+            Description: "Choose the Cloudflare ASR model.",
+            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key switch
+        {
+            "account-id" => _accountId,
+            "api-token" => _apiToken,
+            "selectedModel" => _selectedModelId,
+            _ => null,
+        });
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        switch (key)
+        {
+            case "account-id":
+                await SetAccountIdAsync(value ?? string.Empty);
+                break;
+            case "api-token":
+                await SetApiTokenAsync(value ?? string.Empty);
+                break;
+            case "selectedModel":
+                if (!string.IsNullOrWhiteSpace(value))
+                    SelectModel(value);
+                break;
+        }
+    }
+
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_accountId) || string.IsNullOrWhiteSpace(_apiToken))
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(false, "Enter both Account ID and API token first."));
+
+        return Task.FromResult<PluginSettingsValidationResult?>(
+            new PluginSettingsValidationResult(true, "Credentials saved. Remote validation is not implemented yet."));
     }
 }

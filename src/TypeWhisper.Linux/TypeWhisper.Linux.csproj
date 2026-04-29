@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <RootNamespace>TypeWhisper.Linux</RootNamespace>
+    <AssemblyName>typewhisper</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TypeWhisper.Core\TypeWhisper.Core.csproj" />
+    <ProjectReference Include="..\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TypeWhisper.Linux.Tests" />
+    <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Window/dock icon: bundled as Avalonia resource + copied to output
+         so absolute-path references (tray, autostart .desktop) also work. -->
+    <AvaloniaResource Include="Resources\typewhisper.ico" />
+    <AvaloniaResource Include="Resources\typewhisper-*.png" />
+    <Content Include="Resources\typewhisper.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources\typewhisper-*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.0.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.0.1" />
+    <PackageReference Include="FluentIcons.Avalonia" Version="2.1.323" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.1" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.1" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1">
+      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.1" />
+    <PackageReference Include="PortAudioSharp2" Version="1.0.1" />
+    <PackageReference Include="SharpHook" Version="5.3.9" />
+  </ItemGroup>
+
+  <Target Name="DeployBundledLinuxPlugins"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'
+                     and '$(Configuration)' == 'Release'
+                     and Exists('$(MSBuildProjectDirectory)/../../scripts/deploy-linux-plugins.sh')">
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../scripts/deploy-linux-plugins.sh&quot; $(Configuration)" />
+  </Target>
+</Project>

@@ -9,7 +9,7 @@ namespace TypeWhisper.Plugin.LiveTranscript;
 /// Plugin that shows a floating window with real-time transcription text.
 /// Subscribes to recording and transcription events to display live updates.
 /// </summary>
-public sealed class LiveTranscriptPlugin : ITypeWhisperPlugin
+public sealed class LiveTranscriptPlugin : ITypeWhisperPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
 {
     private IPluginHostServices? _host;
     private LiveTranscriptWindow? _window;

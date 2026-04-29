@@ -39,6 +39,24 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_ReturnsStepChangeMetadata()
+    {
+        var options = new PipelineOptions
+        {
+            CleanupHandler = (text, _) => Task.FromResult(text.Trim()),
+            SnippetExpander = text => text.Replace("brb", "be right back"),
+            DictionaryCorrector = text => text
+        };
+
+        var result = await _sut.ProcessAsync(" brb ", options);
+
+        Assert.Equal("be right back", result.Text);
+        Assert.Contains(result.Steps, step => step.Name == "Cleanup" && step.Changed);
+        Assert.Contains(result.Steps, step => step.Name == "Snippets" && step.Changed);
+        Assert.Contains(result.Steps, step => step.Name == "Dictionary" && !step.Changed);
+    }
+
+    [Fact]
     public async Task ProcessAsync_LlmHandler_Applied()
     {
         var options = new PipelineOptions
@@ -138,6 +156,44 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_Cleanup_RunsBeforeLlmAndSnippets()
+    {
+        var executionOrder = new List<string>();
+
+        var options = new PipelineOptions
+        {
+            PluginPostProcessors =
+            [
+                new PluginPostProcessor(100, (text, _) =>
+                {
+                    executionOrder.Add("Plugin100");
+                    return Task.FromResult(text + "+P100");
+                })
+            ],
+            CleanupHandler = (text, _) =>
+            {
+                executionOrder.Add("Cleanup");
+                return Task.FromResult(text + "+CLEAN");
+            },
+            LlmHandler = (text, _) =>
+            {
+                executionOrder.Add("LLM");
+                return Task.FromResult(text + "+LLM");
+            },
+            SnippetExpander = text =>
+            {
+                executionOrder.Add("Snippets");
+                return text + "+SNP";
+            }
+        };
+
+        var result = await _sut.ProcessAsync("start", options);
+
+        Assert.Equal(["Plugin100", "Cleanup", "LLM", "Snippets"], executionOrder);
+        Assert.Equal("start+P100+CLEAN+LLM+SNP", result.Text);
+    }
+
+    [Fact]
     public async Task ProcessAsync_MultiplePlugins_SortedByPriority()
     {
         var executionOrder = new List<string>();
@@ -221,6 +277,26 @@ public class PostProcessingPipelineTests
 
         // Plugin failed but dictionary still applied
         Assert.Equal("hello+DICT", result.Text);
+        Assert.Contains(result.Steps, step => !step.Succeeded && step.ErrorMessage == "Plugin failed");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_Translation_UsesAutoWhenSourceUnknown()
+    {
+        string? sourceLanguage = null;
+        var options = new PipelineOptions
+        {
+            TranslationHandler = (text, src, _, _) =>
+            {
+                sourceLanguage = src;
+                return Task.FromResult(text);
+            },
+            TranslationTarget = "fr"
+        };
+
+        await _sut.ProcessAsync("bonjour", options);
+
+        Assert.Equal("auto", sourceLanguage);
     }
 
     [Fact]

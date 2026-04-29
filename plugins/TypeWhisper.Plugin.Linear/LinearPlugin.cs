@@ -3,13 +3,12 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Linear;
 
-public sealed class LinearPlugin : IActionPlugin
+public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvider
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -22,6 +21,7 @@ public sealed class LinearPlugin : IActionPlugin
     private string? _apiKey;
     private string? _defaultTeamId;
     private string? _defaultProjectId;
+    private List<LinearTeam> _cachedTeams = [];
 
     public string PluginId => "com.typewhisper.linear";
     public string PluginName => "Linear";
@@ -42,6 +42,12 @@ public sealed class LinearPlugin : IActionPlugin
         _apiKey = await host.LoadSecretAsync("api-key");
         _defaultTeamId = host.GetSetting<string>("default-team-id");
         _defaultProjectId = host.GetSetting<string>("default-project-id");
+        var cachedTeamsJson = host.GetSetting<string>("cached-teams");
+        if (!string.IsNullOrWhiteSpace(cachedTeamsJson))
+        {
+            try { _cachedTeams = JsonSerializer.Deserialize<List<LinearTeam>>(cachedTeamsJson, s_jsonOptions) ?? []; }
+            catch { _cachedTeams = []; }
+        }
 
         _httpClient.DefaultRequestHeaders.Accept.Clear();
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -86,13 +92,18 @@ public sealed class LinearPlugin : IActionPlugin
         }
     }
 
-    public UserControl? CreateSettingsView() => new LinearSettingsView(this);
-
     public async Task SaveApiKeyAsync(string apiKey)
     {
-        if (_host is null) return;
-        _apiKey = apiKey;
-        await _host.StoreSecretAsync("api-key", apiKey);
+        if (_host is null)
+            return;
+
+        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+        if (string.IsNullOrWhiteSpace(apiKey))
+            await _host.DeleteSecretAsync("api-key");
+        else
+            await _host.StoreSecretAsync("api-key", apiKey.Trim());
+
+        _host.NotifyCapabilitiesChanged();
         _host.Log(PluginLogLevel.Info, "Linear API key saved");
     }
 
@@ -141,6 +152,16 @@ public sealed class LinearPlugin : IActionPlugin
                     Name = node.GetProperty("name").GetString() ?? "",
                     Key = node.GetProperty("key").GetString() ?? ""
                 });
+            }
+
+            _cachedTeams = teams;
+            try
+            {
+                _host?.SetSetting("cached-teams", JsonSerializer.Serialize(teams, s_jsonOptions));
+            }
+            catch
+            {
+                // best effort cache
             }
 
             return teams;
@@ -261,6 +282,58 @@ public sealed class LinearPlugin : IActionPlugin
 
         // Truncate to 100 characters
         return firstLine.Length > 100 ? firstLine[..100] : firstLine;
+    }
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new("api-key", "API key", true, null, "Generate a personal API key in Linear Settings > API > Personal API keys."),
+        new(
+            "default-team-id",
+            "Default team ID",
+            Description: _cachedTeams.Count > 0
+                ? $"Showing {_cachedTeams.Count} cached Linear team(s). Click Validate to refresh."
+                : "Required. Team UUID where issues will be created. Click Validate after saving the API key to fetch teams.",
+            Options: _cachedTeams.Count > 0
+                ? _cachedTeams.Select(t => new PluginSettingOption(t.Id, $"{t.Key} - {t.Name}")).ToList()
+                : null),
+        new("default-project-id", "Default project ID", false, null, "Optional. Issues will be added to this project when set.")
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key switch
+        {
+            "api-key" => _apiKey,
+            "default-team-id" => _defaultTeamId,
+            "default-project-id" => _defaultProjectId,
+            _ => null,
+        });
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        switch (key)
+        {
+            case "api-key":
+                await SaveApiKeyAsync(value ?? string.Empty);
+                break;
+            case "default-team-id":
+                SaveDefaultTeamId(value ?? string.Empty);
+                break;
+            case "default-project-id":
+                SaveDefaultProjectId(value ?? string.Empty);
+                break;
+        }
+    }
+
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+
+        var teams = await FetchTeamsAsync(ct);
+        if (teams.Count == 0)
+            return new PluginSettingsValidationResult(false, "No teams found. Check your API key.");
+
+        return new PluginSettingsValidationResult(true, $"Found {teams.Count} team(s). Team options refreshed.");
     }
 
     public void Dispose()

@@ -1,0 +1,231 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             x:Class="TypeWhisper.Linux.Views.Sections.GeneralSection"
+             x:DataType="vm:GeneralSectionViewModel">
+    <UserControl.Styles>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+        <Style Selector="TextBlock.section-title">
+            <Setter Property="FontSize" Value="14.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,4,0,10" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28"
+                    MaxWidth="980"
+                    Spacing="18">
+            <TextBlock Text="Language"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Interface Language"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding UiLanguageChoices}"
+                                      SelectedItem="{Binding SelectedUiLanguageOption}"
+                                      IsEnabled="{Binding IsUiLanguageSupported}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:UiLanguageOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="{Binding UiLanguageSupportMessage}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Startup"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Start automatically at system startup"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding StartWithSystem}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="TypeWhisper starts automatically when you log in."
+                                   FontSize="12"
+                                   Foreground="#8A9AAE" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Services"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Enable local API"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding ApiServerEnabled}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Port"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Column="1"
+                                           Minimum="1"
+                                           Maximum="65535"
+                                           Value="{Binding ApiServerPort}"
+                                           FormatString="0" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Bearer token"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     IsReadOnly="True"
+                                     Text="{Binding ApiBearerToken}" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <TextBlock Text="{Binding ApiStatusText}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="API examples"
+                       Classes="section-title" />
+
+            <Border Classes="panel"
+                    Padding="18,14">
+                <ItemsControl ItemsSource="{Binding CurlExamples}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:CommandExample">
+                            <TextBlock Text="{Binding Command}"
+                                       FontFamily="monospace"
+                                       FontSize="12"
+                                       Foreground="#8A9AAE"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,8" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+
+            <TextBlock Text="Command line"
+                       Classes="section-title"
+                       IsVisible="{Binding ApiServerEnabled}" />
+
+            <Border Classes="panel"
+                    IsVisible="{Binding ApiServerEnabled}">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel>
+                                <TextBlock Text="{Binding CliStatusText}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding CliBundledPathText}"
+                                           FontSize="12"
+                                           Foreground="#8A9AAE"
+                                           TextWrapping="Wrap"
+                                           Margin="0,4,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8">
+                                <Button Content="Refresh"
+                                        Command="{Binding RefreshCliStateCommand}" />
+                                <Button Content="Install"
+                                        Command="{Binding InstallCliCommand}"
+                                        IsEnabled="{Binding CliBundledAvailable}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Padding="18,12">
+                        <TextBlock Text="Installs the bundled CLI launcher to ~/.local/bin/typewhisper. Use the bearer token above through TYPEWHISPER_API_TOKEN or --token."
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Padding="18,14">
+                        <ItemsControl ItemsSource="{Binding CliExamples}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:CommandExample">
+                                    <TextBlock Text="{Binding Command}"
+                                               FontFamily="monospace"
+                                               FontSize="12"
+                                               Foreground="#8A9AAE"
+                                               TextWrapping="Wrap"
+                                               Margin="0,0,0,8" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

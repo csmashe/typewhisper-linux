@@ -4,8 +4,8 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
-using TypeWhisper.Windows.Services;
-using TypeWhisper.Windows.Services.Plugins;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -119,7 +119,6 @@ public class ModelManagerServiceTests
 
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
         public Task DeactivateAsync() => Task.CompletedTask;
-        public System.Windows.Controls.UserControl? CreateSettingsView() => null;
         public void SelectModel(string modelId) => SelectedModelId = modelId;
         public Task LoadModelAsync(string modelId, CancellationToken ct)
         {

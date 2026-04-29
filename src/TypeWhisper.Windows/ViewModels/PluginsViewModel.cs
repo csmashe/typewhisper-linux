@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using TypeWhisper.PluginSDK.Wpf;
 using TypeWhisper.Windows.Services.Localization;
 using TypeWhisper.Windows.Services.Plugins;
 
@@ -247,7 +248,7 @@ public partial class PluginItemViewModel : ObservableObject
         _isEnabled = isEnabled;
 
         if (isEnabled)
-            _settingsView = plugin.Instance.CreateSettingsView();
+            _settingsView = (plugin.Instance as IWpfPluginSettingsProvider)?.CreateSettingsView();
     }
 
     async partial void OnIsEnabledChanged(bool value)
@@ -255,7 +256,7 @@ public partial class PluginItemViewModel : ObservableObject
         if (value)
         {
             await _pluginManager.EnablePluginAsync(Id);
-            SettingsView = _plugin.Instance.CreateSettingsView();
+            SettingsView = (_plugin.Instance as IWpfPluginSettingsProvider)?.CreateSettingsView();
         }
         else
         {
@@ -270,7 +271,7 @@ public partial class PluginItemViewModel : ObservableObject
     {
         // Lazy-load settings view when first expanded
         if (value && SettingsView is null && IsEnabled)
-            SettingsView = _plugin.Instance.CreateSettingsView();
+            SettingsView = (_plugin.Instance as IWpfPluginSettingsProvider)?.CreateSettingsView();
     }
 
     [RelayCommand]

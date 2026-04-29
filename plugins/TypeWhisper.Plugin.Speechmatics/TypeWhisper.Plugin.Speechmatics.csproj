@@ -1,14 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <UseWPF>true</UseWPF>
+    <UseWPF Condition="'$(TargetFramework)' == 'net10.0-windows'">true</UseWPF>
     <RootNamespace>TypeWhisper.Plugin.Speechmatics</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
+    <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK.Wpf\TypeWhisper.PluginSDK.Wpf.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="manifest.json">
