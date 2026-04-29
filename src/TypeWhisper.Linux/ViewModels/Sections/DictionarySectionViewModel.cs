@@ -133,6 +133,10 @@ public partial class DictionarySectionViewModel : ObservableObject
     [RelayCommand]
     private void ClearSearch() => SearchText = "";
 
+    public string ExportToCsv() => _dict.ExportToCsv();
+
+    public int ImportFromCsv(string csv) => _dict.ImportFromCsv(csv);
+
     [RelayCommand]
     private void AddEntry()
     {

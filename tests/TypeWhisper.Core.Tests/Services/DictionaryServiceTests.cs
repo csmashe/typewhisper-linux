@@ -269,6 +269,76 @@ public class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ExportToCsv_IncludesMetadataAndEscapesFields()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "wispr, flow",
+            Replacement = "Wispr \"Flow\"",
+            CaseSensitive = true,
+            IsStarred = true,
+            Priority = 7,
+            Source = DictionaryEntrySource.CorrectionSuggestion
+        });
+
+        var csv = _sut.ExportToCsv();
+
+        Assert.Contains("EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source", csv);
+        Assert.Contains("Correction,\"wispr, flow\",\"Wispr \"\"Flow\"\"\",True,True,True,7,CorrectionSuggestion", csv);
+    }
+
+    [Fact]
+    public void ImportFromCsv_AddsEntriesWithMetadata()
+    {
+        var imported = _sut.ImportFromCsv("""
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,wispr,Wispr,true,true,true,5,Import
+            Term,TypeWhisper,,false,true,false,2,Manual
+            """);
+
+        Assert.Equal(2, imported);
+        Assert.Equal(2, _sut.Entries.Count);
+
+        var correction = _sut.Entries.First(entry => entry.EntryType == DictionaryEntryType.Correction);
+        Assert.Equal("wispr", correction.Original);
+        Assert.Equal("Wispr", correction.Replacement);
+        Assert.True(correction.CaseSensitive);
+        Assert.True(correction.IsStarred);
+        Assert.Equal(5, correction.Priority);
+        Assert.Equal(DictionaryEntrySource.Import, correction.Source);
+
+        var term = _sut.Entries.First(entry => entry.EntryType == DictionaryEntryType.Term);
+        Assert.Equal("TypeWhisper", term.Original);
+        Assert.Null(term.Replacement);
+        Assert.Equal(2, term.Priority);
+        Assert.Equal(DictionaryEntrySource.Manual, term.Source);
+    }
+
+    [Fact]
+    public void ImportFromCsv_SkipsDuplicatesAndInvalidCorrections()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "existing",
+            EntryType = DictionaryEntryType.Term,
+            Original = "TypeWhisper"
+        });
+
+        var imported = _sut.ImportFromCsv("""
+            EntryType,Original,Replacement
+            Term,TypeWhisper,
+            Correction,wispr,
+            Correction,wispr,Wispr
+            """);
+
+        Assert.Equal(1, imported);
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.Contains(_sut.Entries, entry => entry.EntryType == DictionaryEntryType.Correction && entry.Replacement == "Wispr");
+    }
+
+    [Fact]
     public void UpdateEntry_ModifiesEntry()
     {
         _sut.AddEntry(new DictionaryEntry
