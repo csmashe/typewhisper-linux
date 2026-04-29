@@ -23,6 +23,17 @@ public partial class DashboardSectionViewModel : ObservableObject
     [ObservableProperty] private string _timeSavedLabel = "0m";
     [ObservableProperty] private string _averageWordsPerDictationLabel = "0";
     [ObservableProperty] private string _averageDurationLabel = "0s";
+    [ObservableProperty] private string _insertionSuccessRateLabel = "0%";
+    [ObservableProperty] private string _pastedCountLabel = "0";
+    [ObservableProperty] private string _typedCountLabel = "0";
+    [ObservableProperty] private string _clipboardFallbackCountLabel = "0";
+    [ObservableProperty] private string _failedInsertionCountLabel = "0";
+    [ObservableProperty] private string _insertedBreakdownLabel = "0 pasted / 0 typed";
+    [ObservableProperty] private string _cleanupAppliedCountLabel = "0";
+    [ObservableProperty] private string _snippetAppliedCountLabel = "0";
+    [ObservableProperty] private string _dictionaryCorrectionAppliedCountLabel = "0";
+    [ObservableProperty] private string _promptActionAppliedCountLabel = "0";
+    [ObservableProperty] private string _translationAppliedCountLabel = "0";
 
     public ObservableCollection<TranscriptionRecord> RecentActivity { get; } = [];
     public ObservableCollection<AppUsageInsightRow> TopApps { get; } = [];
@@ -77,6 +88,17 @@ public partial class DashboardSectionViewModel : ObservableObject
         var insights = _insights.Build(records);
         AverageWordsPerDictationLabel = insights.AverageWordsPerDictation.ToString("0.#");
         AverageDurationLabel = FormatDuration(insights.AverageDurationSeconds);
+        InsertionSuccessRateLabel = $"{insights.InsertionSuccessRate:0.#}%";
+        PastedCountLabel = insights.PastedCount.ToString();
+        TypedCountLabel = insights.TypedCount.ToString();
+        ClipboardFallbackCountLabel = insights.CopiedToClipboardCount.ToString();
+        FailedInsertionCountLabel = insights.FailedInsertionCount.ToString();
+        InsertedBreakdownLabel = $"{insights.PastedCount} pasted / {insights.TypedCount} typed";
+        CleanupAppliedCountLabel = insights.CleanupAppliedCount.ToString();
+        SnippetAppliedCountLabel = insights.SnippetAppliedCount.ToString();
+        DictionaryCorrectionAppliedCountLabel = insights.DictionaryCorrectionAppliedCount.ToString();
+        PromptActionAppliedCountLabel = insights.PromptActionAppliedCount.ToString();
+        TranslationAppliedCountLabel = insights.TranslationAppliedCount.ToString();
 
         // Time "saved" = words typed at 150 WPM (typist baseline) minus time spoken
         var typingSeconds = WordCount / 150.0 * 60.0;

@@ -17,6 +17,12 @@ public sealed record TranscriptionRecord
     public string? AudioFileName { get; init; }
     public TextInsertionStatus InsertionStatus { get; init; } = TextInsertionStatus.Unknown;
     public string? InsertionFailureReason { get; init; }
+    public CleanupLevel CleanupLevelUsed { get; init; } = CleanupLevel.None;
+    public bool CleanupApplied { get; init; }
+    public bool SnippetApplied { get; init; }
+    public bool DictionaryCorrectionApplied { get; init; }
+    public bool PromptActionApplied { get; init; }
+    public bool TranslationApplied { get; init; }
     public IReadOnlyList<CorrectionSuggestion> PendingCorrectionSuggestions { get; init; } = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 

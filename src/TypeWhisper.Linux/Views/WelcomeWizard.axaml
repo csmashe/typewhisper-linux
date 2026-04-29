@@ -145,6 +145,10 @@
                         <TextBlock FontSize="11"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    Text="Accepts Ctrl / Shift / Alt / Meta plus a letter, digit, F-key, Space, Enter, Tab, arrows, etc." />
+                        <TextBlock Text="{Binding HotkeyStatus}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
                 </StackPanel>
             </TabItem>

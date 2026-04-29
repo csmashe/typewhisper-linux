@@ -37,6 +37,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [ObservableProperty] private WizardModelRow? _selectedModel;
     [ObservableProperty] private string _modelStatus = "";
     [ObservableProperty] private string _hotkeyText = "";
+    [ObservableProperty] private string _hotkeyStatus = "";
     [ObservableProperty] private AudioInputDevice? _selectedMic;
     [ObservableProperty] private string _diagnosticsSummary = "";
     [ObservableProperty] private bool _isMicTestRunning;
@@ -202,6 +203,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
     partial void OnIsCudaBenchmarkRunningChanged(bool value) =>
         OnPropertyChanged(nameof(CudaBenchmarkButtonEnabled));
 
+    partial void OnHotkeyTextChanged(string value)
+    {
+        HotkeyStatus = "";
+    }
+
     [RelayCommand]
     private void Back()
     {
@@ -241,8 +247,16 @@ public partial class WelcomeWizardViewModel : ObservableObject
         // Step 2: save hotkey + mic
         if (StepIndex == 2)
         {
-            if (_hotkey.TrySetHotkeyFromString(HotkeyText))
-                _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
+            if (!_hotkey.TrySetHotkeyFromString(HotkeyText))
+            {
+                HotkeyStatus = $"Could not parse '{HotkeyText}'. Try Ctrl+Shift+Space or Alt+F9.";
+                return;
+            }
+
+            _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
+            HotkeyText = _hotkey.CurrentHotkeyString;
+            HotkeyStatus = $"Hotkey set to {_hotkey.CurrentHotkeyString}.";
+
             if (SelectedMic is not null)
             {
                 _audio.SelectedDeviceIndex = SelectedMic.Index;
@@ -289,6 +303,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         var selectedModelReady = SelectedModel is { } selected
             && _models.GetStatus(selected.ModelId).Type == ModelStatusType.Ready;
         var microphoneReady = SelectedMic is not null;
+        var hotkeyReady = !string.IsNullOrWhiteSpace(_hotkey.CurrentHotkeyString);
 
         Diagnostics.Clear();
         Diagnostics.Add(new WelcomeDiagnosticRow(
@@ -317,6 +332,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
             microphoneReady,
             "Select a microphone before your first dictation."));
         Diagnostics.Add(new WelcomeDiagnosticRow(
+            "Shortcut",
+            hotkeyReady ? _hotkey.CurrentHotkeyString : "No dictation shortcut set",
+            hotkeyReady,
+            "Return to the microphone and shortcut step and set a valid shortcut."));
+        Diagnostics.Add(new WelcomeDiagnosticRow(
             "Model",
             selectedModelReady
                 ? $"{SelectedModel!.DisplayName} ready"
@@ -331,7 +351,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             snapshot.CanUseCuda || !snapshot.HasCudaGpu,
             "Use CPU or install CUDA 12 runtime libraries before selecting CUDA."));
 
-        var blockingIssues = Diagnostics.Count(row => !row.IsReady && row.Title is "Clipboard" or "Automatic paste" or "Microphone" or "Model");
+        var blockingIssues = Diagnostics.Count(row => !row.IsReady && row.Title is "Clipboard" or "Automatic paste" or "Microphone" or "Shortcut" or "Model");
         DiagnosticsSummary = blockingIssues == 0
             ? "Ready for first dictation."
             : $"{blockingIssues} setup item(s) need attention before the smoothest first dictation.";

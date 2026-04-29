@@ -18,6 +18,9 @@ public sealed class TransformSelectionService
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private TransformSelectionSession? _session;
+    private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
+
+    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
     public TransformSelectionService(
         TextInsertionService textInsertion,
@@ -66,11 +69,21 @@ public sealed class TransformSelectionService
         {command}
         """;
 
+    internal static bool IsCancelCommand(string command)
+    {
+        var normalized = command.Trim().Trim('.', '!', '?', ',');
+        return normalized.Equals("cancel", StringComparison.OrdinalIgnoreCase)
+               || normalized.Equals("cancel that", StringComparison.OrdinalIgnoreCase)
+               || normalized.Equals("never mind", StringComparison.OrdinalIgnoreCase)
+               || normalized.Equals("nevermind", StringComparison.OrdinalIgnoreCase)
+               || normalized.Equals("stop", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task StartAsync()
     {
         if (!_promptProcessing.IsAnyProviderAvailable)
         {
-            await ShowWarningAsync("TypeWhisper", "No LLM provider available. Please configure an API key in Plugins.");
+            await ShowWarningAsync("No LLM provider available. Please configure an API key in Plugins.");
             return;
         }
 
@@ -80,7 +93,7 @@ public sealed class TransformSelectionService
         var selectedText = await _textInsertion.CaptureSelectedTextAsync();
         if (string.IsNullOrWhiteSpace(selectedText))
         {
-            await ShowWarningAsync("TypeWhisper", "Select text before using Transform Selection.");
+            await ShowWarningAsync("Select text before using Transform Selection.");
             return;
         }
 
@@ -92,17 +105,29 @@ public sealed class TransformSelectionService
         catch (Exception ex)
         {
             Trace.WriteLine($"[TransformSelection] Failed to start recording: {ex}");
-            await ShowWarningAsync("TypeWhisper", $"Could not start recording: {ex.Message}");
+            await ShowWarningAsync($"Could not start recording: {ex.Message}");
             return;
         }
 
         if (!_audio.IsRecording)
         {
-            await ShowWarningAsync("TypeWhisper", "Could not start recording. Check your microphone settings.");
+            await ShowWarningAsync("Could not start recording. Check your microphone settings.");
             return;
         }
 
         _session = new TransformSelectionSession(selectedText, windowId, processName, windowTitle);
+        PublishOverlay(state => state with
+        {
+            IsOverlayVisible = true,
+            ShowFeedback = false,
+            FeedbackText = null,
+            FeedbackIsError = false,
+            IsRecording = true,
+            StatusText = "Transform command: speak the edit, then press the hotkey again.",
+            PartialText = selectedText,
+            ActiveAppName = string.IsNullOrWhiteSpace(processName) ? windowTitle : processName,
+            SessionStartedAtUtc = DateTime.UtcNow
+        });
     }
 
     private async Task StopAndTransformAsync()
@@ -112,6 +137,18 @@ public sealed class TransformSelectionService
         if (session is null)
             return;
 
+        PublishOverlay(state => state with
+        {
+            IsOverlayVisible = true,
+            ShowFeedback = false,
+            FeedbackText = null,
+            IsRecording = false,
+            StatusText = "Processing transform command...",
+            PartialText = session.SelectedText,
+            ActiveAppName = string.IsNullOrWhiteSpace(session.ProcessName) ? session.WindowTitle : session.ProcessName,
+            SessionStartedAtUtc = null
+        });
+
         byte[] wav;
         try
         {
@@ -120,13 +157,13 @@ public sealed class TransformSelectionService
         catch (Exception ex)
         {
             Trace.WriteLine($"[TransformSelection] Failed to stop recording: {ex}");
-            await ShowWarningAsync("TypeWhisper", $"Could not stop recording: {ex.Message}");
+            await ShowWarningAsync($"Could not stop recording: {ex.Message}");
             return;
         }
 
         if (wav.Length == 0)
         {
-            await ShowWarningAsync("TypeWhisper", "No command audio was recorded.");
+            await ShowWarningAsync("No command audio was recorded.");
             return;
         }
 
@@ -135,34 +172,43 @@ public sealed class TransformSelectionService
             using var cts = new CancellationTokenSource(ProcessingTimeout);
             if (!await _models.EnsureModelLoadedAsync(cancellationToken: cts.Token))
             {
-                await ShowWarningAsync("TypeWhisper", "No transcription model is configured.");
+                await ShowWarningAsync("No transcription model is configured.");
                 return;
             }
 
             var plugin = _models.ActiveTranscriptionPlugin;
             if (plugin is null)
             {
-                await ShowWarningAsync("TypeWhisper", "No transcription model is loaded.");
+                await ShowWarningAsync("No transcription model is loaded.");
                 return;
             }
 
+            PublishStatus("Transcribing transform command...");
             var language = _settings.Current.Language is { Length: > 0 } lang && lang != "auto" ? lang : null;
             var transcription = await plugin.TranscribeAsync(wav, language, translate: false, prompt: null, ct: cts.Token);
             var command = transcription.Text?.Trim();
             if (string.IsNullOrWhiteSpace(command))
             {
-                await ShowWarningAsync("TypeWhisper", "The transform command returned no text.");
+                await ShowWarningAsync("The transform command returned no text.");
                 return;
             }
 
+            if (IsCancelCommand(command))
+            {
+                ShowFeedback("Transform canceled.", isError: false);
+                return;
+            }
+
+            PublishStatus($"Applying: {command}");
             var prompt = BuildTransformPrompt(session.SelectedText, command);
             var transformed = await _promptProcessing.ProcessSystemPromptAsync(prompt, session.SelectedText, cts.Token);
             if (string.IsNullOrWhiteSpace(transformed))
             {
-                await ShowWarningAsync("TypeWhisper", "The transform result was empty.");
+                await ShowWarningAsync("The transform result was empty.");
                 return;
             }
 
+            PublishStatus("Replacing selected text...");
             var insertion = await _textInsertion.InsertTextAsync(
                 transformed,
                 autoPaste: true,
@@ -171,28 +217,56 @@ public sealed class TransformSelectionService
                 targetWindowTitle: session.WindowTitle);
 
             if (insertion is InsertionResult.CopiedToClipboard)
-                await ShowWarningAsync("TypeWhisper", "Transformed text copied. Paste manually to replace the selection.");
+                await ShowWarningAsync("Transformed text copied. Paste manually to replace the selection.");
             else if (insertion is not InsertionResult.Pasted and not InsertionResult.Typed)
-                await ShowWarningAsync("TypeWhisper", "Could not insert transformed text.");
+                await ShowWarningAsync("Could not insert transformed text.");
+            else
+                ShowFeedback("Selection transformed.", isError: false);
         }
         catch (OperationCanceledException)
         {
-            await ShowWarningAsync("TypeWhisper", "Transform selection timed out.");
+            await ShowWarningAsync("Transform selection timed out.");
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[TransformSelection] Transform failed: {ex}");
-            await ShowWarningAsync("TypeWhisper", $"Transform selection failed: {ex.Message}");
+            await ShowWarningAsync($"Transform selection failed: {ex.Message}");
         }
     }
 
-    private static async Task ShowWarningAsync(string title, string message)
+    private async Task ShowWarningAsync(string message)
     {
+        ShowFeedback(message, isError: true);
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var dialog = new MessageDialogWindow();
-            await dialog.ShowMessageAsync(title, message);
+            await dialog.ShowMessageAsync("TypeWhisper", message);
         });
+    }
+
+    private void PublishStatus(string message) => PublishOverlay(state => state with
+    {
+        IsOverlayVisible = true,
+        StatusText = message,
+        ShowFeedback = false,
+        FeedbackText = null,
+        IsRecording = false,
+        SessionStartedAtUtc = null
+    });
+
+    private void ShowFeedback(string message, bool isError) => PublishOverlay(_ => new DictationOverlayState
+    {
+        IsOverlayVisible = false,
+        ShowFeedback = true,
+        FeedbackIsError = isError,
+        FeedbackText = message,
+        StatusText = message
+    });
+
+    private void PublishOverlay(Func<DictationOverlayState, DictationOverlayState> updater)
+    {
+        _overlayState = updater(_overlayState);
+        OverlayStateChanged?.Invoke(this, _overlayState);
     }
 
     private sealed record TransformSelectionSession(

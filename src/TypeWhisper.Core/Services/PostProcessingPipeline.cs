@@ -30,13 +30,18 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
     {
         var steps = BuildSteps(options);
         var text = rawText;
+        var stepResults = new List<PostProcessingStepResult>();
 
         foreach (var (_, name, executor) in steps)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
+                var before = text;
                 text = await executor(text, ct);
+                stepResults.Add(new PostProcessingStepResult(
+                    name,
+                    !string.Equals(before, text, StringComparison.Ordinal)));
             }
             catch (OperationCanceledException)
             {
@@ -50,7 +55,11 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             }
         }
 
-        return new PostProcessingResult { Text = text };
+        return new PostProcessingResult
+        {
+            Text = text,
+            Steps = stepResults
+        };
     }
 
     private static List<(int Priority, string Name, Func<string, CancellationToken, Task<string>> Execute)>

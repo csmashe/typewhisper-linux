@@ -220,6 +220,75 @@
                             </StackPanel>
                         </Border>
                     </Grid>
+                    <TextBlock Text="Insertion reliability"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Margin="0,8,0,0" />
+                    <Grid ColumnDefinitions="*,*"
+                          RowDefinitions="Auto,Auto"
+                          ColumnSpacing="10"
+                          RowSpacing="10">
+                        <Border Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding InsertionSuccessRateLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Inserted"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding ClipboardFallbackCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Clipboard fallback"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding PastedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding InsertedBreakdownLabel}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1"
+                                Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding FailedInsertionCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Failed"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1"
@@ -250,6 +319,90 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <TextBlock Text="Writing assists"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Margin="0,12,0,0" />
+                    <Grid ColumnDefinitions="*,*"
+                          RowDefinitions="Auto,Auto,Auto"
+                          ColumnSpacing="10"
+                          RowSpacing="10">
+                        <Border Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding CleanupAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Cleanups"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding SnippetAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Snippets"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding DictionaryCorrectionAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Corrections"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1"
+                                Grid.Column="1"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding PromptActionAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Prompt actions"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="2"
+                                Background="#111822"
+                                BorderBrush="#243241"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding TranslationAppliedCountLabel}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Translations"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
                 </StackPanel>
             </Grid>
         </Border>

@@ -16,4 +16,21 @@ public sealed class TransformSelectionServiceTests
         Assert.Contains("This sentence is too long.", result);
         Assert.Contains("make it concise", result);
     }
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("Cancel.")]
+    [InlineData("never mind")]
+    [InlineData("nevermind!")]
+    [InlineData("stop")]
+    public void IsCancelCommand_ReturnsTrueForCancelPhrases(string command)
+    {
+        Assert.True(TransformSelectionService.IsCancelCommand(command));
+    }
+
+    [Fact]
+    public void IsCancelCommand_ReturnsFalseForNormalEditInstruction()
+    {
+        Assert.False(TransformSelectionService.IsCancelCommand("make this more concise"));
+    }
 }

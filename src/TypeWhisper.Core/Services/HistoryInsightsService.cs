@@ -24,20 +24,37 @@ public sealed class HistoryInsightsService
             .Take(Math.Max(0, topAppCount))
             .ToList();
 
+        var pastedCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.Pasted);
+        var typedCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.Typed);
+        var copiedToClipboardCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.CopiedToClipboard);
+        var failedInsertionCount = records.Count(record => record.InsertionStatus
+            is TextInsertionStatus.Failed
+            or TextInsertionStatus.ActionFailed
+            or TextInsertionStatus.MissingClipboardTool
+            or TextInsertionStatus.MissingPasteTool);
+        var successfulInsertionCount = pastedCount + typedCount;
+        var insertionAttemptCount = successfulInsertionCount + copiedToClipboardCount + failedInsertionCount;
+
         return new HistoryInsights
         {
             TotalRecords = records.Count,
             TotalWords = totalWords,
             AverageWordsPerDictation = Math.Round(totalWords / (double)records.Count, 1),
             AverageDurationSeconds = Math.Round(totalDuration / records.Count, 1),
-            PastedCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.Pasted),
-            TypedCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.Typed),
-            CopiedToClipboardCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.CopiedToClipboard),
-            FailedInsertionCount = records.Count(record => record.InsertionStatus
-                is TextInsertionStatus.Failed
-                or TextInsertionStatus.ActionFailed
-                or TextInsertionStatus.MissingClipboardTool
-                or TextInsertionStatus.MissingPasteTool),
+            PastedCount = pastedCount,
+            TypedCount = typedCount,
+            CopiedToClipboardCount = copiedToClipboardCount,
+            FailedInsertionCount = failedInsertionCount,
+            SuccessfulInsertionCount = successfulInsertionCount,
+            InsertionAttemptCount = insertionAttemptCount,
+            InsertionSuccessRate = insertionAttemptCount > 0
+                ? Math.Round(successfulInsertionCount / (double)insertionAttemptCount * 100, 1)
+                : 0,
+            CleanupAppliedCount = records.Count(record => record.CleanupApplied),
+            SnippetAppliedCount = records.Count(record => record.SnippetApplied),
+            DictionaryCorrectionAppliedCount = records.Count(record => record.DictionaryCorrectionApplied),
+            PromptActionAppliedCount = records.Count(record => record.PromptActionApplied),
+            TranslationAppliedCount = records.Count(record => record.TranslationApplied),
             TopApps = topApps
         };
     }

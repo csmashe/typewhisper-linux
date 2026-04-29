@@ -75,4 +75,11 @@ public sealed record PostProcessingResult
 {
     /// <summary>The fully processed text.</summary>
     public required string Text { get; init; }
+
+    /// <summary>Execution details for each pipeline step that ran.</summary>
+    public IReadOnlyList<PostProcessingStepResult> Steps { get; init; } = [];
 }
+
+public sealed record PostProcessingStepResult(
+    string Name,
+    bool Changed);

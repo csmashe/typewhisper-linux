@@ -538,7 +538,17 @@ public sealed class DictationOrchestrator : IDisposable
 
             // Write to history last so stats reflect the just-completed capture.
             if (_settings.Current.SaveToHistoryEnabled)
-                AddHistoryRecord(transcriptionId, timestamp, rawText, finalText, duration, result, wavPath, insertion);
+                AddHistoryRecord(
+                    transcriptionId,
+                    timestamp,
+                    rawText,
+                    finalText,
+                    duration,
+                    result,
+                    wavPath,
+                    insertion,
+                    pipelineResult,
+                    cleanupLevel);
 
             if (_settings.Current.MemoryEnabled)
                 _ = Task.Run(() => _memory.ExtractAndStoreAsync(finalText));
@@ -714,8 +724,17 @@ public sealed class DictationOrchestrator : IDisposable
         || name.Contains("bluez", StringComparison.OrdinalIgnoreCase)
         || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
 
-    private void AddHistoryRecord(string id, DateTime timestamp, string rawText, string finalText, double duration,
-        PluginTranscriptionResult? result, string wavPath, InsertionResult insertion)
+    private void AddHistoryRecord(
+        string id,
+        DateTime timestamp,
+        string rawText,
+        string finalText,
+        double duration,
+        PluginTranscriptionResult? result,
+        string wavPath,
+        InsertionResult insertion,
+        PostProcessingResult pipelineResult,
+        CleanupLevel cleanupLevel)
     {
         try
         {
@@ -741,6 +760,12 @@ public sealed class DictationOrchestrator : IDisposable
                 AudioFileName = Path.GetFileName(wavPath),
                 InsertionStatus = ToTextInsertionStatus(insertion),
                 InsertionFailureReason = InsertionFailureReasonFor(insertion),
+                CleanupLevelUsed = cleanupLevel,
+                CleanupApplied = WasPipelineStepChanged(pipelineResult, "Cleanup"),
+                SnippetApplied = WasPipelineStepChanged(pipelineResult, "Snippets"),
+                DictionaryCorrectionApplied = WasPipelineStepChanged(pipelineResult, "Dictionary"),
+                PromptActionApplied = WasPipelineStepChanged(pipelineResult, "LLM"),
+                TranslationApplied = WasPipelineStepChanged(pipelineResult, "Translation"),
             });
         }
         catch (Exception ex)
@@ -763,6 +788,10 @@ public sealed class DictationOrchestrator : IDisposable
             InsertionResult.Failed => TextInsertionStatus.Failed,
             _ => TextInsertionStatus.Unknown,
         };
+
+    private static bool WasPipelineStepChanged(PostProcessingResult result, string name) =>
+        result.Steps.Any(step =>
+            step.Changed && string.Equals(step.Name, name, StringComparison.OrdinalIgnoreCase));
 
     private static string? InsertionFailureReasonFor(InsertionResult insertion) =>
         insertion switch

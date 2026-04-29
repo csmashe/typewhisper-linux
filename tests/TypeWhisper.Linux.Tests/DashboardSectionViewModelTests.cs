@@ -19,9 +19,9 @@ public sealed class DashboardSectionViewModelTests : IDisposable
     public void Refresh_BuildsHistoryInsightsForSelectedRange()
     {
         var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
-        history.AddRecord(CreateRecord("one two three four", "code", 8, DateTime.UtcNow));
-        history.AddRecord(CreateRecord("one two", "code", 4, DateTime.UtcNow));
-        history.AddRecord(CreateRecord("one two three four five six", "browser", 12, DateTime.UtcNow));
+        history.AddRecord(CreateRecord("one two three four", "code", 8, DateTime.UtcNow, TextInsertionStatus.Pasted, cleanupApplied: true));
+        history.AddRecord(CreateRecord("one two", "code", 4, DateTime.UtcNow, TextInsertionStatus.Typed, snippetApplied: true));
+        history.AddRecord(CreateRecord("one two three four five six", "browser", 12, DateTime.UtcNow, TextInsertionStatus.CopiedToClipboard, dictionaryApplied: true, promptApplied: true, translationApplied: true));
         var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
         var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
 
@@ -32,13 +32,30 @@ public sealed class DashboardSectionViewModelTests : IDisposable
         Assert.True(sut.HasTopApps);
         Assert.Equal("code", sut.TopApps[0].AppProcessName);
         Assert.Equal("2 dictations · 6 words", sut.TopApps[0].Summary);
+        Assert.Equal("66.7%", sut.InsertionSuccessRateLabel);
+        Assert.Equal("1", sut.PastedCountLabel);
+        Assert.Equal("1", sut.TypedCountLabel);
+        Assert.Equal("1 pasted / 1 typed", sut.InsertedBreakdownLabel);
+        Assert.Equal("1", sut.ClipboardFallbackCountLabel);
+        Assert.Equal("0", sut.FailedInsertionCountLabel);
+        Assert.Equal("1", sut.CleanupAppliedCountLabel);
+        Assert.Equal("1", sut.SnippetAppliedCountLabel);
+        Assert.Equal("1", sut.DictionaryCorrectionAppliedCountLabel);
+        Assert.Equal("1", sut.PromptActionAppliedCountLabel);
+        Assert.Equal("1", sut.TranslationAppliedCountLabel);
     }
 
     private static TranscriptionRecord CreateRecord(
         string finalText,
         string appProcessName,
         double durationSeconds,
-        DateTime timestamp) =>
+        DateTime timestamp,
+        TextInsertionStatus insertionStatus = TextInsertionStatus.Unknown,
+        bool cleanupApplied = false,
+        bool snippetApplied = false,
+        bool dictionaryApplied = false,
+        bool promptApplied = false,
+        bool translationApplied = false) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -46,7 +63,13 @@ public sealed class DashboardSectionViewModelTests : IDisposable
             RawText = finalText,
             FinalText = finalText,
             AppProcessName = appProcessName,
-            DurationSeconds = durationSeconds
+            DurationSeconds = durationSeconds,
+            InsertionStatus = insertionStatus,
+            CleanupApplied = cleanupApplied,
+            SnippetApplied = snippetApplied,
+            DictionaryCorrectionApplied = dictionaryApplied,
+            PromptActionApplied = promptApplied,
+            TranslationApplied = translationApplied
         };
 
     public void Dispose()

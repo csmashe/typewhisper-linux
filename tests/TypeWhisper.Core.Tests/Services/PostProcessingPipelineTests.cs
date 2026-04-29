@@ -39,6 +39,24 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_ReturnsStepChangeMetadata()
+    {
+        var options = new PipelineOptions
+        {
+            CleanupHandler = (text, _) => Task.FromResult(text.Trim()),
+            SnippetExpander = text => text.Replace("brb", "be right back"),
+            DictionaryCorrector = text => text
+        };
+
+        var result = await _sut.ProcessAsync(" brb ", options);
+
+        Assert.Equal("be right back", result.Text);
+        Assert.Contains(result.Steps, step => step.Name == "Cleanup" && step.Changed);
+        Assert.Contains(result.Steps, step => step.Name == "Snippets" && step.Changed);
+        Assert.Contains(result.Steps, step => step.Name == "Dictionary" && !step.Changed);
+    }
+
+    [Fact]
     public async Task ProcessAsync_LlmHandler_Applied()
     {
         var options = new PipelineOptions
