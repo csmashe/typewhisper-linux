@@ -161,7 +161,7 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="models:DictionaryEntry">
                                     <Border Classes="entry-card">
-                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto"
+                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto"
                                               ColumnSpacing="14">
                                             <StackPanel Grid.Column="0"
                                                         MinWidth="180">
@@ -207,15 +207,48 @@
                                                                FontSize="10.5"
                                                                Foreground="#D6DEE9" />
                                                 </Border>
+                                                <Border Background="#1B2430"
+                                                        BorderBrush="#223243"
+                                                        BorderThickness="1"
+                                                        CornerRadius="999"
+                                                        Padding="8,3">
+                                                    <TextBlock Text="{Binding Priority, StringFormat='Priority {0}'}"
+                                                               FontSize="10.5"
+                                                               Foreground="#D6DEE9" />
+                                                </Border>
                                             </StackPanel>
 
-                                            <ToggleSwitch Grid.Column="2"
+                                            <Button Grid.Column="2"
+                                                    Content="{Binding IsStarred, Converter={x:Static local:BoolTextConverter.Instance}, ConverterParameter='True=★|False=☆'}"
+                                                    Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleStarredCommand}"
+                                                    CommandParameter="{Binding}"
+                                                    Padding="10,6"
+                                                    MinWidth="38"
+                                                    VerticalAlignment="Center" />
+
+                                            <StackPanel Grid.Column="3"
+                                                        Orientation="Horizontal"
+                                                        Spacing="4"
+                                                        VerticalAlignment="Center">
+                                                <Button Content="−"
+                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DecreasePriorityCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        Padding="8,6"
+                                                        MinWidth="30" />
+                                                <Button Content="+"
+                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).IncreasePriorityCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        Padding="8,6"
+                                                        MinWidth="30" />
+                                            </StackPanel>
+
+                                            <ToggleSwitch Grid.Column="4"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleEnabledCommand}"
                                                           CommandParameter="{Binding}"
                                                           VerticalAlignment="Center" />
 
-                                            <Button Grid.Column="3"
+                                            <Button Grid.Column="5"
                                                     Content="Delete"
                                                     Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DeleteCommand}"
                                                     CommandParameter="{Binding}"
@@ -280,7 +313,7 @@
             <Border Classes="panel"
                     Padding="14,12"
                     IsVisible="{Binding ShowAddBar}">
-                <Grid ColumnDefinitions="*,Auto,*,Auto,Auto,Auto,Auto"
+                <Grid ColumnDefinitions="*,Auto,*,92,Auto,Auto,Auto,Auto"
                       ColumnSpacing="10">
                     <TextBox Grid.Column="0"
                              Text="{Binding NewOriginal}"
@@ -292,19 +325,24 @@
                     <TextBox Grid.Column="2"
                              Text="{Binding NewReplacement}"
                              PlaceholderText="Replacement (optional)" />
-                    <ToggleButton Grid.Column="3"
+                    <NumericUpDown Grid.Column="3"
+                                   Minimum="0"
+                                   Maximum="999"
+                                   Value="{Binding NewPriority}"
+                                   PlaceholderText="Priority" />
+                    <ToggleButton Grid.Column="4"
                                   IsChecked="{Binding IsNewTypeCorrection}"
                                   Content="Correction"
                                   Padding="10,6" />
-                    <ToggleButton Grid.Column="4"
+                    <ToggleButton Grid.Column="5"
                                   IsChecked="{Binding IsNewTypeTerm}"
                                   Content="Term"
                                   Padding="10,6" />
-                    <CheckBox Grid.Column="5"
+                    <CheckBox Grid.Column="6"
                               Content="Aa"
                               IsChecked="{Binding CaseSensitive}"
                               VerticalAlignment="Center" />
-                    <Button Grid.Column="6"
+                    <Button Grid.Column="7"
                             Content="+ Add"
                             Command="{Binding AddEntryCommand}"
                             Padding="14,7" />
