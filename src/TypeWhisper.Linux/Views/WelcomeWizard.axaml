@@ -5,6 +5,7 @@
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
         xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
         xmlns:svc="using:TypeWhisper.Linux.Services"
+        xmlns:local="using:TypeWhisper.Linux"
         mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="720"
         x:Class="TypeWhisper.Linux.Views.WelcomeWizard"
         x:DataType="vm:WelcomeWizardViewModel"
@@ -22,20 +23,19 @@
                        HorizontalAlignment="Center"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
             <!-- step dots -->
-            <ItemsControl Margin="0,10,0,0" HorizontalAlignment="Center">
+            <ItemsControl Margin="0,10,0,0" HorizontalAlignment="Center"
+                          ItemsSource="{Binding StepDots}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <StackPanel Orientation="Horizontal" Spacing="6" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
-                <ItemsControl.Items>
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource SystemAccentColorBrush}" />
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource TextFillColorTertiaryBrush}" />
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource TextFillColorTertiaryBrush}" />
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource TextFillColorTertiaryBrush}" />
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource TextFillColorTertiaryBrush}" />
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource TextFillColorTertiaryBrush}" />
-                </ItemsControl.Items>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WelcomeStepDot">
+                        <Ellipse Width="24" Height="6"
+                                 Fill="{Binding IsActive, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=#6F7A86'}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
             </ItemsControl>
             <TextBlock Text="{Binding StepText}"
                        FontSize="10" HorizontalAlignment="Center" Margin="0,6,0,0"

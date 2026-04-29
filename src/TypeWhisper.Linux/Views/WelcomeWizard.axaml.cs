@@ -7,6 +7,8 @@ namespace TypeWhisper.Linux.Views;
 
 public partial class WelcomeWizard : Window
 {
+    private bool _isClosed;
+
     public WelcomeWizard() => InitializeComponent();
 
     protected override void OnDataContextChanged(EventArgs e)
@@ -18,6 +20,8 @@ public partial class WelcomeWizard : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _isClosed = true;
+
         if (DataContext is WelcomeWizardViewModel vm)
             vm.Cleanup();
 
@@ -37,6 +41,9 @@ public partial class WelcomeWizard : Window
             return;
 
         await Task.Delay(350);
+        if (_isClosed || !IsVisible || !ReferenceEquals(DataContext, vm))
+            return;
+
         vm.CompletePasteSmokeTest(PasteSmokeBox.Text);
     }
 }

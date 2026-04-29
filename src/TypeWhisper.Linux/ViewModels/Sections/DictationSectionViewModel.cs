@@ -697,7 +697,6 @@ public sealed class AppInsertionStrategyRow : ObservableObject
                 return;
 
             Strategy = selected;
-            OnPropertyChanged();
         }
     }
 

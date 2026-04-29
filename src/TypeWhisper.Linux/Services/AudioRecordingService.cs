@@ -351,7 +351,7 @@ public sealed class AudioRecordingService : IDisposable
 
     private static PaStream CreateInputStream(
         int deviceIndex,
-        dynamic inputInfo,
+        DeviceInfo inputInfo,
         int sampleRate,
         PortAudioSharp.Stream.Callback callback)
     {

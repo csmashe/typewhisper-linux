@@ -71,7 +71,8 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
         sut.NewReplacement = "Today is {date:yyyy-MM-dd}";
 
         Assert.True(sut.ShowPreview);
-        Assert.Equal($"Today is {DateTime.Now:yyyy-MM-dd}", sut.PreviewText);
+        Assert.StartsWith("Today is ", sut.PreviewText);
+        Assert.Equal(DateTime.Now.Date.ToString("yyyy-MM-dd"), sut.PreviewText["Today is ".Length..]);
     }
 
     [Fact]

@@ -429,10 +429,10 @@
                            VerticalAlignment="Center"
                            FontSize="14"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           IsVisible="{Binding !RecentActivity.Count}" />
+                           IsVisible="{Binding !HasRecentActivity}" />
 
                 <ItemsControl ItemsSource="{Binding RecentActivity}"
-                              IsVisible="{Binding RecentActivity.Count}">
+                              IsVisible="{Binding HasRecentActivity}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="models:TranscriptionRecord">
                             <Border Padding="8,10"

@@ -79,6 +79,7 @@ When one of those tools is missing, the Linux UI disables that control and shows
 - Tray icon support where the current desktop environment exposes a compatible system tray
 - XDG autostart integration through `~/.config/autostart/typewhisper.desktop`
 - Single-instance lock using `XDG_RUNTIME_DIR`
+- Set `TYPEWHISPER_DISABLE_IME=1` to disable Avalonia X11 IME integration when debugging input-method issues
 - Desktop install script that publishes the app, installs it under the user profile, and creates a launcher icon
 
 ## Linux Requirements

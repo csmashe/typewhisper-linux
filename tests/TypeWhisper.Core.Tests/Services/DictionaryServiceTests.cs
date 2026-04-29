@@ -69,7 +69,7 @@ public class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
-    public void ActivatePack_SkipsDuplicates()
+    public void ActivatePack_AllowsSameTermInDifferentSources()
     {
         _sut.AddEntry(new DictionaryEntry
         {
@@ -81,8 +81,9 @@ public class DictionaryServiceTests : IDisposable
         var pack = new TermPack("test", "Test Pack", "T", ["React", "Vue"]);
         _sut.ActivatePack(pack);
 
-        // Should have 2 entries: the existing "React" and the new "Vue"
-        Assert.Equal(2, _sut.Entries.Count);
+        Assert.Equal(3, _sut.Entries.Count);
+        Assert.Contains(_sut.Entries, e => e.Id == "existing" && e.Original == "React");
+        Assert.Contains(_sut.Entries, e => e.Id == "pack:test:React" && e.Original == "React");
     }
 
     [Fact]

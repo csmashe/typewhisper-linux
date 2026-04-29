@@ -245,7 +245,7 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
-    public async Task InsertTextAsync_empty_text_with_auto_enter_sends_enter_without_clipboard()
+    public async Task InsertTextAsync_empty_text_with_auto_enter_requires_paste_tool()
     {
         var platform = new FakeTextInsertionPlatform
         {
@@ -256,8 +256,8 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync("", autoPaste: true, autoEnter: true);
 
-        Assert.Equal(InsertionResult.Pasted, result);
-        Assert.True(platform.EnterSent);
+        Assert.Equal(InsertionResult.MissingPasteTool, result);
+        Assert.False(platform.EnterSent);
         Assert.False(platform.PasteSent);
         Assert.Equal("previous", platform.Clipboard);
     }
@@ -270,6 +270,7 @@ public sealed class TextInsertionServiceTests
         public bool PasteAvailable { get; set; } = true;
         public bool ActivateSucceeds { get; set; } = true;
         public bool PasteSucceeds { get; set; } = true;
+        public bool TypeSucceeds { get; set; } = true;
         public Queue<bool>? PasteResults { get; set; }
         public bool PasteSent { get; private set; }
         public int PasteAttemptCount { get; private set; }
@@ -311,7 +312,7 @@ public sealed class TextInsertionServiceTests
         public Task<bool> TypeTextAsync(string text)
         {
             TypedText = text;
-            return Task.FromResult(PasteSucceeds);
+            return Task.FromResult(TypeSucceeds);
         }
 
         public Task<bool> SendCopyAsync() => Task.FromResult(true);

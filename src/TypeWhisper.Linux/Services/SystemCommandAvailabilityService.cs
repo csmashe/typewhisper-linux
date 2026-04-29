@@ -12,26 +12,31 @@ public sealed class SystemCommandAvailabilityService
         _snapshot = BuildSnapshot();
     }
 
-    public bool IsWaylandSession => _snapshot.SessionType == "Wayland";
-    public bool IsX11Session => _snapshot.SessionType == "X11";
-    public bool HasXdotool => _snapshot.HasAutomaticPasteTool;
-    public bool HasXclip => _snapshot.ClipboardToolName == "xclip" && _snapshot.HasClipboardTool;
-    public bool HasWlClipboard => _snapshot.ClipboardToolName == "wl-clipboard" && _snapshot.HasClipboardTool;
-    public bool HasPactl { get; private set; }
-    public bool HasPlayerCtl { get; private set; }
-    public bool HasCanberraGtkPlay { get; private set; }
-    public bool HasFfmpeg => _snapshot.HasFfmpeg;
-    public bool HasSpeechFeedback => _snapshot.HasSpeechFeedback;
-    public bool HasCudaGpu => _snapshot.HasCudaGpu;
-    public bool HasCudaRuntimeLibraries => _snapshot.HasCudaRuntimeLibraries;
-    public string? SpeechFeedbackCommand => _snapshot.SpeechFeedbackCommand;
+    public bool IsWaylandSession { get { var s = _snapshot; return s.SessionType == "Wayland"; } }
+    public bool IsX11Session { get { var s = _snapshot; return s.SessionType == "X11"; } }
+    public bool HasXdotool { get { var s = _snapshot; return s.HasAutomaticPasteTool; } }
+    public bool HasXclip { get { var s = _snapshot; return s.ClipboardToolName == "xclip" && s.HasClipboardTool; } }
+    public bool HasWlClipboard { get { var s = _snapshot; return s.ClipboardToolName == "wl-clipboard" && s.HasClipboardTool; } }
+    public bool HasPactl { get { var s = _snapshot; return s.HasPactl; } }
+    public bool HasPlayerCtl { get { var s = _snapshot; return s.HasPlayerCtl; } }
+    public bool HasCanberraGtkPlay { get { var s = _snapshot; return s.HasCanberraGtkPlay; } }
+    public bool HasFfmpeg { get { var s = _snapshot; return s.HasFfmpeg; } }
+    public bool HasSpeechFeedback { get { var s = _snapshot; return s.HasSpeechFeedback; } }
+    public bool HasCudaGpu { get { var s = _snapshot; return s.HasCudaGpu; } }
+    public bool HasCudaRuntimeLibraries { get { var s = _snapshot; return s.HasCudaRuntimeLibraries; } }
+    public string? SpeechFeedbackCommand { get { var s = _snapshot; return s.SpeechFeedbackCommand; } }
 
-    public LinuxCapabilitySnapshot GetSnapshot() => _snapshot;
+    public LinuxCapabilitySnapshot GetSnapshot()
+    {
+        var s = _snapshot;
+        return s;
+    }
 
     public LinuxCapabilitySnapshot RefreshSnapshot()
     {
-        _snapshot = BuildSnapshot();
-        return _snapshot;
+        var snapshot = BuildSnapshot();
+        Interlocked.Exchange(ref _snapshot, snapshot);
+        return snapshot;
     }
 
     public async Task<CudaBenchmarkResult> RunCudaBenchmarkAsync(CancellationToken cancellationToken = default)
@@ -107,9 +112,9 @@ public sealed class SystemCommandAvailabilityService
         var hasWlClipboard = IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
         var speechCommand = ResolveSpeechFeedbackCommand();
 
-        HasPactl = IsCommandAvailable("pactl");
-        HasPlayerCtl = IsCommandAvailable("playerctl");
-        HasCanberraGtkPlay = IsCommandAvailable("canberra-gtk-play");
+        var hasPactl = IsCommandAvailable("pactl");
+        var hasPlayerCtl = IsCommandAvailable("playerctl");
+        var hasCanberraGtkPlay = IsCommandAvailable("canberra-gtk-play");
 
         return new LinuxCapabilitySnapshot(
             SessionType: isWayland ? "Wayland" : isX11 ? "X11" : "Unknown",
@@ -119,6 +124,9 @@ public sealed class SystemCommandAvailabilityService
             HasFfmpeg: IsCommandAvailable("ffmpeg"),
             HasSpeechFeedback: speechCommand is not null,
             SpeechFeedbackCommand: speechCommand,
+            HasPactl: hasPactl,
+            HasPlayerCtl: hasPlayerCtl,
+            HasCanberraGtkPlay: hasCanberraGtkPlay,
             HasCudaGpu: IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
             HasCudaRuntimeLibraries: IsLibraryAvailable("libcudart.so.12")
                                      && IsLibraryAvailable("libcublas.so.12"));
@@ -218,6 +226,9 @@ public sealed record LinuxCapabilitySnapshot(
     bool HasFfmpeg,
     bool HasSpeechFeedback,
     string? SpeechFeedbackCommand,
+    bool HasPactl,
+    bool HasPlayerCtl,
+    bool HasCanberraGtkPlay,
     bool HasCudaGpu,
     bool HasCudaRuntimeLibraries)
 {

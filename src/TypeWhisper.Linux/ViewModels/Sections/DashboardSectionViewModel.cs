@@ -38,6 +38,7 @@ public partial class DashboardSectionViewModel : ObservableObject
     public ObservableCollection<TranscriptionRecord> RecentActivity { get; } = [];
     public ObservableCollection<AppUsageInsightRow> TopApps { get; } = [];
     public bool HasTopApps => TopApps.Count > 0;
+    public bool HasRecentActivity => RecentActivity.Count > 0;
 
     public DashboardSectionViewModel(
         IHistoryService history,
@@ -118,6 +119,7 @@ public partial class DashboardSectionViewModel : ObservableObject
             TopApps.Add(new AppUsageInsightRow(app));
 
         OnPropertyChanged(nameof(HasTopApps));
+        OnPropertyChanged(nameof(HasRecentActivity));
     }
 
     private void PersistSelectedRange(TimeRange value)

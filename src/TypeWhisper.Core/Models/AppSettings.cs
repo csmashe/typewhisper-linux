@@ -3,6 +3,7 @@ namespace TypeWhisper.Core.Models;
 public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
+    private Dictionary<string, TextInsertionStrategy> _appInsertionStrategies = new(StringComparer.OrdinalIgnoreCase);
 
     public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
     public string PushToTalkHotkey { get; init; } = "Ctrl+Shift";
@@ -13,7 +14,13 @@ public record AppSettings
     public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
     public bool AutoPaste { get; init; } = true;
-    public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies { get; init; } = new();
+    public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
+    {
+        get => _appInsertionStrategies;
+        init => _appInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
+            value ?? [],
+            StringComparer.OrdinalIgnoreCase);
+    }
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
     public RecordingMode Mode { get; init; } = RecordingMode.Toggle;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;

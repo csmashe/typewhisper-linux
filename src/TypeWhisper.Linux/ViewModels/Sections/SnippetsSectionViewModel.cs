@@ -7,10 +7,12 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
-public partial class SnippetsSectionViewModel : ObservableObject
+public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 {
     private readonly ISnippetService _snippets;
     private readonly IDictionaryService _dictionary;
+    private readonly Action _snippetsChangedHandler;
+    private readonly Action _entriesChangedHandler;
 
     public ObservableCollection<Snippet> FilteredSnippets { get; } = [];
     public ObservableCollection<string> AvailableTags { get; } = ["All tags"];
@@ -48,9 +50,17 @@ public partial class SnippetsSectionViewModel : ObservableObject
     {
         _snippets = snippets;
         _dictionary = dictionary;
-        _snippets.SnippetsChanged += () => Dispatcher.UIThread.Post(Refresh);
-        _dictionary.EntriesChanged += () => Dispatcher.UIThread.Post(NotifyConflictWarningChanged);
+        _snippetsChangedHandler = () => Dispatcher.UIThread.Post(Refresh);
+        _entriesChangedHandler = () => Dispatcher.UIThread.Post(NotifyConflictWarningChanged);
+        _snippets.SnippetsChanged += _snippetsChangedHandler;
+        _dictionary.EntriesChanged += _entriesChangedHandler;
         Refresh();
+    }
+
+    public void Dispose()
+    {
+        _snippets.SnippetsChanged -= _snippetsChangedHandler;
+        _dictionary.EntriesChanged -= _entriesChangedHandler;
     }
 
     partial void OnSelectedTagFilterChanged(string value) => Refresh();

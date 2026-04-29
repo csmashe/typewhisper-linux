@@ -218,6 +218,10 @@ public sealed class TransformSelectionService
 
             if (insertion is InsertionResult.CopiedToClipboard)
                 await ShowWarningAsync("Transformed text copied. Paste manually to replace the selection.");
+            else if (insertion is InsertionResult.MissingClipboardTool)
+                await ShowWarningAsync(ClipboardToolMissingMessage());
+            else if (insertion is InsertionResult.MissingPasteTool)
+                await ShowWarningAsync("Install xdotool to paste transformed text automatically.");
             else if (insertion is not InsertionResult.Pasted and not InsertionResult.Typed)
                 await ShowWarningAsync("Could not insert transformed text.");
             else
@@ -262,6 +266,11 @@ public sealed class TransformSelectionService
         FeedbackText = message,
         StatusText = message
     });
+
+    private static string ClipboardToolMissingMessage() =>
+        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+            ? "Install wl-clipboard to copy transformed text."
+            : "Install xclip to copy transformed text.";
 
     private void PublishOverlay(Func<DictationOverlayState, DictationOverlayState> updater)
     {

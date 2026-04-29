@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Globalization;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -375,7 +376,10 @@ public sealed class HistoryService : IHistoryService
             var json = JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_filePath, json);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HistoryService] Failed to save history to '{_filePath}': {ex}");
+        }
     }
 
     private static string CsvEscape(string value)

@@ -518,10 +518,10 @@ public sealed class DictationOrchestrator : IDisposable
                 or InsertionResult.MissingPasteTool;
             ReportStatus(completionMessage);
             ShowFeedback(
-                isError ? completionMessage : "Dictation completed.",
+                completionMessage,
                 isError: isError);
 
-            if (insertion is InsertionResult.Pasted or InsertionResult.CopiedToClipboard)
+            if (insertion is InsertionResult.Pasted or InsertionResult.Typed or InsertionResult.CopiedToClipboard)
             {
                 _models.PluginManager.EventBus.Publish(new TextInsertedEvent
                 {

@@ -329,6 +329,7 @@ public partial class HistoryRecordRow : ObservableObject
         if (value)
         {
             _owner.CollapseAllExcept(this);
+            SetCorrectionSuggestions(Record.PendingCorrectionSuggestions);
         }
         else
         {

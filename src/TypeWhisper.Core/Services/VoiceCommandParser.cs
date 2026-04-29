@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace TypeWhisper.Core.Services;
@@ -21,6 +22,7 @@ public sealed class VoiceCommandParser
             return new VoiceCommandParseResult(text);
 
         var current = text.Trim();
+        var trailingOutput = new StringBuilder();
         var autoEnter = false;
 
         while (true)
@@ -44,20 +46,22 @@ public sealed class VoiceCommandParser
 
             if (TryRemoveSuffix(current, NewParagraphSuffix, out var withoutParagraph))
             {
-                current = TrimTrailingNoise(withoutParagraph) + "\n\n";
+                current = TrimTrailingNoise(withoutParagraph);
+                trailingOutput.Insert(0, "\n\n");
                 continue;
             }
 
             if (TryRemoveSuffix(current, NewLineSuffix, out var withoutLine))
             {
-                current = TrimTrailingNoise(withoutLine) + "\n";
+                current = TrimTrailingNoise(withoutLine);
+                trailingOutput.Insert(0, "\n");
                 continue;
             }
 
             break;
         }
 
-        return new VoiceCommandParseResult(current, autoEnter);
+        return new VoiceCommandParseResult(current + trailingOutput, autoEnter);
     }
 
     private static Regex BuildSuffixRegex(string phrase)

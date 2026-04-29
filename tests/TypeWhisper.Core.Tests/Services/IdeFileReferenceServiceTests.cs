@@ -32,7 +32,6 @@ public sealed class IdeFileReferenceServiceTests
     [InlineData("tag program dot c sharp", "@program.cs")]
     [InlineData("file tag dot env", "@.env")]
     [InlineData("file app settings dot json", "app_settings.json")]
-    [InlineData("index dot ts", "index.ts")]
     public void TryFormatReferenceCommand_ConvertsClearReferenceCommands(string input, string expected)
     {
         var result = _sut.TryFormatReferenceCommand(input);
@@ -43,6 +42,7 @@ public sealed class IdeFileReferenceServiceTests
     [Theory]
     [InlineData("make this variable camel case")]
     [InlineData("at the end of the day, save this")]
+    [InlineData("index dot ts")]
     [InlineData("tag this as urgent")]
     [InlineData("file this under important")]
     [InlineData("reference the spec for details")]

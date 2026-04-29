@@ -225,12 +225,15 @@ public sealed class TextInsertionService
         if (!await FocusTargetWindowAsync(targetWindowId))
         {
             LogInsertionFallback("Enter command failed: target window could not be focused.");
-            return InsertionResult.Failed;
+            return InsertionResult.ActionFailed;
         }
 
+        if (!_platform.IsPasteAvailable)
+            return InsertionResult.MissingPasteTool;
+
         return await _platform.SendEnterAsync()
-            ? InsertionResult.Pasted
-            : InsertionResult.Failed;
+            ? InsertionResult.ActionHandled
+            : InsertionResult.ActionFailed;
     }
 
     private static bool ShouldTypeDirectly(string? processName, string? windowTitle)

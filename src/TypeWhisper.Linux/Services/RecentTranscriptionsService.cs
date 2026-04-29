@@ -108,7 +108,8 @@ public sealed class RecentTranscriptionsService
     private static string StatusTextFor(InsertionResult result) =>
         result switch
         {
-            InsertionResult.Pasted => "Typed recent transcription.",
+            InsertionResult.Typed => "Typed recent transcription.",
+            InsertionResult.Pasted => "Pasted recent transcription.",
             InsertionResult.CopiedToClipboard => "Copied recent transcription to clipboard.",
             InsertionResult.NoText => "No recent transcriptions.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),

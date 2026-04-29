@@ -16,6 +16,9 @@ public sealed class SystemCommandAvailabilityServiceTests
             HasFfmpeg: true,
             HasSpeechFeedback: false,
             SpeechFeedbackCommand: null,
+            HasPactl: false,
+            HasPlayerCtl: false,
+            HasCanberraGtkPlay: false,
             HasCudaGpu: false,
             HasCudaRuntimeLibraries: false);
 
@@ -42,6 +45,9 @@ public sealed class SystemCommandAvailabilityServiceTests
             HasFfmpeg: true,
             HasSpeechFeedback: true,
             SpeechFeedbackCommand: "espeak-ng",
+            HasPactl: true,
+            HasPlayerCtl: true,
+            HasCanberraGtkPlay: true,
             HasCudaGpu: hasGpu,
             HasCudaRuntimeLibraries: hasRuntime);
 

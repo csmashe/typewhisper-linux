@@ -351,13 +351,13 @@ public sealed class DictionaryService : IDictionaryService
         var changed = false;
         lock (_gate)
         {
-            var existingOriginals = _cache
+            var existingPackIds = _cache
                 .Where(e => e.EntryType == DictionaryEntryType.Term)
-                .Select(e => e.Original)
+                .Select(e => e.Id)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var newEntries = pack.Terms
-                .Where(t => !existingOriginals.Contains(t))
+                .Where(t => !existingPackIds.Contains($"pack:{pack.Id}:{t}"))
                 .Select(t => new DictionaryEntry
                 {
                     Id = $"pack:{pack.Id}:{t}",
@@ -425,15 +425,35 @@ public sealed class DictionaryService : IDictionaryService
         {
             if (_cacheLoaded) return;
 
+            if (!File.Exists(_filePath))
+            {
+                _cacheLoaded = true;
+                return;
+            }
+
+            string json;
             try
             {
-                if (File.Exists(_filePath))
-                {
-                    var json = File.ReadAllText(_filePath);
-                    _cache = JsonSerializer.Deserialize<List<DictionaryEntry>>(json) ?? [];
-                }
+                json = File.ReadAllText(_filePath);
             }
-            catch
+            catch (IOException ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}");
+                _cacheLoaded = true;
+                return;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}");
+                _cacheLoaded = true;
+                return;
+            }
+
+            try
+            {
+                _cache = JsonSerializer.Deserialize<List<DictionaryEntry>>(json) ?? [];
+            }
+            catch (JsonException)
             {
                 PreserveBrokenFile(_filePath);
                 _cache = [];

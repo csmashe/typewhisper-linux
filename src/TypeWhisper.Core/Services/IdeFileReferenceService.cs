@@ -95,9 +95,7 @@ public sealed partial class IdeFileReferenceService
             }
         }
 
-        return LooksLikeSpokenFileName(normalized)
-            ? ToFileReference(normalized)
-            : null;
+        return null;
     }
 
     private static string Normalize(string value) =>

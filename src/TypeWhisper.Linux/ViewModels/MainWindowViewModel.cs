@@ -144,7 +144,7 @@ public partial class MainWindowViewModel : ObservableObject
 public partial class NavItem : ObservableObject
 {
     public string Label { get; }
-    public Symbol Icon { get; }
+    public Symbol? Icon { get; }
     public object? Content { get; }
     public bool IsHeader { get; }
 
@@ -153,7 +153,7 @@ public partial class NavItem : ObservableObject
     public NavItem(string label, Symbol? icon, object? content, bool isHeader)
     {
         Label = label;
-        Icon = icon ?? Symbol.Home;
+        Icon = icon ?? (isHeader ? null : Symbol.Home);
         Content = content;
         IsHeader = isHeader;
     }

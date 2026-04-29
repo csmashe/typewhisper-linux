@@ -151,7 +151,7 @@ public partial class DictionarySectionViewModel : ObservableObject
             Replacement = string.IsNullOrWhiteSpace(NewReplacement) ? null : NewReplacement.Trim(),
             CaseSensitive = CaseSensitive,
             IsEnabled = true,
-            Priority = NewPriority,
+            Priority = Math.Clamp(NewPriority, 0, 999),
         });
 
         NewOriginal = "";

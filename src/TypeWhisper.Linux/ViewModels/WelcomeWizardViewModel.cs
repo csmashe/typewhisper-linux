@@ -36,6 +36,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public ObservableCollection<WizardModelRow> AvailableModels { get; } = [];
     public ObservableCollection<PluginRow> ExtensionPlugins { get; } = [];
     public ObservableCollection<WelcomeDiagnosticRow> Diagnostics { get; } = [];
+    public ObservableCollection<WelcomeStepDot> StepDots { get; } = [];
 
     [ObservableProperty] private int _stepIndex;
     [ObservableProperty] private WizardModelRow? _selectedModel;
@@ -97,6 +98,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         LoadExtensions();
         LoadMics();
         RefreshDiagnostics();
+        RefreshStepDots();
 
         HotkeyText = _hotkey.CurrentHotkeyString;
     }
@@ -195,6 +197,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         OnPropertyChanged(nameof(IsLastStep));
         OnPropertyChanged(nameof(NextLabel));
         OnPropertyChanged(nameof(StepText));
+        RefreshStepDots();
 
         if (value == 3)
             RefreshDiagnostics();
@@ -451,10 +454,21 @@ public partial class WelcomeWizardViewModel : ObservableObject
             if (SelectedMic is not null)
                 _audio.SelectedDeviceIndex = SelectedMic.Index;
 
-            _audio.StartRecording();
+            try
+            {
+                _audio.StartRecording();
+            }
+            catch (Exception ex)
+            {
+                FirstDictationStatus = $"Could not start recording: {ex.Message}";
+                IsFirstDictationRecording = false;
+                return;
+            }
+
             if (!_audio.IsRecording)
             {
                 FirstDictationStatus = "Could not start recording.";
+                IsFirstDictationRecording = false;
                 return;
             }
 
@@ -584,6 +598,24 @@ public partial class WelcomeWizardViewModel : ObservableObject
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
     }
+
+    private void RefreshStepDots()
+    {
+        while (StepDots.Count < StepCount)
+            StepDots.Add(new WelcomeStepDot(StepDots.Count));
+
+        while (StepDots.Count > StepCount)
+            StepDots.RemoveAt(StepDots.Count - 1);
+
+        foreach (var dot in StepDots)
+            dot.IsActive = dot.Index == StepIndex;
+    }
+}
+
+public sealed partial class WelcomeStepDot(int index) : ObservableObject
+{
+    public int Index { get; } = index;
+    [ObservableProperty] private bool _isActive;
 }
 
 public sealed record WizardModelRow(

@@ -66,8 +66,8 @@ public static class Program
             {
                 // Avalonia's X11 IBus integration can log noisy DBus errors
                 // when IBus destroys an input context before Avalonia releases it.
-                // TypeWhisper does not depend on IME composition in its own UI.
-                EnableIme = false
+                // Set TYPEWHISPER_DISABLE_IME=1 to disable IME composition.
+                EnableIme = !IsImeDisabled()
             })
 #if DEBUG
             .WithDeveloperTools()
@@ -79,6 +79,12 @@ public static class Program
         => Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder(args)
             .ConfigureServices(ServiceRegistrations.Register)
             .Build();
+
+    private static bool IsImeDisabled() =>
+        Environment.GetEnvironmentVariable("TYPEWHISPER_DISABLE_IME") is { } value &&
+        (value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("yes", StringComparison.OrdinalIgnoreCase));
 
     private static bool AcquireSingleInstanceLock()
     {

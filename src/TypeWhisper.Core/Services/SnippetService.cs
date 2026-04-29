@@ -157,15 +157,13 @@ public sealed partial class SnippetService : ISnippetService
         var count = 0;
         lock (_gate)
         {
-            var existingTriggers = _cache.Select(s => s.Trigger).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
             foreach (var snippet in imported)
             {
-                if (existingTriggers.Contains(snippet.Trigger)) continue;
+                if (_cache.Any(existing => SnippetIdentityEquals(existing, snippet)))
+                    continue;
 
                 var newSnippet = snippet with { Id = Guid.NewGuid().ToString() };
                 _cache.Add(newSnippet);
-                existingTriggers.Add(newSnippet.Trigger);
                 count++;
             }
 
@@ -178,6 +176,14 @@ public sealed partial class SnippetService : ISnippetService
 
         return count;
     }
+
+    private static bool SnippetIdentityEquals(Snippet left, Snippet right) =>
+        string.Equals(left.Trigger, right.Trigger, StringComparison.OrdinalIgnoreCase) &&
+        left.TriggerMode == right.TriggerMode &&
+        left.CaseSensitive == right.CaseSensitive &&
+        (left.ProfileIds ?? []).Count == (right.ProfileIds ?? []).Count &&
+        (left.ProfileIds ?? []).Order(StringComparer.OrdinalIgnoreCase)
+            .SequenceEqual((right.ProfileIds ?? []).Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
 
     private static string ExpandPlaceholders(string template, Func<string>? clipboardProvider)
     {

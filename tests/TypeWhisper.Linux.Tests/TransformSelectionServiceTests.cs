@@ -33,4 +33,12 @@ public sealed class TransformSelectionServiceTests
     {
         Assert.False(TransformSelectionService.IsCancelCommand("make this more concise"));
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsCancelCommand_ReturnsFalseForEmptyOrWhitespace(string command)
+    {
+        Assert.False(TransformSelectionService.IsCancelCommand(command));
+    }
 }

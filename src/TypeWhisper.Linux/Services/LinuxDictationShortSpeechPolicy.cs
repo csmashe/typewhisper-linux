@@ -41,7 +41,7 @@ internal static class LinuxDictationShortSpeechPolicy
 
         if (peakLevel < LongClipQuietPeakThreshold)
         {
-            return transcribeShortQuietClipsAggressively
+            return rawDuration < ShortClipSeconds && transcribeShortQuietClipsAggressively
                 ? LinuxShortSpeechDecision.Transcribe
                 : LinuxShortSpeechDecision.DiscardNoSpeech;
         }
@@ -92,7 +92,7 @@ internal static class LinuxDictationShortSpeechPolicy
             peak = Math.Max(peak, Math.Abs((int)sample));
         }
 
-        return peak / (float)short.MaxValue;
+        return Math.Clamp(peak / (float)short.MaxValue, 0f, 1f);
     }
 
     private static bool IsStandardPcm16MonoWav(byte[] wav) =>

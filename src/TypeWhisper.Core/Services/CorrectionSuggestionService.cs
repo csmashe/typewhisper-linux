@@ -106,9 +106,11 @@ public sealed class CorrectionSuggestionService
 
     private static IReadOnlyList<Token> Tokenize(string text) =>
         text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(token => new Token(
-                token.Trim(' ', '\t', '\r', '\n', '.', ',', ';', ':', '!', '?', '"', '(', ')', '[', ']'),
-                token.Trim(' ', '\t', '\r', '\n', '.', ',', ';', ':', '!', '?', '"', '(', ')', '[', ']').ToUpperInvariant()))
+            .Select(token =>
+            {
+                var trimmed = token.Trim(' ', '\t', '\r', '\n', '.', ',', ';', ':', '!', '?', '"', '(', ')', '[', ']');
+                return new Token(trimmed, trimmed.ToUpperInvariant());
+            })
             .Where(token => token.Trimmed.Length > 0)
             .ToList();
 
