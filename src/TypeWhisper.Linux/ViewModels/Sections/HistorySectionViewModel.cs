@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -109,13 +110,13 @@ public partial class HistorySectionViewModel : ObservableObject
         if (_settings.Current.AutoAddDictionaryCorrections)
         {
             LearnCorrections(suggestions.Select(suggestion => new CorrectionSuggestionRow(suggestion)));
-            _history.SetPendingCorrectionSuggestions(record.Record.Id, []);
-            record.SetCorrectionSuggestions([]);
+            if (SetPendingCorrectionSuggestions(record, []))
+                record.SetCorrectionSuggestions([]);
         }
         else
         {
-            _history.SetPendingCorrectionSuggestions(record.Record.Id, suggestions);
-            record.SetCorrectionSuggestions(suggestions);
+            if (SetPendingCorrectionSuggestions(record, suggestions))
+                record.SetCorrectionSuggestions(suggestions);
         }
 
         Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
@@ -154,7 +155,7 @@ public partial class HistorySectionViewModel : ObservableObject
         });
     }
 
-    internal void SetPendingCorrectionSuggestions(
+    internal bool SetPendingCorrectionSuggestions(
         HistoryRecordRow record,
         IReadOnlyList<CorrectionSuggestion> suggestions)
     {
@@ -162,10 +163,12 @@ public partial class HistorySectionViewModel : ObservableObject
         {
             _history.SetPendingCorrectionSuggestions(record.Record.Id, suggestions);
             record.Record = record.Record with { PendingCorrectionSuggestions = suggestions };
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // Keep the local row unchanged when persistence fails.
+            Trace.WriteLine($"[HistorySectionViewModel] Failed to persist correction suggestions: {ex}");
+            return false;
         }
     }
 
@@ -384,17 +387,21 @@ public partial class HistoryRecordRow : ObservableObject
     private void SaveApprovedCorrections()
     {
         _owner.LearnCorrections(CorrectionSuggestions);
-        CorrectionSuggestions.Clear();
-        _owner.SetPendingCorrectionSuggestions(this, []);
-        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        if (_owner.SetPendingCorrectionSuggestions(this, []))
+        {
+            CorrectionSuggestions.Clear();
+            OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        }
     }
 
     [RelayCommand]
     private void DismissCorrectionSuggestions()
     {
-        CorrectionSuggestions.Clear();
-        _owner.SetPendingCorrectionSuggestions(this, []);
-        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        if (_owner.SetPendingCorrectionSuggestions(this, []))
+        {
+            CorrectionSuggestions.Clear();
+            OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        }
     }
 
     [RelayCommand]

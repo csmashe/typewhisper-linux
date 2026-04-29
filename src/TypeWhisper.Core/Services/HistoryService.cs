@@ -79,7 +79,6 @@ public sealed class HistoryService : IHistoryService
     public void AddRecord(TranscriptionRecord record)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             _cache.Insert(0, record);
@@ -94,39 +93,34 @@ public sealed class HistoryService : IHistoryService
                 _distinctApps.Sort(StringComparer.OrdinalIgnoreCase);
             }
 
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
-        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
     public void UpdateRecord(string id, string finalText)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
-            if (idx >= 0)
-            {
-                var old = _cache[idx];
-                var updated = old with { FinalText = finalText };
-                _cache[idx] = updated;
-                _totalWords += updated.WordCount - old.WordCount;
-            }
+            if (idx < 0)
+                return;
 
-            snapshot = _cache.ToList();
+            var old = _cache[idx];
+            var updated = old with { FinalText = finalText };
+            _cache[idx] = updated;
+            _totalWords += updated.WordCount - old.WordCount;
+            SaveToDisk(_cache.ToList());
         }
 
-        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
     public void SetPendingCorrectionSuggestions(string id, IReadOnlyList<CorrectionSuggestion> suggestions)
     {
         EnsureCacheLoaded();
-        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
@@ -135,10 +129,9 @@ public sealed class HistoryService : IHistoryService
 
             _cache[idx] = _cache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
 
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
-        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
@@ -146,25 +139,23 @@ public sealed class HistoryService : IHistoryService
     {
         EnsureCacheLoaded();
         string? removedAudioFileName = null;
-        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
-            if (idx >= 0)
-            {
-                var removed = _cache[idx];
-                _cache.RemoveAt(idx);
-                _totalRecords--;
-                _totalWords -= removed.WordCount;
-                _totalDuration -= removed.DurationSeconds;
-                removedAudioFileName = removed.AudioFileName;
-            }
+            if (idx < 0)
+                return;
+
+            var removed = _cache[idx];
+            _cache.RemoveAt(idx);
+            _totalRecords--;
+            _totalWords -= removed.WordCount;
+            _totalDuration -= removed.DurationSeconds;
+            removedAudioFileName = removed.AudioFileName;
 
             RebuildDistinctApps();
-            snapshot = _cache.ToList();
+            SaveToDisk(_cache.ToList());
         }
 
-        SaveToDisk(snapshot);
         DeleteAudioFile(removedAudioFileName);
         RecordsChanged?.Invoke();
     }
@@ -181,9 +172,9 @@ public sealed class HistoryService : IHistoryService
             _totalWords = 0;
             _totalDuration = 0;
             _distinctApps.Clear();
+            SaveToDisk([]);
         }
 
-        SaveToDisk([]);
         DeleteAudioFiles(audioFiles);
         RecordsChanged?.Invoke();
     }
@@ -225,9 +216,9 @@ public sealed class HistoryService : IHistoryService
             _cache = _cache.Where(r => r.CreatedAt >= cutoff).ToList();
             RebuildStats();
             snapshot = _cache.ToList();
+            SaveToDisk(snapshot);
         }
 
-        SaveToDisk(snapshot);
         DeleteAudioFiles(removedAudioFiles);
         RecordsChanged?.Invoke();
     }

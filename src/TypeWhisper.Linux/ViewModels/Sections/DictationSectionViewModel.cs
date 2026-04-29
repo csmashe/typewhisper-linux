@@ -568,7 +568,10 @@ public partial class DictationSectionViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(processName))
             return "";
 
-        return Path.GetFileNameWithoutExtension(processName.Trim());
+        var baseName = Path.GetFileName(processName.Trim());
+        return baseName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileNameWithoutExtension(baseName)
+            : baseName;
     }
 
     partial void OnWhisperModeEnabledChanged(bool value)

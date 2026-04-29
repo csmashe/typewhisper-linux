@@ -63,24 +63,39 @@ public sealed partial class SnippetService : ISnippetService
     public void UpdateSnippet(Snippet snippet)
     {
         EnsureCacheLoaded();
+        var changed = false;
         lock (_gate)
         {
             var idx = _cache.FindIndex(s => s.Id == snippet.Id);
-            if (idx >= 0) _cache[idx] = snippet;
+            if (idx < 0 || _cache[idx] == snippet)
+                return;
+
+            _cache[idx] = snippet;
             SaveToDisk();
+            changed = true;
         }
-        SnippetsChanged?.Invoke();
+
+        if (changed)
+            SnippetsChanged?.Invoke();
     }
 
     public void DeleteSnippet(string id)
     {
         EnsureCacheLoaded();
+        var changed = false;
         lock (_gate)
         {
-            _cache.RemoveAll(s => s.Id == id);
+            var idx = _cache.FindIndex(s => s.Id == id);
+            if (idx < 0)
+                return;
+
+            _cache.RemoveAt(idx);
             SaveToDisk();
+            changed = true;
         }
-        SnippetsChanged?.Invoke();
+
+        if (changed)
+            SnippetsChanged?.Invoke();
     }
 
     public string ApplySnippets(string text, Func<string>? clipboardProvider = null, string? profileId = null)
@@ -95,6 +110,7 @@ public sealed partial class SnippetService : ISnippetService
                 .ToList();
         }
 
+        var usageIncrements = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var snippet in activeSnippets)
         {
             var comparison = snippet.CaseSensitive
@@ -112,9 +128,10 @@ public sealed partial class SnippetService : ISnippetService
 
             text = replaced;
 
-            IncrementUsageCount(snippet.Id);
+            usageIncrements[snippet.Id] = usageIncrements.GetValueOrDefault(snippet.Id) + 1;
         }
 
+        IncrementUsageCounts(usageIncrements);
         return text;
     }
 
@@ -179,9 +196,12 @@ public sealed partial class SnippetService : ISnippetService
     }
 
     private static bool SnippetIdentityEquals(Snippet left, Snippet right) =>
-        string.Equals(left.Trigger, right.Trigger, StringComparison.OrdinalIgnoreCase) &&
         left.TriggerMode == right.TriggerMode &&
         left.CaseSensitive == right.CaseSensitive &&
+        string.Equals(
+            left.Trigger,
+            right.Trigger,
+            left.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase) &&
         (left.ProfileIds ?? []).Count == (right.ProfileIds ?? []).Count &&
         (left.ProfileIds ?? []).Order(StringComparer.OrdinalIgnoreCase)
             .SequenceEqual((right.ProfileIds ?? []).Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
@@ -229,6 +249,37 @@ public sealed partial class SnippetService : ISnippetService
                 };
                 SaveToDisk();
             }
+        }
+    }
+
+    private void IncrementUsageCounts(IReadOnlyDictionary<string, int> increments)
+    {
+        if (increments.Count == 0)
+            return;
+
+        lock (_gate)
+        {
+            var changed = false;
+            var now = DateTime.UtcNow;
+            foreach (var (id, delta) in increments)
+            {
+                if (delta <= 0)
+                    continue;
+
+                var idx = _cache.FindIndex(s => s.Id == id);
+                if (idx < 0)
+                    continue;
+
+                _cache[idx] = _cache[idx] with
+                {
+                    UsageCount = _cache[idx].UsageCount + delta,
+                    LastUsedAt = now
+                };
+                changed = true;
+            }
+
+            if (changed)
+                SaveToDisk();
         }
     }
 

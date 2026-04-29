@@ -104,7 +104,11 @@ public sealed class TextInsertionService
         };
 
         if (shouldTypeDirectly)
-            return await TypeTextAsync(text, targetWindowId, autoEnter);
+        {
+            var directResult = await TypeTextAsync(text, targetWindowId, autoEnter);
+            if (directResult is not InsertionResult.Failed)
+                return directResult;
+        }
 
         if (!_platform.IsClipboardSetAvailable)
             return InsertionResult.MissingClipboardTool;
@@ -363,7 +367,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+v") == 0;
 
     public async Task<bool> TypeTextAsync(string text) =>
-        await RunXdotoolAsync("type", "--clearmodifiers", "--delay", "0", text) == 0;
+        await RunXdotoolAsync("type", "--clearmodifiers", "--delay", "0", "--", text) == 0;
 
     public async Task<bool> SendCopyAsync() =>
         await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+c") == 0;
