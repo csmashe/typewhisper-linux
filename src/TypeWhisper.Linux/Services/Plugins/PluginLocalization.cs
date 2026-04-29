@@ -7,7 +7,6 @@ namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
 /// Loads localized strings from JSON files in a plugin's Localization/ subdirectory.
-/// Mirrors the Windows implementation but drops the WPF-backed Loc global;
 /// current language defaults to CultureInfo.CurrentUICulture or an explicit override.
 /// </summary>
 public sealed class PluginLocalization : IPluginLocalization

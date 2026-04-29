@@ -1,7 +1,7 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
-using TypeWhisper.Windows.Services;
+using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.PluginSystem.Tests;
 

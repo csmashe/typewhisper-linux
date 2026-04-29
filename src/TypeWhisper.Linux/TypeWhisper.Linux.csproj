@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="TypeWhisper.Linux.Tests" />
+    <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests" />
   </ItemGroup>
 
   <ItemGroup>
