@@ -1,8 +1,9 @@
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
-public sealed class HistoryInsightsService
+public sealed class HistoryInsightsService : IHistoryInsightsService
 {
     public HistoryInsights Build(IReadOnlyList<TranscriptionRecord> records, int topAppCount = 5)
     {

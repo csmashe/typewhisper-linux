@@ -41,7 +41,7 @@ internal static class ServiceRegistrations
             new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
         services.AddSingleton<CleanupService>();
         services.AddSingleton<CorrectionSuggestionService>();
-        services.AddSingleton<HistoryInsightsService>();
+        services.AddSingleton<IHistoryInsightsService, HistoryInsightsService>();
         services.AddSingleton<IdeFileReferenceService>();
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
         services.AddSingleton<ITranslationService, TranslationService>();

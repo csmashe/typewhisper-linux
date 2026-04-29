@@ -8,11 +8,12 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
-public partial class DashboardSectionViewModel : ObservableObject
+public partial class DashboardSectionViewModel : ObservableObject, IDisposable
 {
     private readonly IHistoryService _history;
     private readonly ISettingsService _settings;
-    private readonly HistoryInsightsService _insights;
+    private readonly IHistoryInsightsService _insights;
+    private bool _disposed;
 
     public enum TimeRange { Weekly, Month, AllTime }
 
@@ -43,14 +44,20 @@ public partial class DashboardSectionViewModel : ObservableObject
     public DashboardSectionViewModel(
         IHistoryService history,
         ISettingsService settings,
-        HistoryInsightsService insights)
+        IHistoryInsightsService insights)
     {
         _history = history;
         _settings = settings;
         _insights = insights;
         _selectedRange = ReadSelectedRange(settings.Current.DashboardSelectedPeriod);
-        _history.RecordsChanged += () => Dispatcher.UIThread.Post(Refresh);
+        _history.RecordsChanged += OnRecordsChanged;
         _ = InitializeAsync();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _history.RecordsChanged -= OnRecordsChanged;
     }
 
     partial void OnSelectedRangeChanged(TimeRange value)
@@ -66,11 +73,21 @@ public partial class DashboardSectionViewModel : ObservableObject
     private async Task InitializeAsync()
     {
         await _history.EnsureLoadedAsync().ConfigureAwait(false);
-        Dispatcher.UIThread.Post(Refresh);
+        if (!_disposed)
+            Dispatcher.UIThread.Post(Refresh);
+    }
+
+    private void OnRecordsChanged()
+    {
+        if (!_disposed)
+            Dispatcher.UIThread.Post(Refresh);
     }
 
     private void Refresh()
     {
+        if (_disposed)
+            return;
+
         var now = DateTime.UtcNow;
         var cutoff = SelectedRange switch
         {

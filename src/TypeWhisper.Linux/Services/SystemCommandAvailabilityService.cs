@@ -205,8 +205,27 @@ public sealed class SystemCommandAvailabilityService
             if (process is null)
                 return false;
 
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(1000);
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            var exitTask = process.WaitForExitAsync();
+            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(1));
+
+            if (Task.WhenAny(exitTask, timeoutTask).GetAwaiter().GetResult() != exitTask)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Ignore failures while cleaning up a timed-out probe.
+                }
+
+                return false;
+            }
+
+            Task.WhenAll(outputTask, errorTask).GetAwaiter().GetResult();
+            var output = outputTask.GetAwaiter().GetResult();
             return output.Contains(libraryName, StringComparison.Ordinal);
         }
         catch

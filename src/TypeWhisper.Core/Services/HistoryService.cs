@@ -130,8 +130,10 @@ public sealed class HistoryService : IHistoryService
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
-            if (idx >= 0)
-                _cache[idx] = _cache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
+            if (idx < 0)
+                return;
+
+            _cache[idx] = _cache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
 
             snapshot = _cache.ToList();
         }

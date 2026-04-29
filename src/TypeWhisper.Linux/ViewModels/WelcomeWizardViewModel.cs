@@ -399,10 +399,21 @@ public partial class WelcomeWizardViewModel : ObservableObject
         PasteSmokeText = "";
         PasteTestStatus = "Running paste test...";
 
-        var result = await _textInsertion.InsertTextAsync(
-            PasteSmokeExpectedText,
-            autoPaste: true,
-            strategy: TextInsertionStrategy.ClipboardPaste);
+        InsertionResult result;
+        try
+        {
+            result = await _textInsertion.InsertTextAsync(
+                PasteSmokeExpectedText,
+                autoPaste: true,
+                strategy: TextInsertionStrategy.ClipboardPaste);
+        }
+        catch (Exception ex)
+        {
+            PasteSmokeText = ex.Message;
+            PasteTestPassed = false;
+            PasteTestStatus = $"Paste test failed: {ex.Message}";
+            return false;
+        }
 
         if (result is InsertionResult.MissingClipboardTool)
         {
@@ -498,7 +509,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
         try
         {
             if (SelectedModel is { } selected)
-                await _models.EnsureModelLoadedAsync(selected.ModelId);
+            {
+                var loaded = await _models.EnsureModelLoadedAsync(selected.ModelId);
+                if (!loaded)
+                {
+                    FirstDictationStatus = "Could not load the selected transcription model.";
+                    return;
+                }
+            }
 
             var plugin = _models.ActiveTranscriptionPlugin;
             if (plugin is null)

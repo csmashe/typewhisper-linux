@@ -222,14 +222,14 @@ public sealed class TextInsertionService
 
     private async Task<InsertionResult> SendEnterOnlyAsync(string? targetWindowId)
     {
+        if (!_platform.IsPasteAvailable)
+            return InsertionResult.MissingPasteTool;
+
         if (!await FocusTargetWindowAsync(targetWindowId))
         {
             LogInsertionFallback("Enter command failed: target window could not be focused.");
             return InsertionResult.ActionFailed;
         }
-
-        if (!_platform.IsPasteAvailable)
-            return InsertionResult.MissingPasteTool;
 
         return await _platform.SendEnterAsync()
             ? InsertionResult.ActionHandled

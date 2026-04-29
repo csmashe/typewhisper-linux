@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -233,11 +234,11 @@ public sealed partial class SnippetService : ISnippetService
 
     private void EnsureCacheLoaded()
     {
-        if (_cacheLoaded) return;
+        if (Volatile.Read(ref _cacheLoaded)) return;
 
         lock (_gate)
         {
-            if (_cacheLoaded) return;
+            if (Volatile.Read(ref _cacheLoaded)) return;
 
             try
             {
@@ -253,7 +254,7 @@ public sealed partial class SnippetService : ISnippetService
                 _cache = [];
             }
 
-            _cacheLoaded = true;
+            Volatile.Write(ref _cacheLoaded, true);
         }
     }
 

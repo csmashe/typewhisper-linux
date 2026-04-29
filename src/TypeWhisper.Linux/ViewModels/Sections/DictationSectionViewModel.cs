@@ -163,7 +163,6 @@ public partial class DictationSectionViewModel : ObservableObject
                 return;
 
             CleanupLevel = selected;
-            OnPropertyChanged();
         }
     }
 

@@ -158,8 +158,15 @@ public partial class HistorySectionViewModel : ObservableObject
         HistoryRecordRow record,
         IReadOnlyList<CorrectionSuggestion> suggestions)
     {
-        _history.SetPendingCorrectionSuggestions(record.Record.Id, suggestions);
-        record.Record = record.Record with { PendingCorrectionSuggestions = suggestions };
+        try
+        {
+            _history.SetPendingCorrectionSuggestions(record.Record.Id, suggestions);
+            record.Record = record.Record with { PendingCorrectionSuggestions = suggestions };
+        }
+        catch
+        {
+            // Keep the local row unchanged when persistence fails.
+        }
     }
 
     internal void CollapseAllExcept(HistoryRecordRow keep)
