@@ -153,16 +153,18 @@ public partial class App : Application
             if (Program.StartMinimized)
                 main.Opened += (_, _) => main.Hide();
 
-            // First-run onboarding wizard.
+            var bootstrapTask = BootstrapDeferredAsync(services);
+
+            // First-run onboarding wizard. Wait for bootstrap so bundled
+            // plugins are deployed and initialized before the model picker loads.
             if (!settings.Current.HasCompletedOnboarding)
             {
-                main.Opened += (_, _) =>
+                main.Opened += async (_, _) =>
                 {
+                    await bootstrapTask;
                     (main.DataContext as ViewModels.MainWindowViewModel)?.OpenWizard();
                 };
             }
-
-            _ = BootstrapDeferredAsync(services);
         }
 
         base.OnFrameworkInitializationCompleted();

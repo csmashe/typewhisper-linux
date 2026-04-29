@@ -33,6 +33,68 @@ public sealed class SystemCommandAvailabilityService
             HasCudaGpu: HasCudaGpu,
             HasCudaRuntimeLibraries: HasCudaRuntimeLibraries);
 
+    public async Task<CudaBenchmarkResult> RunCudaBenchmarkAsync(CancellationToken cancellationToken = default)
+    {
+        if (!HasCudaGpu)
+            return new CudaBenchmarkResult(false, "No NVIDIA GPU/driver detected.", null);
+
+        if (!HasCudaRuntimeLibraries)
+            return new CudaBenchmarkResult(false, "NVIDIA GPU detected, but CUDA 12 runtime libraries are missing.", null);
+
+        if (!IsCommandAvailable("nvidia-smi"))
+            return new CudaBenchmarkResult(true, "CUDA runtime libraries are present. nvidia-smi was not found for timing.", null);
+
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+
+            if (process is null)
+                return new CudaBenchmarkResult(false, "Could not start nvidia-smi.", null);
+
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            var waitTask = process.WaitForExitAsync(cancellationToken);
+            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+            var completed = await Task.WhenAny(waitTask, timeoutTask);
+            if (!ReferenceEquals(completed, waitTask) && !process.HasExited)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return new CudaBenchmarkResult(false, "nvidia-smi did not respond within 3 seconds.", stopwatch.Elapsed);
+            }
+
+            await waitTask;
+
+            stopwatch.Stop();
+            var output = (await outputTask).Trim();
+            var error = (await errorTask).Trim();
+            if (process.ExitCode != 0)
+                return new CudaBenchmarkResult(false, string.IsNullOrWhiteSpace(error) ? "nvidia-smi failed." : error, stopwatch.Elapsed);
+
+            var firstLine = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+            var message = string.IsNullOrWhiteSpace(firstLine)
+                ? $"CUDA responded in {stopwatch.ElapsedMilliseconds} ms."
+                : $"CUDA responded in {stopwatch.ElapsedMilliseconds} ms: {firstLine}.";
+            return new CudaBenchmarkResult(true, message, stopwatch.Elapsed);
+        }
+        catch (OperationCanceledException)
+        {
+            return new CudaBenchmarkResult(false, "CUDA benchmark was canceled.", stopwatch.Elapsed);
+        }
+        catch (Exception ex)
+        {
+            return new CudaBenchmarkResult(false, $"CUDA benchmark failed: {ex.Message}", stopwatch.Elapsed);
+        }
+    }
+
     public string? SpeechFeedbackCommand
     {
         get
@@ -119,6 +181,8 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 }
+
+public sealed record CudaBenchmarkResult(bool Success, string Message, TimeSpan? Elapsed);
 
 public sealed record LinuxCapabilitySnapshot(
     string SessionType,

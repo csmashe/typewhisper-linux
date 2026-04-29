@@ -62,6 +62,13 @@ public static class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            .With(new X11PlatformOptions
+            {
+                // Avalonia's X11 IBus integration can log noisy DBus errors
+                // when IBus destroys an input context before Avalonia releases it.
+                // TypeWhisper does not depend on IME composition in its own UI.
+                EnableIme = false
+            })
 #if DEBUG
             .WithDeveloperTools()
 #endif
