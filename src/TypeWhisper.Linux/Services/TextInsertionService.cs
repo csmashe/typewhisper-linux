@@ -7,12 +7,24 @@ namespace TypeWhisper.Linux.Services;
 public enum InsertionResult
 {
     Pasted,
+    Typed,
     CopiedToClipboard,
     NoText,
     ActionHandled,
     ActionFailed,
+    MissingClipboardTool,
+    MissingPasteTool,
     Failed,
 }
+
+public sealed record TextInsertionRequest(
+    string Text,
+    bool AutoPaste = true,
+    string? TargetWindowId = null,
+    string? TargetProcessName = null,
+    string? TargetWindowTitle = null,
+    bool AutoEnter = false,
+    TextInsertionStrategy Strategy = TextInsertionStrategy.Auto);
 
 /// <summary>
 /// Text insertion on Linux. The reliable path is clipboard-first: put the
@@ -24,6 +36,8 @@ public sealed class TextInsertionService
 {
     private static readonly TimeSpan FocusDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan ClipboardRestoreDelay = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan PasteRetryDelay = TimeSpan.FromMilliseconds(75);
+    private const int PasteAttemptCount = 3;
 
     private readonly ITextInsertionPlatform _platform;
     private readonly IErrorLogService? _errorLog;
@@ -48,10 +62,56 @@ public sealed class TextInsertionService
         string text,
         bool autoPaste = true,
         string? targetWindowId = null,
-        bool autoEnter = false)
+        string? targetProcessName = null,
+        string? targetWindowTitle = null,
+        bool autoEnter = false,
+        TextInsertionStrategy strategy = TextInsertionStrategy.Auto) =>
+        await InsertTextAsync(new TextInsertionRequest(
+            text,
+            autoPaste,
+            targetWindowId,
+            targetProcessName,
+            targetWindowTitle,
+            autoEnter,
+            strategy));
+
+    public async Task<InsertionResult> InsertTextAsync(TextInsertionRequest request)
     {
+        var text = request.Text;
+        var autoPaste = request.AutoPaste;
+        var targetWindowId = request.TargetWindowId;
+        var targetProcessName = request.TargetProcessName;
+        var targetWindowTitle = request.TargetWindowTitle;
+        var autoEnter = request.AutoEnter;
+        var strategy = request.Strategy;
+
         if (string.IsNullOrEmpty(text))
-            return InsertionResult.NoText;
+            return autoEnter
+                ? await SendEnterOnlyAsync(targetWindowId)
+                : InsertionResult.NoText;
+
+        if (strategy is TextInsertionStrategy.CopyOnly)
+            autoPaste = false;
+
+        if (autoPaste && !_platform.IsPasteAvailable)
+            return InsertionResult.MissingPasteTool;
+
+        var shouldTypeDirectly = autoPaste && strategy switch
+        {
+            TextInsertionStrategy.DirectTyping => true,
+            TextInsertionStrategy.ClipboardPaste => false,
+            _ => ShouldTypeDirectly(targetProcessName, targetWindowTitle)
+        };
+
+        if (shouldTypeDirectly)
+        {
+            var directResult = await TypeTextAsync(text, targetWindowId, autoEnter);
+            if (strategy is TextInsertionStrategy.DirectTyping || directResult is not InsertionResult.Failed)
+                return directResult;
+        }
+
+        if (!_platform.IsClipboardSetAvailable)
+            return InsertionResult.MissingClipboardTool;
 
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
         if (!await _platform.SetClipboardTextAsync(text))
@@ -66,9 +126,9 @@ public sealed class TextInsertionService
             return InsertionResult.CopiedToClipboard;
         }
 
-        if (!await _platform.SendPasteAsync())
+        if (!await TrySendPasteAsync())
         {
-            LogInsertionFallback("Auto paste fell back to clipboard: Ctrl+V could not be sent.");
+            LogInsertionFallback("Auto paste fell back to clipboard: Ctrl+V could not be sent after retries.");
             return InsertionResult.CopiedToClipboard;
         }
 
@@ -130,6 +190,82 @@ public sealed class TextInsertionService
         }
     }
 
+    private async Task<bool> TrySendPasteAsync()
+    {
+        for (var attempt = 1; attempt <= PasteAttemptCount; attempt++)
+        {
+            if (await _platform.SendPasteAsync())
+                return true;
+
+            if (attempt < PasteAttemptCount)
+                await _platform.DelayAsync(PasteRetryDelay);
+        }
+
+        return false;
+    }
+
+    private async Task<InsertionResult> TypeTextAsync(string text, string? targetWindowId, bool autoEnter)
+    {
+        if (!await FocusTargetWindowAsync(targetWindowId))
+        {
+            LogInsertionFallback("Direct typing fell back: target window could not be focused.");
+            return InsertionResult.Failed;
+        }
+
+        if (!await _platform.TypeTextAsync(text))
+        {
+            LogInsertionFallback("Direct typing failed.");
+            return InsertionResult.Failed;
+        }
+
+        if (autoEnter && !await _platform.SendEnterAsync())
+            LogInsertionFallback("Direct typing succeeded, but Enter could not be sent.");
+
+        return InsertionResult.Typed;
+    }
+
+    private async Task<InsertionResult> SendEnterOnlyAsync(string? targetWindowId)
+    {
+        if (!_platform.IsPasteAvailable)
+            return InsertionResult.MissingPasteTool;
+
+        if (!await FocusTargetWindowAsync(targetWindowId))
+        {
+            LogInsertionFallback("Enter command failed: target window could not be focused.");
+            return InsertionResult.ActionFailed;
+        }
+
+        return await _platform.SendEnterAsync()
+            ? InsertionResult.ActionHandled
+            : InsertionResult.ActionFailed;
+    }
+
+    private static bool ShouldTypeDirectly(string? processName, string? windowTitle)
+    {
+        return ContainsCodex(processName)
+            || ContainsCodex(windowTitle)
+            || IsTerminalProcess(processName);
+
+        static bool ContainsCodex(string? value) =>
+            !string.IsNullOrWhiteSpace(value)
+            && value.Contains("codex", StringComparison.OrdinalIgnoreCase);
+
+        static bool IsTerminalProcess(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            var process = ProcessNameNormalizer.Normalize(value);
+            return process.Equals("kitty", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("gnome-terminal", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("konsole", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("alacritty", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("wezterm", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("xterm", StringComparison.OrdinalIgnoreCase)
+                || process.Equals("tilix", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     private void LogInsertionFallback(string message)
     {
         Trace.WriteLine($"[TextInsertionService] {message}");
@@ -146,18 +282,27 @@ public sealed class TextInsertionService
 
 internal interface ITextInsertionPlatform
 {
+    bool IsClipboardSetAvailable { get; }
+    bool IsPasteAvailable { get; }
     Task<string?> TryGetClipboardTextAsync();
     Task<bool> SetClipboardTextAsync(string text);
     Task DelayAsync(TimeSpan delay);
     string? GetActiveWindowId();
     Task<bool> ActivateWindowAsync(string windowId);
     Task<bool> SendPasteAsync();
+    Task<bool> TypeTextAsync(string text);
     Task<bool> SendCopyAsync();
     Task<bool> SendEnterAsync();
 }
 
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
+    public bool IsClipboardSetAvailable => IsWayland()
+        ? IsCommandAvailable("wl-copy")
+        : IsCommandAvailable("xclip");
+
+    public bool IsPasteAvailable => IsCommandAvailable("xdotool");
+
     public async Task<string?> TryGetClipboardTextAsync()
     {
         var psi = IsWayland()
@@ -221,6 +366,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     public async Task<bool> SendPasteAsync() =>
         await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+v") == 0;
 
+    public async Task<bool> TypeTextAsync(string text) =>
+        await RunXdotoolAsync("type", "--clearmodifiers", "--delay", "0", "--", text) == 0;
+
     public async Task<bool> SendCopyAsync() =>
         await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+c") == 0;
 
@@ -229,6 +377,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private static bool IsWayland() =>
         Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+
+    private static bool IsCommandAvailable(string command)
+    {
+        return SystemCommandAvailabilityService.IsCommandAvailable(command);
+    }
 
     private static string? RunXdotool(string arguments)
     {

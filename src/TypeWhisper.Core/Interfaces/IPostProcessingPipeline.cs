@@ -38,6 +38,9 @@ public sealed record PipelineOptions
     /// <summary>Runs LLM prompt processing on text. Returns processed text.</summary>
     public Func<string, CancellationToken, Task<string>>? LlmHandler { get; init; }
 
+    /// <summary>Applies cleanup before prompt actions and snippets.</summary>
+    public Func<string, CancellationToken, Task<string>>? CleanupHandler { get; init; }
+
     /// <summary>Translates text. Params: text, sourceLang, targetLang. Returns translated text.</summary>
     public Func<string, string, string, CancellationToken, Task<string>>? TranslationHandler { get; init; }
 
@@ -72,4 +75,24 @@ public sealed record PostProcessingResult
 {
     /// <summary>The fully processed text.</summary>
     public required string Text { get; init; }
+
+    /// <summary>Execution details for each pipeline step that ran.</summary>
+    public IReadOnlyList<PostProcessingStepResult> Steps { get; init; } = [];
 }
+
+public static class PostProcessingStepNames
+{
+    public const string Formatting = "Formatting";
+    public const string Cleanup = "Cleanup";
+    public const string Llm = "LLM";
+    public const string Snippets = "Snippets";
+    public const string VocabularyBoosting = "VocabularyBoosting";
+    public const string Dictionary = "Dictionary";
+    public const string Translation = "Translation";
+}
+
+public sealed record PostProcessingStepResult(
+    string Name,
+    bool Changed,
+    bool Succeeded = true,
+    string? ErrorMessage = null);

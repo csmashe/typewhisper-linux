@@ -30,4 +30,10 @@ public interface IDictionaryService
 
     void ActivatePack(TermPack pack);
     void DeactivatePack(string packId);
+
+    string ExportToCsv() =>
+        throw new NotSupportedException();
+
+    int ImportFromCsv(string csv) =>
+        throw new NotSupportedException();
 }

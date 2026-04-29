@@ -93,6 +93,7 @@ public partial class App : Application
             var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
             var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
             var lastCopyLastTranscriptionApplied = hotkey.CurrentCopyLastTranscriptionHotkeyString;
+            var lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
             settings.SettingsChanged += s =>
             {
                 hotkey.Mode = s.Mode;
@@ -120,6 +121,12 @@ public partial class App : Application
                 {
                     lastCopyLastTranscriptionApplied = hotkey.CurrentCopyLastTranscriptionHotkeyString;
                 }
+
+                if (s.TransformSelectionHotkey != lastTransformSelectionApplied
+                    && hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey))
+                {
+                    lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
+                }
             };
 
             var api = services.GetRequiredService<HttpApiService>();
@@ -139,21 +146,25 @@ public partial class App : Application
             };
             hotkey.RecentTranscriptionsRequested += (_, _) => recentTranscriptions.TogglePalette();
             hotkey.CopyLastTranscriptionRequested += (_, _) => _ = recentTranscriptions.CopyLastTranscriptionToClipboardAsync();
+            var transformSelection = services.GetRequiredService<TransformSelectionService>();
+            hotkey.TransformSelectionRequested += (_, _) => _ = transformSelection.ToggleAsync();
 
             // Launch minimized / hidden if --minimized was passed.
             if (Program.StartMinimized)
                 main.Opened += (_, _) => main.Hide();
 
-            // First-run onboarding wizard.
+            var bootstrapTask = BootstrapDeferredAsync(services);
+
+            // First-run onboarding wizard. Wait for bootstrap so bundled
+            // plugins are deployed and initialized before the model picker loads.
             if (!settings.Current.HasCompletedOnboarding)
             {
-                main.Opened += (_, _) =>
+                main.Opened += async (_, _) =>
                 {
+                    await bootstrapTask;
                     (main.DataContext as ViewModels.MainWindowViewModel)?.OpenWizard();
                 };
             }
-
-            _ = BootstrapDeferredAsync(services);
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -170,6 +181,7 @@ public partial class App : Application
         hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey);
         hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey);
         hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey);
+        hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey);
 
         // Treat the upstream default as "unset" on Linux and substitute the
         // Linux default (HotkeyService's ctor-time binding — Ctrl+Shift+Space).

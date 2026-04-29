@@ -26,7 +26,11 @@ public partial class DictationOverlayViewModel : ObservableObject
     [ObservableProperty] private double _recordingSeconds;
     [ObservableProperty] private float _audioLevel;
 
-    public DictationOverlayViewModel(DictationOrchestrator dictation, AudioRecordingService audio, ISettingsService settings)
+    public DictationOverlayViewModel(
+        DictationOrchestrator dictation,
+        TransformSelectionService transformSelection,
+        AudioRecordingService audio,
+        ISettingsService settings)
     {
         _audio = audio;
         _settings = settings;
@@ -50,6 +54,9 @@ public partial class DictationOverlayViewModel : ObservableObject
         };
 
         dictation.OverlayStateChanged += (_, state) =>
+            Dispatcher.UIThread.Post(() => ApplyState(state));
+
+        transformSelection.OverlayStateChanged += (_, state) =>
             Dispatcher.UIThread.Post(() => ApplyState(state));
 
         _audio.LevelChanged += (_, level) =>

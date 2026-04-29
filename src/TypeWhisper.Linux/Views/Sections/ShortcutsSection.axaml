@@ -159,6 +159,33 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
+                                <TextBlock Text="Transform selection"
+                                           Classes="row-title" />
+                                <TextBlock Text="Optional global shortcut for editing selected text by voice. Leave blank to disable it."
+                                           Classes="row-hint" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        VerticalAlignment="Center">
+                                <TextBox Width="240"
+                                         Text="{Binding TransformSelectionHotkeyText}"
+                                         PlaceholderText="Ctrl+Shift+T" />
+                                <Button Content="Apply"
+                                        Command="{Binding ApplyTransformSelectionHotkeyCommand}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Height="1"
+                            Background="#16FFFFFF"
+                            Margin="18,0" />
+
+                    <Border Classes="section-row">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel Margin="0,0,16,0">
                                 <TextBlock Text="Recent transcriptions"
                                            Classes="row-title" />
                                 <TextBlock Text="Optional global shortcut that opens a searchable palette of recent transcriptions."

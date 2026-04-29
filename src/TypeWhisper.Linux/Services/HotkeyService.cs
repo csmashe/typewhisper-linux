@@ -23,6 +23,15 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class HotkeyService : IDisposable
 {
+    private enum HotkeyBinding
+    {
+        Dictation,
+        PromptPalette,
+        RecentTranscriptions,
+        CopyLastTranscription,
+        TransformSelection
+    }
+
     private const int PushToTalkThresholdMs = 600;
 
     private readonly TaskPoolGlobalHook _hook = new();
@@ -36,11 +45,14 @@ public sealed class HotkeyService : IDisposable
     private ModifierMask _recentTranscriptionsModifiers = ModifierMask.None;
     private KeyCode? _copyLastTranscriptionKey;
     private ModifierMask _copyLastTranscriptionModifiers = ModifierMask.None;
+    private KeyCode? _transformSelectionKey;
+    private ModifierMask _transformSelectionModifiers = ModifierMask.None;
     private RecordingMode _mode = RecordingMode.Toggle;
     private bool _keyIsDown;
     private bool _promptKeyIsDown;
     private bool _recentKeyIsDown;
     private bool _copyLastKeyIsDown;
+    private bool _transformSelectionKeyIsDown;
     private DateTime _keyDownTime;
     private bool _running;
     private int _disposed;
@@ -52,6 +64,7 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? PromptPaletteRequested;
     public event EventHandler? RecentTranscriptionsRequested;
     public event EventHandler? CopyLastTranscriptionRequested;
+    public event EventHandler? TransformSelectionRequested;
     public event EventHandler<string>? HookFailed;
 
     public RecordingMode Mode
@@ -87,7 +100,7 @@ public sealed class HotkeyService : IDisposable
         // collisions), but the raw setter is reachable from tests and any
         // future direct caller. Silently no-op rather than throw so call
         // sites don't need try/catch.
-        if (HotkeyMatchesAny(key, modifiers, (_promptPaletteKey, _promptPaletteModifiers), (_recentTranscriptionsKey, _recentTranscriptionsModifiers), (_copyLastTranscriptionKey, _copyLastTranscriptionModifiers)))
+        if (HotkeyMatchesAny(key, modifiers, GetBoundHotkeys(HotkeyBinding.Dictation)))
         {
             Trace.WriteLine("[HotkeyService] Refusing dictation hotkey that collides with another shortcut.");
             return;
@@ -99,7 +112,7 @@ public sealed class HotkeyService : IDisposable
 
     public void SetPromptPaletteHotkey(KeyCode? key, ModifierMask modifiers)
     {
-        if (key is not null && HotkeyMatchesAny(key.Value, modifiers, (_key, _modifiers), (_recentTranscriptionsKey, _recentTranscriptionsModifiers), (_copyLastTranscriptionKey, _copyLastTranscriptionModifiers)))
+        if (key is not null && HotkeyMatchesAny(key.Value, modifiers, GetBoundHotkeys(HotkeyBinding.PromptPalette)))
         {
             Trace.WriteLine("[HotkeyService] Refusing prompt palette hotkey that collides with another shortcut.");
             return;
@@ -117,6 +130,8 @@ public sealed class HotkeyService : IDisposable
         _recentTranscriptionsKey is null ? "" : FormatHotkey(_recentTranscriptionsKey.Value, _recentTranscriptionsModifiers);
     public string CurrentCopyLastTranscriptionHotkeyString =>
         _copyLastTranscriptionKey is null ? "" : FormatHotkey(_copyLastTranscriptionKey.Value, _copyLastTranscriptionModifiers);
+    public string CurrentTransformSelectionHotkeyString =>
+        _transformSelectionKey is null ? "" : FormatHotkey(_transformSelectionKey.Value, _transformSelectionModifiers);
 
     /// <summary>
     /// Parses strings like "Ctrl+Shift+Space", "Alt+F9", "Ctrl+K" and binds
@@ -132,7 +147,7 @@ public sealed class HotkeyService : IDisposable
 
         // Don't let the dictation hotkey collide with the prompt palette — the
         // palette handler runs first in OnKeyPressed and would shadow this key.
-        if (HotkeyMatchesAny(key!.Value, modifiers, (_promptPaletteKey, _promptPaletteModifiers), (_recentTranscriptionsKey, _recentTranscriptionsModifiers), (_copyLastTranscriptionKey, _copyLastTranscriptionModifiers)))
+        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.Dictation)))
             return false;
 
         SetHotkey(key.Value, modifiers);
@@ -151,7 +166,7 @@ public sealed class HotkeyService : IDisposable
             return false;
 
         // Don't let the prompt palette collide with the dictation hotkey.
-        if (HotkeyMatchesAny(key!.Value, modifiers, (_key, _modifiers), (_recentTranscriptionsKey, _recentTranscriptionsModifiers), (_copyLastTranscriptionKey, _copyLastTranscriptionModifiers)))
+        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.PromptPalette)))
             return false;
 
         SetPromptPaletteHotkey(key, modifiers);
@@ -170,7 +185,7 @@ public sealed class HotkeyService : IDisposable
         if (!TryParseHotkey(text, out var key, out var modifiers))
             return false;
 
-        if (HotkeyMatchesAny(key!.Value, modifiers, (_key, _modifiers), (_promptPaletteKey, _promptPaletteModifiers), (_copyLastTranscriptionKey, _copyLastTranscriptionModifiers)))
+        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.RecentTranscriptions)))
             return false;
 
         _recentTranscriptionsKey = key;
@@ -190,11 +205,31 @@ public sealed class HotkeyService : IDisposable
         if (!TryParseHotkey(text, out var key, out var modifiers))
             return false;
 
-        if (HotkeyMatchesAny(key!.Value, modifiers, (_key, _modifiers), (_promptPaletteKey, _promptPaletteModifiers), (_recentTranscriptionsKey, _recentTranscriptionsModifiers)))
+        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.CopyLastTranscription)))
             return false;
 
         _copyLastTranscriptionKey = key;
         _copyLastTranscriptionModifiers = modifiers;
+        return true;
+    }
+
+    public bool TrySetTransformSelectionHotkeyFromString(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            _transformSelectionKey = null;
+            _transformSelectionModifiers = ModifierMask.None;
+            return true;
+        }
+
+        if (!TryParseHotkey(text, out var key, out var modifiers))
+            return false;
+
+        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.TransformSelection)))
+            return false;
+
+        _transformSelectionKey = key;
+        _transformSelectionModifiers = modifiers;
         return true;
     }
 
@@ -204,7 +239,21 @@ public sealed class HotkeyService : IDisposable
         return key == otherKey.Value && modifiers == otherModifiers;
     }
 
-    private static bool HotkeyMatchesAny(KeyCode key, ModifierMask modifiers, params (KeyCode? Key, ModifierMask Modifiers)[] others) =>
+    private IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> GetBoundHotkeys(HotkeyBinding? exclude = null)
+    {
+        if (exclude != HotkeyBinding.Dictation)
+            yield return (_key, _modifiers);
+        if (exclude != HotkeyBinding.PromptPalette)
+            yield return (_promptPaletteKey, _promptPaletteModifiers);
+        if (exclude != HotkeyBinding.RecentTranscriptions)
+            yield return (_recentTranscriptionsKey, _recentTranscriptionsModifiers);
+        if (exclude != HotkeyBinding.CopyLastTranscription)
+            yield return (_copyLastTranscriptionKey, _copyLastTranscriptionModifiers);
+        if (exclude != HotkeyBinding.TransformSelection)
+            yield return (_transformSelectionKey, _transformSelectionModifiers);
+    }
+
+    private static bool HotkeyMatchesAny(KeyCode key, ModifierMask modifiers, IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> others) =>
         others.Any(other => HotkeyMatches(key, modifiers, other.Key, other.Modifiers));
 
     private static string FormatHotkey(KeyCode key, ModifierMask mods)
@@ -313,6 +362,14 @@ public sealed class HotkeyService : IDisposable
             return;
         }
 
+        if (MatchesTransformSelectionHotkey(e))
+        {
+            if (_transformSelectionKeyIsDown) return;
+            _transformSelectionKeyIsDown = true;
+            TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
         if (MatchesPromptPaletteHotkey(e))
         {
             // Same repeat-guard as the dictation key so OS auto-repeat doesn't
@@ -374,6 +431,13 @@ public sealed class HotkeyService : IDisposable
             && ModifiersMatch(e.RawEvent.Mask, _copyLastTranscriptionModifiers);
     }
 
+    private bool MatchesTransformSelectionHotkey(KeyboardHookEventArgs e)
+    {
+        if (_transformSelectionKey is null) return false;
+        return e.Data.KeyCode == _transformSelectionKey.Value
+            && ModifiersMatch(e.RawEvent.Mask, _transformSelectionModifiers);
+    }
+
     private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
     {
         // Clear the prompt-palette repeat guard on its own key release so the
@@ -384,6 +448,8 @@ public sealed class HotkeyService : IDisposable
             _recentKeyIsDown = false;
         if (_copyLastTranscriptionKey is not null && e.Data.KeyCode == _copyLastTranscriptionKey.Value)
             _copyLastKeyIsDown = false;
+        if (_transformSelectionKey is not null && e.Data.KeyCode == _transformSelectionKey.Value)
+            _transformSelectionKeyIsDown = false;
 
         // We only care about the release of the main key; modifier releases
         // are ignored so the user can let go of Ctrl/Shift first.

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -11,8 +13,12 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class HistorySectionViewModel : ObservableObject
 {
     private readonly IHistoryService _history;
+    private readonly IDictionaryService _dictionary;
+    private readonly ISettingsService _settings;
+    private readonly CorrectionSuggestionService _correctionSuggestions;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly AudioPlaybackService _audioPlayback;
+    private bool _suppressRefresh;
 
     public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];
     public ObservableCollection<string> AvailableApps { get; } = ["All apps"];
@@ -28,14 +34,24 @@ public partial class HistorySectionViewModel : ObservableObject
 
     public HistorySectionViewModel(
         IHistoryService history,
+        IDictionaryService dictionary,
+        ISettingsService settings,
+        CorrectionSuggestionService correctionSuggestions,
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback)
     {
         _history = history;
+        _dictionary = dictionary;
+        _settings = settings;
+        _correctionSuggestions = correctionSuggestions;
         _sessionAudioFiles = sessionAudioFiles;
         _audioPlayback = audioPlayback;
 
-        _history.RecordsChanged += () => Dispatcher.UIThread.Post(Refresh);
+        _history.RecordsChanged += () =>
+        {
+            if (!_suppressRefresh)
+                Dispatcher.UIThread.Post(Refresh);
+        };
         _audioPlayback.PlaybackStateChanged += () => Dispatcher.UIThread.Post(RefreshPlaybackState);
         _ = LoadAsync();
     }
@@ -78,7 +94,84 @@ public partial class HistorySectionViewModel : ObservableObject
 
     internal void SaveEdit(HistoryRecordRow record, string newText)
     {
-        _history.UpdateRecord(record.Record.Id, newText);
+        var originalText = record.Record.FinalText;
+
+        _suppressRefresh = true;
+        try
+        {
+            _history.UpdateRecord(record.Record.Id, newText);
+
+            var suggestions = _correctionSuggestions.GenerateSuggestions(originalText, newText);
+            if (_settings.Current.AutoAddDictionaryCorrections)
+            {
+                LearnCorrections(suggestions.Select(suggestion => new CorrectionSuggestionRow(suggestion)));
+                if (SetPendingCorrectionSuggestions(record, []))
+                    record.SetCorrectionSuggestions([]);
+            }
+            else
+            {
+                if (SetPendingCorrectionSuggestions(record, suggestions))
+                    record.SetCorrectionSuggestions(suggestions);
+            }
+
+            Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
+        }
+        finally
+        {
+            _suppressRefresh = false;
+        }
+
+        Refresh();
+    }
+
+    internal void LearnCorrections(IEnumerable<CorrectionSuggestionRow> suggestions)
+    {
+        foreach (var suggestion in suggestions.Where(suggestion => suggestion.IsApproved))
+        {
+            if (string.IsNullOrWhiteSpace(suggestion.Original)
+                || string.IsNullOrWhiteSpace(suggestion.Replacement))
+                continue;
+
+            _dictionary.LearnCorrection(suggestion.Original.Trim(), suggestion.Replacement.Trim());
+        }
+    }
+
+    internal void AddTermFromHistory(HistoryRecordRow record)
+    {
+        var term = record.Record.FinalText.Trim();
+        if (string.IsNullOrWhiteSpace(term))
+            return;
+
+        var exists = _dictionary.Entries.Any(entry =>
+            entry.EntryType == DictionaryEntryType.Term
+            && string.Equals(entry.Original.Trim(), term, StringComparison.OrdinalIgnoreCase));
+        if (exists)
+            return;
+
+        _dictionary.AddEntry(new DictionaryEntry
+        {
+            Id = Guid.NewGuid().ToString(),
+            EntryType = DictionaryEntryType.Term,
+            Original = term,
+            Source = DictionaryEntrySource.Manual
+        });
+    }
+
+    internal bool SetPendingCorrectionSuggestions(
+        HistoryRecordRow record,
+        IReadOnlyList<CorrectionSuggestion> suggestions)
+    {
+        try
+        {
+            _history.SetPendingCorrectionSuggestions(record.Record.Id, suggestions);
+            record.Record = record.Record with { PendingCorrectionSuggestions = suggestions };
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HistorySectionViewModel] Failed to persist correction suggestions: {ex}");
+            return false;
+        }
     }
 
     internal void CollapseAllExcept(HistoryRecordRow keep)
@@ -220,6 +313,8 @@ public partial class HistoryRecordRow : ObservableObject
     [ObservableProperty] private bool _isEditing;
     [ObservableProperty] private string _editText = "";
 
+    public ObservableCollection<CorrectionSuggestionRow> CorrectionSuggestions { get; } = [];
+
     public string TimeLabel => Record.Timestamp.ToString("HH:mm");
     public string DurationLabel => $"{Record.DurationSeconds:F1}s";
     public bool HasProfileName => !string.IsNullOrWhiteSpace(Record.ProfileName);
@@ -232,11 +327,13 @@ public partial class HistoryRecordRow : ObservableObject
     public bool ShowEditPanel => IsExpanded && IsEditing;
     public bool ShowExpandedMeta => IsExpanded && !IsEditing;
     public bool ShowExpandedActions => IsExpanded && !IsEditing;
+    public bool HasCorrectionSuggestions => IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
 
     public HistoryRecordRow(TranscriptionRecord record, HistorySectionViewModel owner)
     {
         _record = record;
         _owner = owner;
+        SetCorrectionSuggestions(record.PendingCorrectionSuggestions);
     }
 
     partial void OnIsExpandedChanged(bool value)
@@ -244,10 +341,12 @@ public partial class HistoryRecordRow : ObservableObject
         if (value)
         {
             _owner.CollapseAllExcept(this);
+            SetCorrectionSuggestions(Record.PendingCorrectionSuggestions);
         }
         else
         {
             IsEditing = false;
+            CorrectionSuggestions.Clear();
         }
 
         NotifyExpansionStateChanged();
@@ -274,6 +373,7 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(HasLanguage));
         OnPropertyChanged(nameof(HasProfileName));
         OnPropertyChanged(nameof(HasAppProcessName));
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
     }
 
     [RelayCommand]
@@ -284,6 +384,39 @@ public partial class HistoryRecordRow : ObservableObject
 
     [RelayCommand]
     private void TogglePlayback() => _owner.TogglePlaybackCommand.Execute(this);
+
+    [RelayCommand]
+    private void SaveApprovedCorrections()
+    {
+        _owner.LearnCorrections(CorrectionSuggestions);
+        if (_owner.SetPendingCorrectionSuggestions(this, []))
+        {
+            CorrectionSuggestions.Clear();
+            OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        }
+    }
+
+    [RelayCommand]
+    private void DismissCorrectionSuggestions()
+    {
+        if (_owner.SetPendingCorrectionSuggestions(this, []))
+        {
+            CorrectionSuggestions.Clear();
+            OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        }
+    }
+
+    [RelayCommand]
+    private void AddToDictionary() => _owner.AddTermFromHistory(this);
+
+    internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
+    {
+        CorrectionSuggestions.Clear();
+        foreach (var suggestion in suggestions)
+            CorrectionSuggestions.Add(new CorrectionSuggestionRow(suggestion));
+
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+    }
 
     internal void NotifyPlaybackStateChanged()
     {
@@ -298,5 +431,23 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowEditPanel));
         OnPropertyChanged(nameof(ShowExpandedMeta));
         OnPropertyChanged(nameof(ShowExpandedActions));
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+    }
+}
+
+public partial class CorrectionSuggestionRow : ObservableObject
+{
+    [ObservableProperty] private bool _isApproved = true;
+    [ObservableProperty] private string _original;
+    [ObservableProperty] private string _replacement;
+
+    public double Confidence { get; }
+    public string ConfidenceLabel => Confidence > 0 ? $"{Confidence:P0}" : "";
+
+    public CorrectionSuggestionRow(CorrectionSuggestion suggestion)
+    {
+        _original = suggestion.Original;
+        _replacement = suggestion.Replacement;
+        Confidence = suggestion.Confidence;
     }
 }

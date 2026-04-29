@@ -88,7 +88,7 @@ public sealed class RecentTranscriptionsService
         }
 
         var result = await _textInsertion.InsertTextAsync(entry.FinalText, autoPaste: false);
-        FeedbackRequested?.Invoke(StatusTextFor(result), result == InsertionResult.Failed);
+        FeedbackRequested?.Invoke(StatusTextFor(result), IsError(result));
     }
 
     private async Task InsertEntryAsync(RecentTranscriptionEntry entry, string? targetWindowId)
@@ -97,16 +97,29 @@ public sealed class RecentTranscriptionsService
             entry.FinalText,
             _settings.Current.AutoPaste,
             targetWindowId);
-        FeedbackRequested?.Invoke(StatusTextFor(result), result == InsertionResult.Failed);
+        FeedbackRequested?.Invoke(StatusTextFor(result), IsError(result));
     }
+
+    private static bool IsError(InsertionResult result) =>
+        result is InsertionResult.Failed
+            or InsertionResult.MissingClipboardTool
+            or InsertionResult.MissingPasteTool;
 
     private static string StatusTextFor(InsertionResult result) =>
         result switch
         {
-            InsertionResult.Pasted => "Typed recent transcription.",
+            InsertionResult.Typed => "Typed recent transcription.",
+            InsertionResult.Pasted => "Pasted recent transcription.",
             InsertionResult.CopiedToClipboard => "Copied recent transcription to clipboard.",
             InsertionResult.NoText => "No recent transcriptions.",
+            InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+            InsertionResult.MissingPasteTool => "Install xdotool to paste recent transcriptions automatically.",
             InsertionResult.Failed => "Text insertion failed.",
             _ => "Done."
         };
+
+    private static string ClipboardToolMissingMessage() =>
+        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+            ? "Install wl-clipboard to copy recent transcriptions."
+            : "Install xclip to copy recent transcriptions.";
 }

@@ -31,6 +31,7 @@ public sealed class AudioRecordingService : IDisposable
     private readonly object _sampleLock = new();
     private PaStream? _stream;
     private int _sampleCount;
+    private int _captureSampleRate = SampleRate;
     private int _isRecording;
     private int _isPreviewing;
     private int? _selectedDeviceIndex;
@@ -88,6 +89,7 @@ public sealed class AudioRecordingService : IDisposable
         {
             _sampleChunks.Clear();
             _sampleCount = 0;
+            _captureSampleRate = SampleRate;
         }
 
         if (!EnsureInputStreamStarted())
@@ -321,9 +323,38 @@ public sealed class AudioRecordingService : IDisposable
     private static string GetStableDeviceId(string deviceName, int maxInputChannels) =>
         $"{deviceName}|{maxInputChannels}";
 
-    private static PaStream CreateInputStream(int deviceIndex, PortAudioSharp.Stream.Callback callback)
+    private PaStream CreateInputStream(int deviceIndex, PortAudioSharp.Stream.Callback callback)
     {
         var inputInfo = PortAudio.GetDeviceInfo(deviceIndex);
+        var candidateRates = CandidateSampleRates(inputInfo.defaultSampleRate);
+        Exception? lastError = null;
+
+        foreach (var sampleRate in candidateRates)
+        {
+            try
+            {
+                var stream = CreateInputStream(deviceIndex, inputInfo, sampleRate, callback);
+                _captureSampleRate = sampleRate;
+                if (sampleRate != SampleRate)
+                    Trace.WriteLine($"[AudioRecordingService] Capturing at {sampleRate} Hz and resampling to {SampleRate} Hz.");
+                return stream;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                Trace.WriteLine($"[AudioRecordingService] Failed to open input stream at {sampleRate} Hz: {ex.Message}");
+            }
+        }
+
+        throw lastError ?? new InvalidOperationException("No compatible input sample rate was accepted by PortAudio.");
+    }
+
+    private static PaStream CreateInputStream(
+        int deviceIndex,
+        DeviceInfo inputInfo,
+        int sampleRate,
+        PortAudioSharp.Stream.Callback callback)
+    {
         var inputParams = new StreamParameters
         {
             device = deviceIndex,
@@ -336,11 +367,29 @@ public sealed class AudioRecordingService : IDisposable
         return new PaStream(
             inParams: inputParams,
             outParams: null,
-            sampleRate: SampleRate,
+            sampleRate: sampleRate,
             framesPerBuffer: FramesPerBuffer,
             streamFlags: StreamFlags.ClipOff,
             callback: callback,
             userData: IntPtr.Zero);
+    }
+
+    private static IReadOnlyList<int> CandidateSampleRates(double defaultSampleRate)
+    {
+        var rates = new List<int>();
+        AddRate((int)Math.Round(defaultSampleRate));
+        AddRate(48000);
+        AddRate(44100);
+        AddRate(32000);
+        AddRate(24000);
+        AddRate(SampleRate);
+        return rates;
+
+        void AddRate(int rate)
+        {
+            if (rate > 0 && !rates.Contains(rate))
+                rates.Add(rate);
+        }
     }
 
     private static byte[] FloatSamplesToWav(float[] samples, int sampleRate)
@@ -356,15 +405,39 @@ public sealed class AudioRecordingService : IDisposable
     {
         lock (_sampleLock)
         {
-            return WriteWav(SampleRate, _sampleCount, writer =>
+            var samples = new float[_sampleCount];
+            var offset = 0;
+            foreach (var chunk in _sampleChunks)
             {
-                foreach (var chunk in _sampleChunks)
-                {
-                    foreach (var sample in chunk)
-                        writer.Write(ToPcm16(sample));
-                }
-            });
+                Array.Copy(chunk, 0, samples, offset, chunk.Length);
+                offset += chunk.Length;
+            }
+
+            var outputSamples = ResampleToSampleRate(samples, _captureSampleRate, SampleRate);
+            return FloatSamplesToWav(outputSamples, SampleRate);
         }
+    }
+
+    internal static float[] ResampleToSampleRate(float[] samples, int sourceSampleRate, int targetSampleRate)
+    {
+        if (samples.Length == 0 || sourceSampleRate <= 0 || sourceSampleRate == targetSampleRate)
+            return samples;
+
+        var outputLength = Math.Max(1, (int)Math.Round(samples.Length * (double)targetSampleRate / sourceSampleRate));
+        var output = new float[outputLength];
+        var ratio = (double)sourceSampleRate / targetSampleRate;
+
+        for (var i = 0; i < output.Length; i++)
+        {
+            var sourceIndex = i * ratio;
+            var leftIndex = (int)Math.Floor(sourceIndex);
+            var rightIndex = Math.Min(leftIndex + 1, samples.Length - 1);
+            var fraction = (float)(sourceIndex - leftIndex);
+
+            output[i] = samples[leftIndex] + (samples[rightIndex] - samples[leftIndex]) * fraction;
+        }
+
+        return output;
     }
 
     private static byte[] WriteWav(int sampleRate, int sampleCount, Action<BinaryWriter> writeSamples)

@@ -38,12 +38,16 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IDictionaryService _dictionary;
     private readonly ISnippetService _snippets;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly LlmCleanupService _cleanup;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly ITranslationService _translation;
     private readonly PromptProcessingService _promptProcessing;
     private readonly MemoryService _memory;
     private readonly RecentTranscriptionsService _recentTranscriptions;
+    private readonly IdeFileReferenceService _ideFileReferences;
     private readonly StreamingTranscriptState _partialTranscriptState = new();
+    private readonly VoiceCommandParser _voiceCommands = new();
+    private readonly DeveloperFormattingService _developerFormatting = new();
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private DateTime _recordingStart;
     private string? _recordingAppProcess;
@@ -92,11 +96,13 @@ public sealed class DictationOrchestrator : IDisposable
         IDictionaryService dictionary,
         ISnippetService snippets,
         IVocabularyBoostingService vocabularyBoosting,
+        LlmCleanupService cleanup,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
         PromptProcessingService promptProcessing,
         MemoryService memory,
-        RecentTranscriptionsService recentTranscriptions)
+        RecentTranscriptionsService recentTranscriptions,
+        IdeFileReferenceService ideFileReferences)
     {
         _hotkey = hotkey;
         _audio = audio;
@@ -115,11 +121,13 @@ public sealed class DictationOrchestrator : IDisposable
         _dictionary = dictionary;
         _snippets = snippets;
         _vocabularyBoosting = vocabularyBoosting;
+        _cleanup = cleanup;
         _pipeline = pipeline;
         _translation = translation;
         _promptProcessing = promptProcessing;
         _memory = memory;
         _recentTranscriptions = recentTranscriptions;
+        _ideFileReferences = ideFileReferences;
     }
 
     public void Initialize()
@@ -163,9 +171,26 @@ public sealed class DictationOrchestrator : IDisposable
             _recordingStart = DateTime.UtcNow;
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
-            _audio.StartRecording();
-            if (!_audio.IsRecording)
+            try
+            {
+                _audio.StartRecording();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Failed to start recording: {ex}");
+                var message = BuildRecordingStartFailureMessage(ex);
+                ReportStatus(message);
+                ShowFeedback(message, isError: true);
                 return;
+            }
+
+            if (!_audio.IsRecording)
+            {
+                var message = BuildRecordingStartFailureMessage(null);
+                ReportStatus(message);
+                ShowFeedback(message, isError: true);
+                return;
+            }
 
             if (_settings.Current.AudioDuckingEnabled)
                 _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
@@ -390,6 +415,7 @@ public sealed class DictationOrchestrator : IDisposable
 
             var promptAction = ResolvePromptAction();
             var translationTarget = _recordingProfile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
+            var cleanupLevel = ResolveCleanupLevel();
 
             var pluginProcessors = _models.PluginManager.PostProcessors
                 .Select(processor => new PluginPostProcessor(
@@ -407,7 +433,18 @@ public sealed class DictationOrchestrator : IDisposable
                     VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
                         ? _vocabularyBoosting.Apply
                         : null,
-                    SnippetExpander = text => _snippets.ApplySnippets(text),
+                    CleanupHandler = cleanupLevel == CleanupLevel.None
+                        ? null
+                        : (text, token) => _cleanup.CleanAsync(
+                            text,
+                            cleanupLevel,
+                            message =>
+                            {
+                                ReportStatus(message);
+                                return Task.CompletedTask;
+                            },
+                            token),
+                    SnippetExpander = text => _snippets.ApplySnippets(text, profileId: _recordingProfile?.Id),
                     LlmHandler = promptAction is not null
                         ? (text, token) => _promptProcessing.ProcessAsync(promptAction, text, token)
                         : null,
@@ -428,7 +465,8 @@ public sealed class DictationOrchestrator : IDisposable
                 },
                 CancellationToken.None);
 
-            var finalText = pipelineResult.Text;
+            var commandResult = _voiceCommands.Parse(pipelineResult.Text);
+            var finalText = ApplyProfileStyleFormatting(commandResult.Text);
 
             TranscriptionCompleted?.Invoke(this, finalText);
             _speechFeedback.AnnounceTranscriptionComplete(finalText);
@@ -447,26 +485,43 @@ public sealed class DictationOrchestrator : IDisposable
             });
 
             var actionPlugin = ResolveActionPlugin(promptAction);
-            var insertion = actionPlugin is null
-                ? await _textInsertion.InsertTextAsync(finalText, _settings.Current.AutoPaste, _recordingWindowId)
+            var insertion = commandResult.CancelInsertion
+                ? InsertionResult.NoText
+                : actionPlugin is null
+                ? await _textInsertion.InsertTextAsync(new TextInsertionRequest(
+                    Text: finalText,
+                    AutoPaste: _settings.Current.AutoPaste,
+                    TargetWindowId: _recordingWindowId,
+                    TargetProcessName: _recordingAppProcess,
+                    TargetWindowTitle: _recordingAppTitle,
+                    AutoEnter: commandResult.AutoEnter,
+                    Strategy: ResolveInsertionStrategy(_recordingAppProcess)))
                 : await ExecuteActionPluginAsync(actionPlugin, finalText, rawText, result?.DetectedLanguage);
 
             var completionMessage = insertion switch
             {
+                InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 => "Pressed Enter.",
                 InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
+                InsertionResult.Typed => $"Typed {finalText.Length} char(s).",
                 InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
                 InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.ActionFailed => "Action failed.",
-                InsertionResult.Failed => "Text insertion failed — is xdotool installed?",
+                InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+                InsertionResult.MissingPasteTool => "Text insertion failed. Install xdotool to enable automatic paste.",
+                InsertionResult.Failed => "Text insertion failed. Dictated text could not be copied or pasted.",
+                InsertionResult.NoText when commandResult.CancelInsertion => "Dictation canceled.",
                 _ => "Done.",
             };
-            var isError = insertion is InsertionResult.Failed or InsertionResult.ActionFailed;
+            var isError = insertion is InsertionResult.Failed
+                or InsertionResult.ActionFailed
+                or InsertionResult.MissingClipboardTool
+                or InsertionResult.MissingPasteTool;
             ReportStatus(completionMessage);
             ShowFeedback(
-                isError ? completionMessage : "Dictation completed.",
+                completionMessage,
                 isError: isError);
 
-            if (insertion is InsertionResult.Pasted or InsertionResult.CopiedToClipboard)
+            if (insertion is InsertionResult.Pasted or InsertionResult.Typed or InsertionResult.CopiedToClipboard)
             {
                 _models.PluginManager.EventBus.Publish(new TextInsertedEvent
                 {
@@ -486,10 +541,20 @@ public sealed class DictationOrchestrator : IDisposable
 
             // Write to history last so stats reflect the just-completed capture.
             if (_settings.Current.SaveToHistoryEnabled)
-                AddHistoryRecord(transcriptionId, timestamp, rawText, finalText, duration, result, wavPath);
+                AddHistoryRecord(
+                    transcriptionId,
+                    timestamp,
+                    rawText,
+                    finalText,
+                    duration,
+                    result,
+                    wavPath,
+                    insertion,
+                    pipelineResult,
+                    cleanupLevel);
 
             if (_settings.Current.MemoryEnabled)
-                _ = Task.Run(() => _memory.ExtractAndStoreAsync(finalText));
+                FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
         }
         catch (Exception ex)
         {
@@ -518,6 +583,55 @@ public sealed class DictationOrchestrator : IDisposable
 
         return _promptActions.EnabledActions.FirstOrDefault(action => action.Id == promptActionId);
     }
+
+    private CleanupLevel ResolveCleanupLevel()
+    {
+        if (_recordingProfile is null)
+            return _settings.Current.CleanupLevel;
+
+        var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
+        return _recordingProfile.CleanupLevelOverride ?? style.CleanupLevel;
+    }
+
+    private string ApplyProfileStyleFormatting(string text)
+    {
+        if (_recordingProfile is null)
+            return text;
+
+        var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
+        var developerFormattingEnabled = _recordingProfile.DeveloperFormattingOverride
+            ?? style.DeveloperFormattingEnabled;
+        if (!developerFormattingEnabled)
+            return text;
+
+        var fileReference = _ideFileReferences.TryFormatReferenceCommand(text);
+        return fileReference ?? _developerFormatting.Format(text);
+    }
+
+    private TextInsertionStrategy ResolveInsertionStrategy(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+            return TextInsertionStrategy.Auto;
+
+        var strategies = _settings.Current.AppInsertionStrategies;
+        if (strategies is null || strategies.Count == 0)
+            return TextInsertionStrategy.Auto;
+
+        var process = ProcessNameNormalizer.Normalize(processName);
+        foreach (var entry in strategies)
+        {
+            if (string.Equals(entry.Key, processName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(entry.Key, process, StringComparison.OrdinalIgnoreCase))
+                return entry.Value;
+        }
+
+        return TextInsertionStrategy.Auto;
+    }
+
+    private static string ClipboardToolMissingMessage() =>
+        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+            ? "Text insertion failed. Install wl-clipboard to enable clipboard insertion."
+            : "Text insertion failed. Install xclip to enable clipboard insertion.";
 
     private IActionPlugin? ResolveActionPlugin(PromptAction? promptAction)
     {
@@ -579,8 +693,53 @@ public sealed class DictationOrchestrator : IDisposable
             TaskScheduler.Default);
     }
 
-    private void AddHistoryRecord(string id, DateTime timestamp, string rawText, string finalText, double duration,
-        PluginTranscriptionResult? result, string wavPath)
+    private string BuildRecordingStartFailureMessage(Exception? ex)
+    {
+        var selectedDevice = ResolveSelectedInputDeviceForMessage();
+        if (selectedDevice is null)
+            return "Could not start recording. No microphone input device is available.";
+
+        var baseMessage = $"Could not start recording from '{selectedDevice.Name}'.";
+        var detail = ex?.Message;
+        if (!string.IsNullOrWhiteSpace(detail))
+            baseMessage += $" {detail}.";
+
+        return IsBluetoothDeviceName(selectedDevice.Name)
+            ? $"{baseMessage} Bluetooth headsets must be in a microphone-capable headset profile; switch the device input profile or choose another microphone."
+            : $"{baseMessage} Choose another microphone or check the device input profile.";
+    }
+
+    private AudioInputDevice? ResolveSelectedInputDeviceForMessage()
+    {
+        try
+        {
+            return _audio.ResolveConfiguredDevice(
+                _settings.Current.SelectedMicrophoneDevice,
+                _settings.Current.SelectedMicrophoneDeviceId);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsBluetoothDeviceName(string name) =>
+        name.Contains("airpod", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("bluetooth", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("bluez", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
+
+    private void AddHistoryRecord(
+        string id,
+        DateTime timestamp,
+        string rawText,
+        string finalText,
+        double duration,
+        PluginTranscriptionResult? result,
+        string wavPath,
+        InsertionResult insertion,
+        PostProcessingResult pipelineResult,
+        CleanupLevel cleanupLevel)
     {
         try
         {
@@ -604,6 +763,14 @@ public sealed class DictationOrchestrator : IDisposable
                 EngineUsed = engine,
                 ModelUsed = model,
                 AudioFileName = Path.GetFileName(wavPath),
+                InsertionStatus = ToTextInsertionStatus(insertion),
+                InsertionFailureReason = InsertionFailureReasonFor(insertion),
+                CleanupLevelUsed = cleanupLevel,
+                CleanupApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Cleanup),
+                SnippetApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Snippets),
+                DictionaryCorrectionApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Dictionary),
+                PromptActionApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Llm),
+                TranslationApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Translation),
             });
         }
         catch (Exception ex)
@@ -611,6 +778,35 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] AddHistoryRecord failed: {ex.Message}");
         }
     }
+
+    private static TextInsertionStatus ToTextInsertionStatus(InsertionResult insertion) =>
+        insertion switch
+        {
+            InsertionResult.Pasted => TextInsertionStatus.Pasted,
+            InsertionResult.Typed => TextInsertionStatus.Typed,
+            InsertionResult.CopiedToClipboard => TextInsertionStatus.CopiedToClipboard,
+            InsertionResult.NoText => TextInsertionStatus.NoText,
+            InsertionResult.ActionHandled => TextInsertionStatus.ActionHandled,
+            InsertionResult.ActionFailed => TextInsertionStatus.ActionFailed,
+            InsertionResult.MissingClipboardTool => TextInsertionStatus.MissingClipboardTool,
+            InsertionResult.MissingPasteTool => TextInsertionStatus.MissingPasteTool,
+            InsertionResult.Failed => TextInsertionStatus.Failed,
+            _ => TextInsertionStatus.Unknown,
+        };
+
+    private static bool WasPipelineStepChanged(PostProcessingResult result, string name) =>
+        result.Steps.Any(step =>
+            step.Changed && string.Equals(step.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    private static string? InsertionFailureReasonFor(InsertionResult insertion) =>
+        insertion switch
+        {
+            InsertionResult.ActionFailed => "Action plugin failed.",
+            InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+            InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
+            InsertionResult.Failed => "Text insertion failed.",
+            _ => null,
+        };
 
     private void ReportStatus(string message)
     {
@@ -880,122 +1076,5 @@ public sealed class DictationOrchestrator : IDisposable
         {
             PartialText = partialText
         });
-    }
-}
-
-internal enum LinuxShortSpeechDecision
-{
-    DiscardTooShort,
-    DiscardNoSpeech,
-    Transcribe
-}
-
-internal static class LinuxDictationShortSpeechPolicy
-{
-    private const int WavHeaderBytes = 44;
-    private const int SampleRate = 16000;
-    private const int BytesPerSample = 2;
-    private const double UltraShortTapSeconds = 0.04;
-    private const double ShortClipSeconds = 1.0;
-    private const double MinimumTranscriptionSeconds = 0.75;
-    private const double TailPaddingSeconds = 0.3;
-    private const float ShortClipQuietPeakThreshold = 0.003f;
-    private const float LongClipQuietPeakThreshold = 0.006f;
-
-    public static LinuxShortSpeechDecision Classify(
-        double rawDuration,
-        float peakLevel,
-        bool transcribeShortQuietClipsAggressively = false)
-    {
-        if (rawDuration < UltraShortTapSeconds)
-            return LinuxShortSpeechDecision.DiscardTooShort;
-
-        if (rawDuration < ShortClipSeconds)
-        {
-            if (peakLevel < ShortClipQuietPeakThreshold)
-            {
-                return transcribeShortQuietClipsAggressively
-                    ? LinuxShortSpeechDecision.Transcribe
-                    : LinuxShortSpeechDecision.DiscardNoSpeech;
-            }
-
-            return LinuxShortSpeechDecision.Transcribe;
-        }
-
-        if (peakLevel < LongClipQuietPeakThreshold)
-        {
-            return transcribeShortQuietClipsAggressively
-                ? LinuxShortSpeechDecision.Transcribe
-                : LinuxShortSpeechDecision.DiscardNoSpeech;
-        }
-
-        return LinuxShortSpeechDecision.Transcribe;
-    }
-
-    public static byte[] PadWavForFinalTranscription(byte[] wav, double rawDuration)
-    {
-        if (!IsStandardPcm16MonoWav(wav))
-            return wav;
-
-        var currentSampleCount = (wav.Length - WavHeaderBytes) / BytesPerSample;
-        var targetSampleCount = currentSampleCount;
-
-        if (rawDuration < MinimumTranscriptionSeconds)
-            targetSampleCount = Math.Max(targetSampleCount, (int)(MinimumTranscriptionSeconds * SampleRate));
-        else
-            targetSampleCount += (int)(TailPaddingSeconds * SampleRate);
-
-        if (targetSampleCount <= currentSampleCount)
-            return wav;
-
-        var padded = new byte[WavHeaderBytes + targetSampleCount * BytesPerSample];
-        Array.Copy(wav, padded, wav.Length);
-        WriteInt32LittleEndian(padded, 4, 36 + targetSampleCount * BytesPerSample);
-        WriteInt32LittleEndian(padded, 40, targetSampleCount * BytesPerSample);
-        return padded;
-    }
-
-    public static double ComputeDurationSeconds(byte[] wav)
-    {
-        if (!IsStandardPcm16MonoWav(wav))
-            return 0;
-
-        return (wav.Length - WavHeaderBytes) / (double)(SampleRate * BytesPerSample);
-    }
-
-    public static float ComputePeakLevel(byte[] wav)
-    {
-        if (!IsStandardPcm16MonoWav(wav))
-            return 0f;
-
-        var peak = 0;
-        for (var i = WavHeaderBytes; i + 1 < wav.Length; i += BytesPerSample)
-        {
-            var sample = BitConverter.ToInt16(wav, i);
-            peak = Math.Max(peak, Math.Abs((int)sample));
-        }
-
-        return peak / (float)short.MaxValue;
-    }
-
-    private static bool IsStandardPcm16MonoWav(byte[] wav) =>
-        wav.Length >= WavHeaderBytes &&
-        wav[0] == (byte)'R' &&
-        wav[1] == (byte)'I' &&
-        wav[2] == (byte)'F' &&
-        wav[3] == (byte)'F' &&
-        wav[8] == (byte)'W' &&
-        wav[9] == (byte)'A' &&
-        wav[10] == (byte)'V' &&
-        wav[11] == (byte)'E' &&
-        BitConverter.ToInt16(wav, 20) == 1 &&
-        BitConverter.ToInt16(wav, 22) == 1 &&
-        BitConverter.ToInt32(wav, 24) == SampleRate &&
-        BitConverter.ToInt16(wav, 34) == 16;
-
-    private static void WriteInt32LittleEndian(byte[] buffer, int offset, int value)
-    {
-        var bytes = BitConverter.GetBytes(value);
-        Array.Copy(bytes, 0, buffer, offset, bytes.Length);
     }
 }

@@ -1,7 +1,7 @@
 using Moq;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
-using TypeWhisper.Windows.Services;
+using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -106,28 +106,28 @@ public class StabilizeTextTests
     [Fact]
     public void EmptyConfirmed_ReturnsNew()
     {
-        var result = StreamingHandler.StabilizeText("", "Hello world");
+        var result = StreamingTranscriptState.StabilizeText("", "Hello world");
         Assert.Equal("Hello world", result);
     }
 
     [Fact]
     public void EmptyNew_ReturnsConfirmed()
     {
-        var result = StreamingHandler.StabilizeText("Hello", "");
+        var result = StreamingTranscriptState.StabilizeText("Hello", "");
         Assert.Equal("Hello", result);
     }
 
     [Fact]
     public void NewStartsWithConfirmed_ReturnsNew()
     {
-        var result = StreamingHandler.StabilizeText("Hello", "Hello world");
+        var result = StreamingTranscriptState.StabilizeText("Hello", "Hello world");
         Assert.Equal("Hello world", result);
     }
 
     [Fact]
     public void ExactMatch_ReturnsConfirmed()
     {
-        var result = StreamingHandler.StabilizeText("Hello world", "Hello world");
+        var result = StreamingTranscriptState.StabilizeText("Hello world", "Hello world");
         Assert.Equal("Hello world", result);
     }
 
@@ -135,7 +135,7 @@ public class StabilizeTextTests
     public void PartialPrefixMatch_KeepsConfirmedAndAppends()
     {
         // "Hello worl" matches >50% of "Hello world", so confirmed + new tail
-        var result = StreamingHandler.StabilizeText("Hello world", "Hello world, how are you?");
+        var result = StreamingTranscriptState.StabilizeText("Hello world", "Hello world, how are you?");
         Assert.Equal("Hello world, how are you?", result);
     }
 
@@ -143,14 +143,14 @@ public class StabilizeTextTests
     public void MinorDivergence_KeepsConfirmedPrefix()
     {
         // First 6 chars match ("Hello "), >50% of 11-char confirmed
-        var result = StreamingHandler.StabilizeText("Hello world", "Hello earth and sky");
+        var result = StreamingTranscriptState.StabilizeText("Hello world", "Hello earth and sky");
         Assert.Equal("Hello world earth and sky", result);
     }
 
     [Fact]
     public void CompletelyDifferent_AcceptsNewText()
     {
-        var result = StreamingHandler.StabilizeText("Hello world", "Goodbye universe");
+        var result = StreamingTranscriptState.StabilizeText("Hello world", "Goodbye universe");
         Assert.Equal("Goodbye universe", result);
     }
 
@@ -160,7 +160,7 @@ public class StabilizeTextTests
         // Confirmed = "A B C D", new starts with "B C D E" (suffix of confirmed)
         var confirmed = "Alpha Beta Gamma Delta";
         var newText = "Beta Gamma Delta Epsilon";
-        var result = StreamingHandler.StabilizeText(confirmed, newText);
+        var result = StreamingTranscriptState.StabilizeText(confirmed, newText);
         // Should keep confirmed + append the new tail " Epsilon"
         Assert.Equal("Alpha Beta Gamma Delta Epsilon", result);
     }
@@ -168,7 +168,7 @@ public class StabilizeTextTests
     [Fact]
     public void WhitespaceIsTrimmed()
     {
-        var result = StreamingHandler.StabilizeText("", "  Hello  ");
+        var result = StreamingTranscriptState.StabilizeText("", "  Hello  ");
         Assert.Equal("Hello", result);
     }
 }
@@ -176,14 +176,14 @@ public class StabilizeTextTests
 public class StreamingTranscriptStateTests
 {
     [Fact]
-    public void StopSession_InvalidatesLateRealtimeEvents()
+    public void StopSession_InvalidatesLatePollingEvents()
     {
         var sut = new StreamingTranscriptState();
         var sessionVersion = sut.StartSession();
 
-        var appliedBeforeStop = sut.TryApplyRealtime(
+        var appliedBeforeStop = sut.TryApplyPolling(
             sessionVersion,
-            new StreamingTranscriptEvent("Hello world", false),
+            "Hello world",
             text => text,
             out var displayBeforeStop);
 
@@ -194,38 +194,14 @@ public class StreamingTranscriptStateTests
 
         Assert.Equal("Hello world", finalText);
 
-        var appliedAfterStop = sut.TryApplyRealtime(
+        var appliedAfterStop = sut.TryApplyPolling(
             sessionVersion,
-            new StreamingTranscriptEvent("Should be ignored", false),
+            "Should be ignored",
             text => text,
             out var displayAfterStop);
 
         Assert.False(appliedAfterStop);
         Assert.Equal("", displayAfterStop);
-    }
-
-    [Fact]
-    public void RealtimeFinalTranscript_AppendsToConfirmedText()
-    {
-        var sut = new StreamingTranscriptState();
-        var sessionVersion = sut.StartSession();
-
-        var interimApplied = sut.TryApplyRealtime(
-            sessionVersion,
-            new StreamingTranscriptEvent("Hello", false),
-            text => text,
-            out var interimDisplay);
-        var finalApplied = sut.TryApplyRealtime(
-            sessionVersion,
-            new StreamingTranscriptEvent("world", true),
-            text => text,
-            out var finalDisplay);
-
-        Assert.True(interimApplied);
-        Assert.Equal("Hello", interimDisplay);
-        Assert.True(finalApplied);
-        Assert.Equal("world", finalDisplay);
-        Assert.Equal("world", sut.StopSession());
     }
 
     [Fact]

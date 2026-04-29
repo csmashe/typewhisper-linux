@@ -69,7 +69,7 @@ public class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
-    public void ActivatePack_SkipsDuplicates()
+    public void ActivatePack_AllowsSameTermInDifferentSources()
     {
         _sut.AddEntry(new DictionaryEntry
         {
@@ -81,8 +81,9 @@ public class DictionaryServiceTests : IDisposable
         var pack = new TermPack("test", "Test Pack", "T", ["React", "Vue"]);
         _sut.ActivatePack(pack);
 
-        // Should have 2 entries: the existing "React" and the new "Vue"
-        Assert.Equal(2, _sut.Entries.Count);
+        Assert.Equal(3, _sut.Entries.Count);
+        Assert.Contains(_sut.Entries, e => e.Id == "existing" && e.Original == "React");
+        Assert.Contains(_sut.Entries, e => e.Id == "pack:test:React" && e.Original == "React");
     }
 
     [Fact]
@@ -118,6 +119,67 @@ public class DictionaryServiceTests : IDisposable
 
         var result = _sut.ApplyCorrections("I deployed to kubernets");
         Assert.Equal("I deployed to Kubernetes", result);
+    }
+
+    [Fact]
+    public void ApplyCorrections_UpdatesUsageMetadata()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "kubernets",
+            Replacement = "Kubernetes"
+        });
+
+        _sut.ApplyCorrections("kubernets");
+
+        var entry = _sut.Entries[0];
+        Assert.Equal(1, entry.UsageCount);
+        Assert.Equal(1, entry.TimesApplied);
+        Assert.NotNull(entry.LastUsedAt);
+    }
+
+    [Fact]
+    public void ApplyCorrections_DoesNotUpdateUsageMetadata_WhenWordBoundaryDoesNotMatch()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "test",
+            Replacement = "exam"
+        });
+
+        var result = _sut.ApplyCorrections("testing");
+
+        Assert.Equal("testing", result);
+        Assert.Equal(0, _sut.Entries[0].UsageCount);
+        Assert.Equal(0, _sut.Entries[0].TimesApplied);
+    }
+
+    [Fact]
+    public void ApplyCorrections_PrefersHigherPriorityCorrection()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "low",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "type whisper",
+            Replacement = "Type Whisper"
+        });
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "high",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "type whisper",
+            Replacement = "TypeWhisper",
+            Priority = 10
+        });
+
+        var result = _sut.ApplyCorrections("type whisper");
+
+        Assert.Equal("TypeWhisper", result);
     }
 
     [Fact]
@@ -180,6 +242,9 @@ public class DictionaryServiceTests : IDisposable
         Assert.Equal(DictionaryEntryType.Correction, _sut.Entries[0].EntryType);
         Assert.Equal("kubernets", _sut.Entries[0].Original);
         Assert.Equal("Kubernetes", _sut.Entries[0].Replacement);
+        Assert.Equal(1, _sut.Entries[0].TimesCorrected);
+        Assert.NotNull(_sut.Entries[0].LastCorrectedAt);
+        Assert.Equal(DictionaryEntrySource.CorrectionSuggestion, _sut.Entries[0].Source);
     }
 
     [Fact]
@@ -191,6 +256,105 @@ public class DictionaryServiceTests : IDisposable
         Assert.Single(_sut.Entries);
         Assert.Equal("Kubernetes", _sut.Entries[0].Replacement);
         Assert.Equal(1, _sut.Entries[0].UsageCount);
+        Assert.Equal(2, _sut.Entries[0].TimesCorrected);
+        Assert.NotNull(_sut.Entries[0].LastCorrectedAt);
+    }
+
+    [Fact]
+    public void Entries_LoadLegacyJsonWithMetadataDefaults()
+    {
+        File.WriteAllText(_filePath, """
+            [
+              {
+                "Id": "legacy",
+                "EntryType": 0,
+                "Original": "React",
+                "IsEnabled": true
+              }
+            ]
+            """);
+
+        var sut = new DictionaryService(_filePath);
+
+        var entry = Assert.Single(sut.Entries);
+        Assert.Equal("React", entry.Original);
+        Assert.False(entry.IsStarred);
+        Assert.Equal(0, entry.TimesApplied);
+        Assert.Equal(0, entry.TimesCorrected);
+        Assert.Equal(0, entry.Priority);
+        Assert.Null(entry.LastUsedAt);
+        Assert.Null(entry.LastCorrectedAt);
+        Assert.Equal(DictionaryEntrySource.Manual, entry.Source);
+    }
+
+    [Fact]
+    public void ExportToCsv_IncludesMetadataAndEscapesFields()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "wispr, flow",
+            Replacement = "Wispr \"Flow\"",
+            CaseSensitive = true,
+            IsStarred = true,
+            Priority = 7,
+            Source = DictionaryEntrySource.CorrectionSuggestion
+        });
+
+        var csv = _sut.ExportToCsv();
+
+        Assert.Contains("EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source", csv);
+        Assert.Contains("Correction,\"wispr, flow\",\"Wispr \"\"Flow\"\"\",True,True,True,7,CorrectionSuggestion", csv);
+    }
+
+    [Fact]
+    public void ImportFromCsv_AddsEntriesWithMetadata()
+    {
+        var imported = _sut.ImportFromCsv("""
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,wispr,Wispr,true,true,true,5,Import
+            Term,TypeWhisper,,false,true,false,2,Manual
+            """);
+
+        Assert.Equal(2, imported);
+        Assert.Equal(2, _sut.Entries.Count);
+
+        var correction = _sut.Entries.First(entry => entry.EntryType == DictionaryEntryType.Correction);
+        Assert.Equal("wispr", correction.Original);
+        Assert.Equal("Wispr", correction.Replacement);
+        Assert.True(correction.CaseSensitive);
+        Assert.True(correction.IsStarred);
+        Assert.Equal(5, correction.Priority);
+        Assert.Equal(DictionaryEntrySource.Import, correction.Source);
+
+        var term = _sut.Entries.First(entry => entry.EntryType == DictionaryEntryType.Term);
+        Assert.Equal("TypeWhisper", term.Original);
+        Assert.Null(term.Replacement);
+        Assert.Equal(2, term.Priority);
+        Assert.Equal(DictionaryEntrySource.Manual, term.Source);
+    }
+
+    [Fact]
+    public void ImportFromCsv_SkipsDuplicatesAndInvalidCorrections()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "existing",
+            EntryType = DictionaryEntryType.Term,
+            Original = "TypeWhisper"
+        });
+
+        var imported = _sut.ImportFromCsv("""
+            EntryType,Original,Replacement
+            Term,TypeWhisper,
+            Correction,wispr,
+            Correction,wispr,Wispr
+            """);
+
+        Assert.Equal(1, imported);
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.Contains(_sut.Entries, entry => entry.EntryType == DictionaryEntryType.Correction && entry.Replacement == "Wispr");
     }
 
     [Fact]

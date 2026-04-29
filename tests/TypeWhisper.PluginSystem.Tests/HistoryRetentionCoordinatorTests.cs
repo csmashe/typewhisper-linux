@@ -1,7 +1,7 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
-using TypeWhisper.Windows.Services;
+using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -178,6 +178,7 @@ public class HistoryRetentionCoordinatorTests
 
         public void AddRecord(TranscriptionRecord record) => RecordsChanged?.Invoke();
         public void UpdateRecord(string id, string finalText) { }
+        public void SetPendingCorrectionSuggestions(string id, IReadOnlyList<CorrectionSuggestion> suggestions) { }
         public void DeleteRecord(string id) => RecordsChanged?.Invoke();
 
         public void ClearAll()

@@ -3,6 +3,7 @@ namespace TypeWhisper.Core.Models;
 public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
+    private Dictionary<string, TextInsertionStrategy> _appInsertionStrategies = new(StringComparer.OrdinalIgnoreCase);
 
     public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
     public string PushToTalkHotkey { get; init; } = "Ctrl+Shift";
@@ -10,8 +11,17 @@ public record AppSettings
     public string HoldOnlyHotkey { get; init; } = "";
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
+    public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
     public bool AutoPaste { get; init; } = true;
+    public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
+    {
+        get => _appInsertionStrategies;
+        init => _appInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
+            value ?? [],
+            StringComparer.OrdinalIgnoreCase);
+    }
+    public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
     public RecordingMode Mode { get; init; } = RecordingMode.Toggle;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
     public int HistoryRetentionMinutes { get; init; } = 90 * 24 * 60;
@@ -72,6 +82,7 @@ public record AppSettings
     // Dictionary
     public string[] EnabledPackIds { get; init; } = [];
     public bool VocabularyBoostingEnabled { get; init; }
+    public bool AutoAddDictionaryCorrections { get; init; }
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
@@ -112,6 +123,22 @@ public enum RecordingMode
     Toggle,
     PushToTalk,
     Hybrid
+}
+
+public enum CleanupLevel
+{
+    None,
+    Light,
+    Medium,
+    High
+}
+
+public enum TextInsertionStrategy
+{
+    Auto,
+    ClipboardPaste,
+    DirectTyping,
+    CopyOnly
 }
 
 public enum HistoryRetentionMode

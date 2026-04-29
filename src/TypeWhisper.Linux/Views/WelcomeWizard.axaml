@@ -5,6 +5,7 @@
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
         xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
         xmlns:svc="using:TypeWhisper.Linux.Services"
+        xmlns:local="using:TypeWhisper.Linux"
         mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="720"
         x:Class="TypeWhisper.Linux.Views.WelcomeWizard"
         x:DataType="vm:WelcomeWizardViewModel"
@@ -22,20 +23,21 @@
                        HorizontalAlignment="Center"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
             <!-- step dots -->
-            <ItemsControl Margin="0,10,0,0" HorizontalAlignment="Center">
+            <ItemsControl Margin="0,10,0,0" HorizontalAlignment="Center"
+                          ItemsSource="{Binding StepDots}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <StackPanel Orientation="Horizontal" Spacing="6" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
-                <ItemsControl.Items>
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource SystemAccentColorBrush}" />
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource TextFillColorTertiaryBrush}" />
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource TextFillColorTertiaryBrush}" />
-                    <Ellipse Width="24" Height="6" Fill="{DynamicResource TextFillColorTertiaryBrush}" />
-                </ItemsControl.Items>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WelcomeStepDot">
+                        <Ellipse Width="24" Height="6"
+                                 Fill="{Binding IsActive, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=#6F7A86'}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <TextBlock Text="{Binding StepIndex, StringFormat='Step {0} of 3'}"
+            <TextBlock Text="{Binding StepText}"
                        FontSize="10" HorizontalAlignment="Center" Margin="0,6,0,0"
                        Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
         </StackPanel>
@@ -143,11 +145,158 @@
                         <TextBlock FontSize="11"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    Text="Accepts Ctrl / Shift / Alt / Meta plus a letter, digit, F-key, Space, Enter, Tab, arrows, etc." />
+                        <TextBlock Text="{Binding HotkeyStatus}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
                 </StackPanel>
             </TabItem>
 
-            <!-- Step 4: done -->
+            <!-- Step 4: system check -->
+            <TabItem>
+                <StackPanel Spacing="14">
+                    <TextBlock Text="System check"
+                               FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding DiagnosticsSummary}"
+                               TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                            CornerRadius="4" Padding="0">
+                        <ScrollViewer MaxHeight="280">
+                            <ItemsControl ItemsSource="{Binding Diagnostics}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:WelcomeDiagnosticRow">
+                                        <Border Padding="12,9" BorderThickness="0,0,0,1"
+                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                                <CheckBox Grid.Column="0"
+                                                          IsChecked="{Binding IsReady, Mode=OneWay}"
+                                                          IsEnabled="False"
+                                                          VerticalAlignment="Top" />
+                                                <StackPanel Grid.Column="1" Spacing="3">
+                                                    <TextBlock Text="{Binding Title}"
+                                                               FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding Status}"
+                                                               TextWrapping="Wrap"
+                                                               FontSize="12"
+                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                    <TextBlock Text="{Binding Hint}"
+                                                               TextWrapping="Wrap"
+                                                               FontSize="11"
+                                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                    <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                            CornerRadius="4" Padding="12">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel Grid.Column="0" Spacing="3">
+                                <TextBlock Text="CUDA check"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding CudaBenchmarkStatus}"
+                                           TextWrapping="Wrap"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="Run"
+                                    Command="{Binding RunCudaBenchmarkCommand}"
+                                    IsEnabled="{Binding CudaBenchmarkButtonEnabled}"
+                                    VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Step 5: first dictation check -->
+            <TabItem>
+                <ScrollViewer>
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="First dictation check"
+                                   FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Verify the microphone, paste path, and selected model before finishing setup." />
+
+                        <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock Grid.Column="0"
+                                               Text="Microphone"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="{Binding MicTestButtonText}"
+                                            Command="{Binding ToggleMicTestCommand}" />
+                                </Grid>
+                                <ProgressBar Minimum="0"
+                                             Maximum="1"
+                                             Value="{Binding MicLevel}"
+                                             Height="8" />
+                                <TextBlock Text="{Binding MicTestStatus}"
+                                           TextWrapping="Wrap"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock Grid.Column="0"
+                                               Text="Paste"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="Run paste test"
+                                            Click="RunPasteSmokeButton_OnClick" />
+                                </Grid>
+                                <TextBox x:Name="PasteSmokeBox"
+                                         Text="{Binding PasteSmokeText}"
+                                         PlaceholderText="Paste test output" />
+                                <TextBlock Text="{Binding PasteTestStatus}"
+                                           TextWrapping="Wrap"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock Grid.Column="0"
+                                               Text="Dictation"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="{Binding FirstDictationButtonText}"
+                                            Command="{Binding ToggleFirstDictationCommand}" />
+                                </Grid>
+                                <TextBlock Text="{Binding FirstDictationStatus}"
+                                           TextWrapping="Wrap"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                <TextBox Text="{Binding FirstDictationText}"
+                                         IsReadOnly="True"
+                                         MinHeight="54"
+                                         TextWrapping="Wrap"
+                                         PlaceholderText="Recognized text" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Step 6: done -->
             <TabItem>
                 <StackPanel Spacing="12" VerticalAlignment="Center">
                     <TextBlock Text="You're ready" FontSize="22" FontWeight="SemiBold"

@@ -165,9 +165,11 @@
             </Border>
 
             <TextBlock Text="Command line"
-                       Classes="section-title" />
+                       Classes="section-title"
+                       IsVisible="{Binding ApiServerEnabled}" />
 
-            <Border Classes="panel">
+            <Border Classes="panel"
+                    IsVisible="{Binding ApiServerEnabled}">
                 <Grid RowDefinitions="Auto,1,Auto,1,Auto">
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
