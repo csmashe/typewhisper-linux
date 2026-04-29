@@ -222,7 +222,7 @@
 
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
-                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                                 <Border Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
@@ -348,6 +348,30 @@
                                 <Border Grid.Row="11" Background="#16FFFFFF" />
 
                                 <Border Grid.Row="12" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Style Preset"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Controls cleanup and developer-safe formatting for this profile."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding StylePresetOptions}"
+                                                  SelectedItem="{Binding SelectedStylePresetOption}"
+                                                  VerticalAlignment="Center">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileStylePresetOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="13" Background="#16FFFFFF" />
+
+                                <Border Grid.Row="14" Padding="18,14">
                                     <Grid ColumnDefinitions="*,150"
                                           ColumnSpacing="16">
                                         <StackPanel>

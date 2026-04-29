@@ -30,6 +30,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public ObservableCollection<ProfileModelOption> ModelOptions { get; } = [];
     public ObservableCollection<PromptActionOption> PromptActionOptions { get; } = [];
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
+    public ObservableCollection<ProfileStylePresetOption> StylePresetOptions { get; } =
+    [
+        new(ProfileStylePreset.Raw, "Raw"),
+        new(ProfileStylePreset.Clean, "Clean"),
+        new(ProfileStylePreset.Concise, "Concise"),
+        new(ProfileStylePreset.FormalEmail, "Formal email"),
+        new(ProfileStylePreset.CasualMessage, "Casual message"),
+        new(ProfileStylePreset.Developer, "Developer"),
+        new(ProfileStylePreset.TerminalSafe, "Terminal-safe"),
+        new(ProfileStylePreset.MeetingNotes, "Meeting notes")
+    ];
     public ObservableCollection<string> ProcessNameChips { get; } = [];
     public ObservableCollection<string> UrlPatternChips { get; } = [];
 
@@ -41,6 +52,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [ObservableProperty] private bool? _editWhisperModeOverride;
     [ObservableProperty] private string? _editModelId;
     [ObservableProperty] private string? _editPromptActionId;
+    [ObservableProperty] private ProfileStylePreset _editStylePreset = ProfileStylePreset.Raw;
     [ObservableProperty] private int _editPriority;
     [ObservableProperty] private bool _editIsEnabled = true;
     [ObservableProperty] private string _processNameInput = "";
@@ -126,6 +138,20 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    public ProfileStylePresetOption? SelectedStylePresetOption
+    {
+        get => StylePresetOptions.FirstOrDefault(option => option.Value == EditStylePreset);
+        set
+        {
+            var selected = value?.Value ?? ProfileStylePreset.Raw;
+            if (selected == EditStylePreset)
+                return;
+
+            EditStylePreset = selected;
+            OnPropertyChanged();
+        }
+    }
+
     public NullableBooleanOption? SelectedWhisperModeOption
     {
         get => WhisperModeOptions.FirstOrDefault(option => option.Value == EditWhisperModeOverride);
@@ -182,6 +208,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             EditWhisperModeOverride = null;
             EditModelId = null;
             EditPromptActionId = null;
+            EditStylePreset = ProfileStylePreset.Raw;
             EditPriority = 0;
             EditIsEnabled = true;
             NotifyStateChanged();
@@ -195,6 +222,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditWhisperModeOverride = value.WhisperModeOverride;
         EditModelId = value.TranscriptionModelOverride;
         EditPromptActionId = value.PromptActionId;
+        EditStylePreset = value.StylePreset;
         EditPriority = value.Priority;
         EditIsEnabled = value.IsEnabled;
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
@@ -215,6 +243,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnEditPromptActionIdChanged(string? value) =>
         OnPropertyChanged(nameof(SelectedPromptActionOption));
+
+    partial void OnEditStylePresetChanged(ProfileStylePreset value) =>
+        OnPropertyChanged(nameof(SelectedStylePresetOption));
 
     partial void OnEditWhisperModeOverrideChanged(bool? value) =>
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
@@ -257,6 +288,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             WhisperModeOverride = EditWhisperModeOverride,
             TranscriptionModelOverride = string.IsNullOrWhiteSpace(EditModelId) ? null : EditModelId,
             PromptActionId = string.IsNullOrWhiteSpace(EditPromptActionId) ? null : EditPromptActionId,
+            StylePreset = EditStylePreset,
             Priority = EditPriority,
             IsEnabled = EditIsEnabled
         };
@@ -501,6 +533,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
         OnPropertyChanged(nameof(SelectedModelOption));
         OnPropertyChanged(nameof(SelectedPromptActionOption));
+        OnPropertyChanged(nameof(SelectedStylePresetOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(MatchStatusText));
         OnPropertyChanged(nameof(ShowLiveContextProfileHint));
@@ -527,5 +560,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 public sealed record ProfileModelOption(string? Value, string Label);
 
 public sealed record PromptActionOption(string? Value, string Label);
+
+public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label);
 
 public sealed record NullableBooleanOption(bool? Value, string Label);

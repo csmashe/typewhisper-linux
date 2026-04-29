@@ -412,6 +412,7 @@ public sealed class DictationOrchestrator : IDisposable
 
             var promptAction = ResolvePromptAction();
             var translationTarget = _recordingProfile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
+            var cleanupLevel = ResolveCleanupLevel();
 
             var pluginProcessors = _models.PluginManager.PostProcessors
                 .Select(processor => new PluginPostProcessor(
@@ -429,11 +430,11 @@ public sealed class DictationOrchestrator : IDisposable
                     VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
                         ? _vocabularyBoosting.Apply
                         : null,
-                    CleanupHandler = _settings.Current.CleanupLevel == CleanupLevel.None
+                    CleanupHandler = cleanupLevel == CleanupLevel.None
                         ? null
                         : (text, token) => _cleanup.CleanAsync(
                             text,
-                            _settings.Current.CleanupLevel,
+                            cleanupLevel,
                             message =>
                             {
                                 ReportStatus(message);
@@ -567,6 +568,15 @@ public sealed class DictationOrchestrator : IDisposable
             return null;
 
         return _promptActions.EnabledActions.FirstOrDefault(action => action.Id == promptActionId);
+    }
+
+    private CleanupLevel ResolveCleanupLevel()
+    {
+        if (_recordingProfile is null)
+            return _settings.Current.CleanupLevel;
+
+        var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
+        return style.CleanupLevel;
     }
 
     private string ApplyProfileStyleFormatting(string text)

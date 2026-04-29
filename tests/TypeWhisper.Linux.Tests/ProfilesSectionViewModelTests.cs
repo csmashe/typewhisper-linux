@@ -58,6 +58,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         sut.EditTranslationTarget = "en";
         sut.EditWhisperModeOverride = true;
         sut.EditModelId = "plugin:com.typewhisper.sherpa-onnx:parakeet";
+        sut.EditStylePreset = ProfileStylePreset.Developer;
         sut.SaveProfileCommand.Execute(null);
 
         var profile = Assert.Single(service.Profiles);
@@ -69,6 +70,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         Assert.Equal("en", profile.TranslationTarget);
         Assert.True(profile.WhisperModeOverride);
         Assert.Equal("plugin:com.typewhisper.sherpa-onnx:parakeet", profile.TranscriptionModelOverride);
+        Assert.Equal(ProfileStylePreset.Developer, profile.StylePreset);
     }
 
     [Fact]
