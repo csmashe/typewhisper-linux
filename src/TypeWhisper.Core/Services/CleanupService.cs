@@ -41,6 +41,7 @@ public sealed partial class CleanupService
         cleaned = TrailingNoiseRegex().Replace(cleaned, "");
         cleaned = StandaloneFillerRegex().Replace(cleaned, " ");
         cleaned = ApplyBacktrack(cleaned);
+        cleaned = ApplySpokenPunctuation(cleaned);
         cleaned = ApplySmartFormatting(cleaned);
         cleaned = LeadingNoiseRegex().Replace(cleaned, "");
         cleaned = TrailingNoiseRegex().Replace(cleaned, "");
@@ -62,9 +63,134 @@ public sealed partial class CleanupService
 
     private static string ApplySmartFormatting(string text)
     {
+        var bullets = TryFormatSpokenBulletList(text);
+        if (bullets is not null)
+            return bullets;
+
         var numbered = TryFormatSpokenNumberedList(text);
         return numbered ?? text;
     }
+
+    private static string ApplySpokenPunctuation(string text)
+    {
+        return SpokenPunctuationRegex().Replace(text, match =>
+        {
+            var mark = match.Groups["mark"].Value.ToLowerInvariant();
+            if (!ShouldApplySpokenPunctuation(text, match, mark))
+                return match.Value;
+
+            return mark switch
+            {
+                "comma" => ",",
+                "period" or "full stop" => ".",
+                "question mark" => "?",
+                "exclamation mark" or "exclamation point" => "!",
+                "colon" => ":",
+                "semicolon" => ";",
+                _ => match.Value
+            };
+        });
+    }
+
+    private static bool ShouldApplySpokenPunctuation(string text, Match match, string mark)
+    {
+        var previousWordCount = CountWordsBefore(text, match.Index);
+        var hasWordAfter = HasWordAfter(text, match.Index + match.Length);
+
+        return mark switch
+        {
+            "period" or "full stop" => previousWordCount >= 2 && !hasWordAfter,
+            "comma" or "colon" or "semicolon" => previousWordCount >= 1 && hasWordAfter,
+            "question mark" or "exclamation mark" or "exclamation point" => previousWordCount >= 1 && !hasWordAfter,
+            _ => false
+        };
+    }
+
+    private static int CountWordsBefore(string text, int endIndex)
+    {
+        var prefix = text[..endIndex];
+        var boundary = Math.Max(
+            Math.Max(prefix.LastIndexOf('.'), prefix.LastIndexOf('?')),
+            Math.Max(prefix.LastIndexOf('!'), prefix.LastIndexOf('\n')));
+        var phrase = prefix[(boundary + 1)..];
+        return WordRegex().Matches(phrase).Count;
+    }
+
+    private static bool HasWordAfter(string text, int startIndex) =>
+        WordRegex().IsMatch(text[startIndex..]);
+
+    private static string? TryFormatSpokenBulletList(string text)
+    {
+        var match = BulletListTriggerRegex().Match(text);
+        if (!match.Success)
+            return null;
+
+        var body = match.Groups["items"].Value.Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
+        if (body.Length == 0)
+            return null;
+
+        var items = SplitBulletItems(body);
+        return items.Count < 2
+            ? null
+            : string.Join('\n', items.Select(item => $"- {item}"));
+    }
+
+    private static IReadOnlyList<string> SplitBulletItems(string body)
+    {
+        var explicitItems = ExplicitBulletSeparatorRegex()
+            .Split(body)
+            .Select(CleanListItem)
+            .Where(item => item.Length > 0)
+            .ToList();
+        if (explicitItems.Count >= 2)
+            return explicitItems;
+
+        var punctuatedItems = BulletPunctuationSeparatorRegex()
+            .Split(body)
+            .Select(CleanListItem)
+            .Where(item => item.Length > 0)
+            .ToList();
+        if (punctuatedItems.Count >= 2)
+            return punctuatedItems;
+
+        var words = body
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(CleanListItem)
+            .Where(item => item.Length > 0)
+            .ToList();
+
+        return IsConservativeSingleWordBulletList(words) ? words : [];
+    }
+
+    private static bool IsConservativeSingleWordBulletList(IReadOnlyList<string> words)
+    {
+        if (words.Count is < 2 or > 9)
+            return false;
+
+        return words.All(word =>
+            SingleWordListItemRegex().IsMatch(word)
+            && !BulletListStopWords().Contains(word, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string CleanListItem(string item) =>
+        item.Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
+
+    private static IReadOnlySet<string> BulletListStopWords() =>
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "a",
+            "an",
+            "and",
+            "for",
+            "need",
+            "of",
+            "or",
+            "the",
+            "things",
+            "to",
+            "we",
+            "with"
+        };
 
     private static string? TryFormatSpokenNumberedList(string text)
     {
@@ -146,7 +272,7 @@ public sealed partial class CleanupService
     [GeneratedRegex(@",{2,}")]
     private static partial Regex DuplicateCommaRegex();
 
-    [GeneratedRegex(@"^[\s,.;:!?-]+")]
+    [GeneratedRegex(@"^[\s,.;:!?]+")]
     private static partial Regex LeadingNoiseRegex();
 
     [GeneratedRegex(@"[\s,;:-]+$")]
@@ -163,4 +289,22 @@ public sealed partial class CleanupService
 
     [GeneratedRegex(@"(?i)\b(?:one|two|three|four|five|six|seven|eight|nine)\b")]
     private static partial Regex NumberedListMarkerRegex();
+
+    [GeneratedRegex(@"(?i)\b(?<mark>comma|period|full\s+stop|question\s+mark|exclamation\s+(?:mark|point)|colon|semicolon)\b")]
+    private static partial Regex SpokenPunctuationRegex();
+
+    [GeneratedRegex(@"(?is)^\s*bullet\s+list\s+(?<items>.+)$")]
+    private static partial Regex BulletListTriggerRegex();
+
+    [GeneratedRegex(@"(?i)\s+(?:next\s+bullet|new\s+bullet)\s+")]
+    private static partial Regex ExplicitBulletSeparatorRegex();
+
+    [GeneratedRegex(@"\s*[,;]\s*")]
+    private static partial Regex BulletPunctuationSeparatorRegex();
+
+    [GeneratedRegex(@"^[A-Za-z][A-Za-z'-]*$")]
+    private static partial Regex SingleWordListItemRegex();
+
+    [GeneratedRegex(@"[A-Za-z][A-Za-z'-]*")]
+    private static partial Regex WordRegex();
 }

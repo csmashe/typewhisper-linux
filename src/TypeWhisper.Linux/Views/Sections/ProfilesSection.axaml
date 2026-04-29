@@ -222,7 +222,7 @@
 
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
-                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                                 <Border Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
@@ -372,6 +372,52 @@
                                 <Border Grid.Row="13" Background="#16FFFFFF" />
 
                                 <Border Grid.Row="14" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Cleanup Override"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Use this only when the style preset needs a different cleanup level."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding CleanupOverrideOptions}"
+                                                  SelectedItem="{Binding SelectedCleanupOverrideOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:NullableCleanupLevelOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="15" Background="#16FFFFFF" />
+
+                                <Border Grid.Row="16" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Developer Formatting Override"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="Force symbol and casing formatting on or off for this profile."
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding WhisperModeOptions}"
+                                                  SelectedItem="{Binding SelectedDeveloperFormattingOverrideOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:NullableBooleanOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="17" Background="#16FFFFFF" />
+
+                                <Border Grid.Row="18" Padding="18,14">
                                     <Grid ColumnDefinitions="*,150"
                                           ColumnSpacing="16">
                                         <StackPanel>

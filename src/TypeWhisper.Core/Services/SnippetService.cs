@@ -66,11 +66,11 @@ public sealed partial class SnippetService : ISnippetService
         SnippetsChanged?.Invoke();
     }
 
-    public string ApplySnippets(string text, Func<string>? clipboardProvider = null)
+    public string ApplySnippets(string text, Func<string>? clipboardProvider = null, string? profileId = null)
     {
         EnsureCacheLoaded();
         var activeSnippets = _cache
-            .Where(s => s.IsEnabled)
+            .Where(s => s.IsEnabled && AppliesToProfile(s, profileId))
             .OrderByDescending(s => s.Trigger.Length);
 
         foreach (var snippet in activeSnippets)
@@ -94,6 +94,17 @@ public sealed partial class SnippetService : ISnippetService
         }
 
         return text;
+    }
+
+    private static bool AppliesToProfile(Snippet snippet, string? profileId)
+    {
+        if (snippet.ProfileIds.Count == 0)
+            return true;
+
+        if (string.IsNullOrWhiteSpace(profileId))
+            return false;
+
+        return snippet.ProfileIds.Contains(profileId, StringComparer.OrdinalIgnoreCase);
     }
 
     public string PreviewReplacement(string replacement, Func<string>? clipboardProvider = null) =>

@@ -224,7 +224,7 @@
             <TextBlock Text="Settings"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
@@ -240,6 +240,81 @@
                             Background="#18FFFFFF" />
 
                     <Border Grid.Row="2"
+                            Classes="row">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="App insertion strategies"
+                                       Classes="row-label" />
+
+                            <Grid ColumnDefinitions="*,180,Auto"
+                                  ColumnSpacing="10">
+                                <TextBox Grid.Column="0"
+                                         PlaceholderText="Process name, e.g. kitty or firefox"
+                                         Text="{Binding NewInsertionAppProcess}" />
+                                <ComboBox Grid.Column="1"
+                                          ItemsSource="{Binding InsertionStrategyOptions}"
+                                          SelectedItem="{Binding SelectedNewInsertionStrategyOption}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:InsertionStrategyOption">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="2"
+                                        Content="Add"
+                                        Command="{Binding AddAppInsertionStrategyCommand}" />
+                            </Grid>
+
+                            <ItemsControl ItemsSource="{Binding AppInsertionStrategies}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:AppInsertionStrategyRow">
+                                        <Grid ColumnDefinitions="*,180,Auto"
+                                              ColumnSpacing="10"
+                                              Margin="0,2,0,0">
+                                            <TextBox Grid.Column="0"
+                                                     Text="{Binding ProcessName}" />
+                                            <ComboBox Grid.Column="1"
+                                                      ItemsSource="{Binding StrategyOptions}"
+                                                      SelectedItem="{Binding SelectedStrategyOption}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:InsertionStrategyOption">
+                                                        <TextBlock Text="{Binding DisplayName}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                            <Button Grid.Column="2"
+                                                    Content="Remove"
+                                                    Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).RemoveAppInsertionStrategyCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Auto-learn approved history corrections"
+                                           Classes="row-label" />
+                                <TextBlock Text="When you edit a history item, clear phrase-level suggestions can be learned immediately."
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding AutoAddDictionaryCorrections}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="6"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240">
                             <TextBlock Text="Auto cleanup"
@@ -257,10 +332,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="3"
+                    <Border Grid.Row="7"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="4"
+                    <Border Grid.Row="8"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="Whisper Mode (AGC)"
@@ -271,10 +346,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="5"
+                    <Border Grid.Row="9"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="6"
+                    <Border Grid.Row="10"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -293,10 +368,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="7"
+                    <Border Grid.Row="11"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="8"
+                    <Border Grid.Row="12"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="Transcribe short or quiet clips"
@@ -307,10 +382,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="9"
+                    <Border Grid.Row="13"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="10"
+                    <Border Grid.Row="14"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="Auto-stop on silence"
@@ -321,10 +396,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="11"
+                    <Border Grid.Row="15"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="12"
+                    <Border Grid.Row="16"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="Silence timeout (seconds)"

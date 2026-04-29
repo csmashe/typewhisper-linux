@@ -80,6 +80,31 @@ public class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void PendingCorrectionSuggestions_PersistCorrectly()
+    {
+        var record = new TranscriptionRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            Timestamp = DateTime.UtcNow,
+            RawText = "hello",
+            FinalText = "hello"
+        };
+        _sut.AddRecord(record);
+
+        _sut.SetPendingCorrectionSuggestions(record.Id,
+        [
+            new CorrectionSuggestion("Kubernets", "Kubernetes") { Confidence = 0.9 }
+        ]);
+
+        var freshService = new HistoryService(_filePath);
+        var loaded = freshService.Records.First(r => r.Id == record.Id);
+        var suggestion = Assert.Single(loaded.PendingCorrectionSuggestions);
+        Assert.Equal("Kubernets", suggestion.Original);
+        Assert.Equal("Kubernetes", suggestion.Replacement);
+        Assert.Equal(0.9, suggestion.Confidence);
+    }
+
+    [Fact]
     public void ExportToMarkdown_FormatsCorrectly()
     {
         var records = new List<TranscriptionRecord>

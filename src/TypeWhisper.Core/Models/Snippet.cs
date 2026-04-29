@@ -12,6 +12,7 @@ public sealed record Snippet
     public DateTime? LastUsedAt { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public string Tags { get; init; } = "";
+    public IReadOnlyList<string> ProfileIds { get; init; } = [];
 }
 
 public enum SnippetTriggerMode

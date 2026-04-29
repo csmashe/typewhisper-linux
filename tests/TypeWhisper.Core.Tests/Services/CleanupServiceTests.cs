@@ -81,6 +81,49 @@ public sealed class CleanupServiceTests
         Assert.Equal("1. Apples\n2. bananas\n3. oranges", result);
     }
 
+    [Theory]
+    [InlineData("bullet list apples bananas oranges", "- Apples\n- bananas\n- oranges")]
+    [InlineData("bullet list apples comma bananas comma oranges", "- Apples\n- bananas\n- oranges")]
+    [InlineData("bullet list apples next bullet bananas next bullet oranges", "- Apples\n- bananas\n- oranges")]
+    public void Clean_Light_FormatsClearSpokenBulletList(string input, string expected)
+    {
+        var result = _sut.Clean(input, CleanupLevel.Light);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void Clean_Light_DoesNotFormatAmbiguousBulletList()
+    {
+        var result = _sut.Clean("bullet list the things we need", CleanupLevel.Light);
+
+        Assert.Equal("Bullet list the things we need", result);
+    }
+
+    [Theory]
+    [InlineData("hello comma world period", "Hello, world.")]
+    [InlineData("are you ready question mark", "Are you ready?")]
+    [InlineData("warning colon check disk semicolon restart later", "Warning: check disk; restart later")]
+    [InlineData("great work exclamation point", "Great work!")]
+    public void Clean_Light_AppliesSpokenPunctuation(string input, string expected)
+    {
+        var result = _sut.Clean(input, CleanupLevel.Light);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("first period", "First period")]
+    [InlineData("third comma", "Third comma")]
+    [InlineData("version one period two", "Version one period two")]
+    [InlineData("first period second period", "First period second.")]
+    public void Clean_Light_LeavesAmbiguousSpokenPunctuationAsWords(string input, string expected)
+    {
+        var result = _sut.Clean(input, CleanupLevel.Light);
+
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public void Clean_Light_DoesNotFormatOutOfOrderNumberedList()
     {

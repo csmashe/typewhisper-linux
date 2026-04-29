@@ -18,6 +18,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
     [ObservableProperty] private string _newTrigger = "";
     [ObservableProperty] private string _newReplacement = "";
     [ObservableProperty] private string _newTags = "";
+    [ObservableProperty] private string _newProfileIds = "";
     [ObservableProperty] private bool _caseSensitive;
     [ObservableProperty] private SnippetTriggerMode _selectedTriggerMode = SnippetTriggerMode.Anywhere;
     [ObservableProperty] private string _selectedTagFilter = "All tags";
@@ -92,6 +93,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
             Trigger = NewTrigger.Trim(),
             Replacement = NewReplacement.Trim(),
             Tags = NewTags.Trim(),
+            ProfileIds = ParseProfileIds(NewProfileIds),
             CaseSensitive = CaseSensitive,
             TriggerMode = SelectedTriggerMode,
             IsEnabled = existing?.IsEnabled ?? true,
@@ -121,6 +123,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
         NewTrigger = "";
         NewReplacement = "";
         NewTags = "";
+        NewProfileIds = "";
         CaseSensitive = false;
         SelectedTriggerMode = SnippetTriggerMode.Anywhere;
         ShowEditor = true;
@@ -133,6 +136,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
         NewTrigger = snippet.Trigger;
         NewReplacement = snippet.Replacement;
         NewTags = snippet.Tags;
+        NewProfileIds = string.Join(", ", snippet.ProfileIds);
         CaseSensitive = snippet.CaseSensitive;
         SelectedTriggerMode = snippet.TriggerMode;
         ShowEditor = true;
@@ -145,6 +149,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
         NewTrigger = "";
         NewReplacement = "";
         NewTags = "";
+        NewProfileIds = "";
         CaseSensitive = false;
         SelectedTriggerMode = SnippetTriggerMode.Anywhere;
         ShowEditor = false;
@@ -217,6 +222,11 @@ public partial class SnippetsSectionViewModel : ObservableObject
 
         SelectedTagFilter = AvailableTags.Contains(current) ? current : "All tags";
     }
+
+    private static IReadOnlyList<string> ParseProfileIds(string value) =>
+        value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 }
 
 public sealed record SnippetTriggerModeOption(SnippetTriggerMode Value, string Label);

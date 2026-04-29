@@ -12,6 +12,12 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("src slash TypeWhisper dot Core", "src/TypeWhisper.Core")]
     [InlineData("CONFIG underscore PATH equals home slash user", "CONFIG_PATH=home/user")]
     [InlineData("escape backslash n", "escape\\n")]
+    [InlineData("function open paren name comma value close paren", "function(name,value)")]
+    [InlineData("array open bracket zero close bracket", "array[zero]")]
+    [InlineData("object open brace key colon value close brace", "object{key:value}")]
+    [InlineData("email at sign example dot com", "email@example.com")]
+    [InlineData("price dollar amount plus tax", "price$amount+tax")]
+    [InlineData("quote hello quote", "\"hello\"")]
     public void Format_ReplacesSpokenSymbols(string input, string expected)
     {
         var result = _sut.Format(input);

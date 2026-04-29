@@ -9,6 +9,7 @@ public interface IHistoryService
 
     void AddRecord(TranscriptionRecord record);
     void UpdateRecord(string id, string finalText);
+    void SetPendingCorrectionSuggestions(string id, IReadOnlyList<CorrectionSuggestion> suggestions);
     void DeleteRecord(string id);
     void ClearAll();
     IReadOnlyList<TranscriptionRecord> Search(string query);

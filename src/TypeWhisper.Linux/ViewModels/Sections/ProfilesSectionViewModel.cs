@@ -41,6 +41,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
         new(ProfileStylePreset.TerminalSafe, "Terminal-safe"),
         new(ProfileStylePreset.MeetingNotes, "Meeting notes")
     ];
+    public ObservableCollection<NullableCleanupLevelOption> CleanupOverrideOptions { get; } =
+    [
+        new(null, "Use style preset"),
+        new(CleanupLevel.None, "None"),
+        new(CleanupLevel.Light, "Light"),
+        new(CleanupLevel.Medium, "Medium"),
+        new(CleanupLevel.High, "High")
+    ];
     public ObservableCollection<string> ProcessNameChips { get; } = [];
     public ObservableCollection<string> UrlPatternChips { get; } = [];
 
@@ -53,6 +61,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [ObservableProperty] private string? _editModelId;
     [ObservableProperty] private string? _editPromptActionId;
     [ObservableProperty] private ProfileStylePreset _editStylePreset = ProfileStylePreset.Raw;
+    [ObservableProperty] private CleanupLevel? _editCleanupLevelOverride;
+    [ObservableProperty] private bool? _editDeveloperFormattingOverride;
     [ObservableProperty] private int _editPriority;
     [ObservableProperty] private bool _editIsEnabled = true;
     [ObservableProperty] private string _processNameInput = "";
@@ -165,6 +175,32 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    public NullableBooleanOption? SelectedDeveloperFormattingOverrideOption
+    {
+        get => WhisperModeOptions.FirstOrDefault(option => option.Value == EditDeveloperFormattingOverride);
+        set
+        {
+            if (value?.Value == EditDeveloperFormattingOverride)
+                return;
+
+            EditDeveloperFormattingOverride = value?.Value;
+            OnPropertyChanged();
+        }
+    }
+
+    public NullableCleanupLevelOption? SelectedCleanupOverrideOption
+    {
+        get => CleanupOverrideOptions.FirstOrDefault(option => option.Value == EditCleanupLevelOverride);
+        set
+        {
+            if (value?.Value == EditCleanupLevelOverride)
+                return;
+
+            EditCleanupLevelOverride = value?.Value;
+            OnPropertyChanged();
+        }
+    }
+
     public ProfilesSectionViewModel(
         IProfileService profiles,
         IActiveWindowService activeWindow,
@@ -209,6 +245,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             EditModelId = null;
             EditPromptActionId = null;
             EditStylePreset = ProfileStylePreset.Raw;
+            EditCleanupLevelOverride = null;
+            EditDeveloperFormattingOverride = null;
             EditPriority = 0;
             EditIsEnabled = true;
             NotifyStateChanged();
@@ -223,6 +261,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditModelId = value.TranscriptionModelOverride;
         EditPromptActionId = value.PromptActionId;
         EditStylePreset = value.StylePreset;
+        EditCleanupLevelOverride = value.CleanupLevelOverride;
+        EditDeveloperFormattingOverride = value.DeveloperFormattingOverride;
         EditPriority = value.Priority;
         EditIsEnabled = value.IsEnabled;
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
@@ -246,6 +286,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnEditStylePresetChanged(ProfileStylePreset value) =>
         OnPropertyChanged(nameof(SelectedStylePresetOption));
+
+    partial void OnEditCleanupLevelOverrideChanged(CleanupLevel? value) =>
+        OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
+
+    partial void OnEditDeveloperFormattingOverrideChanged(bool? value) =>
+        OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
 
     partial void OnEditWhisperModeOverrideChanged(bool? value) =>
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
@@ -289,6 +335,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             TranscriptionModelOverride = string.IsNullOrWhiteSpace(EditModelId) ? null : EditModelId,
             PromptActionId = string.IsNullOrWhiteSpace(EditPromptActionId) ? null : EditPromptActionId,
             StylePreset = EditStylePreset,
+            CleanupLevelOverride = EditCleanupLevelOverride,
+            DeveloperFormattingOverride = EditDeveloperFormattingOverride,
             Priority = EditPriority,
             IsEnabled = EditIsEnabled
         };
@@ -534,6 +582,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedModelOption));
         OnPropertyChanged(nameof(SelectedPromptActionOption));
         OnPropertyChanged(nameof(SelectedStylePresetOption));
+        OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
+        OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(MatchStatusText));
         OnPropertyChanged(nameof(ShowLiveContextProfileHint));
@@ -564,3 +614,5 @@ public sealed record PromptActionOption(string? Value, string Label);
 public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label);
 
 public sealed record NullableBooleanOption(bool? Value, string Label);
+
+public sealed record NullableCleanupLevelOption(CleanupLevel? Value, string Label);

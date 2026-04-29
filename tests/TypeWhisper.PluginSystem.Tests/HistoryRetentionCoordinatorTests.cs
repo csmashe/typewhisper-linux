@@ -178,6 +178,7 @@ public class HistoryRetentionCoordinatorTests
 
         public void AddRecord(TranscriptionRecord record) => RecordsChanged?.Invoke();
         public void UpdateRecord(string id, string finalText) { }
+        public void SetPendingCorrectionSuggestions(string id, IReadOnlyList<CorrectionSuggestion> suggestions) { }
         public void DeleteRecord(string id) => RecordsChanged?.Invoke();
 
         public void ClearAll()

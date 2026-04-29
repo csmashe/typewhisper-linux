@@ -33,6 +33,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.True(suggestion.IsApproved);
         Assert.Equal("Kubernets", suggestion.Original);
         Assert.Equal("Kubernetes", suggestion.Replacement);
+        Assert.Single(history.Records.First().PendingCorrectionSuggestions);
     }
 
     [Fact]
@@ -54,6 +55,43 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.Equal("Kubernets", entry.Original);
         Assert.Equal("Kubernetes", entry.Replacement);
         Assert.Empty(row.CorrectionSuggestions);
+        Assert.Empty(history.Records.First().PendingCorrectionSuggestions);
+    }
+
+    [Fact]
+    public void AddToDictionary_AddsHistoryTextAsTerm()
+    {
+        var history = CreateHistoryService();
+        var dictionary = CreateDictionaryService();
+        var record = CreateRecord("Kubernetes");
+        history.AddRecord(record);
+        var sut = CreateViewModel(history, dictionary);
+        var row = new HistoryRecordRow(record, sut);
+
+        row.AddToDictionaryCommand.Execute(null);
+
+        var entry = Assert.Single(dictionary.Entries);
+        Assert.Equal(DictionaryEntryType.Term, entry.EntryType);
+        Assert.Equal("Kubernetes", entry.Original);
+    }
+
+    [Fact]
+    public void SaveEdit_AutoLearnsCorrectionsWhenEnabled()
+    {
+        var history = CreateHistoryService();
+        var dictionary = CreateDictionaryService();
+        var settings = CreateSettingsService(autoAddCorrections: true);
+        var record = CreateRecord("I use Kubernets daily.");
+        history.AddRecord(record);
+        var sut = CreateViewModel(history, dictionary, settings);
+        var row = new HistoryRecordRow(record, sut);
+
+        sut.SaveEdit(row, "I use Kubernetes daily.");
+
+        Assert.Empty(row.CorrectionSuggestions);
+        var entry = Assert.Single(dictionary.Entries);
+        Assert.Equal("Kubernets", entry.Original);
+        Assert.Equal("Kubernetes", entry.Replacement);
     }
 
     private HistoryService CreateHistoryService() =>
@@ -62,10 +100,21 @@ public sealed class HistorySectionViewModelTests : IDisposable
     private DictionaryService CreateDictionaryService() =>
         new(Path.Combine(_tempDir, "dictionary.json"));
 
-    private HistorySectionViewModel CreateViewModel(HistoryService history, DictionaryService dictionary) =>
+    private SettingsService CreateSettingsService(bool autoAddCorrections = false)
+    {
+        var settings = new SettingsService(Path.Combine(_tempDir, $"settings-{Guid.NewGuid():N}.json"));
+        settings.Save(AppSettings.Default with { AutoAddDictionaryCorrections = autoAddCorrections });
+        return settings;
+    }
+
+    private HistorySectionViewModel CreateViewModel(
+        HistoryService history,
+        DictionaryService dictionary,
+        SettingsService? settings = null) =>
         new(
             history,
             dictionary,
+            settings ?? CreateSettingsService(),
             new CorrectionSuggestionService(),
             new SessionAudioFileService(),
 #pragma warning disable SYSLIB0050

@@ -16,6 +16,8 @@ public sealed record Profile
     public string? PromptActionId { get; init; }
     public string? HotkeyData { get; init; }
     public ProfileStylePreset StylePreset { get; init; } = ProfileStylePreset.Raw;
+    public CleanupLevel? CleanupLevelOverride { get; init; }
+    public bool? DeveloperFormattingOverride { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
 }

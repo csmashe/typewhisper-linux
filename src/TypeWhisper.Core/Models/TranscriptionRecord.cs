@@ -17,6 +17,7 @@ public sealed record TranscriptionRecord
     public string? AudioFileName { get; init; }
     public TextInsertionStatus InsertionStatus { get; init; } = TextInsertionStatus.Unknown;
     public string? InsertionFailureReason { get; init; }
+    public IReadOnlyList<CorrectionSuggestion> PendingCorrectionSuggestions { get; init; } = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
     public int WordCount => FinalText.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;

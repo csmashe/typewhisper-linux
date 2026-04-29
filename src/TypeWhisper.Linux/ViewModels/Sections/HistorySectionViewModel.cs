@@ -13,6 +13,7 @@ public partial class HistorySectionViewModel : ObservableObject
 {
     private readonly IHistoryService _history;
     private readonly IDictionaryService _dictionary;
+    private readonly ISettingsService _settings;
     private readonly CorrectionSuggestionService _correctionSuggestions;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly AudioPlaybackService _audioPlayback;
@@ -33,12 +34,14 @@ public partial class HistorySectionViewModel : ObservableObject
     public HistorySectionViewModel(
         IHistoryService history,
         IDictionaryService dictionary,
+        ISettingsService settings,
         CorrectionSuggestionService correctionSuggestions,
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback)
     {
         _history = history;
         _dictionary = dictionary;
+        _settings = settings;
         _correctionSuggestions = correctionSuggestions;
         _sessionAudioFiles = sessionAudioFiles;
         _audioPlayback = audioPlayback;
@@ -102,7 +105,19 @@ public partial class HistorySectionViewModel : ObservableObject
             _suppressRefresh = false;
         }
 
-        record.SetCorrectionSuggestions(_correctionSuggestions.GenerateSuggestions(originalText, newText));
+        var suggestions = _correctionSuggestions.GenerateSuggestions(originalText, newText);
+        if (_settings.Current.AutoAddDictionaryCorrections)
+        {
+            LearnCorrections(suggestions.Select(suggestion => new CorrectionSuggestionRow(suggestion)));
+            _history.SetPendingCorrectionSuggestions(record.Record.Id, []);
+            record.SetCorrectionSuggestions([]);
+        }
+        else
+        {
+            _history.SetPendingCorrectionSuggestions(record.Record.Id, suggestions);
+            record.SetCorrectionSuggestions(suggestions);
+        }
+
         Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
     }
 
@@ -116,6 +131,35 @@ public partial class HistorySectionViewModel : ObservableObject
 
             _dictionary.LearnCorrection(suggestion.Original.Trim(), suggestion.Replacement.Trim());
         }
+    }
+
+    internal void AddTermFromHistory(HistoryRecordRow record)
+    {
+        var term = record.Record.FinalText.Trim();
+        if (string.IsNullOrWhiteSpace(term))
+            return;
+
+        var exists = _dictionary.Entries.Any(entry =>
+            entry.EntryType == DictionaryEntryType.Term
+            && string.Equals(entry.Original.Trim(), term, StringComparison.OrdinalIgnoreCase));
+        if (exists)
+            return;
+
+        _dictionary.AddEntry(new DictionaryEntry
+        {
+            Id = Guid.NewGuid().ToString(),
+            EntryType = DictionaryEntryType.Term,
+            Original = term,
+            Source = DictionaryEntrySource.Manual
+        });
+    }
+
+    internal void SetPendingCorrectionSuggestions(
+        HistoryRecordRow record,
+        IReadOnlyList<CorrectionSuggestion> suggestions)
+    {
+        _history.SetPendingCorrectionSuggestions(record.Record.Id, suggestions);
+        record.Record = record.Record with { PendingCorrectionSuggestions = suggestions };
     }
 
     internal void CollapseAllExcept(HistoryRecordRow keep)
@@ -277,6 +321,7 @@ public partial class HistoryRecordRow : ObservableObject
     {
         _record = record;
         _owner = owner;
+        SetCorrectionSuggestions(record.PendingCorrectionSuggestions);
     }
 
     partial void OnIsExpandedChanged(bool value)
@@ -332,6 +377,7 @@ public partial class HistoryRecordRow : ObservableObject
     {
         _owner.LearnCorrections(CorrectionSuggestions);
         CorrectionSuggestions.Clear();
+        _owner.SetPendingCorrectionSuggestions(this, []);
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
     }
 
@@ -339,8 +385,12 @@ public partial class HistoryRecordRow : ObservableObject
     private void DismissCorrectionSuggestions()
     {
         CorrectionSuggestions.Clear();
+        _owner.SetPendingCorrectionSuggestions(this, []);
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
     }
+
+    [RelayCommand]
+    private void AddToDictionary() => _owner.AddTermFromHistory(this);
 
     internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
     {

@@ -118,6 +118,21 @@ public sealed class HistoryService : IHistoryService
         RecordsChanged?.Invoke();
     }
 
+    public void SetPendingCorrectionSuggestions(string id, IReadOnlyList<CorrectionSuggestion> suggestions)
+    {
+        EnsureCacheLoaded();
+        lock (_gate)
+        {
+            var idx = _cache.FindIndex(r => r.Id == id);
+            if (idx >= 0)
+                _cache[idx] = _cache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
+
+            SaveToDisk(_cache.ToList());
+        }
+
+        RecordsChanged?.Invoke();
+    }
+
     public void DeleteRecord(string id)
     {
         EnsureCacheLoaded();

@@ -339,6 +339,9 @@
                                                                     Click="OnCopyRecord"
                                                                     Tag="{Binding Record.FinalText}" />
                                                             <Button Classes="link-button"
+                                                                    Content="Add term"
+                                                                    Command="{Binding AddToDictionaryCommand}" />
+                                                            <Button Classes="link-button"
                                                                     Content="{Binding PlaybackButtonText}"
                                                                     Command="{Binding TogglePlaybackCommand}"
                                                                     IsVisible="{Binding HasSessionAudio}" />

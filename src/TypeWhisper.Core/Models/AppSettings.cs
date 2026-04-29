@@ -75,6 +75,7 @@ public record AppSettings
     // Dictionary
     public string[] EnabledPackIds { get; init; } = [];
     public bool VocabularyBoostingEnabled { get; init; }
+    public bool AutoAddDictionaryCorrections { get; init; }
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }

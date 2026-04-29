@@ -441,7 +441,7 @@ public sealed class DictationOrchestrator : IDisposable
                                 return Task.CompletedTask;
                             },
                             token),
-                    SnippetExpander = text => _snippets.ApplySnippets(text),
+                    SnippetExpander = text => _snippets.ApplySnippets(text, profileId: _recordingProfile?.Id),
                     LlmHandler = promptAction is not null
                         ? (text, token) => _promptProcessing.ProcessAsync(promptAction, text, token)
                         : null,
@@ -577,7 +577,7 @@ public sealed class DictationOrchestrator : IDisposable
             return _settings.Current.CleanupLevel;
 
         var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
-        return style.CleanupLevel;
+        return _recordingProfile.CleanupLevelOverride ?? style.CleanupLevel;
     }
 
     private string ApplyProfileStyleFormatting(string text)
@@ -586,7 +586,9 @@ public sealed class DictationOrchestrator : IDisposable
             return text;
 
         var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
-        return style.DeveloperFormattingEnabled
+        var developerFormattingEnabled = _recordingProfile.DeveloperFormattingOverride
+            ?? style.DeveloperFormattingEnabled;
+        return developerFormattingEnabled
             ? _developerFormatting.Format(text)
             : text;
     }

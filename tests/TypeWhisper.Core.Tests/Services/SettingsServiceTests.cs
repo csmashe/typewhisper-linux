@@ -39,6 +39,7 @@ public class SettingsServiceTests : IDisposable
             Language = "de",
             HasCompletedOnboarding = true,
             VocabularyBoostingEnabled = true,
+            AutoAddDictionaryCorrections = true,
             CleanupLevel = CleanupLevel.Light,
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
@@ -53,6 +54,7 @@ public class SettingsServiceTests : IDisposable
         Assert.Equal("de", sut2.Current.Language);
         Assert.True(sut2.Current.HasCompletedOnboarding);
         Assert.True(sut2.Current.VocabularyBoostingEnabled);
+        Assert.True(sut2.Current.AutoAddDictionaryCorrections);
         Assert.Equal(CleanupLevel.Light, sut2.Current.CleanupLevel);
         Assert.Equal(TextInsertionStrategy.DirectTyping, sut2.Current.AppInsertionStrategies["kitty"]);
         Assert.Equal(TextInsertionStrategy.ClipboardPaste, sut2.Current.AppInsertionStrategies["firefox"]);

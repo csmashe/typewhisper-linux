@@ -51,6 +51,14 @@ public partial class DictationSectionViewModel : ObservableObject
         new(CleanupLevel.Medium, "Medium"),
         new(CleanupLevel.High, "High")
     ];
+    public ObservableCollection<InsertionStrategyOption> InsertionStrategyOptions { get; } =
+    [
+        new(TextInsertionStrategy.Auto, "Auto"),
+        new(TextInsertionStrategy.ClipboardPaste, "Clipboard paste"),
+        new(TextInsertionStrategy.DirectTyping, "Direct typing"),
+        new(TextInsertionStrategy.CopyOnly, "Copy only")
+    ];
+    public ObservableCollection<AppInsertionStrategyRow> AppInsertionStrategies { get; } = [];
 
     [ObservableProperty] private string _statusText = "Press your hotkey or click Toggle to start recording.";
     [ObservableProperty] private bool _isRecording;
@@ -67,6 +75,9 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty] private string? _translationTargetLanguage;
     [ObservableProperty] private CleanupLevel _cleanupLevel = CleanupLevel.None;
     [ObservableProperty] private bool _autoPaste;
+    [ObservableProperty] private bool _autoAddDictionaryCorrections;
+    [ObservableProperty] private string _newInsertionAppProcess = "";
+    [ObservableProperty] private TextInsertionStrategy _newInsertionStrategy = TextInsertionStrategy.Auto;
     [ObservableProperty] private bool _whisperModeEnabled;
     [ObservableProperty] private bool _soundFeedbackEnabled = true;
     [ObservableProperty] private bool _transcribeShortQuietClipsAggressively;
@@ -152,6 +163,20 @@ public partial class DictationSectionViewModel : ObservableObject
                 return;
 
             CleanupLevel = selected;
+            OnPropertyChanged();
+        }
+    }
+
+    public InsertionStrategyOption? SelectedNewInsertionStrategyOption
+    {
+        get => InsertionStrategyOptions.FirstOrDefault(option => option.Value == NewInsertionStrategy);
+        set
+        {
+            var selected = value?.Value ?? TextInsertionStrategy.Auto;
+            if (selected == NewInsertionStrategy)
+                return;
+
+            NewInsertionStrategy = selected;
             OnPropertyChanged();
         }
     }
@@ -273,6 +298,8 @@ public partial class DictationSectionViewModel : ObservableObject
         CleanupLevel = settings.CleanupLevel;
         ComputeBackend = NormalizeComputeBackend(settings.ComputeBackend);
         AutoPaste = settings.AutoPaste;
+        AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
+        RefreshAppInsertionStrategies(settings.AppInsertionStrategies);
         WhisperModeEnabled = settings.WhisperModeEnabled;
         SoundFeedbackEnabled = settings.SoundFeedbackEnabled && CanUseSoundFeedback;
         TranscribeShortQuietClipsAggressively = settings.TranscribeShortQuietClipsAggressively;
@@ -290,8 +317,26 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedLanguageOption));
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
+        OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
         OnPropertyChanged(nameof(SelectedComputeBackendOption));
         RefreshModelState();
+    }
+
+    private void RefreshAppInsertionStrategies(IReadOnlyDictionary<string, TextInsertionStrategy>? strategies)
+    {
+        AppInsertionStrategies.Clear();
+
+        foreach (var strategy in strategies ?? new Dictionary<string, TextInsertionStrategy>())
+        {
+            if (string.IsNullOrWhiteSpace(strategy.Key))
+                continue;
+
+            AppInsertionStrategies.Add(new AppInsertionStrategyRow(
+                strategy.Key,
+                strategy.Value,
+                InsertionStrategyOptions,
+                SaveAppInsertionStrategies));
+        }
     }
 
     private void RefreshModelState()
@@ -460,6 +505,73 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnAutoPasteChanged(bool value)
         => _settings.Save(_settings.Current with { AutoPaste = value });
 
+    partial void OnAutoAddDictionaryCorrectionsChanged(bool value)
+        => _settings.Save(_settings.Current with { AutoAddDictionaryCorrections = value });
+
+    [RelayCommand]
+    private void AddAppInsertionStrategy()
+    {
+        var processName = NormalizeProcessName(NewInsertionAppProcess);
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            StatusText = "Enter an app process name before adding an insertion strategy.";
+            return;
+        }
+
+        var existing = AppInsertionStrategies.FirstOrDefault(row =>
+            string.Equals(row.ProcessName, processName, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            existing.Strategy = NewInsertionStrategy;
+            SaveAppInsertionStrategies();
+            NewInsertionAppProcess = "";
+            StatusText = $"Updated insertion strategy for {processName}.";
+            return;
+        }
+
+        AppInsertionStrategies.Add(new AppInsertionStrategyRow(
+            processName,
+            NewInsertionStrategy,
+            InsertionStrategyOptions,
+            SaveAppInsertionStrategies));
+        SaveAppInsertionStrategies();
+        NewInsertionAppProcess = "";
+        StatusText = $"Added insertion strategy for {processName}.";
+    }
+
+    [RelayCommand]
+    private void RemoveAppInsertionStrategy(AppInsertionStrategyRow? row)
+    {
+        if (row is null)
+            return;
+
+        AppInsertionStrategies.Remove(row);
+        SaveAppInsertionStrategies();
+        StatusText = $"Removed insertion strategy for {row.ProcessName}.";
+    }
+
+    private void SaveAppInsertionStrategies()
+    {
+        var strategies = AppInsertionStrategies
+            .Select(row => (ProcessName: NormalizeProcessName(row.ProcessName), row.Strategy))
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProcessName))
+            .GroupBy(row => row.ProcessName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.First().ProcessName,
+                group => group.Last().Strategy,
+                StringComparer.OrdinalIgnoreCase);
+
+        _settings.Save(_settings.Current with { AppInsertionStrategies = strategies });
+    }
+
+    private static string NormalizeProcessName(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+            return "";
+
+        return Path.GetFileNameWithoutExtension(processName.Trim());
+    }
+
     partial void OnWhisperModeEnabledChanged(bool value)
         => _settings.Save(_settings.Current with { WhisperModeEnabled = value });
 
@@ -539,3 +651,65 @@ public sealed record SpokenLanguageOption(
 public sealed record CleanupLevelOption(
     CleanupLevel Value,
     string DisplayName);
+
+public sealed record InsertionStrategyOption(
+    TextInsertionStrategy Value,
+    string DisplayName);
+
+public sealed class AppInsertionStrategyRow : ObservableObject
+{
+    private readonly Action _changed;
+    private string _processName;
+    private TextInsertionStrategy _strategy;
+
+    public string ProcessName
+    {
+        get => _processName;
+        set
+        {
+            if (SetProperty(ref _processName, value))
+                _changed();
+        }
+    }
+
+    public TextInsertionStrategy Strategy
+    {
+        get => _strategy;
+        set
+        {
+            if (SetProperty(ref _strategy, value))
+            {
+                OnPropertyChanged(nameof(SelectedStrategyOption));
+                _changed();
+            }
+        }
+    }
+
+    public IReadOnlyList<InsertionStrategyOption> StrategyOptions { get; }
+
+    public InsertionStrategyOption? SelectedStrategyOption
+    {
+        get => StrategyOptions.FirstOrDefault(option => option.Value == Strategy);
+        set
+        {
+            var selected = value?.Value ?? TextInsertionStrategy.Auto;
+            if (selected == Strategy)
+                return;
+
+            Strategy = selected;
+            OnPropertyChanged();
+        }
+    }
+
+    public AppInsertionStrategyRow(
+        string processName,
+        TextInsertionStrategy strategy,
+        IReadOnlyList<InsertionStrategyOption> strategyOptions,
+        Action changed)
+    {
+        _processName = processName;
+        _strategy = strategy;
+        StrategyOptions = strategyOptions;
+        _changed = changed;
+    }
+}

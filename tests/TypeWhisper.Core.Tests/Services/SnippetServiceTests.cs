@@ -244,6 +244,35 @@ public class SnippetServiceTests : IDisposable
     }
 
     [Fact]
+    public void ApplySnippets_ProfileScopedSnippet_OnlyAppliesToMatchingProfile()
+    {
+        _sut.AddSnippet(new Snippet
+        {
+            Id = "1",
+            Trigger = "sig",
+            Replacement = "Profile signature",
+            ProfileIds = ["profile-1"]
+        });
+
+        Assert.Equal("sig", _sut.ApplySnippets("sig"));
+        Assert.Equal("sig", _sut.ApplySnippets("sig", profileId: "profile-2"));
+        Assert.Equal("Profile signature", _sut.ApplySnippets("sig", profileId: "profile-1"));
+    }
+
+    [Fact]
+    public void ApplySnippets_GlobalSnippet_AppliesWhenProfileIsActive()
+    {
+        _sut.AddSnippet(new Snippet
+        {
+            Id = "1",
+            Trigger = "sig",
+            Replacement = "Global signature"
+        });
+
+        Assert.Equal("Global signature", _sut.ApplySnippets("sig", profileId: "profile-1"));
+    }
+
+    [Fact]
     public void ApplySnippets_UpdatesLastUsedAt()
     {
         _sut.AddSnippet(new Snippet

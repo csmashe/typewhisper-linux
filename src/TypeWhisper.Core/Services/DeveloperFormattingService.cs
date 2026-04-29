@@ -10,6 +10,24 @@ public sealed partial class DeveloperFormattingService
         (BackslashRegex(), "\\"),
         (SlashRegex(), "/"),
         (PipeRegex(), "|"),
+        (OpenParenRegex(), "("),
+        (CloseParenRegex(), ")"),
+        (OpenBracketRegex(), "["),
+        (CloseBracketRegex(), "]"),
+        (OpenBraceRegex(), "{"),
+        (CloseBraceRegex(), "}"),
+        (DoubleQuoteRegex(), "\""),
+        (SingleQuoteRegex(), "'"),
+        (AtSignRegex(), "@"),
+        (HashRegex(), "#"),
+        (DollarRegex(), "$"),
+        (AmpersandRegex(), "&"),
+        (PlusRegex(), "+"),
+        (MinusRegex(), "-"),
+        (StarRegex(), "*"),
+        (ColonRegex(), ":"),
+        (SemicolonRegex(), ";"),
+        (CommaRegex(), ","),
         (UnderscoreRegex(), "_"),
         (EqualsRegex(), "="),
         (DotRegex(), ".")
@@ -78,10 +96,64 @@ public sealed partial class DeveloperFormattingService
     [GeneratedRegex(@"\bdot\b", RegexOptions.IgnoreCase)]
     private static partial Regex DotRegex();
 
+    [GeneratedRegex(@"\b(?:open|left)\s+paren(?:thesis)?\b", RegexOptions.IgnoreCase)]
+    private static partial Regex OpenParenRegex();
+
+    [GeneratedRegex(@"\b(?:close|right)\s+paren(?:thesis)?\b", RegexOptions.IgnoreCase)]
+    private static partial Regex CloseParenRegex();
+
+    [GeneratedRegex(@"\b(?:open|left)\s+bracket\b", RegexOptions.IgnoreCase)]
+    private static partial Regex OpenBracketRegex();
+
+    [GeneratedRegex(@"\b(?:close|right)\s+bracket\b", RegexOptions.IgnoreCase)]
+    private static partial Regex CloseBracketRegex();
+
+    [GeneratedRegex(@"\b(?:open|left)\s+brace\b", RegexOptions.IgnoreCase)]
+    private static partial Regex OpenBraceRegex();
+
+    [GeneratedRegex(@"\b(?:close|right)\s+brace\b", RegexOptions.IgnoreCase)]
+    private static partial Regex CloseBraceRegex();
+
+    [GeneratedRegex(@"\b(?:double\s+quote|quote)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex DoubleQuoteRegex();
+
+    [GeneratedRegex(@"\b(?:single\s+quote|apostrophe)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex SingleQuoteRegex();
+
+    [GeneratedRegex(@"\b(?:at\s+sign|at)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex AtSignRegex();
+
+    [GeneratedRegex(@"\b(?:hash|pound\s+sign)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex HashRegex();
+
+    [GeneratedRegex(@"\bdollar(?:\s+sign)?\b", RegexOptions.IgnoreCase)]
+    private static partial Regex DollarRegex();
+
+    [GeneratedRegex(@"\b(?:ampersand|and\s+sign)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex AmpersandRegex();
+
+    [GeneratedRegex(@"\bplus\b", RegexOptions.IgnoreCase)]
+    private static partial Regex PlusRegex();
+
+    [GeneratedRegex(@"\bminus\b", RegexOptions.IgnoreCase)]
+    private static partial Regex MinusRegex();
+
+    [GeneratedRegex(@"\b(?:star|asterisk)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex StarRegex();
+
+    [GeneratedRegex(@"\bcolon\b", RegexOptions.IgnoreCase)]
+    private static partial Regex ColonRegex();
+
+    [GeneratedRegex(@"\bsemicolon\b", RegexOptions.IgnoreCase)]
+    private static partial Regex SemicolonRegex();
+
+    [GeneratedRegex(@"\bcomma\b", RegexOptions.IgnoreCase)]
+    private static partial Regex CommaRegex();
+
     [GeneratedRegex(@"--\s+")]
     private static partial Regex FlagWhitespaceRegex();
 
-    [GeneratedRegex(@"\s*([|/\\=._])\s*")]
+    [GeneratedRegex(@"\s*([|/\\=._()[\]{}""'@#$&+*:;,])\s*")]
     private static partial Regex SpaceAroundSymbolsRegex();
 
     [GeneratedRegex(@"\s+")]
