@@ -565,13 +565,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private static string NormalizeProcessName(string? processName)
     {
-        if (string.IsNullOrWhiteSpace(processName))
-            return "";
-
-        var baseName = Path.GetFileName(processName.Trim());
-        return baseName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            ? Path.GetFileNameWithoutExtension(baseName)
-            : baseName;
+        return ProcessNameNormalizer.Normalize(processName);
     }
 
     partial void OnWhisperModeEnabledChanged(bool value)

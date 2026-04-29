@@ -100,26 +100,28 @@ public partial class HistorySectionViewModel : ObservableObject
         try
         {
             _history.UpdateRecord(record.Record.Id, newText);
+
+            var suggestions = _correctionSuggestions.GenerateSuggestions(originalText, newText);
+            if (_settings.Current.AutoAddDictionaryCorrections)
+            {
+                LearnCorrections(suggestions.Select(suggestion => new CorrectionSuggestionRow(suggestion)));
+                if (SetPendingCorrectionSuggestions(record, []))
+                    record.SetCorrectionSuggestions([]);
+            }
+            else
+            {
+                if (SetPendingCorrectionSuggestions(record, suggestions))
+                    record.SetCorrectionSuggestions(suggestions);
+            }
+
+            Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
         }
         finally
         {
             _suppressRefresh = false;
         }
 
-        var suggestions = _correctionSuggestions.GenerateSuggestions(originalText, newText);
-        if (_settings.Current.AutoAddDictionaryCorrections)
-        {
-            LearnCorrections(suggestions.Select(suggestion => new CorrectionSuggestionRow(suggestion)));
-            if (SetPendingCorrectionSuggestions(record, []))
-                record.SetCorrectionSuggestions([]);
-        }
-        else
-        {
-            if (SetPendingCorrectionSuggestions(record, suggestions))
-                record.SetCorrectionSuggestions(suggestions);
-        }
-
-        Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
+        Refresh();
     }
 
     internal void LearnCorrections(IEnumerable<CorrectionSuggestionRow> suggestions)

@@ -344,15 +344,26 @@ public sealed class HistoryService : IHistoryService
 
     private List<TranscriptionRecord> LoadFromDisk()
     {
+        if (!File.Exists(_filePath)) return [];
+
+        string json;
         try
         {
-            if (!File.Exists(_filePath)) return [];
+            json = File.ReadAllText(_filePath);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HistoryService] Failed to read history from '{_filePath}': {ex}");
+            return [];
+        }
 
-            var json = File.ReadAllText(_filePath);
+        try
+        {
             return JsonSerializer.Deserialize<List<TranscriptionRecord>>(json) ?? [];
         }
-        catch
+        catch (JsonException ex)
         {
+            Trace.WriteLine($"[HistoryService] Failed to parse history from '{_filePath}': {ex}");
             PreserveBrokenFile(_filePath);
             return [];
         }

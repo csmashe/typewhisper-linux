@@ -617,7 +617,7 @@ public sealed class DictationOrchestrator : IDisposable
         if (strategies is null || strategies.Count == 0)
             return TextInsertionStrategy.Auto;
 
-        var process = Path.GetFileNameWithoutExtension(processName);
+        var process = ProcessNameNormalizer.Normalize(processName);
         foreach (var entry in strategies)
         {
             if (string.Equals(entry.Key, processName, StringComparison.OrdinalIgnoreCase)

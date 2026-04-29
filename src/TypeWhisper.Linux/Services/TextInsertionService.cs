@@ -106,7 +106,7 @@ public sealed class TextInsertionService
         if (shouldTypeDirectly)
         {
             var directResult = await TypeTextAsync(text, targetWindowId, autoEnter);
-            if (directResult is not InsertionResult.Failed)
+            if (strategy is TextInsertionStrategy.DirectTyping || directResult is not InsertionResult.Failed)
                 return directResult;
         }
 
@@ -255,7 +255,7 @@ public sealed class TextInsertionService
             if (string.IsNullOrWhiteSpace(value))
                 return false;
 
-            var process = Path.GetFileNameWithoutExtension(value);
+            var process = ProcessNameNormalizer.Normalize(value);
             return process.Equals("kitty", StringComparison.OrdinalIgnoreCase)
                 || process.Equals("gnome-terminal", StringComparison.OrdinalIgnoreCase)
                 || process.Equals("konsole", StringComparison.OrdinalIgnoreCase)
