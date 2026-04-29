@@ -17,6 +17,15 @@ public enum InsertionResult
     Failed,
 }
 
+public sealed record TextInsertionRequest(
+    string Text,
+    bool AutoPaste = true,
+    string? TargetWindowId = null,
+    string? TargetProcessName = null,
+    string? TargetWindowTitle = null,
+    bool AutoEnter = false,
+    TextInsertionStrategy Strategy = TextInsertionStrategy.Auto);
+
 /// <summary>
 /// Text insertion on Linux. The reliable path is clipboard-first: put the
 /// transcription on the clipboard, refocus the captured target window when
@@ -56,8 +65,26 @@ public sealed class TextInsertionService
         string? targetProcessName = null,
         string? targetWindowTitle = null,
         bool autoEnter = false,
-        TextInsertionStrategy strategy = TextInsertionStrategy.Auto)
+        TextInsertionStrategy strategy = TextInsertionStrategy.Auto) =>
+        await InsertTextAsync(new TextInsertionRequest(
+            text,
+            autoPaste,
+            targetWindowId,
+            targetProcessName,
+            targetWindowTitle,
+            autoEnter,
+            strategy));
+
+    public async Task<InsertionResult> InsertTextAsync(TextInsertionRequest request)
     {
+        var text = request.Text;
+        var autoPaste = request.AutoPaste;
+        var targetWindowId = request.TargetWindowId;
+        var targetProcessName = request.TargetProcessName;
+        var targetWindowTitle = request.TargetWindowTitle;
+        var autoEnter = request.AutoEnter;
+        var strategy = request.Strategy;
+
         if (string.IsNullOrEmpty(text))
             return autoEnter
                 ? await SendEnterOnlyAsync(targetWindowId)
@@ -346,26 +373,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private static bool IsCommandAvailable(string command)
     {
-        try
-        {
-            var psi = new ProcessStartInfo("sh")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add($"command -v {command}");
-
-            using var p = Process.Start(psi);
-            if (p is null) return false;
-            p.WaitForExit();
-            return p.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
+        return SystemCommandAvailabilityService.IsCommandAvailable(command);
     }
 
     private static string? RunXdotool(string arguments)

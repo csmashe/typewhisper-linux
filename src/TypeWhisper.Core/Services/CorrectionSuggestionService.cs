@@ -66,6 +66,7 @@ public sealed class CorrectionSuggestionService
         if (maxTotal > 3 && maxChanged > maxTotal / 2)
             return false;
 
+        // Avoid learning apostrophe-only churn from contractions or straight-vs-curly quote changes.
         return !originalChanged.Concat(correctedChanged).Any(token =>
             token.Trimmed.Contains('\'')
             || token.Trimmed.Contains('’'));

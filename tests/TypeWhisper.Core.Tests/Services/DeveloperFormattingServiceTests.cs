@@ -12,11 +12,11 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("src slash TypeWhisper dot Core", "src/TypeWhisper.Core")]
     [InlineData("CONFIG underscore PATH equals home slash user", "CONFIG_PATH=home/user")]
     [InlineData("escape backslash n", "escape\\n")]
-    [InlineData("function open paren name comma value close paren", "function(name,value)")]
+    [InlineData("function open paren name comma value close paren", "function(name, value)")]
     [InlineData("array open bracket zero close bracket", "array[zero]")]
     [InlineData("object open brace key colon value close brace", "object{key:value}")]
     [InlineData("email at sign example dot com", "email@example.com")]
-    [InlineData("price dollar amount plus tax", "price$amount+tax")]
+    [InlineData("2 plus 2 minus 1", "2+2-1")]
     [InlineData("quote hello quote", "\"hello\"")]
     public void Format_ReplacesSpokenSymbols(string input, string expected)
     {
@@ -34,5 +34,17 @@ public sealed class DeveloperFormattingServiceTests
         var result = _sut.Format(input);
 
         Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("dot the i's")]
+    [InlineData("see you at 5")]
+    [InlineData("price plus tax")]
+    [InlineData("Hello, world. How are you?")]
+    public void Format_DoesNotCollapseCommonProse(string input)
+    {
+        var result = _sut.Format(input);
+
+        Assert.Equal(input, result);
     }
 }

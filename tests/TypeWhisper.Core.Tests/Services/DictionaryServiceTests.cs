@@ -140,6 +140,24 @@ public class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ApplyCorrections_DoesNotUpdateUsageMetadata_WhenWordBoundaryDoesNotMatch()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "test",
+            Replacement = "exam"
+        });
+
+        var result = _sut.ApplyCorrections("testing");
+
+        Assert.Equal("testing", result);
+        Assert.Equal(0, _sut.Entries[0].UsageCount);
+        Assert.Equal(0, _sut.Entries[0].TimesApplied);
+    }
+
+    [Fact]
     public void ApplyCorrections_PrefersHigherPriorityCorrection()
     {
         _sut.AddEntry(new DictionaryEntry

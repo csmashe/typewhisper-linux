@@ -26,4 +26,30 @@ public sealed class IdeFileReferenceServiceTests
 
         Assert.Equal("@index.ts", result);
     }
+
+    [Theory]
+    [InlineData("at index dot ts", "@index.ts")]
+    [InlineData("tag program dot c sharp", "@program.cs")]
+    [InlineData("file tag dot env", "@.env")]
+    [InlineData("file app settings dot json", "app_settings.json")]
+    [InlineData("index dot ts", "index.ts")]
+    public void TryFormatReferenceCommand_ConvertsClearReferenceCommands(string input, string expected)
+    {
+        var result = _sut.TryFormatReferenceCommand(input);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("make this variable camel case")]
+    [InlineData("at the end of the day, save this")]
+    [InlineData("tag this as urgent")]
+    [InlineData("file this under important")]
+    [InlineData("reference the spec for details")]
+    public void TryFormatReferenceCommand_LeavesNormalDeveloperTextAlone(string input)
+    {
+        var result = _sut.TryFormatReferenceCommand(input);
+
+        Assert.Null(result);
+    }
 }

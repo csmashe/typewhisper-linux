@@ -78,6 +78,7 @@ public sealed class HistoryService : IHistoryService
     public void AddRecord(TranscriptionRecord record)
     {
         EnsureCacheLoaded();
+        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             _cache.Insert(0, record);
@@ -92,15 +93,17 @@ public sealed class HistoryService : IHistoryService
                 _distinctApps.Sort(StringComparer.OrdinalIgnoreCase);
             }
 
-            SaveToDisk(_cache.ToList());
+            snapshot = _cache.ToList();
         }
 
+        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
     public void UpdateRecord(string id, string finalText)
     {
         EnsureCacheLoaded();
+        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
@@ -112,24 +115,27 @@ public sealed class HistoryService : IHistoryService
                 _totalWords += updated.WordCount - old.WordCount;
             }
 
-            SaveToDisk(_cache.ToList());
+            snapshot = _cache.ToList();
         }
 
+        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
     public void SetPendingCorrectionSuggestions(string id, IReadOnlyList<CorrectionSuggestion> suggestions)
     {
         EnsureCacheLoaded();
+        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
             if (idx >= 0)
                 _cache[idx] = _cache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
 
-            SaveToDisk(_cache.ToList());
+            snapshot = _cache.ToList();
         }
 
+        SaveToDisk(snapshot);
         RecordsChanged?.Invoke();
     }
 
@@ -137,6 +143,7 @@ public sealed class HistoryService : IHistoryService
     {
         EnsureCacheLoaded();
         string? removedAudioFileName = null;
+        List<TranscriptionRecord> snapshot;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
@@ -151,9 +158,10 @@ public sealed class HistoryService : IHistoryService
             }
 
             RebuildDistinctApps();
-            SaveToDisk(_cache.ToList());
+            snapshot = _cache.ToList();
         }
 
+        SaveToDisk(snapshot);
         DeleteAudioFile(removedAudioFileName);
         RecordsChanged?.Invoke();
     }
@@ -170,9 +178,9 @@ public sealed class HistoryService : IHistoryService
             _totalWords = 0;
             _totalDuration = 0;
             _distinctApps.Clear();
-            SaveToDisk([]);
         }
 
+        SaveToDisk([]);
         DeleteAudioFiles(audioFiles);
         RecordsChanged?.Invoke();
     }
@@ -199,6 +207,7 @@ public sealed class HistoryService : IHistoryService
         EnsureCacheLoaded();
         var cutoff = DateTime.UtcNow - retention.Value;
         List<string?> removedAudioFiles;
+        List<TranscriptionRecord> snapshot;
 
         lock (_gate)
         {
@@ -212,9 +221,10 @@ public sealed class HistoryService : IHistoryService
 
             _cache = _cache.Where(r => r.CreatedAt >= cutoff).ToList();
             RebuildStats();
-            SaveToDisk(_cache.ToList());
+            snapshot = _cache.ToList();
         }
 
+        SaveToDisk(snapshot);
         DeleteAudioFiles(removedAudioFiles);
         RecordsChanged?.Invoke();
     }
@@ -243,12 +253,23 @@ public sealed class HistoryService : IHistoryService
     {
         var l = labels ?? ExportLabels.Default;
         var sb = new StringBuilder();
-        sb.AppendLine($"{l.Timestamp},{l.App},{l.Text},{l.Duration},{l.Words},{l.Language}");
+        sb.AppendLine(string.Join(',',
+            CsvEscape(l.Timestamp),
+            CsvEscape(l.App),
+            CsvEscape(l.Text),
+            CsvEscape(l.Duration),
+            CsvEscape(l.Words),
+            CsvEscape(l.Language)));
 
         foreach (var r in records)
         {
-            var text = "\"" + r.FinalText.Replace("\"", "\"\"") + "\"";
-            sb.AppendLine($"{r.Timestamp:yyyy-MM-dd HH:mm:ss},{r.AppProcessName ?? ""},{text},{r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)},{r.WordCount},{r.Language ?? ""}");
+            sb.AppendLine(string.Join(',',
+                CsvEscape(r.Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)),
+                CsvEscape(r.AppProcessName ?? ""),
+                CsvEscape(r.FinalText),
+                CsvEscape(r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)),
+                CsvEscape(r.WordCount.ToString(CultureInfo.InvariantCulture)),
+                CsvEscape(r.Language ?? "")));
         }
 
         return sb.ToString();
@@ -338,6 +359,7 @@ public sealed class HistoryService : IHistoryService
         }
         catch
         {
+            PreserveBrokenFile(_filePath);
             return [];
         }
     }
@@ -354,6 +376,31 @@ public sealed class HistoryService : IHistoryService
             File.WriteAllText(_filePath, json);
         }
         catch { }
+    }
+
+    private static string CsvEscape(string value)
+    {
+        if (!value.Contains(',') && !value.Contains('"') && !value.Contains('\n') && !value.Contains('\r'))
+            return value;
+
+        return "\"" + value.Replace("\"", "\"\"") + "\"";
+    }
+
+    private static void PreserveBrokenFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return;
+
+            var brokenPath = $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            File.Move(path, brokenPath);
+            System.Diagnostics.Trace.WriteLine($"[HistoryService] Preserved unreadable file as {brokenPath}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"[HistoryService] Could not preserve unreadable file: {ex.Message}");
+        }
     }
 
     private void RebuildStats()

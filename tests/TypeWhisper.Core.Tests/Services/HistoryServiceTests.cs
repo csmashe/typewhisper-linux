@@ -130,6 +130,30 @@ public class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ExportToCsv_EscapesLabelsAppTextAndLanguage()
+    {
+        var records = new List<TranscriptionRecord>
+        {
+            new()
+            {
+                Id = "1",
+                Timestamp = new DateTime(2026, 3, 15, 10, 30, 0, DateTimeKind.Utc),
+                RawText = "hello",
+                FinalText = "Hello, \"world\"",
+                AppProcessName = "browser, tab",
+                DurationSeconds = 1.5,
+                Language = "en,us"
+            }
+        };
+
+        var result = _sut.ExportToCsv(records);
+
+        Assert.Contains("\"browser, tab\"", result);
+        Assert.Contains("\"Hello, \"\"world\"\"\"", result);
+        Assert.Contains("\"en,us\"", result);
+    }
+
+    [Fact]
     public void ExportToJson_ProducesValidJson()
     {
         var records = new List<TranscriptionRecord>

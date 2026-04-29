@@ -22,15 +22,12 @@ public sealed partial class DeveloperFormattingService
         (HashRegex(), "#"),
         (DollarRegex(), "$"),
         (AmpersandRegex(), "&"),
-        (PlusRegex(), "+"),
-        (MinusRegex(), "-"),
         (StarRegex(), "*"),
         (ColonRegex(), ":"),
         (SemicolonRegex(), ";"),
         (CommaRegex(), ","),
         (UnderscoreRegex(), "_"),
-        (EqualsRegex(), "="),
-        (DotRegex(), ".")
+        (EqualsRegex(), "=")
     ];
 
     public string Format(string text)
@@ -46,9 +43,37 @@ public sealed partial class DeveloperFormattingService
         foreach (var (pattern, replacement) in SymbolReplacements)
             formatted = pattern.Replace(formatted, replacement);
 
+        formatted = ApplyContextualSymbolReplacements(formatted);
         formatted = FlagWhitespaceRegex().Replace(formatted, "--");
         formatted = SpaceAroundSymbolsRegex().Replace(formatted, "$1");
+        formatted = PunctuationLeadingSpaceRegex().Replace(formatted, "$1");
         return RepeatedWhitespaceRegex().Replace(formatted, " ").Trim();
+    }
+
+    private static string ApplyContextualSymbolReplacements(string text)
+    {
+        text = EmailPhraseRegex().Replace(text, match =>
+        {
+            var domain = ReplaceRepeated(match.Groups["domain"].Value, DotBetweenCodeTokensRegex(), "${left}.${right}");
+            domain = RepeatedWhitespaceRegex().Replace(domain, "");
+            return $"{match.Groups["left"].Value}@{domain}";
+        });
+
+        text = ReplaceRepeated(text, DotBetweenCodeTokensRegex(), "${left}.${right}");
+        text = NumericPlusRegex().Replace(text, "${left}+${right}");
+        return NumericMinusRegex().Replace(text, "${left}-${right}");
+    }
+
+    private static string ReplaceRepeated(string text, Regex regex, string replacement)
+    {
+        while (true)
+        {
+            var replaced = regex.Replace(text, replacement);
+            if (string.Equals(replaced, text, StringComparison.Ordinal))
+                return text;
+
+            text = replaced;
+        }
     }
 
     private static string? TryFormatCasingCommand(string text)
@@ -93,9 +118,6 @@ public sealed partial class DeveloperFormattingService
     [GeneratedRegex(@"\bequals\b", RegexOptions.IgnoreCase)]
     private static partial Regex EqualsRegex();
 
-    [GeneratedRegex(@"\bdot\b", RegexOptions.IgnoreCase)]
-    private static partial Regex DotRegex();
-
     [GeneratedRegex(@"\b(?:open|left)\s+paren(?:thesis)?\b", RegexOptions.IgnoreCase)]
     private static partial Regex OpenParenRegex();
 
@@ -120,7 +142,7 @@ public sealed partial class DeveloperFormattingService
     [GeneratedRegex(@"\b(?:single\s+quote|apostrophe)\b", RegexOptions.IgnoreCase)]
     private static partial Regex SingleQuoteRegex();
 
-    [GeneratedRegex(@"\b(?:at\s+sign|at)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bat\s+sign\b", RegexOptions.IgnoreCase)]
     private static partial Regex AtSignRegex();
 
     [GeneratedRegex(@"\b(?:hash|pound\s+sign)\b", RegexOptions.IgnoreCase)]
@@ -131,12 +153,6 @@ public sealed partial class DeveloperFormattingService
 
     [GeneratedRegex(@"\b(?:ampersand|and\s+sign)\b", RegexOptions.IgnoreCase)]
     private static partial Regex AmpersandRegex();
-
-    [GeneratedRegex(@"\bplus\b", RegexOptions.IgnoreCase)]
-    private static partial Regex PlusRegex();
-
-    [GeneratedRegex(@"\bminus\b", RegexOptions.IgnoreCase)]
-    private static partial Regex MinusRegex();
 
     [GeneratedRegex(@"\b(?:star|asterisk)\b", RegexOptions.IgnoreCase)]
     private static partial Regex StarRegex();
@@ -153,11 +169,26 @@ public sealed partial class DeveloperFormattingService
     [GeneratedRegex(@"--\s+")]
     private static partial Regex FlagWhitespaceRegex();
 
-    [GeneratedRegex(@"\s*([|/\\=._()[\]{}""'@#$&+*:;,])\s*")]
+    [GeneratedRegex(@"\s*([|/\\=_()[\]{}""'@#$&+*:;])\s*")]
     private static partial Regex SpaceAroundSymbolsRegex();
+
+    [GeneratedRegex(@"\b(?<left>[A-Za-z0-9._%+-]+)\s+at\s+(?<domain>[A-Za-z0-9-]+(?:\s+dot\s+[A-Za-z0-9-]+)+)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex EmailPhraseRegex();
+
+    [GeneratedRegex(@"\b(?<left>[A-Za-z_][A-Za-z0-9_]*|\d+)\s+dot\s+(?<right>[A-Za-z_][A-Za-z0-9_]*|\d+)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex DotBetweenCodeTokensRegex();
+
+    [GeneratedRegex(@"\b(?<left>\d+(?:\.\d+)?)\s+plus\s+(?<right>\d+(?:\.\d+)?)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex NumericPlusRegex();
+
+    [GeneratedRegex(@"\b(?<left>\d+(?:\.\d+)?)\s+minus\s+(?<right>\d+(?:\.\d+)?)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex NumericMinusRegex();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex RepeatedWhitespaceRegex();
+
+    [GeneratedRegex(@"\s+([,.])")]
+    private static partial Regex PunctuationLeadingSpaceRegex();
 
     [GeneratedRegex(@"^(?<mode>camel|snake|kebab)\s+case\s+(?<text>.+)$", RegexOptions.IgnoreCase)]
     private static partial Regex CasingCommandRegex();

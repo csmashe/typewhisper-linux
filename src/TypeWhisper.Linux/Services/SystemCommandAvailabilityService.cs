@@ -5,33 +5,34 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class SystemCommandAvailabilityService
 {
-    public bool IsWaylandSession => Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
-    public bool IsX11Session => Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
-    public bool HasXdotool => IsCommandAvailable("xdotool");
-    public bool HasXclip => IsCommandAvailable("xclip");
-    public bool HasWlClipboard => IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
-    public bool HasPactl => IsCommandAvailable("pactl");
-    public bool HasPlayerCtl => IsCommandAvailable("playerctl");
-    public bool HasCanberraGtkPlay => IsCommandAvailable("canberra-gtk-play");
-    public bool HasFfmpeg => IsCommandAvailable("ffmpeg");
-    public bool HasSpeechFeedback => IsCommandAvailable("espeak-ng")
-                                    || IsCommandAvailable("espeak")
-                                    || IsCommandAvailable("spd-say");
-    public bool HasCudaGpu => IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl");
-    public bool HasCudaRuntimeLibraries => IsLibraryAvailable("libcudart.so.12")
-                                           && IsLibraryAvailable("libcublas.so.12");
+    private LinuxCapabilitySnapshot _snapshot;
 
-    public LinuxCapabilitySnapshot GetSnapshot() =>
-        new(
-            SessionType: IsWaylandSession ? "Wayland" : IsX11Session ? "X11" : "Unknown",
-            HasClipboardTool: IsWaylandSession ? HasWlClipboard : HasXclip,
-            ClipboardToolName: IsWaylandSession ? "wl-clipboard" : "xclip",
-            HasAutomaticPasteTool: HasXdotool,
-            HasFfmpeg: HasFfmpeg,
-            HasSpeechFeedback: HasSpeechFeedback,
-            SpeechFeedbackCommand: SpeechFeedbackCommand,
-            HasCudaGpu: HasCudaGpu,
-            HasCudaRuntimeLibraries: HasCudaRuntimeLibraries);
+    public SystemCommandAvailabilityService()
+    {
+        _snapshot = BuildSnapshot();
+    }
+
+    public bool IsWaylandSession => _snapshot.SessionType == "Wayland";
+    public bool IsX11Session => _snapshot.SessionType == "X11";
+    public bool HasXdotool => _snapshot.HasAutomaticPasteTool;
+    public bool HasXclip => _snapshot.ClipboardToolName == "xclip" && _snapshot.HasClipboardTool;
+    public bool HasWlClipboard => _snapshot.ClipboardToolName == "wl-clipboard" && _snapshot.HasClipboardTool;
+    public bool HasPactl { get; private set; }
+    public bool HasPlayerCtl { get; private set; }
+    public bool HasCanberraGtkPlay { get; private set; }
+    public bool HasFfmpeg => _snapshot.HasFfmpeg;
+    public bool HasSpeechFeedback => _snapshot.HasSpeechFeedback;
+    public bool HasCudaGpu => _snapshot.HasCudaGpu;
+    public bool HasCudaRuntimeLibraries => _snapshot.HasCudaRuntimeLibraries;
+    public string? SpeechFeedbackCommand => _snapshot.SpeechFeedbackCommand;
+
+    public LinuxCapabilitySnapshot GetSnapshot() => _snapshot;
+
+    public LinuxCapabilitySnapshot RefreshSnapshot()
+    {
+        _snapshot = BuildSnapshot();
+        return _snapshot;
+    }
 
     public async Task<CudaBenchmarkResult> RunCudaBenchmarkAsync(CancellationToken cancellationToken = default)
     {
@@ -65,6 +66,9 @@ public sealed class SystemCommandAvailabilityService
             var waitTask = process.WaitForExitAsync(cancellationToken);
             var timeoutTask = Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
             var completed = await Task.WhenAny(waitTask, timeoutTask);
+            if (cancellationToken.IsCancellationRequested)
+                throw new OperationCanceledException(cancellationToken);
+
             if (!ReferenceEquals(completed, waitTask) && !process.HasExited)
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
@@ -95,18 +99,40 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
-    public string? SpeechFeedbackCommand
+    private LinuxCapabilitySnapshot BuildSnapshot()
     {
-        get
-        {
-            if (IsCommandAvailable("espeak-ng")) return "espeak-ng";
-            if (IsCommandAvailable("espeak")) return "espeak";
-            if (IsCommandAvailable("spd-say")) return "spd-say";
-            return null;
-        }
+        var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+        var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
+        var hasXclip = IsCommandAvailable("xclip");
+        var hasWlClipboard = IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
+        var speechCommand = ResolveSpeechFeedbackCommand();
+
+        HasPactl = IsCommandAvailable("pactl");
+        HasPlayerCtl = IsCommandAvailable("playerctl");
+        HasCanberraGtkPlay = IsCommandAvailable("canberra-gtk-play");
+
+        return new LinuxCapabilitySnapshot(
+            SessionType: isWayland ? "Wayland" : isX11 ? "X11" : "Unknown",
+            HasClipboardTool: isWayland ? hasWlClipboard : hasXclip,
+            ClipboardToolName: isWayland ? "wl-clipboard" : "xclip",
+            HasAutomaticPasteTool: IsCommandAvailable("xdotool"),
+            HasFfmpeg: IsCommandAvailable("ffmpeg"),
+            HasSpeechFeedback: speechCommand is not null,
+            SpeechFeedbackCommand: speechCommand,
+            HasCudaGpu: IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
+            HasCudaRuntimeLibraries: IsLibraryAvailable("libcudart.so.12")
+                                     && IsLibraryAvailable("libcublas.so.12"));
     }
 
-    private static bool IsCommandAvailable(string commandName)
+    private static string? ResolveSpeechFeedbackCommand()
+    {
+        if (IsCommandAvailable("espeak-ng")) return "espeak-ng";
+        if (IsCommandAvailable("espeak")) return "espeak";
+        if (IsCommandAvailable("spd-say")) return "spd-say";
+        return null;
+    }
+
+    public static bool IsCommandAvailable(string commandName)
     {
         var pathValue = Environment.GetEnvironmentVariable("PATH");
         if (string.IsNullOrWhiteSpace(pathValue))

@@ -42,6 +42,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<CleanupService>();
         services.AddSingleton<CorrectionSuggestionService>();
         services.AddSingleton<HistoryInsightsService>();
+        services.AddSingleton<IdeFileReferenceService>();
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
         services.AddSingleton<ITranslationService, TranslationService>();
 

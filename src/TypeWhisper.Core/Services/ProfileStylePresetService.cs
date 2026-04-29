@@ -12,7 +12,7 @@ public static class ProfileStylePresetService
             ProfileStylePreset.Concise => Settings(preset, CleanupLevel.High, smartFormatting: true),
             ProfileStylePreset.FormalEmail => Settings(preset, CleanupLevel.Medium, smartFormatting: true),
             ProfileStylePreset.CasualMessage => Settings(preset, CleanupLevel.Light, smartFormatting: true),
-            ProfileStylePreset.Developer => Settings(preset, CleanupLevel.None, developerFormatting: true, terminalSafe: true),
+            ProfileStylePreset.Developer => Settings(preset, CleanupLevel.None, developerFormatting: true),
             ProfileStylePreset.TerminalSafe => Settings(preset, CleanupLevel.None, developerFormatting: true, terminalSafe: true),
             ProfileStylePreset.MeetingNotes => Settings(preset, CleanupLevel.Medium, smartFormatting: true),
             _ => Settings(ProfileStylePreset.Raw, CleanupLevel.None)

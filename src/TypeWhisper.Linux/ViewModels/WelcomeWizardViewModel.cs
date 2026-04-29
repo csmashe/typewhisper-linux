@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -26,6 +28,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private readonly SystemCommandAvailabilityService _commands;
     private readonly TextInsertionService _textInsertion;
     private readonly ISettingsService _settings;
+    private readonly EventHandler _pluginStateChangedHandler;
+    private readonly PropertyChangedEventHandler _modelStateChangedHandler;
     private const string PasteSmokeExpectedText = "typewhisper paste test";
     private bool _cleanedUp;
 
@@ -83,8 +87,10 @@ public partial class WelcomeWizardViewModel : ObservableObject
         _textInsertion = textInsertion;
         _settings = settings;
 
-        _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshPluginState);
-        _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModelState);
+        _pluginStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(RefreshPluginState);
+        _modelStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(RefreshModelState);
+        _pluginManager.PluginStateChanged += _pluginStateChangedHandler;
+        _models.PropertyChanged += _modelStateChangedHandler;
         _audio.LevelChanged += OnAudioLevelChanged;
 
         LoadModels();
@@ -267,9 +273,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 });
             }
         }
-
-        if (StepIndex == 3)
-            RefreshDiagnostics();
 
         if (IsLastStep)
         {
@@ -534,13 +537,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
             return;
 
         _cleanedUp = true;
+        _pluginManager.PluginStateChanged -= _pluginStateChangedHandler;
+        _models.PropertyChanged -= _modelStateChangedHandler;
         _audio.LevelChanged -= OnAudioLevelChanged;
 
         if (IsMicTestRunning)
             _audio.StopPreview();
 
         if (IsFirstDictationRecording)
-            _ = _audio.StopRecordingAsync();
+            FireAndLog(() => _audio.StopRecordingAsync(), "welcome wizard stop recording");
 
         IsMicTestRunning = false;
         IsFirstDictationRecording = false;
@@ -558,6 +563,26 @@ public partial class WelcomeWizardViewModel : ObservableObject
             if (IsMicTestRunning && MicLevel > 0.05)
                 MicTestStatus = "Microphone input detected.";
         });
+    }
+
+    private static void FireAndLog(Func<Task> start, string label)
+    {
+        Task task;
+        try
+        {
+            task = start();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[WelcomeWizard] {label} threw synchronously: {ex.Message}");
+            return;
+        }
+
+        task.ContinueWith(
+            t => Trace.WriteLine($"[WelcomeWizard] {label} faulted: {t.Exception?.GetBaseException().Message}"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 }
 

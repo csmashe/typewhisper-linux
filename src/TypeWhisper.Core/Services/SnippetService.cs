@@ -9,6 +9,7 @@ namespace TypeWhisper.Core.Services;
 public sealed partial class SnippetService : ISnippetService
 {
     private readonly string _filePath;
+    private readonly object _gate = new();
     private List<Snippet> _cache = [];
     private bool _cacheLoaded;
 
@@ -17,7 +18,10 @@ public sealed partial class SnippetService : ISnippetService
         get
         {
             EnsureCacheLoaded();
-            return _cache;
+            lock (_gate)
+            {
+                return _cache.ToList();
+            }
         }
     }
 
@@ -26,11 +30,14 @@ public sealed partial class SnippetService : ISnippetService
         get
         {
             EnsureCacheLoaded();
-            return _cache
-                .SelectMany(s => s.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            lock (_gate)
+            {
+                return _cache
+                    .SelectMany(s => s.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
         }
     }
 
@@ -44,34 +51,48 @@ public sealed partial class SnippetService : ISnippetService
     public void AddSnippet(Snippet snippet)
     {
         EnsureCacheLoaded();
-        _cache.Add(snippet);
-        SaveToDisk();
+        lock (_gate)
+        {
+            _cache.Add(snippet);
+            SaveToDisk();
+        }
         SnippetsChanged?.Invoke();
     }
 
     public void UpdateSnippet(Snippet snippet)
     {
         EnsureCacheLoaded();
-        var idx = _cache.FindIndex(s => s.Id == snippet.Id);
-        if (idx >= 0) _cache[idx] = snippet;
-        SaveToDisk();
+        lock (_gate)
+        {
+            var idx = _cache.FindIndex(s => s.Id == snippet.Id);
+            if (idx >= 0) _cache[idx] = snippet;
+            SaveToDisk();
+        }
         SnippetsChanged?.Invoke();
     }
 
     public void DeleteSnippet(string id)
     {
         EnsureCacheLoaded();
-        _cache.RemoveAll(s => s.Id == id);
-        SaveToDisk();
+        lock (_gate)
+        {
+            _cache.RemoveAll(s => s.Id == id);
+            SaveToDisk();
+        }
         SnippetsChanged?.Invoke();
     }
 
     public string ApplySnippets(string text, Func<string>? clipboardProvider = null, string? profileId = null)
     {
         EnsureCacheLoaded();
-        var activeSnippets = _cache
-            .Where(s => s.IsEnabled && AppliesToProfile(s, profileId))
-            .OrderByDescending(s => s.Trigger.Length);
+        List<Snippet> activeSnippets;
+        lock (_gate)
+        {
+            activeSnippets = _cache
+                .Where(s => s.IsEnabled && AppliesToProfile(s, profileId))
+                .OrderByDescending(s => s.Trigger.Length)
+                .ToList();
+        }
 
         foreach (var snippet in activeSnippets)
         {
@@ -121,7 +142,10 @@ public sealed partial class SnippetService : ISnippetService
     public string ExportToJson()
     {
         EnsureCacheLoaded();
-        return JsonSerializer.Serialize(_cache, SnippetJsonContext.Default.ListSnippet);
+        lock (_gate)
+        {
+            return JsonSerializer.Serialize(_cache, SnippetJsonContext.Default.ListSnippet);
+        }
     }
 
     public int ImportFromJson(string json)
@@ -130,24 +154,27 @@ public sealed partial class SnippetService : ISnippetService
         if (imported is null or { Count: 0 }) return 0;
 
         EnsureCacheLoaded();
-        var existingTriggers = _cache.Select(s => s.Trigger).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         var count = 0;
-        foreach (var snippet in imported)
+        lock (_gate)
         {
-            if (existingTriggers.Contains(snippet.Trigger)) continue;
+            var existingTriggers = _cache.Select(s => s.Trigger).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var newSnippet = snippet with { Id = Guid.NewGuid().ToString() };
-            _cache.Add(newSnippet);
-            existingTriggers.Add(newSnippet.Trigger);
-            count++;
+            foreach (var snippet in imported)
+            {
+                if (existingTriggers.Contains(snippet.Trigger)) continue;
+
+                var newSnippet = snippet with { Id = Guid.NewGuid().ToString() };
+                _cache.Add(newSnippet);
+                existingTriggers.Add(newSnippet.Trigger);
+                count++;
+            }
+
+            if (count > 0)
+                SaveToDisk();
         }
 
         if (count > 0)
-        {
-            SaveToDisk();
             SnippetsChanged?.Invoke();
-        }
 
         return count;
     }
@@ -183,15 +210,18 @@ public sealed partial class SnippetService : ISnippetService
 
     private void IncrementUsageCount(string id)
     {
-        var idx = _cache.FindIndex(s => s.Id == id);
-        if (idx >= 0)
+        lock (_gate)
         {
-            _cache[idx] = _cache[idx] with
+            var idx = _cache.FindIndex(s => s.Id == id);
+            if (idx >= 0)
             {
-                UsageCount = _cache[idx].UsageCount + 1,
-                LastUsedAt = DateTime.UtcNow
-            };
-            SaveToDisk();
+                _cache[idx] = _cache[idx] with
+                {
+                    UsageCount = _cache[idx].UsageCount + 1,
+                    LastUsedAt = DateTime.UtcNow
+                };
+                SaveToDisk();
+            }
         }
     }
 
@@ -199,20 +229,26 @@ public sealed partial class SnippetService : ISnippetService
     {
         if (_cacheLoaded) return;
 
-        try
+        lock (_gate)
         {
-            if (File.Exists(_filePath))
-            {
-                var json = File.ReadAllText(_filePath);
-                _cache = JsonSerializer.Deserialize<List<Snippet>>(json) ?? [];
-            }
-        }
-        catch
-        {
-            _cache = [];
-        }
+            if (_cacheLoaded) return;
 
-        _cacheLoaded = true;
+            try
+            {
+                if (File.Exists(_filePath))
+                {
+                    var json = File.ReadAllText(_filePath);
+                    _cache = JsonSerializer.Deserialize(json, SnippetJsonContext.Default.ListSnippet) ?? [];
+                }
+            }
+            catch
+            {
+                PreserveBrokenFile(_filePath);
+                _cache = [];
+            }
+
+            _cacheLoaded = true;
+        }
     }
 
     private void SaveToDisk()
@@ -223,10 +259,27 @@ public sealed partial class SnippetService : ISnippetService
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
-            var json = JsonSerializer.Serialize(_cache, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(_cache, SnippetJsonContext.Default.ListSnippet);
             File.WriteAllText(_filePath, json);
         }
         catch { }
+    }
+
+    private static void PreserveBrokenFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return;
+
+            var brokenPath = $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            File.Move(path, brokenPath);
+            System.Diagnostics.Trace.WriteLine($"[SnippetService] Preserved unreadable file as {brokenPath}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"[SnippetService] Could not preserve unreadable file: {ex.Message}");
+        }
     }
 }
 

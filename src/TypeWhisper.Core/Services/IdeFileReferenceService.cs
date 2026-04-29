@@ -4,6 +4,21 @@ namespace TypeWhisper.Core.Services;
 
 public sealed partial class IdeFileReferenceService
 {
+    private static readonly string[] AtReferencePrefixes =
+    [
+        "at ",
+        "tag ",
+        "file tag ",
+        "file reference ",
+        "reference "
+    ];
+
+    private static readonly string[] PlainReferencePrefixes =
+    [
+        "file ",
+        "open file "
+    ];
+
     private static readonly Dictionary<string, string> ExtensionAliases = new(StringComparer.OrdinalIgnoreCase)
     {
         ["ts"] = "ts",
@@ -53,6 +68,38 @@ public sealed partial class IdeFileReferenceService
         return string.IsNullOrWhiteSpace(fileReference) ? "" : "@" + fileReference;
     }
 
+    public string? TryFormatReferenceCommand(string spokenText)
+    {
+        if (string.IsNullOrWhiteSpace(spokenText))
+            return null;
+
+        var normalized = Normalize(spokenText).Trim('.', '!', '?', ',');
+        if (normalized.Length == 0)
+            return null;
+
+        foreach (var prefix in AtReferencePrefixes)
+        {
+            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var candidate = normalized[prefix.Length..].Trim();
+                return LooksLikeSpokenFileName(candidate) ? ToAtReference(candidate) : null;
+            }
+        }
+
+        foreach (var prefix in PlainReferencePrefixes)
+        {
+            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var candidate = normalized[prefix.Length..].Trim();
+                return LooksLikeSpokenFileName(candidate) ? ToFileReference(candidate) : null;
+            }
+        }
+
+        return LooksLikeSpokenFileName(normalized)
+            ? ToFileReference(normalized)
+            : null;
+    }
+
     private static string Normalize(string value) =>
         RepeatedWhitespaceRegex()
             .Replace(value.Trim().ToLowerInvariant(), " ");
@@ -74,6 +121,10 @@ public sealed partial class IdeFileReferenceService
         value.Contains('.', StringComparison.Ordinal)
         || value.Contains('/', StringComparison.Ordinal)
         || value.StartsWith("@", StringComparison.Ordinal);
+
+    private static bool LooksLikeSpokenFileName(string value) =>
+        DotEnvRegex().IsMatch(value)
+        || ExtensionRegex().IsMatch(value);
 
     [GeneratedRegex(@"\bdot\s+env\b", RegexOptions.IgnoreCase)]
     private static partial Regex DotEnvRegex();

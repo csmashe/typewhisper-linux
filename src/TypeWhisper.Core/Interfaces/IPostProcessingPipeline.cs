@@ -80,6 +80,19 @@ public sealed record PostProcessingResult
     public IReadOnlyList<PostProcessingStepResult> Steps { get; init; } = [];
 }
 
+public static class PostProcessingStepNames
+{
+    public const string Formatting = "Formatting";
+    public const string Cleanup = "Cleanup";
+    public const string Llm = "LLM";
+    public const string Snippets = "Snippets";
+    public const string VocabularyBoosting = "VocabularyBoosting";
+    public const string Dictionary = "Dictionary";
+    public const string Translation = "Translation";
+}
+
 public sealed record PostProcessingStepResult(
     string Name,
-    bool Changed);
+    bool Changed,
+    bool Succeeded = true,
+    string? ErrorMessage = null);

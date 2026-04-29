@@ -277,6 +277,26 @@ public class PostProcessingPipelineTests
 
         // Plugin failed but dictionary still applied
         Assert.Equal("hello+DICT", result.Text);
+        Assert.Contains(result.Steps, step => !step.Succeeded && step.ErrorMessage == "Plugin failed");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_Translation_UsesAutoWhenSourceUnknown()
+    {
+        string? sourceLanguage = null;
+        var options = new PipelineOptions
+        {
+            TranslationHandler = (text, src, _, _) =>
+            {
+                sourceLanguage = src;
+                return Task.FromResult(text);
+            },
+            TranslationTarget = "fr"
+        };
+
+        await _sut.ProcessAsync("bonjour", options);
+
+        Assert.Equal("auto", sourceLanguage);
     }
 
     [Fact]

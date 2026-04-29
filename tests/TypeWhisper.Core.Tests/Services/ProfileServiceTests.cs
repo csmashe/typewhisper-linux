@@ -135,13 +135,13 @@ public class ProfileServiceTests : IDisposable
     }
 
     [Fact]
-    public void StylePresetService_ResolvesDeveloperAsTerminalSafe()
+    public void StylePresetService_ResolvesDeveloperWithoutTerminalSafe()
     {
         var result = ProfileStylePresetService.Resolve(ProfileStylePreset.Developer);
 
         Assert.Equal(CleanupLevel.None, result.CleanupLevel);
         Assert.True(result.DeveloperFormattingEnabled);
-        Assert.True(result.TerminalSafe);
+        Assert.False(result.TerminalSafe);
     }
 
     [Fact]

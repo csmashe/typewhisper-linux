@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -51,8 +52,9 @@ public sealed class LlmCleanupService
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
+            Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {ex.Message}");
             if (statusCallback is not null)
                 await statusCallback("Cleanup failed. Using Light cleanup.");
             return lightText;
