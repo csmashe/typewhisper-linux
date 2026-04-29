@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using Xunit;
 
@@ -183,6 +184,64 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("new text", platform.TypedText);
         Assert.False(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_clipboard_paste_strategy_overrides_terminal_direct_typing()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            autoPaste: true,
+            targetProcessName: "kitty",
+            targetWindowTitle: "typewhisper-linux",
+            strategy: TextInsertionStrategy.ClipboardPaste);
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_direct_typing_strategy_types_for_non_terminal_app()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            autoPaste: true,
+            targetProcessName: "firefox",
+            strategy: TextInsertionStrategy.DirectTyping);
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("new text", platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_copy_only_strategy_ignores_auto_paste()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            autoPaste: true,
+            strategy: TextInsertionStrategy.CopyOnly);
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal("new text", platform.Clipboard);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
     }
 
     [Fact]

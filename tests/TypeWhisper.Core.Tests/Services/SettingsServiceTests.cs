@@ -39,7 +39,12 @@ public class SettingsServiceTests : IDisposable
             Language = "de",
             HasCompletedOnboarding = true,
             VocabularyBoostingEnabled = true,
-            CleanupLevel = CleanupLevel.Light
+            CleanupLevel = CleanupLevel.Light,
+            AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
+            {
+                ["kitty"] = TextInsertionStrategy.DirectTyping,
+                ["firefox"] = TextInsertionStrategy.ClipboardPaste
+            }
         };
 
         sut.Save(settings);
@@ -49,6 +54,8 @@ public class SettingsServiceTests : IDisposable
         Assert.True(sut2.Current.HasCompletedOnboarding);
         Assert.True(sut2.Current.VocabularyBoostingEnabled);
         Assert.Equal(CleanupLevel.Light, sut2.Current.CleanupLevel);
+        Assert.Equal(TextInsertionStrategy.DirectTyping, sut2.Current.AppInsertionStrategies["kitty"]);
+        Assert.Equal(TextInsertionStrategy.ClipboardPaste, sut2.Current.AppInsertionStrategies["firefox"]);
     }
 
     [Fact]

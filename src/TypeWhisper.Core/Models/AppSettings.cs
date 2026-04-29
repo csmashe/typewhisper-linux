@@ -13,6 +13,7 @@ public record AppSettings
     public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
     public bool AutoPaste { get; init; } = true;
+    public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies { get; init; } = new();
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
     public RecordingMode Mode { get; init; } = RecordingMode.Toggle;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
@@ -122,6 +123,14 @@ public enum CleanupLevel
     Light,
     Medium,
     High
+}
+
+public enum TextInsertionStrategy
+{
+    Auto,
+    ClipboardPaste,
+    DirectTyping,
+    CopyOnly
 }
 
 public enum HistoryRetentionMode

@@ -55,17 +55,27 @@ public sealed class TextInsertionService
         string? targetWindowId = null,
         string? targetProcessName = null,
         string? targetWindowTitle = null,
-        bool autoEnter = false)
+        bool autoEnter = false,
+        TextInsertionStrategy strategy = TextInsertionStrategy.Auto)
     {
         if (string.IsNullOrEmpty(text))
             return autoEnter
                 ? await SendEnterOnlyAsync(targetWindowId)
                 : InsertionResult.NoText;
 
+        if (strategy is TextInsertionStrategy.CopyOnly)
+            autoPaste = false;
+
         if (autoPaste && !_platform.IsPasteAvailable)
             return InsertionResult.MissingPasteTool;
 
-        var shouldTypeDirectly = autoPaste && ShouldTypeDirectly(targetProcessName, targetWindowTitle);
+        var shouldTypeDirectly = autoPaste && strategy switch
+        {
+            TextInsertionStrategy.DirectTyping => true,
+            TextInsertionStrategy.ClipboardPaste => false,
+            _ => ShouldTypeDirectly(targetProcessName, targetWindowTitle)
+        };
+
         if (shouldTypeDirectly)
             return await TypeTextAsync(text, targetWindowId, autoEnter);
 

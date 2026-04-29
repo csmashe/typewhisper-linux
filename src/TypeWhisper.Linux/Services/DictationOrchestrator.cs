@@ -491,7 +491,8 @@ public sealed class DictationOrchestrator : IDisposable
                     _recordingWindowId,
                     _recordingAppProcess,
                     _recordingAppTitle,
-                    commandResult.AutoEnter)
+                    commandResult.AutoEnter,
+                    ResolveInsertionStrategy(_recordingAppProcess))
                 : await ExecuteActionPluginAsync(actionPlugin, finalText, rawText, result?.DetectedLanguage);
 
             var completionMessage = insertion switch
@@ -537,7 +538,7 @@ public sealed class DictationOrchestrator : IDisposable
 
             // Write to history last so stats reflect the just-completed capture.
             if (_settings.Current.SaveToHistoryEnabled)
-                AddHistoryRecord(transcriptionId, timestamp, rawText, finalText, duration, result, wavPath);
+                AddHistoryRecord(transcriptionId, timestamp, rawText, finalText, duration, result, wavPath, insertion);
 
             if (_settings.Current.MemoryEnabled)
                 _ = Task.Run(() => _memory.ExtractAndStoreAsync(finalText));
@@ -588,6 +589,26 @@ public sealed class DictationOrchestrator : IDisposable
         return style.DeveloperFormattingEnabled
             ? _developerFormatting.Format(text)
             : text;
+    }
+
+    private TextInsertionStrategy ResolveInsertionStrategy(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+            return TextInsertionStrategy.Auto;
+
+        var strategies = _settings.Current.AppInsertionStrategies;
+        if (strategies is null || strategies.Count == 0)
+            return TextInsertionStrategy.Auto;
+
+        var process = Path.GetFileNameWithoutExtension(processName);
+        foreach (var entry in strategies)
+        {
+            if (string.Equals(entry.Key, processName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(entry.Key, process, StringComparison.OrdinalIgnoreCase))
+                return entry.Value;
+        }
+
+        return TextInsertionStrategy.Auto;
     }
 
     private static string ClipboardToolMissingMessage() =>
@@ -692,7 +713,7 @@ public sealed class DictationOrchestrator : IDisposable
         || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
 
     private void AddHistoryRecord(string id, DateTime timestamp, string rawText, string finalText, double duration,
-        PluginTranscriptionResult? result, string wavPath)
+        PluginTranscriptionResult? result, string wavPath, InsertionResult insertion)
     {
         try
         {
@@ -716,6 +737,8 @@ public sealed class DictationOrchestrator : IDisposable
                 EngineUsed = engine,
                 ModelUsed = model,
                 AudioFileName = Path.GetFileName(wavPath),
+                InsertionStatus = ToTextInsertionStatus(insertion),
+                InsertionFailureReason = InsertionFailureReasonFor(insertion),
             });
         }
         catch (Exception ex)
@@ -723,6 +746,31 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] AddHistoryRecord failed: {ex.Message}");
         }
     }
+
+    private static TextInsertionStatus ToTextInsertionStatus(InsertionResult insertion) =>
+        insertion switch
+        {
+            InsertionResult.Pasted => TextInsertionStatus.Pasted,
+            InsertionResult.Typed => TextInsertionStatus.Typed,
+            InsertionResult.CopiedToClipboard => TextInsertionStatus.CopiedToClipboard,
+            InsertionResult.NoText => TextInsertionStatus.NoText,
+            InsertionResult.ActionHandled => TextInsertionStatus.ActionHandled,
+            InsertionResult.ActionFailed => TextInsertionStatus.ActionFailed,
+            InsertionResult.MissingClipboardTool => TextInsertionStatus.MissingClipboardTool,
+            InsertionResult.MissingPasteTool => TextInsertionStatus.MissingPasteTool,
+            InsertionResult.Failed => TextInsertionStatus.Failed,
+            _ => TextInsertionStatus.Unknown,
+        };
+
+    private static string? InsertionFailureReasonFor(InsertionResult insertion) =>
+        insertion switch
+        {
+            InsertionResult.ActionFailed => "Action plugin failed.",
+            InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+            InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
+            InsertionResult.Failed => "Text insertion failed.",
+            _ => null,
+        };
 
     private void ReportStatus(string message)
     {

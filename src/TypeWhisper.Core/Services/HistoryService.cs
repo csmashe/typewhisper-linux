@@ -282,6 +282,8 @@ public sealed class HistoryService : IHistoryService
             engine = r.EngineUsed,
             model = r.ModelUsed,
             profile = r.ProfileName,
+            insertion_status = r.InsertionStatus.ToString(),
+            insertion_failure_reason = r.InsertionFailureReason,
             words = r.WordCount
         });
 

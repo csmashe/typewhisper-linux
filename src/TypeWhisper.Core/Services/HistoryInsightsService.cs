@@ -30,6 +30,14 @@ public sealed class HistoryInsightsService
             TotalWords = totalWords,
             AverageWordsPerDictation = Math.Round(totalWords / (double)records.Count, 1),
             AverageDurationSeconds = Math.Round(totalDuration / records.Count, 1),
+            PastedCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.Pasted),
+            TypedCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.Typed),
+            CopiedToClipboardCount = records.Count(record => record.InsertionStatus is TextInsertionStatus.CopiedToClipboard),
+            FailedInsertionCount = records.Count(record => record.InsertionStatus
+                is TextInsertionStatus.Failed
+                or TextInsertionStatus.ActionFailed
+                or TextInsertionStatus.MissingClipboardTool
+                or TextInsertionStatus.MissingPasteTool),
             TopApps = topApps
         };
     }

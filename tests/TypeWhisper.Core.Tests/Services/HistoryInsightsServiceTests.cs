@@ -22,9 +22,9 @@ public sealed class HistoryInsightsServiceTests
     {
         var records = new[]
         {
-            Record("one two three", "code", duration: 3),
-            Record("one two", "code", duration: 5),
-            Record("one two three four", "browser", duration: 4)
+            Record("one two three", "code", duration: 3, TextInsertionStatus.Pasted),
+            Record("one two", "code", duration: 5, TextInsertionStatus.Typed),
+            Record("one two three four", "browser", duration: 4, TextInsertionStatus.MissingPasteTool)
         };
 
         var result = _sut.Build(records);
@@ -36,9 +36,17 @@ public sealed class HistoryInsightsServiceTests
         Assert.Equal("code", result.TopApps[0].AppProcessName);
         Assert.Equal(2, result.TopApps[0].RecordCount);
         Assert.Equal(5, result.TopApps[0].WordCount);
+        Assert.Equal(1, result.PastedCount);
+        Assert.Equal(1, result.TypedCount);
+        Assert.Equal(0, result.CopiedToClipboardCount);
+        Assert.Equal(1, result.FailedInsertionCount);
     }
 
-    private static TranscriptionRecord Record(string finalText, string app, double duration) =>
+    private static TranscriptionRecord Record(
+        string finalText,
+        string app,
+        double duration,
+        TextInsertionStatus insertionStatus = TextInsertionStatus.Unknown) =>
         new()
         {
             Id = Guid.NewGuid().ToString(),
@@ -46,6 +54,7 @@ public sealed class HistoryInsightsServiceTests
             RawText = finalText,
             FinalText = finalText,
             AppProcessName = app,
-            DurationSeconds = duration
+            DurationSeconds = duration,
+            InsertionStatus = insertionStatus
         };
 }
