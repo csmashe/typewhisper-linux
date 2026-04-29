@@ -19,7 +19,7 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
     public void SaveSnippet_PersistsSelectedTriggerMode()
     {
         var service = CreateSnippetService();
-        var sut = new SnippetsSectionViewModel(service);
+        var sut = CreateViewModel(service);
 
         sut.BeginCreateCommand.Execute(null);
         sut.NewTrigger = "sign off";
@@ -47,7 +47,7 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
             CreatedAt = DateTime.UtcNow.AddDays(-10)
         };
         service.AddSnippet(existing);
-        var sut = new SnippetsSectionViewModel(service);
+        var sut = CreateViewModel(service);
 
         sut.BeginEditCommand.Execute(existing);
         sut.NewReplacement = "New address";
@@ -66,7 +66,7 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
     public void PreviewText_UsesSnippetPlaceholderExpansion()
     {
         var service = CreateSnippetService();
-        var sut = new SnippetsSectionViewModel(service);
+        var sut = CreateViewModel(service);
 
         sut.NewReplacement = "Today is {date:yyyy-MM-dd}";
 
@@ -74,8 +74,51 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
         Assert.Equal($"Today is {DateTime.Now:yyyy-MM-dd}", sut.PreviewText);
     }
 
+    [Fact]
+    public void ConflictWarning_ShowsDictionaryTermMatch()
+    {
+        var dictionary = CreateDictionaryService();
+        dictionary.AddEntry(new DictionaryEntry
+        {
+            Id = "term-1",
+            EntryType = DictionaryEntryType.Term,
+            Original = "Kubernetes"
+        });
+        var sut = CreateViewModel(CreateSnippetService(), dictionary);
+
+        sut.NewTrigger = "kubernetes";
+
+        Assert.True(sut.HasConflictWarning);
+        Assert.Equal("This trigger matches an enabled dictionary term: Kubernetes.", sut.ConflictWarningText);
+    }
+
+    [Fact]
+    public void ConflictWarning_ShowsDictionaryCorrectionMatch()
+    {
+        var dictionary = CreateDictionaryService();
+        dictionary.AddEntry(new DictionaryEntry
+        {
+            Id = "correction-1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "wispr",
+            Replacement = "Wispr",
+        });
+        var sut = CreateViewModel(CreateSnippetService(), dictionary);
+
+        sut.NewTrigger = "wispr";
+
+        Assert.True(sut.HasConflictWarning);
+        Assert.Equal("This trigger matches a dictionary correction: wispr -> Wispr.", sut.ConflictWarningText);
+    }
+
     private SnippetService CreateSnippetService() =>
         new(Path.Combine(_tempDir, "snippets.json"));
+
+    private DictionaryService CreateDictionaryService() =>
+        new(Path.Combine(_tempDir, "dictionary.json"));
+
+    private SnippetsSectionViewModel CreateViewModel(SnippetService snippets, DictionaryService? dictionary = null) =>
+        new(snippets, dictionary ?? CreateDictionaryService());
 
     public void Dispose()
     {

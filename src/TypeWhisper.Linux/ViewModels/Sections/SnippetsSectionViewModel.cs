@@ -10,6 +10,7 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class SnippetsSectionViewModel : ObservableObject
 {
     private readonly ISnippetService _snippets;
+    private readonly IDictionaryService _dictionary;
 
     public ObservableCollection<Snippet> FilteredSnippets { get; } = [];
     public ObservableCollection<string> AvailableTags { get; } = ["All tags"];
@@ -34,20 +35,25 @@ public partial class SnippetsSectionViewModel : ObservableObject
     public string EditorSaveText => IsEditingExisting ? "Save changes" : "Create snippet";
     public string PreviewText => _snippets.PreviewReplacement(NewReplacement);
     public bool ShowPreview => !string.IsNullOrWhiteSpace(NewReplacement);
+    public bool HasConflictWarning => !string.IsNullOrWhiteSpace(ConflictWarningText);
+    public string ConflictWarningText => BuildConflictWarning(NewTrigger);
     public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
     [
         new(SnippetTriggerMode.Anywhere, "Anywhere"),
         new(SnippetTriggerMode.ExactPhrase, "Exact phrase")
     ];
 
-    public SnippetsSectionViewModel(ISnippetService snippets)
+    public SnippetsSectionViewModel(ISnippetService snippets, IDictionaryService dictionary)
     {
         _snippets = snippets;
+        _dictionary = dictionary;
         _snippets.SnippetsChanged += () => Dispatcher.UIThread.Post(Refresh);
+        _dictionary.EntriesChanged += () => Dispatcher.UIThread.Post(NotifyConflictWarningChanged);
         Refresh();
     }
 
     partial void OnSelectedTagFilterChanged(string value) => Refresh();
+    partial void OnNewTriggerChanged(string value) => NotifyConflictWarningChanged();
     partial void OnNewReplacementChanged(string value)
     {
         OnPropertyChanged(nameof(PreviewText));
@@ -171,6 +177,34 @@ public partial class SnippetsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowEmptyState));
         OnPropertyChanged(nameof(ShowSnippetList));
         OnPropertyChanged(nameof(HasSelectedTagFilter));
+    }
+
+    private void NotifyConflictWarningChanged()
+    {
+        OnPropertyChanged(nameof(ConflictWarningText));
+        OnPropertyChanged(nameof(HasConflictWarning));
+    }
+
+    private string BuildConflictWarning(string trigger)
+    {
+        if (string.IsNullOrWhiteSpace(trigger))
+            return "";
+
+        var normalized = trigger.Trim();
+        var conflict = _dictionary.Entries.FirstOrDefault(entry =>
+            entry.IsEnabled
+            && string.Equals(entry.Original.Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+
+        return conflict switch
+        {
+            { EntryType: DictionaryEntryType.Term } =>
+                $"This trigger matches an enabled dictionary term: {conflict.Original}.",
+            { EntryType: DictionaryEntryType.Correction, Replacement: { Length: > 0 } replacement } =>
+                $"This trigger matches a dictionary correction: {conflict.Original} -> {replacement}.",
+            { EntryType: DictionaryEntryType.Correction } =>
+                $"This trigger matches a dictionary correction: {conflict.Original}.",
+            _ => ""
+        };
     }
 
     private void RebuildTagFilter()
