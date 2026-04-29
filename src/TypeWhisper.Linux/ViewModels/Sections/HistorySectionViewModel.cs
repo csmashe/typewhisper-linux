@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -11,8 +12,11 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class HistorySectionViewModel : ObservableObject
 {
     private readonly IHistoryService _history;
+    private readonly IDictionaryService _dictionary;
+    private readonly CorrectionSuggestionService _correctionSuggestions;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly AudioPlaybackService _audioPlayback;
+    private bool _suppressRefresh;
 
     public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];
     public ObservableCollection<string> AvailableApps { get; } = ["All apps"];
@@ -28,14 +32,22 @@ public partial class HistorySectionViewModel : ObservableObject
 
     public HistorySectionViewModel(
         IHistoryService history,
+        IDictionaryService dictionary,
+        CorrectionSuggestionService correctionSuggestions,
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback)
     {
         _history = history;
+        _dictionary = dictionary;
+        _correctionSuggestions = correctionSuggestions;
         _sessionAudioFiles = sessionAudioFiles;
         _audioPlayback = audioPlayback;
 
-        _history.RecordsChanged += () => Dispatcher.UIThread.Post(Refresh);
+        _history.RecordsChanged += () =>
+        {
+            if (!_suppressRefresh)
+                Dispatcher.UIThread.Post(Refresh);
+        };
         _audioPlayback.PlaybackStateChanged += () => Dispatcher.UIThread.Post(RefreshPlaybackState);
         _ = LoadAsync();
     }
@@ -78,7 +90,32 @@ public partial class HistorySectionViewModel : ObservableObject
 
     internal void SaveEdit(HistoryRecordRow record, string newText)
     {
-        _history.UpdateRecord(record.Record.Id, newText);
+        var originalText = record.Record.FinalText;
+
+        _suppressRefresh = true;
+        try
+        {
+            _history.UpdateRecord(record.Record.Id, newText);
+        }
+        finally
+        {
+            _suppressRefresh = false;
+        }
+
+        record.SetCorrectionSuggestions(_correctionSuggestions.GenerateSuggestions(originalText, newText));
+        Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
+    }
+
+    internal void LearnCorrections(IEnumerable<CorrectionSuggestionRow> suggestions)
+    {
+        foreach (var suggestion in suggestions.Where(suggestion => suggestion.IsApproved))
+        {
+            if (string.IsNullOrWhiteSpace(suggestion.Original)
+                || string.IsNullOrWhiteSpace(suggestion.Replacement))
+                continue;
+
+            _dictionary.LearnCorrection(suggestion.Original.Trim(), suggestion.Replacement.Trim());
+        }
     }
 
     internal void CollapseAllExcept(HistoryRecordRow keep)
@@ -220,6 +257,8 @@ public partial class HistoryRecordRow : ObservableObject
     [ObservableProperty] private bool _isEditing;
     [ObservableProperty] private string _editText = "";
 
+    public ObservableCollection<CorrectionSuggestionRow> CorrectionSuggestions { get; } = [];
+
     public string TimeLabel => Record.Timestamp.ToString("HH:mm");
     public string DurationLabel => $"{Record.DurationSeconds:F1}s";
     public bool HasProfileName => !string.IsNullOrWhiteSpace(Record.ProfileName);
@@ -232,6 +271,7 @@ public partial class HistoryRecordRow : ObservableObject
     public bool ShowEditPanel => IsExpanded && IsEditing;
     public bool ShowExpandedMeta => IsExpanded && !IsEditing;
     public bool ShowExpandedActions => IsExpanded && !IsEditing;
+    public bool HasCorrectionSuggestions => IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
 
     public HistoryRecordRow(TranscriptionRecord record, HistorySectionViewModel owner)
     {
@@ -248,6 +288,7 @@ public partial class HistoryRecordRow : ObservableObject
         else
         {
             IsEditing = false;
+            CorrectionSuggestions.Clear();
         }
 
         NotifyExpansionStateChanged();
@@ -274,6 +315,7 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(HasLanguage));
         OnPropertyChanged(nameof(HasProfileName));
         OnPropertyChanged(nameof(HasAppProcessName));
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
     }
 
     [RelayCommand]
@@ -284,6 +326,30 @@ public partial class HistoryRecordRow : ObservableObject
 
     [RelayCommand]
     private void TogglePlayback() => _owner.TogglePlaybackCommand.Execute(this);
+
+    [RelayCommand]
+    private void SaveApprovedCorrections()
+    {
+        _owner.LearnCorrections(CorrectionSuggestions);
+        CorrectionSuggestions.Clear();
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+    }
+
+    [RelayCommand]
+    private void DismissCorrectionSuggestions()
+    {
+        CorrectionSuggestions.Clear();
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+    }
+
+    internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
+    {
+        CorrectionSuggestions.Clear();
+        foreach (var suggestion in suggestions)
+            CorrectionSuggestions.Add(new CorrectionSuggestionRow(suggestion));
+
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+    }
 
     internal void NotifyPlaybackStateChanged()
     {
@@ -298,5 +364,23 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowEditPanel));
         OnPropertyChanged(nameof(ShowExpandedMeta));
         OnPropertyChanged(nameof(ShowExpandedActions));
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+    }
+}
+
+public partial class CorrectionSuggestionRow : ObservableObject
+{
+    [ObservableProperty] private bool _isApproved = true;
+    [ObservableProperty] private string _original;
+    [ObservableProperty] private string _replacement;
+
+    public double Confidence { get; }
+    public string ConfidenceLabel => Confidence > 0 ? $"{Confidence:P0}" : "";
+
+    public CorrectionSuggestionRow(CorrectionSuggestion suggestion)
+    {
+        _original = suggestion.Original;
+        _replacement = suggestion.Replacement;
+        Confidence = suggestion.Confidence;
     }
 }
