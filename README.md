@@ -34,6 +34,20 @@ This branch contains Linux-specific work that is not part of the original branch
 - Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `canberra-gtk-play`, or CUDA runtime libraries
 - Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
 - Linux session audio handling for dictation, file transcription, and recorder workflows
+- Optional transcription cleanup pipeline with `Light` (deterministic), `Medium`, and `High` levels — Medium/High route through the configured LLM provider and degrade to Light when no provider is available
+- Profile style presets — `Raw`, `Clean`, `Concise`, `Formal Email`, `Casual Message`, `Developer`, `Terminal Safe`, and `Meeting Notes` — that bundle cleanup level and formatting choices per profile, with optional cleanup and developer-formatting overrides
+- Developer-safe formatting that converts spoken punctuation and casing commands (for example "dash dash", "open paren", "snake case") into code-friendly output
+- Voice command suffixes parsed at the end of a dictation: `press enter`, `new paragraph`, `new line`, and `cancel`
+- Transform-selection hotkey that voice-edits the text currently selected in another application
+- Spoken IDE file references such as "at file dot ts" mapped to file tags for editor/IDE workflows
+- Per-app text-insertion strategies (`Auto`, `Clipboard Paste`, `Direct Typing`, `Copy Only`) keyed by process name, with auto-paste retry and clipboard preservation
+- Correction suggestions generated from user edits in history, with optional auto-learning into the dictionary and confidence scoring
+- Dictionary entries gain starring, priority, source tracking (`Manual`, `Import`, `CorrectionSuggestion`, `AutoLearned`), and times-applied/times-corrected stats
+- Snippets gain an `Exact Phrase` trigger mode alongside `Anywhere`, plus per-profile scoping by profile id
+- Dashboard insights panel summarizing average words and duration per dictation, insertion reliability, and top apps
+- Spoken-feedback provider and voice selection on top of the existing toggle
+- Aggressive short-clip transcription option for short, quiet utterances that would otherwise be discarded as silence
+- Short-speech policy with peak-level and duration thresholds so accidental taps and silent clips are dropped before they reach the engine
 
 ## Features
 
