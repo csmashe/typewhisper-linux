@@ -96,6 +96,9 @@ public sealed partial class SnippetService : ISnippetService
         return text;
     }
 
+    public string PreviewReplacement(string replacement, Func<string>? clipboardProvider = null) =>
+        ExpandPlaceholders(replacement, clipboardProvider);
+
     private static string BuildTriggerPattern(Snippet snippet)
     {
         var escaped = Regex.Escape(snippet.Trigger);

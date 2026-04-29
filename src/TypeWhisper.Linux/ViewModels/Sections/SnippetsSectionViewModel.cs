@@ -18,6 +18,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
     [ObservableProperty] private string _newReplacement = "";
     [ObservableProperty] private string _newTags = "";
     [ObservableProperty] private bool _caseSensitive;
+    [ObservableProperty] private SnippetTriggerMode _selectedTriggerMode = SnippetTriggerMode.Anywhere;
     [ObservableProperty] private string _selectedTagFilter = "All tags";
     [ObservableProperty] private bool _showEditor;
     [ObservableProperty] private string? _editingSnippetId;
@@ -31,6 +32,13 @@ public partial class SnippetsSectionViewModel : ObservableObject
     public bool IsEditingExisting => !string.IsNullOrWhiteSpace(EditingSnippetId);
     public string EditorTitle => IsEditingExisting ? "Edit snippet" : "New snippet";
     public string EditorSaveText => IsEditingExisting ? "Save changes" : "Create snippet";
+    public string PreviewText => _snippets.PreviewReplacement(NewReplacement);
+    public bool ShowPreview => !string.IsNullOrWhiteSpace(NewReplacement);
+    public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
+    [
+        new(SnippetTriggerMode.Anywhere, "Anywhere"),
+        new(SnippetTriggerMode.ExactPhrase, "Exact phrase")
+    ];
 
     public SnippetsSectionViewModel(ISnippetService snippets)
     {
@@ -40,6 +48,11 @@ public partial class SnippetsSectionViewModel : ObservableObject
     }
 
     partial void OnSelectedTagFilterChanged(string value) => Refresh();
+    partial void OnNewReplacementChanged(string value)
+    {
+        OnPropertyChanged(nameof(PreviewText));
+        OnPropertyChanged(nameof(ShowPreview));
+    }
 
     partial void OnShowEditorChanged(bool value)
     {
@@ -74,8 +87,10 @@ public partial class SnippetsSectionViewModel : ObservableObject
             Replacement = NewReplacement.Trim(),
             Tags = NewTags.Trim(),
             CaseSensitive = CaseSensitive,
+            TriggerMode = SelectedTriggerMode,
             IsEnabled = existing?.IsEnabled ?? true,
             UsageCount = existing?.UsageCount ?? 0,
+            LastUsedAt = existing?.LastUsedAt,
             CreatedAt = existing?.CreatedAt ?? DateTime.UtcNow
         };
 
@@ -101,6 +116,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
         NewReplacement = "";
         NewTags = "";
         CaseSensitive = false;
+        SelectedTriggerMode = SnippetTriggerMode.Anywhere;
         ShowEditor = true;
     }
 
@@ -112,6 +128,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
         NewReplacement = snippet.Replacement;
         NewTags = snippet.Tags;
         CaseSensitive = snippet.CaseSensitive;
+        SelectedTriggerMode = snippet.TriggerMode;
         ShowEditor = true;
     }
 
@@ -123,6 +140,7 @@ public partial class SnippetsSectionViewModel : ObservableObject
         NewReplacement = "";
         NewTags = "";
         CaseSensitive = false;
+        SelectedTriggerMode = SnippetTriggerMode.Anywhere;
         ShowEditor = false;
     }
 
@@ -166,3 +184,5 @@ public partial class SnippetsSectionViewModel : ObservableObject
         SelectedTagFilter = AvailableTags.Contains(current) ? current : "All tags";
     }
 }
+
+public sealed record SnippetTriggerModeOption(SnippetTriggerMode Value, string Label);

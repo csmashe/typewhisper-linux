@@ -12,6 +12,7 @@ public interface ISnippetService
     void UpdateSnippet(Snippet snippet);
     void DeleteSnippet(string id);
     string ApplySnippets(string text, Func<string>? clipboardProvider = null);
+    string PreviewReplacement(string replacement, Func<string>? clipboardProvider = null);
 
     string ExportToJson();
     int ImportFromJson(string json);

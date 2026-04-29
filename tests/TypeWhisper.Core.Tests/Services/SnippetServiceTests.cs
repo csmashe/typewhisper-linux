@@ -125,6 +125,16 @@ public class SnippetServiceTests : IDisposable
     }
 
     [Fact]
+    public void PreviewReplacement_ExpandsPlaceholdersWithoutSnippetTrigger()
+    {
+        var now = DateTime.Now;
+
+        var result = _sut.PreviewReplacement("Today is {date:yyyy-MM-dd}; clipboard={clipboard}", () => "copied");
+
+        Assert.Equal($"Today is {now:yyyy-MM-dd}; clipboard=copied", result);
+    }
+
+    [Fact]
     public void AllTags_ReturnsDistinctSortedTags()
     {
         _sut.AddSnippet(new Snippet { Id = "1", Trigger = "a", Replacement = "A", Tags = "Code,E-Mail" });
