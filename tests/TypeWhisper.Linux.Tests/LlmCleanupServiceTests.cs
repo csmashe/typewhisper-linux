@@ -86,6 +86,33 @@ public sealed class LlmCleanupServiceTests
         Assert.Contains("Cleanup failed. Using Light cleanup.", statuses);
     }
 
+    [Fact]
+    public async Task CleanAsync_Medium_FallsBackToLightWhenUnavailableStatusCallbackFails()
+    {
+        var sut = CreateService([]);
+
+        var result = await sut.CleanAsync(
+            "um hello",
+            CleanupLevel.Medium,
+            _ => throw new InvalidOperationException("Status failed."));
+
+        Assert.Equal("Hello", result);
+    }
+
+    [Fact]
+    public async Task CleanAsync_Medium_FallsBackToLightWhenFailureStatusCallbackFails()
+    {
+        var provider = new FakeLlmProviderPlugin("unused") { ThrowOnProcess = true };
+        var sut = CreateService([provider]);
+
+        var result = await sut.CleanAsync(
+            "um hello",
+            CleanupLevel.Medium,
+            _ => throw new InvalidOperationException("Status failed."));
+
+        Assert.Equal("Hello", result);
+    }
+
     private static LlmCleanupService CreateService(IReadOnlyList<ILlmProviderPlugin> providers)
     {
         var pluginManager = TestPluginManagerFactory.Create(llmProviders: providers);

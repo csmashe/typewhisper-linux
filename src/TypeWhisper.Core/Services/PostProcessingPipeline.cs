@@ -140,7 +140,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
                 async (text, ct) =>
                 {
                     var sourceLang = detectedLang ?? effectiveLang ?? "auto";
-                    if (sourceLang == targetLang || effectiveLang == targetLang)
+                    if (sourceLang == targetLang)
                         return text;
 
                     if (options.StatusCallback is not null)

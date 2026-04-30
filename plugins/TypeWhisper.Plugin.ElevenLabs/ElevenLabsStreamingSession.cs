@@ -232,23 +232,32 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
             return;
 
         _disposed = true;
-        _receiveCts.Cancel();
 
-        if (_ws.State == WebSocketState.Open)
+        await _sendLock.WaitAsync(CancellationToken.None);
+        try
         {
-            try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
-            catch { /* best effort */ }
-        }
+            _receiveCts.Cancel();
 
-        if (_receiveTask is not null)
+            if (_ws.State == WebSocketState.Open)
+            {
+                try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
+                catch { /* best effort */ }
+            }
+
+            if (_receiveTask is not null)
+            {
+                try { await _receiveTask; }
+                catch { /* expected */ }
+            }
+
+            _audioBuffer.Dispose();
+        }
+        finally
         {
-            try { await _receiveTask; }
-            catch { /* expected */ }
+            _sendLock.Release();
+            _sendLock.Dispose();
+            _receiveCts.Dispose();
+            _ws.Dispose();
         }
-
-        _audioBuffer.Dispose();
-        _sendLock.Dispose();
-        _receiveCts.Dispose();
-        _ws.Dispose();
     }
 }

@@ -157,12 +157,11 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
 
             if (changed)
             {
-                if (!IsConfigured)
-                {
-                    _fetchedLlmModels = [];
-                    _host.SetSetting("fetchedLlmModels", _fetchedLlmModels);
-                    NormalizeSelectedLlmModel();
-                }
+                _fetchedLlmModels = [];
+                _selectedLlmModelId = null;
+                _host.SetSetting("fetchedLlmModels", _fetchedLlmModels);
+                _host.SetSetting<string?>("selectedLlmModel", _selectedLlmModelId);
+                NormalizeSelectedLlmModel();
 
                 if (wasConfigured != IsConfigured)
                     _host.NotifyCapabilitiesChanged();

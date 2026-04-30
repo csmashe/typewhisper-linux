@@ -74,7 +74,7 @@ jobs:
           }
 
           $scanMode = if ($runAll) { 'all' } elseif ($projects.Count -gt 0) { 'changed' } else { 'none' }
-          $json = if ($projects.Count -gt 0) { ConvertTo-Json -InputObject $projects -Compress -Depth 3 } else { '[]' }
+          $json = if ($projects.Count -gt 0) { ConvertTo-Json -InputObject $projects -Compress -Depth 3 -AsArray } else { '[]' }
           $hasProjects = if ($projects.Count -gt 0) { 'true' } else { 'false' }
 
           Write-Host "Plugin smoke scan mode: $scanMode"

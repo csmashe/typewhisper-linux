@@ -30,17 +30,15 @@ public sealed class LlmCleanupService
         var lightText = _cleanup.Clean(text, CleanupLevel.Light);
         if (!_promptProcessing.IsAnyProviderAvailable)
         {
-            if (statusCallback is not null)
-                await statusCallback("Cleanup provider unavailable. Using Light cleanup.");
+            await NotifyStatusAsync(statusCallback, "Cleanup provider unavailable. Using Light cleanup.");
             return lightText;
         }
 
-        if (statusCallback is not null)
-        {
-            await statusCallback(level == CleanupLevel.Medium
+        await NotifyStatusAsync(
+            statusCallback,
+            level == CleanupLevel.Medium
                 ? "Applying Medium cleanup..."
                 : "Applying High cleanup...");
-        }
 
         try
         {
@@ -55,9 +53,23 @@ public sealed class LlmCleanupService
         catch (Exception ex)
         {
             Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {ex.Message}");
-            if (statusCallback is not null)
-                await statusCallback("Cleanup failed. Using Light cleanup.");
+            await NotifyStatusAsync(statusCallback, "Cleanup failed. Using Light cleanup.");
             return lightText;
+        }
+    }
+
+    private static async Task NotifyStatusAsync(Func<string, Task>? statusCallback, string message)
+    {
+        if (statusCallback is null)
+            return;
+
+        try
+        {
+            await statusCallback(message);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[LlmCleanupService] Status callback failed: {ex.Message}");
         }
     }
 }

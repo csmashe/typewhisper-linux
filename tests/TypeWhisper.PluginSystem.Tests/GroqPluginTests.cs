@@ -217,6 +217,29 @@ public class GroqPluginTests
         Assert.Equal(2, host.NotifyCapabilitiesChangedCount);
     }
 
+    [Fact]
+    public async Task SetApiKeyAsync_ClearsFetchedLlmModelsAndSelectionWhenKeyChanges()
+    {
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "old-key";
+        host.SetSetting("fetchedLlmModels", new List<FetchedLlmModel>
+        {
+            new("custom-model-from-old-account", "Old"),
+        });
+        host.SetSetting("selectedLlmModel", "custom-model-from-old-account");
+
+        var sut = new GroqPlugin();
+        await sut.ActivateAsync(host);
+
+        await sut.SetApiKeyAsync("new-key");
+
+        Assert.Empty(sut.FetchedLlmModels);
+        Assert.Equal(sut.SupportedModels.First().Id, sut.SelectedLlmModelId);
+        Assert.Empty(host.GetSetting<List<FetchedLlmModel>>("fetchedLlmModels")!);
+        Assert.Equal(sut.SupportedModels.First().Id, host.GetSetting<string>("selectedLlmModel"));
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+    }
+
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {

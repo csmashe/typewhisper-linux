@@ -16,8 +16,9 @@ public sealed partial class DeveloperFormattingService
         (CloseBracketRegex(), "]"),
         (OpenBraceRegex(), "{"),
         (CloseBraceRegex(), "}"),
-        (DoubleQuoteRegex(), "\""),
         (SingleQuoteRegex(), "'"),
+        (DoubleQuoteRegex(), "\""),
+        (QuoteRegex(), "\""),
         (AtSignRegex(), "@"),
         (HashRegex(), "#"),
         (DollarRegex(), "$"),
@@ -136,11 +137,14 @@ public sealed partial class DeveloperFormattingService
     [GeneratedRegex(@"\b(?:close|right)\s+brace\b", RegexOptions.IgnoreCase)]
     private static partial Regex CloseBraceRegex();
 
-    [GeneratedRegex(@"\b(?:double\s+quote|quote)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bdouble\s+quote\b", RegexOptions.IgnoreCase)]
     private static partial Regex DoubleQuoteRegex();
 
     [GeneratedRegex(@"\b(?:single\s+quote|apostrophe)\b", RegexOptions.IgnoreCase)]
     private static partial Regex SingleQuoteRegex();
+
+    [GeneratedRegex(@"\bquote\b", RegexOptions.IgnoreCase)]
+    private static partial Regex QuoteRegex();
 
     [GeneratedRegex(@"\bat\s+sign\b", RegexOptions.IgnoreCase)]
     private static partial Regex AtSignRegex();

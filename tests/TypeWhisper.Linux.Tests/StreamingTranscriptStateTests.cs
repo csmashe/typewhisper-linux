@@ -27,6 +27,14 @@ public sealed class LinuxStreamingTranscriptStateTests
     }
 
     [Fact]
+    public void StabilizeText_DoesNotAppendShortUnrelatedTextViaEmptyOverlap()
+    {
+        var result = StreamingTranscriptState.StabilizeText("abc", "xyz");
+
+        Assert.Equal("xyz", result);
+    }
+
+    [Fact]
     public void TryApplyPolling_IgnoresStaleSessions()
     {
         var sut = new StreamingTranscriptState();

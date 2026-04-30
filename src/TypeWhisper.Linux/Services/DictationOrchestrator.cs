@@ -192,28 +192,38 @@ public sealed class DictationOrchestrator : IDisposable
                 return;
             }
 
-            if (_settings.Current.AudioDuckingEnabled)
-                _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
-            if (_settings.Current.PauseMediaDuringRecording)
-                _mediaPause.PauseMedia();
-            if (_settings.Current.SoundFeedbackEnabled)
-                _soundFeedback.PlayRecordingStarted();
-            _speechFeedback.AnnounceRecordingStarted();
-            RecordingStateChanged?.Invoke(this, true);
-            SetOverlayState(state => state with
+            try
             {
-                IsOverlayVisible = true,
-                ShowFeedback = false,
-                FeedbackIsError = false,
-                FeedbackText = null,
-                PartialText = null,
-                IsRecording = true,
-                StatusText = "Recording… press the hotkey again to stop.",
-                ActiveProfileName = null,
-                ActiveAppName = null,
-                SessionStartedAtUtc = DateTime.UtcNow
-            });
-            StartPartialTranscriptionSession();
+                if (_settings.Current.AudioDuckingEnabled)
+                    _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
+                if (_settings.Current.PauseMediaDuringRecording)
+                    _mediaPause.PauseMedia();
+                if (_settings.Current.SoundFeedbackEnabled)
+                    _soundFeedback.PlayRecordingStarted();
+                _speechFeedback.AnnounceRecordingStarted();
+                RecordingStateChanged?.Invoke(this, true);
+                SetOverlayState(state => state with
+                {
+                    IsOverlayVisible = true,
+                    ShowFeedback = false,
+                    FeedbackIsError = false,
+                    FeedbackText = null,
+                    PartialText = null,
+                    IsRecording = true,
+                    StatusText = "Recording… press the hotkey again to stop.",
+                    ActiveProfileName = null,
+                    ActiveAppName = null,
+                    SessionStartedAtUtc = DateTime.UtcNow
+                });
+                StartPartialTranscriptionSession();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Post-start setup failed: {ex}");
+                RollBackStartedRecording();
+                await StopPartialTranscriptionSessionAsync();
+                throw;
+            }
 
             // Publish the snapshot task before releasing the toggle gate so a
             // near-immediate StopAsync can reliably observe and await it.
@@ -262,6 +272,7 @@ public sealed class DictationOrchestrator : IDisposable
     public async Task StopAsync()
     {
         if (!await _toggleGate.WaitAsync(0)) return;
+        var earlyCleanupDone = false;
         try
         {
             if (!_audio.IsRecording) return;
@@ -271,6 +282,7 @@ public sealed class DictationOrchestrator : IDisposable
             await AwaitRecordingSnapshotAsync();
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
+            earlyCleanupDone = true;
             if (_settings.Current.SoundFeedbackEnabled)
                 _soundFeedback.PlayRecordingStopped();
             RecordingStateChanged?.Invoke(this, false);
@@ -336,8 +348,11 @@ public sealed class DictationOrchestrator : IDisposable
         }
         finally
         {
-            _audioDucking.RestoreAudio();
-            _mediaPause.ResumeMedia();
+            if (!earlyCleanupDone)
+            {
+                _audioDucking.RestoreAudio();
+                _mediaPause.ResumeMedia();
+            }
             _toggleGate.Release();
         }
     }
@@ -830,6 +845,40 @@ public sealed class DictationOrchestrator : IDisposable
             FeedbackText = text,
             PartialText = null,
             IsRecording = false,
+            ActiveProfileName = null,
+            ActiveAppName = null,
+            SessionStartedAtUtc = null
+        });
+    }
+
+    private void RollBackStartedRecording()
+    {
+        try
+        {
+            if (_audio.IsRecording)
+                _audio.StopRecording();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Failed to stop recording during start rollback: {ex.Message}");
+        }
+
+        try { _audioDucking.RestoreAudio(); }
+        catch (Exception ex) { Trace.WriteLine($"[Dictation] Failed to restore audio during start rollback: {ex.Message}"); }
+
+        try { _mediaPause.ResumeMedia(); }
+        catch (Exception ex) { Trace.WriteLine($"[Dictation] Failed to resume media during start rollback: {ex.Message}"); }
+
+        RecordingStateChanged?.Invoke(this, false);
+        SetOverlayState(state => state with
+        {
+            IsOverlayVisible = false,
+            ShowFeedback = false,
+            FeedbackIsError = false,
+            FeedbackText = null,
+            PartialText = null,
+            IsRecording = false,
+            StatusText = "Ready",
             ActiveProfileName = null,
             ActiveAppName = null,
             SessionStartedAtUtc = null

@@ -128,56 +128,54 @@ static class Program
         if (string.IsNullOrWhiteSpace(file))
             return Error("Usage: typewhisper transcribe <file|->");
 
-        byte[] audioBytes;
+        Stream audioStream;
         var fileName = "audio.wav";
 
         if (file == "-")
         {
-            await using var stdin = Console.OpenStandardInput();
-            using var buffer = new MemoryStream();
-            await stdin.CopyToAsync(buffer);
-            audioBytes = buffer.ToArray();
-            if (audioBytes.Length == 0)
-                return Error("No data received from stdin.");
+            audioStream = Console.OpenStandardInput();
         }
         else
         {
             if (!File.Exists(file))
                 return Error($"File not found: {file}");
 
-            audioBytes = await File.ReadAllBytesAsync(file);
+            audioStream = File.OpenRead(file);
             fileName = Path.GetFileName(file);
         }
 
         try
         {
-            using var content = new MultipartFormDataContent();
-            var fileContent = new ByteArrayContent(audioBytes);
-            fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-            content.Add(fileContent, "file", fileName);
+            using (audioStream)
+            {
+                using var content = new MultipartFormDataContent();
+                var fileContent = new StreamContent(audioStream);
+                fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                content.Add(fileContent, "file", fileName);
 
-            AddString(content, "language", options.Language);
-            foreach (var hint in options.LanguageHints)
-                AddString(content, "language_hint", hint);
-            AddString(content, "task", options.Task);
-            AddString(content, "target_language", options.TranslateTo);
-            AddString(content, "response_format", options.ResponseFormat);
-            AddString(content, "prompt", options.Prompt);
-            AddString(content, "engine", options.Engine);
-            AddString(content, "model", options.Model);
+                AddString(content, "language", options.Language);
+                foreach (var hint in options.LanguageHints)
+                    AddString(content, "language_hint", hint);
+                AddString(content, "task", options.Task);
+                AddString(content, "target_language", options.TranslateTo);
+                AddString(content, "response_format", options.ResponseFormat);
+                AddString(content, "prompt", options.Prompt);
+                AddString(content, "engine", options.Engine);
+                AddString(content, "model", options.Model);
 
-            var path = options.AwaitDownload ? "/v1/transcribe?await_download=1" : "/v1/transcribe";
-            var response = await Http.PostAsync($"{baseUrl}{path}", content);
-            var body = await response.Content.ReadAsStringAsync();
+                var path = options.AwaitDownload ? "/v1/transcribe?await_download=1" : "/v1/transcribe";
+                var response = await Http.PostAsync($"{baseUrl}{path}", content);
+                var body = await response.Content.ReadAsStringAsync();
 
-            if (!response.IsSuccessStatusCode)
-                return Error($"Transcription failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}");
+                if (!response.IsSuccessStatusCode)
+                    return Error($"Transcription failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}");
 
-            if (options.Json) { Console.WriteLine(PrettyJson(body)); return 0; }
+                if (options.Json) { Console.WriteLine(PrettyJson(body)); return 0; }
 
-            using var doc = JsonDocument.Parse(body);
-            Console.WriteLine(Prop(doc.RootElement, "text"));
-            return 0;
+                using var doc = JsonDocument.Parse(body);
+                Console.WriteLine(Prop(doc.RootElement, "text"));
+                return 0;
+            }
         }
         catch (HttpRequestException)
         {

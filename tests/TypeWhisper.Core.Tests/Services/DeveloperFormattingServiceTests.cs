@@ -18,6 +18,8 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("email at sign example dot com", "email@example.com")]
     [InlineData("2 plus 2 minus 1", "2+2-1")]
     [InlineData("quote hello quote", "\"hello\"")]
+    [InlineData("single quote hello single quote", "'hello'")]
+    [InlineData("double quote hello double quote", "\"hello\"")]
     public void Format_ReplacesSpokenSymbols(string input, string expected)
     {
         var result = _sut.Format(input);

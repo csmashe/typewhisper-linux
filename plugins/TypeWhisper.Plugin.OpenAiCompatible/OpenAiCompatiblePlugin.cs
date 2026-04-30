@@ -164,7 +164,7 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
         _host?.SetSetting("selectedLlmModel", modelId);
     }
 
-    internal void SetFetchedModels(List<FetchedModel> models)
+    internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged = true)
     {
         _fetchedModels = models;
         try
@@ -173,7 +173,8 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
             _host?.SetSetting("fetchedModels", json);
         }
         catch { /* best effort */ }
-        _host?.NotifyCapabilitiesChanged();
+        if (notifyCapabilitiesChanged)
+            _host?.NotifyCapabilitiesChanged();
     }
 
     internal async Task<List<FetchedModel>> FetchModelsAsync(CancellationToken ct = default)
@@ -296,12 +297,14 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
             return new PluginSettingsValidationResult(false, "Could not connect to the server.");
 
         var models = await FetchModelsAsync(ct);
-        SetFetchedModels(models);
+        SetFetchedModels(models, notifyCapabilitiesChanged: false);
 
         if (string.IsNullOrWhiteSpace(_selectedModelId) && models.Count > 0)
             SelectModel(models[0].Id);
         if (string.IsNullOrWhiteSpace(_selectedLlmModelId) && models.Count > 0)
             SelectLlmModel(models[0].Id);
+
+        _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(true, $"Connection OK. Fetched {models.Count} model(s).");
     }

@@ -111,7 +111,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
         request.Content = form;
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, ct);
         var json = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
@@ -162,7 +162,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
         try
         {
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
         catch

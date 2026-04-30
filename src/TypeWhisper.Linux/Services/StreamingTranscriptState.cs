@@ -91,7 +91,7 @@ internal sealed class StreamingTranscriptState
             return confirmed + tail;
         }
 
-        var minOverlap = Math.Min(20, confirmed.Length / 4);
+        var minOverlap = Math.Max(1, Math.Min(20, confirmed.Length / 4));
         var maxShift = Math.Min(confirmed.Length - minOverlap, 150);
         if (maxShift > 0)
         {
