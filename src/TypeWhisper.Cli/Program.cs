@@ -12,6 +12,11 @@ static class Program
     private const int DefaultPort = 9876;
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
 
+    // Transcribe can run far longer than the default timeout when --await-download
+    // triggers a model fetch on the server side, so use an unbounded HttpClient
+    // and bound each request via CancellationTokenSource instead.
+    private static readonly HttpClient TranscribeHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
+
     static async Task<int> Main(string[] args)
     {
         var options = CliOptions.Parse(args);
@@ -164,8 +169,22 @@ static class Program
                 AddString(content, "model", options.Model);
 
                 var path = options.AwaitDownload ? "/v1/transcribe?await_download=1" : "/v1/transcribe";
-                var response = await Http.PostAsync($"{baseUrl}{path}", content);
-                var body = await response.Content.ReadAsStringAsync();
+                var requestBudget = options.AwaitDownload ? TimeSpan.FromMinutes(15) : TimeSpan.FromMinutes(5);
+                using var requestCts = new CancellationTokenSource(requestBudget);
+
+                HttpResponseMessage response;
+                string body;
+                try
+                {
+                    response = await TranscribeHttp.PostAsync($"{baseUrl}{path}", content, requestCts.Token);
+                    body = await response.Content.ReadAsStringAsync(requestCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return Error(options.AwaitDownload
+                        ? "Transcription timed out while waiting for model download."
+                        : "Transcription timed out.");
+                }
 
                 if (!response.IsSuccessStatusCode)
                     return Error($"Transcription failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}");
@@ -225,8 +244,12 @@ static class Program
 
     static void ApplyAuthorization(string? token)
     {
-        if (!string.IsNullOrWhiteSpace(token))
-            Http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (string.IsNullOrWhiteSpace(token))
+            return;
+
+        var auth = new AuthenticationHeaderValue("Bearer", token);
+        Http.DefaultRequestHeaders.Authorization = auth;
+        TranscribeHttp.DefaultRequestHeaders.Authorization = auth;
     }
 
     static void AddString(MultipartFormDataContent content, string name, string? value)
@@ -361,8 +384,11 @@ static class Program
                         awaitDownload = true;
                         break;
                     case "--port":
-                        if (!TryReadValue(args, ref i, out var portValue) || !int.TryParse(portValue, out port))
-                            return options with { Error = "--port requires a number." };
+                        if (!TryReadValue(args, ref i, out var portValue)
+                            || !int.TryParse(portValue, out port)
+                            || port < 1
+                            || port > 65535)
+                            return options with { Error = "--port requires a number between 1 and 65535." };
                         break;
                     case "--token":
                         if (!TryReadValue(args, ref i, out token))
@@ -435,6 +461,17 @@ static class Program
         private static bool TryReadValue(string[] args, ref int index, out string value)
         {
             if (index + 1 >= args.Length)
+            {
+                value = "";
+                return false;
+            }
+
+            // Reject candidates that look like option flags (e.g. "--json" after
+            // "--port") so a missing value fails fast instead of silently
+            // consuming the next switch. A bare "-" is allowed for stdin-style
+            // positionals.
+            var candidate = args[index + 1];
+            if (candidate.Length > 1 && candidate.StartsWith('-'))
             {
                 value = "";
                 return false;

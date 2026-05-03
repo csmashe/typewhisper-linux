@@ -68,10 +68,10 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
             if (_disposed || _ws.State != WebSocketState.Open)
                 return;
 
-            if (_audioBuffer.Length == 0)
-                return;
-
-            var chunk = _audioBuffer.ToArray();
+            // Always send a terminal commit so the server knows the audio
+            // stream is done, even when the buffer happens to be empty
+            // because SendAudioAsync just flushed an exact-chunk boundary.
+            var chunk = _audioBuffer.Length == 0 ? Array.Empty<byte>() : _audioBuffer.ToArray();
             _audioBuffer.SetLength(0);
             await SendAudioPayloadAsync(chunk, commit: true, ct);
         }

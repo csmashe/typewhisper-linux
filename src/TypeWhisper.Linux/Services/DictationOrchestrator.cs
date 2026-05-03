@@ -146,7 +146,22 @@ public sealed class DictationOrchestrator : IDisposable
         _hotkey.DictationStartRequested += _startHandler;
         _hotkey.DictationStopRequested += _stopHandler;
         _hotkey.HookFailed += _hookFailedHandler;
-        _hotkey.Initialize();
+        try
+        {
+            _hotkey.Initialize();
+        }
+        catch
+        {
+            _hotkey.DictationToggleRequested -= _toggleHandler;
+            _hotkey.DictationStartRequested -= _startHandler;
+            _hotkey.DictationStopRequested -= _stopHandler;
+            _hotkey.HookFailed -= _hookFailedHandler;
+            _toggleHandler = null;
+            _startHandler = null;
+            _stopHandler = null;
+            _hookFailedHandler = null;
+            throw;
+        }
         _initialized = true;
     }
 
@@ -900,6 +915,22 @@ public sealed class DictationOrchestrator : IDisposable
         if (_startHandler is not null) _hotkey.DictationStartRequested -= _startHandler;
         if (_stopHandler is not null) _hotkey.DictationStopRequested -= _stopHandler;
         if (_hookFailedHandler is not null) _hotkey.HookFailed -= _hookFailedHandler;
+
+        // If we're shutting down mid-recording, the audio capture is still
+        // active and ducking/media-pause are still applied. Stop the capture
+        // and undo the playback effects before tearing down anything else,
+        // otherwise the user is left with a muted system after exit.
+        if (_audio.IsRecording)
+        {
+            try { _audio.StopRecording(); }
+            catch (Exception ex) { Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.Message}"); }
+
+            try { _audioDucking.RestoreAudio(); }
+            catch (Exception ex) { Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.Message}"); }
+
+            try { _mediaPause.ResumeMedia(); }
+            catch (Exception ex) { Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}"); }
+        }
 
         ShutdownPartialTranscriptionSession();
         try
