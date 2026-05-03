@@ -37,7 +37,14 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         if (_disposed || _ws.State != WebSocketState.Open || pcm16Audio.Length == 0)
             return;
 
-        await _sendLock.WaitAsync(ct);
+        try
+        {
+            await _sendLock.WaitAsync(ct);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
         try
         {
             if (_disposed || _ws.State != WebSocketState.Open)
@@ -53,7 +60,8 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         }
         finally
         {
-            _sendLock.Release();
+            try { _sendLock.Release(); }
+            catch (ObjectDisposedException) { }
         }
     }
 
@@ -62,7 +70,14 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         if (_disposed || _ws.State != WebSocketState.Open)
             return;
 
-        await _sendLock.WaitAsync(ct);
+        try
+        {
+            await _sendLock.WaitAsync(ct);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
         try
         {
             if (_disposed || _ws.State != WebSocketState.Open)
@@ -77,7 +92,8 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         }
         finally
         {
-            _sendLock.Release();
+            try { _sendLock.Release(); }
+            catch (ObjectDisposedException) { }
         }
     }
 
@@ -192,7 +208,13 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                 var json = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
                 if (TryParseTranscriptEvent(json, out var transcriptEvent, out var error))
                 {
-                    TranscriptReceived?.Invoke(transcriptEvent!);
+                    // Isolate subscriber failures so a buggy handler can't
+                    // tear down the WebSocket receive loop.
+                    try { TranscriptReceived?.Invoke(transcriptEvent!); }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"ElevenLabs realtime subscriber failed: {ex.Message}");
+                    }
                 }
                 else if (!string.IsNullOrWhiteSpace(error))
                 {

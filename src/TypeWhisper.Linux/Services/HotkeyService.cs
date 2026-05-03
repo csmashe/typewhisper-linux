@@ -47,12 +47,16 @@ public sealed class HotkeyService : IDisposable
     private ModifierMask _copyLastTranscriptionModifiers = ModifierMask.None;
     private KeyCode? _transformSelectionKey;
     private ModifierMask _transformSelectionModifiers = ModifierMask.None;
+    private readonly KeyCode _cancelKey = KeyCode.VcEscape;
+    private readonly ModifierMask _cancelModifiers = ModifierMask.None;
     private RecordingMode _mode = RecordingMode.Toggle;
     private bool _keyIsDown;
     private bool _promptKeyIsDown;
     private bool _recentKeyIsDown;
     private bool _copyLastKeyIsDown;
     private bool _transformSelectionKeyIsDown;
+    private bool _cancelKeyIsDown;
+    private volatile bool _cancelShortcutEnabled;
     private DateTime _keyDownTime;
     private bool _running;
     private int _disposed;
@@ -65,7 +69,20 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? RecentTranscriptionsRequested;
     public event EventHandler? CopyLastTranscriptionRequested;
     public event EventHandler? TransformSelectionRequested;
+    public event EventHandler? CancelRequested;
     public event EventHandler<string>? HookFailed;
+
+    /// <summary>
+    /// Gates the Escape cancel shortcut. Only true while a dictation is active
+    /// (recording or transcription in flight) — outside that window Escape
+    /// passes through to the foreground app so we don't shadow modal dialogs,
+    /// vim, etc.
+    /// </summary>
+    public bool IsCancelShortcutEnabled
+    {
+        get => _cancelShortcutEnabled;
+        set => _cancelShortcutEnabled = value;
+    }
 
     public RecordingMode Mode
     {
@@ -346,6 +363,28 @@ public sealed class HotkeyService : IDisposable
 
     private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
     {
+        // Cancel hotkey is only honored while a dictation is in flight. We also
+        // defer to any user-configured binding that happens to share the same
+        // key+modifiers so we don't silently convert a stop-and-transcribe
+        // press into a discard. The fallthrough lets the regular matcher
+        // handle this press as it would have without cancel support.
+        if (MatchesCancelHotkey(e))
+        {
+            if (!_cancelKeyIsDown)
+            {
+                _cancelKeyIsDown = true;
+                if (_cancelShortcutEnabled && !CancelHotkeyCollidesWithAnotherBinding())
+                {
+                    try { CancelRequested?.Invoke(this, EventArgs.Empty); }
+                    catch (Exception ex)
+                    {
+                        Trace.WriteLine($"[HotkeyService] Cancel handler threw: {ex.Message}");
+                    }
+                    return;
+                }
+            }
+        }
+
         if (MatchesRecentTranscriptionsHotkey(e))
         {
             if (_recentKeyIsDown) return;
@@ -438,6 +477,12 @@ public sealed class HotkeyService : IDisposable
             && ModifiersMatch(e.RawEvent.Mask, _transformSelectionModifiers);
     }
 
+    private bool MatchesCancelHotkey(KeyboardHookEventArgs e) =>
+        e.Data.KeyCode == _cancelKey && ModifiersMatch(e.RawEvent.Mask, _cancelModifiers);
+
+    private bool CancelHotkeyCollidesWithAnotherBinding() =>
+        HotkeyMatchesAny(_cancelKey, _cancelModifiers, GetBoundHotkeys());
+
     private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
     {
         // Clear the prompt-palette repeat guard on its own key release so the
@@ -450,6 +495,8 @@ public sealed class HotkeyService : IDisposable
             _copyLastKeyIsDown = false;
         if (_transformSelectionKey is not null && e.Data.KeyCode == _transformSelectionKey.Value)
             _transformSelectionKeyIsDown = false;
+        if (e.Data.KeyCode == _cancelKey)
+            _cancelKeyIsDown = false;
 
         // We only care about the release of the main key; modifier releases
         // are ignored so the user can let go of Ctrl/Shift first.
