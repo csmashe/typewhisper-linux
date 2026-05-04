@@ -5,6 +5,7 @@
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
         xmlns:local="using:TypeWhisper.Linux"
         xmlns:icons="using:FluentIcons.Avalonia"
+        xmlns:fluent="using:FluentIcons.Common"
         xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
         xmlns:sections="using:TypeWhisper.Linux.Views.Sections"
         mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="760"
@@ -76,7 +77,7 @@
                                             BorderBrush="{Binding IsSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2A3C55|False=Transparent'}"
                                             BorderThickness="1">
                                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                            <icons:SymbolIcon Symbol="{Binding Icon}"
+                                            <icons:SymbolIcon Symbol="{Binding Icon, TargetNullValue={x:Static fluent:Symbol.Home}, FallbackValue={x:Static fluent:Symbol.Home}}"
                                                               FontSize="14"
                                                               VerticalAlignment="Center" />
                                             <TextBlock Grid.Column="1"
