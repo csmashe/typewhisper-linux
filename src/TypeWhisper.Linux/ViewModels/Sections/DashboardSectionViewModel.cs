@@ -10,6 +10,8 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class DashboardSectionViewModel : ObservableObject, IDisposable
 {
+    private const double ManualTypingWordsPerMinute = 40.0;
+
     private readonly IHistoryService _history;
     private readonly ISettingsService _settings;
     private readonly IHistoryInsightsService _insights;
@@ -118,8 +120,8 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         PromptActionAppliedCountLabel = insights.PromptActionAppliedCount.ToString();
         TranslationAppliedCountLabel = insights.TranslationAppliedCount.ToString();
 
-        // Time "saved" = words typed at 150 WPM (typist baseline) minus time spoken
-        var typingSeconds = WordCount / 150.0 * 60.0;
+        // Time "saved" = estimated manual typing time minus time spoken.
+        var typingSeconds = WordCount / ManualTypingWordsPerMinute * 60.0;
         var saved = Math.Max(0, typingSeconds - totalSeconds);
         TimeSavedLabel = saved < 60
             ? $"{(int)saved}s"

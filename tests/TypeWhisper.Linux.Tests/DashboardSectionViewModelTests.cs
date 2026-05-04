@@ -45,6 +45,32 @@ public sealed class DashboardSectionViewModelTests : IDisposable
         Assert.Equal("1", sut.TranslationAppliedCountLabel);
     }
 
+    [Fact]
+    public void Refresh_CalculatesTimeSavedFromManualTypingBaseline()
+    {
+        var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
+        history.AddRecord(CreateRecord("one two three four five six seven eight", "code", 4, DateTime.UtcNow));
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
+
+        sut.SelectedRange = DashboardSectionViewModel.TimeRange.AllTime;
+
+        Assert.Equal("8s", sut.TimeSavedLabel);
+    }
+
+    [Fact]
+    public void Refresh_CountsWordsSeparatedByNewlines()
+    {
+        var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
+        history.AddRecord(CreateRecord("Hi Ryan,\n\nThis has spacing.", "browser", 1, DateTime.UtcNow));
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
+
+        sut.SelectedRange = DashboardSectionViewModel.TimeRange.AllTime;
+
+        Assert.Equal(5, sut.WordCount);
+    }
+
     private static TranscriptionRecord CreateRecord(
         string finalText,
         string appProcessName,

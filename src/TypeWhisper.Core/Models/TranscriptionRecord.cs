@@ -26,7 +26,7 @@ public sealed record TranscriptionRecord
     public IReadOnlyList<CorrectionSuggestion> PendingCorrectionSuggestions { get; init; } = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
-    public int WordCount => FinalText.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+    public int WordCount => FinalText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
     public string Preview => FinalText.Length > 100 ? string.Concat(FinalText.AsSpan(0, 100), "...") : FinalText;
 }
 
