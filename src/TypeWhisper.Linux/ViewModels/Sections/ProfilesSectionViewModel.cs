@@ -543,7 +543,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     {
         var processName = _activeWindow.GetActiveWindowProcessName();
         var title = _activeWindow.GetActiveWindowTitle();
-        var url = _activeWindow.GetBrowserUrl();
+        var url = _activeWindow.GetBrowserUrl(allowInteractiveCapture: false);
 
         if (string.IsNullOrWhiteSpace(processName)
             || string.Equals(processName, _hostProcessName, StringComparison.OrdinalIgnoreCase))

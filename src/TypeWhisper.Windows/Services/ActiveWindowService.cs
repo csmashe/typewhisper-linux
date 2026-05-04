@@ -77,7 +77,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         return result > 0 ? new string(buffer, 0, result) : null;
     }
 
-    public string? GetBrowserUrl()
+    public string? GetBrowserUrl(bool allowInteractiveCapture = true)
     {
         var hwnd = NativeMethods.GetForegroundWindow();
         if (hwnd == IntPtr.Zero) return null;

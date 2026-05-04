@@ -297,7 +297,7 @@ public sealed class DictationOrchestrator : IDisposable
                 {
                     _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
                     _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
-                    _recordingAppUrl = _activeWindow.GetBrowserUrl();
+                    _recordingAppUrl = _activeWindow.GetBrowserUrl(allowInteractiveCapture: false);
                     _recordingProfile = _profiles.MatchProfile(_recordingAppProcess, _recordingAppUrl);
                     _audio.WhisperModeEnabled =
                         _recordingProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
@@ -582,8 +582,24 @@ public sealed class DictationOrchestrator : IDisposable
             };
 
             var promptAction = ResolvePromptAction();
+            if (_recordingProfile is not null)
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Matched profile '{_recordingProfile.Name}' "
+                    + $"(process='{_recordingAppProcess ?? "<unknown>"}', "
+                    + $"url='{_recordingAppUrl ?? "<unknown>"}', "
+                    + $"promptAction='{promptAction?.Name ?? "<none>"}').");
+
+                if (!string.IsNullOrWhiteSpace(_recordingProfile.PromptActionId) && promptAction is null)
+                {
+                    var message = $"Prompt action for profile '{_recordingProfile.Name}' is disabled or missing.";
+                    Trace.WriteLine($"[Dictation] {message} actionId='{_recordingProfile.PromptActionId}'.");
+                    ReportStatus(message);
+                }
+            }
+
             var translationTarget = _recordingProfile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
-            var cleanupLevel = ResolveCleanupLevel();
+            var cleanupLevel = ResolveCleanupLevel(promptAction);
 
             var pluginProcessors = _models.PluginManager.PostProcessors
                 .Select(processor => new PluginPostProcessor(
@@ -614,7 +630,7 @@ public sealed class DictationOrchestrator : IDisposable
                             token),
                     SnippetExpander = text => _snippets.ApplySnippets(text, profileId: _recordingProfile?.Id),
                     LlmHandler = promptAction is not null
-                        ? (text, token) => _promptProcessing.ProcessAsync(promptAction, text, token)
+                        ? (text, token) => RunPromptActionAsync(promptAction, text, token)
                         : null,
                     TranslationHandler = !string.IsNullOrWhiteSpace(translationTarget)
                         ? (text, source, target, token) => _translation.TranslateAsync(text, source, target, token)
@@ -800,13 +816,45 @@ public sealed class DictationOrchestrator : IDisposable
         return _promptActions.EnabledActions.FirstOrDefault(action => action.Id == promptActionId);
     }
 
-    private CleanupLevel ResolveCleanupLevel()
+    private async Task<string> RunPromptActionAsync(
+        PromptAction promptAction,
+        string text,
+        CancellationToken token)
+    {
+        try
+        {
+            var message = $"Running prompt action '{promptAction.Name}'...";
+            Trace.WriteLine($"[Dictation] {message}");
+            ReportStatus(message);
+            return await _promptProcessing.ProcessAsync(promptAction, text, token);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var message = $"Prompt action '{promptAction.Name}' failed: {ex.Message}";
+            Trace.WriteLine($"[Dictation] {message}");
+            ReportStatus(message);
+            throw;
+        }
+    }
+
+    private CleanupLevel ResolveCleanupLevel(PromptAction? promptAction)
     {
         if (_recordingProfile is null)
             return _settings.Current.CleanupLevel;
 
         var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
-        return _recordingProfile.CleanupLevelOverride ?? style.CleanupLevel;
+        var cleanupLevel = _recordingProfile.CleanupLevelOverride ?? style.CleanupLevel;
+
+        // Profile prompt actions are already LLM transforms. Avoid running a
+        // separate LLM cleanup pass first, because the action should receive
+        // the dictated text, not another model's interpretation of it.
+        return promptAction is not null && cleanupLevel > CleanupLevel.Light
+            ? CleanupLevel.Light
+            : cleanupLevel;
     }
 
     private string ApplyProfileStyleFormatting(string text)
@@ -986,7 +1034,7 @@ public sealed class DictationOrchestrator : IDisposable
                 CleanupApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Cleanup),
                 SnippetApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Snippets),
                 DictionaryCorrectionApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Dictionary),
-                PromptActionApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Llm),
+                PromptActionApplied = WasPipelineStepSucceeded(pipelineResult, PostProcessingStepNames.Llm),
                 TranslationApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Translation),
             });
         }
@@ -1014,6 +1062,10 @@ public sealed class DictationOrchestrator : IDisposable
     private static bool WasPipelineStepChanged(PostProcessingResult result, string name) =>
         result.Steps.Any(step =>
             step.Changed && string.Equals(step.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    private static bool WasPipelineStepSucceeded(PostProcessingResult result, string name) =>
+        result.Steps.Any(step =>
+            step.Succeeded && string.Equals(step.Name, name, StringComparison.OrdinalIgnoreCase));
 
     private static string? InsertionFailureReasonFor(InsertionResult insertion) =>
         insertion switch

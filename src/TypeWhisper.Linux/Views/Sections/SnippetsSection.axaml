@@ -79,64 +79,67 @@
                 Padding="16,14"
                 Margin="0,0,0,18"
                 IsVisible="{Binding ShowEditor}">
-            <Grid ColumnDefinitions="150,*,150,150,150,Auto,Auto"
-                  ColumnSpacing="10"
-                  RowDefinitions="Auto,Auto,Auto,Auto">
-                <TextBlock Grid.ColumnSpan="6"
+            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                <TextBlock Grid.Row="0"
                            Text="{Binding EditorTitle}"
                            FontSize="14"
                            FontWeight="SemiBold"
                            Margin="0,0,0,12" />
 
-                <TextBox Grid.Row="1"
-                         Grid.Column="0"
-                         Text="{Binding NewTrigger}"
-                         PlaceholderText="Trigger" />
-                <TextBox Grid.Row="1"
-                         Grid.Column="1"
-                         Text="{Binding NewReplacement}"
-                         PlaceholderText="Replacement text" />
-                <ComboBox Grid.Row="1"
-                         Grid.Column="2"
-                         ItemsSource="{Binding TriggerModeOptions}"
-                         SelectedValue="{Binding SelectedTriggerMode}"
-                         SelectedValueBinding="{Binding Value}">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:SnippetTriggerModeOption">
-                            <TextBlock Text="{Binding Label}" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
-                <TextBox Grid.Row="1"
-                         Grid.Column="3"
-                         Text="{Binding NewTags}"
-                         PlaceholderText="Tags" />
-                <TextBox Grid.Row="1"
-                         Grid.Column="4"
-                         Text="{Binding NewProfileIds}"
-                         PlaceholderText="Profile IDs" />
-                <CheckBox Grid.Row="1"
-                          Grid.Column="5"
-                          Content="Case sensitive"
-                          IsChecked="{Binding CaseSensitive}"
-                          VerticalAlignment="Center" />
-                <StackPanel Grid.Row="1"
-                            Grid.Column="6"
-                            Orientation="Horizontal"
-                            Spacing="8">
+                <Grid Grid.Row="1"
+                      ColumnDefinitions="160,*,150"
+                      ColumnSpacing="10">
+                    <TextBox Grid.Column="0"
+                             Text="{Binding NewTrigger}"
+                             PlaceholderText="Trigger" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding NewReplacement}"
+                             PlaceholderText="Replacement text" />
+                    <ComboBox Grid.Column="2"
+                              ItemsSource="{Binding TriggerModeOptions}"
+                              SelectedValue="{Binding SelectedTriggerMode}"
+                              SelectedValueBinding="{Binding Value}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:SnippetTriggerModeOption">
+                                <TextBlock Text="{Binding Label}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+
+                <Grid Grid.Row="2"
+                      ColumnDefinitions="*,*,Auto,Auto"
+                      ColumnSpacing="10"
+                      Margin="0,10,0,0">
+                    <TextBox Grid.Column="0"
+                             Text="{Binding NewTags}"
+                             PlaceholderText="Tags" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding NewProfileIds}"
+                             PlaceholderText="Profile IDs" />
+                    <CheckBox Grid.Column="2"
+                              Content="Case sensitive"
+                              IsChecked="{Binding CaseSensitive}"
+                              VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="3"
+                                Orientation="Horizontal"
+                                Spacing="8"
+                                HorizontalAlignment="Right">
                     <Button Content="{Binding EditorSaveText}"
                             Command="{Binding SaveSnippetCommand}"
                             Background="#2196F3"
                             BorderBrush="#2196F3"
                             Foreground="White"
+                            MinWidth="118"
                             Padding="14,8" />
                     <Button Content="Cancel"
                             Command="{Binding CancelEditCommand}"
+                            MinWidth="82"
                             Padding="14,8" />
-                </StackPanel>
+                    </StackPanel>
+                </Grid>
 
-                <Border Grid.Row="2"
-                        Grid.ColumnSpan="6"
+                <Border Grid.Row="3"
                         Background="#101820"
                         BorderBrush="#223243"
                         BorderThickness="1"
@@ -156,8 +159,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Row="3"
-                        Grid.ColumnSpan="6"
+                <Border Grid.Row="4"
                         Background="#241D12"
                         BorderBrush="#6A4A1D"
                         BorderThickness="1"
@@ -217,6 +219,7 @@
                                    FontSize="12.5"
                                    Foreground="#8A9AAE"
                                    TextAlignment="Center"
+                                   TextWrapping="Wrap"
                                    Margin="0,0,0,18" />
                         <Button Content="+ Create first snippet"
                                 Command="{Binding BeginCreateCommand}"

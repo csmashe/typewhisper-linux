@@ -186,6 +186,51 @@ public sealed class TextInsertionServiceTests
         Assert.False(platform.PasteSent);
     }
 
+    [Theory]
+    [InlineData("firefox", "Example")]
+    [InlineData("zen", "Teamwork — Zen Browser")]
+    [InlineData(null, "Teamwork — Zen Browser")]
+    public async Task InsertTextAsync_browser_target_uses_direct_typing(string? processName, string windowTitle)
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            autoPaste: true,
+            targetProcessName: processName,
+            targetWindowTitle: windowTitle);
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("new text", platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Theory]
+    [InlineData("zen", "Inbox (3,013) - chris@example.com - Mail — Zen Browser")]
+    [InlineData("firefox", "Gmail - Inbox")]
+    public async Task InsertTextAsync_mail_browser_target_uses_clipboard_paste(string? processName, string windowTitle)
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            autoPaste: true,
+            targetProcessName: processName,
+            targetWindowTitle: windowTitle);
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
     [Fact]
     public async Task InsertTextAsync_clipboard_paste_strategy_overrides_terminal_direct_typing()
     {

@@ -10,11 +10,48 @@ public sealed class ActiveWindowServiceTests
     [InlineData("Google Chrome", true)]
     [InlineData("Microsoft Edge", true)]
     [InlineData("org.mozilla.firefox", true)]
+    [InlineData("Zen Browser", true)]
+    [InlineData("zen", true)]
+    [InlineData("zen-browser", true)]
     [InlineData("code", false)]
     [InlineData(null, false)]
     public void IsSupportedBrowserIdentity_RecognizesBrowserNames(string? identity, bool expected)
     {
         Assert.Equal(expected, ActiveWindowService.IsSupportedBrowserIdentity(identity));
+    }
+
+    [Theory]
+    [InlineData("zen")]
+    [InlineData("zen-browser")]
+    [InlineData("zen-bin")]
+    public void IsSupportedBrowserProcess_RecognizesZenBrowserProcesses(string processName)
+    {
+        Assert.True(ActiveWindowService.IsSupportedBrowserProcess(processName));
+    }
+
+    [Fact]
+    public void IsSupportedBrowserWindow_RecognizesZenBrowserTitleWhenProcessUnknown()
+    {
+        Assert.True(ActiveWindowService.IsSupportedBrowserWindow(
+            null,
+            "Hey Ryan - chris@example.com - Mail — Zen Browser"));
+    }
+
+    [Fact]
+    public void TryInferBrowserProcessNameFromTitle_ReturnsZenForZenBrowser()
+    {
+        Assert.Equal(
+            "zen",
+            ActiveWindowService.TryInferBrowserProcessNameFromTitle("Inbox - Mail — Zen Browser"));
+    }
+
+    [Fact]
+    public void TryInferBrowserUrlFromTitle_ReturnsGmailForZenMailWindow()
+    {
+        Assert.Equal(
+            "https://mail.google.com",
+            ActiveWindowService.TryInferBrowserUrlFromTitle(
+                "Hey Ryan - chris@example.com - Excel On The Web Mail — Zen Browser"));
     }
 
     [Fact]

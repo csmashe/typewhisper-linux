@@ -17,7 +17,17 @@ public sealed class ActiveWindowService : IActiveWindowService
     private static readonly bool IsGdbusAvailable = CheckCommandAvailable("gdbus", "--version");
     private static readonly HashSet<string> BrowserProcessNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "chrome", "msedge", "brave", "opera", "vivaldi", "chromium", "firefox", "waterfox"
+        "chrome",
+        "msedge",
+        "brave",
+        "opera",
+        "vivaldi",
+        "chromium",
+        "firefox",
+        "waterfox",
+        "zen",
+        "zen-browser",
+        "zen-bin"
     };
     private static readonly string[] BrowserAppNameHints =
     [
@@ -30,7 +40,9 @@ public sealed class ActiveWindowService : IActiveWindowService
         "vivaldi",
         "chromium",
         "firefox",
-        "waterfox"
+        "waterfox",
+        "zen browser",
+        "zen"
     ];
     private const string AtSpiRegistryBusName = "org.a11y.atspi.Registry";
     private const string AtSpiRootPath = "/org/a11y/atspi/accessible/root";
@@ -53,7 +65,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         if (!IsXdotoolAvailable) return null;
         var pid = RunXdotool("getactivewindow getwindowpid");
         if (string.IsNullOrWhiteSpace(pid) || !int.TryParse(pid, out var pidInt))
-            return null;
+            return TryInferBrowserProcessNameFromTitle(GetActiveWindowTitle());
 
         try
         {
@@ -62,7 +74,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
         catch
         {
-            return null;
+            return TryInferBrowserProcessNameFromTitle(GetActiveWindowTitle());
         }
     }
 
@@ -73,7 +85,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         return string.IsNullOrWhiteSpace(title) ? null : title;
     }
 
-    public string? GetBrowserUrl()
+    public string? GetBrowserUrl(bool allowInteractiveCapture = true)
     {
         var windowId = IsXdotoolAvailable ? RunXdotool("getactivewindow") : null;
         var title = GetActiveWindowTitle();
@@ -94,9 +106,14 @@ public sealed class ActiveWindowService : IActiveWindowService
         if (atSpiUrl is not null)
             return _cachedUrl = atSpiUrl;
 
-        if (!string.IsNullOrWhiteSpace(windowId)
+        var inferredUrl = TryInferBrowserUrlFromTitle(title);
+        if (inferredUrl is not null)
+            return _cachedUrl = inferredUrl;
+
+        if (allowInteractiveCapture
+            && !string.IsNullOrWhiteSpace(windowId)
             && IsXclipAvailable
-            && IsSupportedBrowserProcess(GetActiveWindowProcessName()))
+            && IsSupportedBrowserWindow(GetActiveWindowProcessName(), title))
         {
             return _cachedUrl = TryCaptureBrowserUrl(windowId);
         }
@@ -427,6 +444,39 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     internal static bool IsSupportedBrowserProcess(string? processName) =>
         !string.IsNullOrWhiteSpace(processName) && BrowserProcessNames.Contains(processName);
+
+    internal static bool IsSupportedBrowserWindow(string? processName, string? title) =>
+        IsSupportedBrowserProcess(processName)
+        || TryInferBrowserProcessNameFromTitle(title) is not null;
+
+    internal static string? TryInferBrowserProcessNameFromTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return null;
+
+        if (title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase))
+            return "zen";
+
+        return null;
+    }
+
+    internal static string? TryInferBrowserUrlFromTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return null;
+
+        // Zen/Firefox windows do not always expose a process id through
+        // xdotool on Flatpak/X11. Gmail titles are still reliable enough to
+        // match URL-scoped email profiles without visibly focusing the address
+        // bar just to copy the real URL.
+        if (title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
+            && title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase))
+        {
+            return "https://mail.google.com";
+        }
+
+        return null;
+    }
 
     internal static bool IsSupportedBrowserIdentity(string? identity)
     {

@@ -244,11 +244,21 @@ public sealed class TextInsertionService
     {
         return ContainsCodex(processName)
             || ContainsCodex(windowTitle)
+            || ShouldTypeBrowserDirectly(processName, windowTitle)
             || IsTerminalProcess(processName);
 
         static bool ContainsCodex(string? value) =>
             !string.IsNullOrWhiteSpace(value)
             && value.Contains("codex", StringComparison.OrdinalIgnoreCase);
+
+        static bool ShouldTypeBrowserDirectly(string? processName, string? title) =>
+            ActiveWindowService.IsSupportedBrowserWindow(processName, title)
+            && !IsMailBrowserWindow(title);
+
+        static bool IsMailBrowserWindow(string? title) =>
+            !string.IsNullOrWhiteSpace(title)
+            && (title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
+                || title.Contains("Gmail", StringComparison.OrdinalIgnoreCase));
 
         static bool IsTerminalProcess(string? value)
         {
@@ -364,16 +374,33 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         await RunXdotoolAsync("windowactivate", "--sync", windowId) == 0;
 
     public async Task<bool> SendPasteAsync() =>
-        await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+v") == 0;
+        await SendModifiedKeyAsync("Control_L", "v");
 
     public async Task<bool> TypeTextAsync(string text) =>
-        await RunXdotoolAsync("type", "--clearmodifiers", "--delay", "0", "--", text) == 0;
+        await RunXdotoolAsync("type", "--clearmodifiers", "--delay", "8", "--", text) == 0;
 
     public async Task<bool> SendCopyAsync() =>
-        await RunXdotoolAsync("key", "--clearmodifiers", "ctrl+c") == 0;
+        await SendModifiedKeyAsync("Control_L", "c");
 
     public async Task<bool> SendEnterAsync() =>
         await RunXdotoolAsync("key", "--clearmodifiers", "Return") == 0;
+
+    private static async Task<bool> SendModifiedKeyAsync(string modifier, string key)
+    {
+        var keyDown = await RunXdotoolAsync("keydown", "--clearmodifiers", modifier) == 0;
+        var keySent = false;
+        try
+        {
+            if (keyDown)
+                keySent = await RunXdotoolAsync("key", key) == 0;
+        }
+        finally
+        {
+            await RunXdotoolAsync("keyup", modifier);
+        }
+
+        return keyDown && keySent;
+    }
 
     private static bool IsWayland() =>
         Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };

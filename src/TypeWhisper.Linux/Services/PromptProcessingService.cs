@@ -42,7 +42,7 @@ public sealed class PromptProcessingService
             }
         }
 
-        return await provider.ProcessAsync(systemPrompt, inputText, modelId, ct);
+        return await provider.ProcessAsync(systemPrompt, FormatPromptActionInput(inputText), modelId, ct);
     }
 
     public async Task<string> ProcessSystemPromptAsync(string systemPrompt, string inputText, CancellationToken ct)
@@ -56,6 +56,13 @@ public sealed class PromptProcessingService
 
     private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
         => ResolveProvider(action.ProviderOverride);
+
+    internal static string FormatPromptActionInput(string inputText) =>
+        $"""
+        Text to process:
+
+        {inputText}
+        """;
 
     private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(string? providerOverride)
     {

@@ -41,7 +41,9 @@ public sealed class PromptProcessingServiceTests : IDisposable
             SystemPrompt = "Rewrite this"
         }, "hello", CancellationToken.None);
 
-        Assert.Equal("processed:Default Provider:model-a:hello", result);
+        Assert.Equal(
+            $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            result);
     }
 
     [Fact]
@@ -71,7 +73,9 @@ public sealed class PromptProcessingServiceTests : IDisposable
             ProviderOverride = "plugin:com.test.override:model-b"
         }, "hello", CancellationToken.None);
 
-        Assert.Equal("processed:Override Provider:model-b:hello", result);
+        Assert.Equal(
+            $"processed:Override Provider:model-b:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            result);
     }
 
     [Fact]
@@ -92,7 +96,18 @@ public sealed class PromptProcessingServiceTests : IDisposable
             SystemPrompt = "Rewrite this"
         }, "hello", CancellationToken.None);
 
-        Assert.Equal("processed:First Provider:model-z:hello", result);
+        Assert.Equal(
+            $"processed:First Provider:model-z:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            result);
+    }
+
+    [Fact]
+    public void FormatPromptActionInput_LabelsInputText()
+    {
+        var result = PromptProcessingService.FormatPromptActionInput("Ryan, this is a test.");
+
+        Assert.Contains("Text to process:", result);
+        Assert.Contains("Ryan, this is a test.", result);
     }
 
     private static Mock<ISettingsService> CreateSettings(AppSettings current)
