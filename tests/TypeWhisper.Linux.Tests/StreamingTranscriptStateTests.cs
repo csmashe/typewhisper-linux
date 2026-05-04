@@ -6,11 +6,32 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class LinuxStreamingTranscriptStateTests
 {
     [Fact]
+    public void StopSession_ReturnsConfirmedPollingText()
+    {
+        var sut = new StreamingTranscriptState();
+        var session = sut.StartSession();
+
+        var applied = sut.TryApplyPolling(session, "preview only", text => text, out var display);
+
+        Assert.True(applied);
+        Assert.Equal("preview only", display);
+        Assert.Equal("preview only", sut.StopSession());
+    }
+
+    [Fact]
     public void StabilizeText_PreservesConfirmedPrefixWhenTranscriptGrows()
     {
         var result = StreamingTranscriptState.StabilizeText("Hello world", "Hello world, how are you?");
 
         Assert.Equal("Hello world, how are you?", result);
+    }
+
+    [Fact]
+    public void StabilizeText_DoesNotAppendShortUnrelatedTextViaEmptyOverlap()
+    {
+        var result = StreamingTranscriptState.StabilizeText("abc", "xyz");
+
+        Assert.Equal("xyz", result);
     }
 
     [Fact]

@@ -25,4 +25,25 @@ public sealed class AudioRecordingServiceTests
 
         Assert.Same(samples, processed);
     }
+
+    [Fact]
+    public void ResampleToSampleRate_DownsamplesToTargetLength()
+    {
+        var samples = Enumerable.Range(0, 480).Select(i => i / 480f).ToArray();
+
+        var processed = AudioRecordingService.ResampleToSampleRate(samples, 48000, 16000);
+
+        Assert.Equal(160, processed.Length);
+        Assert.Equal(samples[0], processed[0]);
+    }
+
+    [Fact]
+    public void ResampleToSampleRate_ReturnsSameArrayWhenRateAlreadyMatches()
+    {
+        var samples = new[] { 0.1f, 0.2f };
+
+        var processed = AudioRecordingService.ResampleToSampleRate(samples, 16000, 16000);
+
+        Assert.Same(samples, processed);
+    }
 }

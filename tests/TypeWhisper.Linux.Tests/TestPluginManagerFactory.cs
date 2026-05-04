@@ -13,6 +13,7 @@ internal static class TestPluginManagerFactory
     public static PluginManager Create(
         IReadOnlyList<ILlmProviderPlugin>? llmProviders = null,
         IReadOnlyList<IActionPlugin>? actionPlugins = null,
+        IReadOnlyList<ITtsProviderPlugin>? ttsProviders = null,
         IReadOnlyList<LoadedPlugin>? loadedPlugins = null)
     {
         var activeWindow = new Mock<IActiveWindowService>();
@@ -31,6 +32,8 @@ internal static class TestPluginManagerFactory
             SetPrivateField(pluginManager, "_llmProviders", llmProviders.ToList());
         if (actionPlugins is not null)
             SetPrivateField(pluginManager, "_actionPlugins", actionPlugins.ToList());
+        if (ttsProviders is not null)
+            SetPrivateField(pluginManager, "_ttsProviders", ttsProviders.ToList());
         if (loadedPlugins is not null)
             SetPrivateField(pluginManager, "_allPlugins", loadedPlugins.ToList());
 

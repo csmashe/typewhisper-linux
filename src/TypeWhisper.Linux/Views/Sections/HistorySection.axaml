@@ -44,6 +44,14 @@
             <Setter Property="Padding" Value="0" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
+        <Style Selector="Border.suggestion-panel">
+            <Setter Property="Background" Value="#101820" />
+            <Setter Property="BorderBrush" Value="#26384A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="10" />
+            <Setter Property="Margin" Value="0,8,0,4" />
+        </Style>
     </UserControl.Styles>
 
     <DockPanel Margin="28">
@@ -253,6 +261,72 @@
                                                             </TextBlock>
                                                         </StackPanel>
 
+                                                        <Border Classes="suggestion-panel"
+                                                                IsVisible="{Binding HasCorrectionSuggestions}">
+                                                            <StackPanel Spacing="8">
+                                                                <TextBlock Text="Suggested dictionary corrections"
+                                                                           FontSize="12"
+                                                                           FontWeight="SemiBold"
+                                                                           Foreground="#D8E6F7" />
+
+                                                                <ItemsControl ItemsSource="{Binding CorrectionSuggestions}">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:CorrectionSuggestionRow">
+                                                                            <Grid ColumnDefinitions="Auto,*,Auto,*"
+                                                                                  RowDefinitions="Auto,Auto"
+                                                                                  ColumnSpacing="8"
+                                                                                  Margin="0,0,0,6">
+                                                                                <CheckBox Grid.Row="0"
+                                                                                          Grid.Column="0"
+                                                                                          Grid.RowSpan="2"
+                                                                                          IsChecked="{Binding IsApproved}"
+                                                                                          VerticalAlignment="Center" />
+
+                                                                                <TextBlock Grid.Row="0"
+                                                                                           Grid.Column="1"
+                                                                                           Text="Original"
+                                                                                           Classes="label" />
+                                                                                <TextBlock Grid.Row="0"
+                                                                                           Grid.Column="2"
+                                                                                           Text="->"
+                                                                                           Foreground="#8A9AAE"
+                                                                                           VerticalAlignment="Bottom" />
+                                                                                <TextBlock Grid.Row="0"
+                                                                                           Grid.Column="3"
+                                                                                           Text="Replacement"
+                                                                                           Classes="label" />
+
+                                                                                <TextBox Grid.Row="1"
+                                                                                         Grid.Column="1"
+                                                                                         Text="{Binding Original}"
+                                                                                         MinWidth="170" />
+                                                                                <TextBlock Grid.Row="1"
+                                                                                           Grid.Column="2"
+                                                                                           Text="{Binding ConfidenceLabel}"
+                                                                                           Foreground="#8A9AAE"
+                                                                                           FontSize="11"
+                                                                                           VerticalAlignment="Center" />
+                                                                                <TextBox Grid.Row="1"
+                                                                                         Grid.Column="3"
+                                                                                         Text="{Binding Replacement}"
+                                                                                         MinWidth="170" />
+                                                                            </Grid>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+
+                                                                <StackPanel Orientation="Horizontal"
+                                                                            Spacing="8">
+                                                                    <Button Content="Learn approved"
+                                                                            Padding="12,6"
+                                                                            Command="{Binding SaveApprovedCorrectionsCommand}" />
+                                                                    <Button Content="Dismiss"
+                                                                            Padding="12,6"
+                                                                            Command="{Binding DismissCorrectionSuggestionsCommand}" />
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                        </Border>
+
                                                         <StackPanel Orientation="Horizontal"
                                                                     Spacing="12"
                                                                     Margin="0,2,0,0"
@@ -264,6 +338,9 @@
                                                                     Content="Copy"
                                                                     Click="OnCopyRecord"
                                                                     Tag="{Binding Record.FinalText}" />
+                                                            <Button Classes="link-button"
+                                                                    Content="Add term"
+                                                                    Command="{Binding AddToDictionaryCommand}" />
                                                             <Button Classes="link-button"
                                                                     Content="{Binding PlaybackButtonText}"
                                                                     Command="{Binding TogglePlaybackCommand}"

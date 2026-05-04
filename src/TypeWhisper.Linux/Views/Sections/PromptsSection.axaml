@@ -186,8 +186,7 @@
                         <TextBlock Text="Provider"
                                    Margin="0,0,0,6" />
                         <ComboBox ItemsSource="{Binding AvailableProviders}"
-                                  SelectedValue="{Binding EditProviderOverride}"
-                                  SelectedValueBinding="{Binding Value}">
+                                  SelectedItem="{Binding SelectedEditProvider}">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ProviderOption">
                                     <TextBlock Text="{Binding Label}" />

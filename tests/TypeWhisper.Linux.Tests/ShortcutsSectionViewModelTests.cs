@@ -50,6 +50,61 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         Assert.Equal("", sut.PromptPaletteHotkeyText);
     }
 
+    [Fact]
+    public void ApplyTransformSelectionHotkey_SavesConfiguredBinding()
+    {
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        settings.Load();
+        var hotkey = new HotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+
+        sut.TransformSelectionHotkeyText = "Ctrl+Shift+T";
+        sut.ApplyTransformSelectionHotkeyCommand.Execute(null);
+
+        Assert.Equal("Ctrl+Shift+T", settings.Current.TransformSelectionHotkey);
+        Assert.Equal("Ctrl+Shift+T", sut.TransformSelectionHotkeyText);
+    }
+
+    [Fact]
+    public void ApplyTransformSelectionHotkey_BlankInputClearsBinding()
+    {
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        settings.Load();
+        var hotkey = new HotkeyService();
+        hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+Shift+T");
+        settings.Save(settings.Current with { TransformSelectionHotkey = "Ctrl+Shift+T" });
+
+        var sut = new ShortcutsSectionViewModel(hotkey, settings)
+        {
+            TransformSelectionHotkeyText = ""
+        };
+
+        sut.ApplyTransformSelectionHotkeyCommand.Execute(null);
+
+        Assert.Equal("", settings.Current.TransformSelectionHotkey);
+        Assert.Equal("", sut.TransformSelectionHotkeyText);
+    }
+
+    [Fact]
+    public void ApplyTransformSelectionHotkey_RejectsCollisionWithPromptPalette()
+    {
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        settings.Load();
+        var hotkey = new HotkeyService();
+        hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+P");
+        settings.Save(settings.Current with { PromptPaletteHotkey = "Ctrl+Shift+P" });
+
+        var sut = new ShortcutsSectionViewModel(hotkey, settings)
+        {
+            TransformSelectionHotkeyText = "Ctrl+Shift+P"
+        };
+
+        sut.ApplyTransformSelectionHotkeyCommand.Execute(null);
+
+        Assert.Equal("", settings.Current.TransformSelectionHotkey);
+        Assert.Contains("collides", sut.StatusMessage);
+    }
+
     public void Dispose()
     {
         try

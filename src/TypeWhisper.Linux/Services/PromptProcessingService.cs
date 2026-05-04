@@ -45,11 +45,23 @@ public sealed class PromptProcessingService
         return await provider.ProcessAsync(systemPrompt, inputText, modelId, ct);
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
+    public async Task<string> ProcessSystemPromptAsync(string systemPrompt, string inputText, CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(action.ProviderOverride))
+        var (provider, modelId) = ResolveProvider(providerOverride: null);
+        if (provider is null)
+            throw new InvalidOperationException("No enabled LLM provider is available.");
+
+        return await provider.ProcessAsync(systemPrompt, inputText, modelId, ct);
+    }
+
+    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
+        => ResolveProvider(action.ProviderOverride);
+
+    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(string? providerOverride)
+    {
+        if (!string.IsNullOrWhiteSpace(providerOverride))
         {
-            var overrideResult = ResolvePluginModelId(action.ProviderOverride);
+            var overrideResult = ResolvePluginModelId(providerOverride);
             if (overrideResult.Provider is not null)
                 return overrideResult;
         }

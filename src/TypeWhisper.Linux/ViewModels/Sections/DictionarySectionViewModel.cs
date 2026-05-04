@@ -21,6 +21,7 @@ public partial class DictionarySectionViewModel : ObservableObject
     [ObservableProperty] private string _newOriginal = "";
     [ObservableProperty] private string _newReplacement = "";
     [ObservableProperty] private bool _caseSensitive;
+    [ObservableProperty] private int _newPriority;
     [ObservableProperty] private DictionaryEntryType _newEntryType = DictionaryEntryType.Correction;
 
     public bool HasSearchText => !string.IsNullOrWhiteSpace(SearchText);
@@ -132,6 +133,10 @@ public partial class DictionarySectionViewModel : ObservableObject
     [RelayCommand]
     private void ClearSearch() => SearchText = "";
 
+    public string ExportToCsv() => _dict.ExportToCsv();
+
+    public int ImportFromCsv(string csv) => _dict.ImportFromCsv(csv);
+
     [RelayCommand]
     private void AddEntry()
     {
@@ -146,11 +151,13 @@ public partial class DictionarySectionViewModel : ObservableObject
             Replacement = string.IsNullOrWhiteSpace(NewReplacement) ? null : NewReplacement.Trim(),
             CaseSensitive = CaseSensitive,
             IsEnabled = true,
+            Priority = Math.Clamp(NewPriority, 0, 999),
         });
 
         NewOriginal = "";
         NewReplacement = "";
         CaseSensitive = false;
+        NewPriority = 0;
     }
 
     [RelayCommand]
@@ -159,6 +166,18 @@ public partial class DictionarySectionViewModel : ObservableObject
     [RelayCommand]
     private void ToggleEnabled(DictionaryEntry entry) =>
         _dict.UpdateEntry(entry with { IsEnabled = !entry.IsEnabled });
+
+    [RelayCommand]
+    private void ToggleStarred(DictionaryEntry entry) =>
+        _dict.UpdateEntry(entry with { IsStarred = !entry.IsStarred });
+
+    [RelayCommand]
+    private void IncreasePriority(DictionaryEntry entry) =>
+        _dict.UpdateEntry(entry with { Priority = Math.Min(entry.Priority + 1, 999) });
+
+    [RelayCommand]
+    private void DecreasePriority(DictionaryEntry entry) =>
+        _dict.UpdateEntry(entry with { Priority = Math.Max(entry.Priority - 1, 0) });
 
     [RelayCommand]
     private void TogglePack(TermPackItemViewModel pack)
@@ -214,7 +233,10 @@ public partial class DictionarySectionViewModel : ObservableObject
                 || (entry.Replacement?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false));
         }
 
-        foreach (var entry in entries.OrderBy(entry => entry.Original, StringComparer.OrdinalIgnoreCase))
+        foreach (var entry in entries
+                     .OrderByDescending(entry => entry.IsStarred)
+                     .ThenByDescending(entry => entry.Priority)
+                     .ThenBy(entry => entry.Original, StringComparer.OrdinalIgnoreCase))
             FilteredEntries.Add(entry);
 
         OnPropertyChanged(nameof(EntryCount));

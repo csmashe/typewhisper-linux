@@ -1,5 +1,5 @@
 using System.IO;
-using TypeWhisper.Windows.Services.Plugins;
+using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 

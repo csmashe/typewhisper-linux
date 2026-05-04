@@ -125,6 +125,16 @@ public class SnippetServiceTests : IDisposable
     }
 
     [Fact]
+    public void PreviewReplacement_ExpandsPlaceholdersWithoutSnippetTrigger()
+    {
+        var now = DateTime.Now;
+
+        var result = _sut.PreviewReplacement("Today is {date:yyyy-MM-dd}; clipboard={clipboard}", () => "copied");
+
+        Assert.Equal($"Today is {now:yyyy-MM-dd}; clipboard=copied", result);
+    }
+
+    [Fact]
     public void AllTags_ReturnsDistinctSortedTags()
     {
         _sut.AddSnippet(new Snippet { Id = "1", Trigger = "a", Replacement = "A", Tags = "Code,E-Mail" });
@@ -216,6 +226,87 @@ public class SnippetServiceTests : IDisposable
 
         var result = _sut.ApplySnippets(input);
         Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void ApplySnippets_ExactPhraseTrigger_ReplacesWholeUtteranceOnly()
+    {
+        _sut.AddSnippet(new Snippet
+        {
+            Id = "1",
+            Trigger = "sig",
+            Replacement = "Signature",
+            TriggerMode = SnippetTriggerMode.ExactPhrase
+        });
+
+        Assert.Equal("Signature", _sut.ApplySnippets("sig."));
+        Assert.Equal("please use sig", _sut.ApplySnippets("please use sig"));
+    }
+
+    [Fact]
+    public void ApplySnippets_ProfileScopedSnippet_OnlyAppliesToMatchingProfile()
+    {
+        _sut.AddSnippet(new Snippet
+        {
+            Id = "1",
+            Trigger = "sig",
+            Replacement = "Profile signature",
+            ProfileIds = ["profile-1"]
+        });
+
+        Assert.Equal("sig", _sut.ApplySnippets("sig"));
+        Assert.Equal("sig", _sut.ApplySnippets("sig", profileId: "profile-2"));
+        Assert.Equal("Profile signature", _sut.ApplySnippets("sig", profileId: "profile-1"));
+    }
+
+    [Fact]
+    public void ApplySnippets_GlobalSnippet_AppliesWhenProfileIsActive()
+    {
+        _sut.AddSnippet(new Snippet
+        {
+            Id = "1",
+            Trigger = "sig",
+            Replacement = "Global signature"
+        });
+
+        Assert.Equal("Global signature", _sut.ApplySnippets("sig", profileId: "profile-1"));
+    }
+
+    [Fact]
+    public void ApplySnippets_UpdatesLastUsedAt()
+    {
+        _sut.AddSnippet(new Snippet
+        {
+            Id = "1",
+            Trigger = "sig",
+            Replacement = "Signature"
+        });
+
+        _sut.ApplySnippets("sig");
+
+        Assert.Equal(1, _sut.Snippets[0].UsageCount);
+        Assert.NotNull(_sut.Snippets[0].LastUsedAt);
+    }
+
+    [Fact]
+    public void Snippets_LoadLegacyJsonWithTriggerModeDefaults()
+    {
+        File.WriteAllText(_filePath, """
+            [
+              {
+                "Id": "legacy",
+                "Trigger": "sig",
+                "Replacement": "Signature",
+                "IsEnabled": true
+              }
+            ]
+            """);
+
+        var sut = new SnippetService(_filePath);
+
+        var snippet = Assert.Single(sut.Snippets);
+        Assert.Equal(SnippetTriggerMode.Anywhere, snippet.TriggerMode);
+        Assert.Null(snippet.LastUsedAt);
     }
 
     [Fact]

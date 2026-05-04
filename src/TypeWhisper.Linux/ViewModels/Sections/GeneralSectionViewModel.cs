@@ -1,4 +1,6 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -9,12 +11,20 @@ public partial class GeneralSectionViewModel : ObservableObject
 {
     private readonly ISettingsService _settings;
     private readonly HttpApiService _api;
+    private readonly CliInstallService _cliInstall;
     [ObservableProperty] private string? _uiLanguage;
     [ObservableProperty] private bool _startWithSystem;
     [ObservableProperty] private bool _apiServerEnabled;
     [ObservableProperty] private int _apiServerPort;
     [ObservableProperty] private string _apiBearerToken = "";
     [ObservableProperty] private string _apiStatusText = "";
+    [ObservableProperty] private string _cliStatusText = "";
+    [ObservableProperty] private string _cliBundledPathText = "";
+    [ObservableProperty] private bool _cliBundledAvailable;
+    [ObservableProperty] private bool _cliInstalled;
+
+    public ObservableCollection<CommandExample> CurlExamples { get; } = [];
+    public ObservableCollection<CommandExample> CliExamples { get; } = [];
 
     public IReadOnlyList<UiLanguageOption> UiLanguageChoices { get; } =
     [
@@ -51,15 +61,17 @@ public partial class GeneralSectionViewModel : ObservableObject
         }
     }
 
-    public GeneralSectionViewModel(ISettingsService settings, HttpApiService api)
+    public GeneralSectionViewModel(ISettingsService settings, HttpApiService api, CliInstallService cliInstall)
     {
         _settings = settings;
         _api = api;
+        _cliInstall = cliInstall;
         Refresh(settings.Current);
         StartWithSystem = StartupService.IsEnabled;
         _settings.SettingsChanged += Refresh;
         _api.StateChanged += () => ApiStatusText = _api.StatusText;
         ApiStatusText = _api.StatusText;
+        RefreshCliState();
     }
 
     private void Refresh(Core.Models.AppSettings s)
@@ -68,7 +80,45 @@ public partial class GeneralSectionViewModel : ObservableObject
         ApiServerEnabled = s.ApiServerEnabled;
         ApiServerPort = s.ApiServerPort;
         ApiBearerToken = HttpApiService.ReadBearerToken(s);
+        RefreshExamples(s.ApiServerPort);
         OnPropertyChanged(nameof(SelectedUiLanguageOption));
+    }
+
+    [RelayCommand]
+    private void RefreshCliState() => ApplyCliState(_cliInstall.GetState());
+
+    [RelayCommand]
+    private void InstallCli()
+    {
+        try
+        {
+            ApplyCliState(_cliInstall.Install());
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            CliStatusText = ex.Message;
+        }
+    }
+
+    private void ApplyCliState(CliInstallState state)
+    {
+        CliStatusText = state.StatusText;
+        CliBundledAvailable = state.BundledCliAvailable;
+        CliInstalled = state.Installed;
+        CliBundledPathText = state.BundledPath is null
+            ? $"Installer target: {state.LauncherPath}"
+            : $"Bundled: {state.BundledPath}  |  Target: {state.LauncherPath}";
+    }
+
+    private void RefreshExamples(int port)
+    {
+        CurlExamples.Clear();
+        foreach (var command in CliInstallService.BuildCurlExamples(port))
+            CurlExamples.Add(new CommandExample(command));
+
+        CliExamples.Clear();
+        foreach (var command in CliInstallService.BuildCliExamples(port))
+            CliExamples.Add(new CommandExample(command));
     }
 
     partial void OnUiLanguageChanged(string? value)
@@ -106,3 +156,5 @@ public partial class GeneralSectionViewModel : ObservableObject
 }
 
 public sealed record UiLanguageOption(string? Value, string DisplayName);
+
+public sealed record CommandExample(string Command);

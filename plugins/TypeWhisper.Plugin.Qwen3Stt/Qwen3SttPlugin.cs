@@ -72,7 +72,7 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient, baseUrl, apiKey, model,
-            wavAudio, language, translate: false, "verbose_json", ct);
+            wavAudio, language, translate: false, "verbose_json", ct, prompt);
     }
 
     internal async Task SetApiKeyAsync(string apiKey)

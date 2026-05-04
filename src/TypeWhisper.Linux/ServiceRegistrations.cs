@@ -13,11 +13,9 @@ using TypeWhisper.Linux.Views;
 namespace TypeWhisper.Linux;
 
 /// <summary>
-/// DI wiring for the Linux host. Mirrors the registration shape of
-/// TypeWhisper.Windows/App.xaml.cs but substitutes Linux-native service
-/// implementations for the Win32/WPF ones. Services that aren't portable
-/// to Linux (Velopack updater, SMTC MediaPause, Core Audio ducking,
-/// SupporterDiscord, License server) are omitted from v1.
+/// DI wiring for the Linux host. Keeps registrations Linux-native and omits
+/// Windows-only services such as Win32 hotkeys, WPF UI, Velopack, SMTC media
+/// pause, Core Audio ducking, supporter Discord, and license server flows.
 /// </summary>
 internal static class ServiceRegistrations
 {
@@ -31,6 +29,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IErrorLogService>(new ErrorLogService(dataPath));
         services.AddSingleton<IHistoryService>(
             new HistoryService(Path.Combine(dataPath, "history.json"), TypeWhisperEnvironment.AudioPath));
+        services.AddSingleton<RecentTranscriptionStore>();
         services.AddSingleton<IDictionaryService>(
             new DictionaryService(Path.Combine(dataPath, "dictionary.json")));
         services.AddSingleton<IVocabularyBoostingService, VocabularyBoostingService>();
@@ -40,6 +39,10 @@ internal static class ServiceRegistrations
             new ProfileService(Path.Combine(dataPath, "profiles.json")));
         services.AddSingleton<IPromptActionService>(
             new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
+        services.AddSingleton<CleanupService>();
+        services.AddSingleton<CorrectionSuggestionService>();
+        services.AddSingleton<IHistoryInsightsService, HistoryInsightsService>();
+        services.AddSingleton<IdeFileReferenceService>();
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
         services.AddSingleton<ITranslationService, TranslationService>();
 
@@ -58,6 +61,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<SystemCommandAvailabilityService>();
         services.AddSingleton<AudioRecordingService>();
         services.AddSingleton<AudioFileService>();
+        services.AddSingleton<IFileTranscriptionProcessor, FileTranscriptionProcessor>();
         services.AddSingleton<AudioPlaybackService>();
         services.AddSingleton<SessionAudioFileService>();
         services.AddSingleton<SoundFeedbackService>();
@@ -67,12 +71,17 @@ internal static class ServiceRegistrations
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
+        services.AddSingleton<LlmCleanupService>();
         services.AddSingleton<PromptPaletteService>();
+        services.AddSingleton<TransformSelectionService>();
+        services.AddSingleton<RecentTranscriptionsService>();
         services.AddSingleton<MemoryService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
         services.AddSingleton<HttpApiService>();
+        services.AddSingleton<CliInstallService>();
+        services.AddSingleton<WatchFolderService>();
 
         // ViewModels — section VMs are singletons so state stays consistent
         // across the sidebar nav and the onboarding wizard.
@@ -99,6 +108,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();
         services.AddTransient<PromptPaletteWindow>();
+        services.AddTransient<RecentTranscriptionsPaletteWindow>();
         services.AddTransient<WelcomeWizard>();
     }
 }

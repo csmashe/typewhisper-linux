@@ -2,7 +2,7 @@ using System.IO;
 using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.PluginSDK;
-using TypeWhisper.Windows.Services.Plugins;
+using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 

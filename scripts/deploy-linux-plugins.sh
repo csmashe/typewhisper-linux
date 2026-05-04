@@ -43,6 +43,7 @@ declare -A PLUGINS=(
   ["com.typewhisper.groq"]="TypeWhisper.Plugin.Groq"
   ["com.typewhisper.assemblyai"]="TypeWhisper.Plugin.AssemblyAi"
   ["com.typewhisper.deepgram"]="TypeWhisper.Plugin.Deepgram"
+  ["com.typewhisper.elevenlabs"]="TypeWhisper.Plugin.ElevenLabs"
   ["com.typewhisper.cloudflare-asr"]="TypeWhisper.Plugin.CloudflareAsr"
   ["com.typewhisper.gladia"]="TypeWhisper.Plugin.Gladia"
   ["com.typewhisper.speechmatics"]="TypeWhisper.Plugin.Speechmatics"

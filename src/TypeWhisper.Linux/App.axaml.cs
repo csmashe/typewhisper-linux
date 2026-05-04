@@ -91,6 +91,9 @@ public partial class App : Application
             ReconcileHotkeyOnStartup(hotkey, settings);
             var lastApplied = hotkey.CurrentHotkeyString;
             var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
+            var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
+            var lastCopyLastTranscriptionApplied = hotkey.CurrentCopyLastTranscriptionHotkeyString;
+            var lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
             settings.SettingsChanged += s =>
             {
                 hotkey.Mode = s.Mode;
@@ -106,6 +109,24 @@ public partial class App : Application
                 {
                     lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
                 }
+
+                if (s.RecentTranscriptionsHotkey != lastRecentTranscriptionsApplied
+                    && hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey))
+                {
+                    lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
+                }
+
+                if (s.CopyLastTranscriptionHotkey != lastCopyLastTranscriptionApplied
+                    && hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey))
+                {
+                    lastCopyLastTranscriptionApplied = hotkey.CurrentCopyLastTranscriptionHotkeyString;
+                }
+
+                if (s.TransformSelectionHotkey != lastTransformSelectionApplied
+                    && hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey))
+                {
+                    lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
+                }
             };
 
             var api = services.GetRequiredService<HttpApiService>();
@@ -115,20 +136,35 @@ public partial class App : Application
             var promptPalette = services.GetRequiredService<PromptPaletteService>();
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
 
+            var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
+            recentTranscriptions.FeedbackRequested += (message, isError) =>
+            {
+                // Feed this through the overlay feedback path by reusing
+                // dictation status events rather than creating a second toast
+                // implementation.
+                Debug.WriteLine($"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}");
+            };
+            hotkey.RecentTranscriptionsRequested += (_, _) => recentTranscriptions.TogglePalette();
+            hotkey.CopyLastTranscriptionRequested += (_, _) => _ = recentTranscriptions.CopyLastTranscriptionToClipboardAsync();
+            var transformSelection = services.GetRequiredService<TransformSelectionService>();
+            hotkey.TransformSelectionRequested += (_, _) => _ = transformSelection.ToggleAsync();
+
             // Launch minimized / hidden if --minimized was passed.
             if (Program.StartMinimized)
                 main.Opened += (_, _) => main.Hide();
 
-            // First-run onboarding wizard.
+            var bootstrapTask = BootstrapDeferredAsync(services);
+
+            // First-run onboarding wizard. Wait for bootstrap so bundled
+            // plugins are deployed and initialized before the model picker loads.
             if (!settings.Current.HasCompletedOnboarding)
             {
-                main.Opened += (_, _) =>
+                main.Opened += async (_, _) =>
                 {
+                    await bootstrapTask;
                     (main.DataContext as ViewModels.MainWindowViewModel)?.OpenWizard();
                 };
             }
-
-            _ = BootstrapDeferredAsync(services);
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -143,6 +179,9 @@ public partial class App : Application
         var s = settings.Current;
         hotkey.Mode = s.Mode;
         hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey);
+        hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey);
+        hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey);
+        hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey);
 
         // Treat the upstream default as "unset" on Linux and substitute the
         // Linux default (HotkeyService's ctor-time binding — Ctrl+Shift+Space).

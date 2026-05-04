@@ -15,8 +15,31 @@ public sealed record TranscriptionRecord
     public string EngineUsed { get; init; } = "whisper";
     public string? ModelUsed { get; init; }
     public string? AudioFileName { get; init; }
+    public TextInsertionStatus InsertionStatus { get; init; } = TextInsertionStatus.Unknown;
+    public string? InsertionFailureReason { get; init; }
+    public CleanupLevel CleanupLevelUsed { get; init; } = CleanupLevel.None;
+    public bool CleanupApplied { get; init; }
+    public bool SnippetApplied { get; init; }
+    public bool DictionaryCorrectionApplied { get; init; }
+    public bool PromptActionApplied { get; init; }
+    public bool TranslationApplied { get; init; }
+    public IReadOnlyList<CorrectionSuggestion> PendingCorrectionSuggestions { get; init; } = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
     public int WordCount => FinalText.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
     public string Preview => FinalText.Length > 100 ? string.Concat(FinalText.AsSpan(0, 100), "...") : FinalText;
+}
+
+public enum TextInsertionStatus
+{
+    Unknown,
+    Pasted,
+    Typed,
+    CopiedToClipboard,
+    NoText,
+    ActionHandled,
+    ActionFailed,
+    MissingClipboardTool,
+    MissingPasteTool,
+    Failed
 }

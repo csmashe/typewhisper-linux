@@ -153,7 +153,7 @@ public partial class NavItem : ObservableObject
     public NavItem(string label, Symbol? icon, object? content, bool isHeader)
     {
         Label = label;
-        Icon = icon;
+        Icon = icon ?? (isHeader ? null : Symbol.Home);
         Content = content;
         IsHeader = isHeader;
     }
