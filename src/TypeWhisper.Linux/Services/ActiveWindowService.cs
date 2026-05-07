@@ -126,21 +126,26 @@ public sealed class ActiveWindowService : IActiveWindowService
         try
         {
             var ownId = Environment.ProcessId;
-            return Process.GetProcesses()
-                .Where(p =>
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var process in Process.GetProcesses())
+            {
+                try
                 {
-                    try { return p.Id != ownId && !string.IsNullOrWhiteSpace(p.MainWindowTitle); }
-                    catch { return false; }
-                })
-                .Select(p =>
+                    if (process.Id != ownId && !string.IsNullOrWhiteSpace(process.MainWindowTitle))
+                        names.Add(process.ProcessName);
+                }
+                catch
                 {
-                    try { return p.ProcessName; }
-                    catch { return null; }
-                })
-                .Where(n => n is not null)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToList()!;
+                    // Skip processes we can't read.
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+
+            return names.Order(StringComparer.OrdinalIgnoreCase).ToList();
         }
         catch
         {
@@ -355,9 +360,12 @@ public sealed class ActiveWindowService : IActiveWindowService
         if (string.IsNullOrWhiteSpace(output))
             return [];
 
-        var ints = Regex.Matches(output, @"\b\d+\b")
-            .Select(match => uint.Parse(match.Value))
-            .ToList();
+        var ints = new List<uint>();
+        foreach (Match match in Regex.Matches(output, @"\b\d+\b"))
+        {
+            if (uint.TryParse(match.Value, out var value))
+                ints.Add(value);
+        }
 
         return ints.Count > 1 ? ints[1..] : [];
     }
@@ -689,7 +697,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             return 0;
 
         var match = Regex.Matches(value, @"\b\d+\b").LastOrDefault();
-        return match is null ? 0 : int.Parse(match.Value);
+        return match is not null && int.TryParse(match.Value, out var result) ? result : 0;
     }
 }
 

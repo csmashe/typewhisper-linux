@@ -12,7 +12,8 @@ public sealed class SystemCommandAvailabilityServiceTests
             SessionType: "X11",
             HasClipboardTool: true,
             ClipboardToolName: "xclip",
-            HasAutomaticPasteTool: false,
+            HasXdotool: false,
+            HasWtype: false,
             HasFfmpeg: true,
             HasSpeechFeedback: false,
             SpeechFeedbackCommand: null,
@@ -41,7 +42,8 @@ public sealed class SystemCommandAvailabilityServiceTests
             SessionType: "X11",
             HasClipboardTool: true,
             ClipboardToolName: "xclip",
-            HasAutomaticPasteTool: true,
+            HasXdotool: true,
+            HasWtype: false,
             HasFfmpeg: true,
             HasSpeechFeedback: true,
             SpeechFeedbackCommand: "espeak-ng",
@@ -53,5 +55,74 @@ public sealed class SystemCommandAvailabilityServiceTests
 
         Assert.Equal(expectedCanUseCuda, snapshot.CanUseCuda);
         Assert.Equal(expectedStatus, snapshot.CudaStatus);
+    }
+
+    [Theory]
+    [InlineData("X11", "Install xdotool to enable automatic paste.")]
+    [InlineData("Wayland", "Install wtype (or xdotool for XWayland apps) to enable automatic paste.")]
+    public void LinuxCapabilitySnapshot_PasteToolInstallHintIsSessionAware(
+        string sessionType,
+        string expectedHint)
+    {
+        var snapshot = new LinuxCapabilitySnapshot(
+            SessionType: sessionType,
+            HasClipboardTool: false,
+            ClipboardToolName: "xclip",
+            HasXdotool: false,
+            HasWtype: false,
+            HasFfmpeg: false,
+            HasSpeechFeedback: false,
+            SpeechFeedbackCommand: null,
+            HasPactl: false,
+            HasPlayerCtl: false,
+            HasCanberraGtkPlay: false,
+            HasCudaGpu: false,
+            HasCudaRuntimeLibraries: false);
+
+        Assert.Equal(expectedHint, snapshot.PasteToolInstallHint);
+    }
+
+    [Fact]
+    public void LinuxCapabilitySnapshot_WaylandWithWtypeReportsAvailable()
+    {
+        var snapshot = new LinuxCapabilitySnapshot(
+            SessionType: "Wayland",
+            HasClipboardTool: true,
+            ClipboardToolName: "wl-clipboard",
+            HasXdotool: false,
+            HasWtype: true,
+            HasFfmpeg: false,
+            HasSpeechFeedback: false,
+            SpeechFeedbackCommand: null,
+            HasPactl: false,
+            HasPlayerCtl: false,
+            HasCanberraGtkPlay: false,
+            HasCudaGpu: false,
+            HasCudaRuntimeLibraries: false);
+
+        Assert.True(snapshot.HasAutomaticPasteTool);
+        Assert.Equal("wtype available", snapshot.PasteStatus);
+    }
+
+    [Fact]
+    public void LinuxCapabilitySnapshot_WaylandXdotoolOnlyReportsXWayland()
+    {
+        var snapshot = new LinuxCapabilitySnapshot(
+            SessionType: "Wayland",
+            HasClipboardTool: true,
+            ClipboardToolName: "wl-clipboard",
+            HasXdotool: true,
+            HasWtype: false,
+            HasFfmpeg: false,
+            HasSpeechFeedback: false,
+            SpeechFeedbackCommand: null,
+            HasPactl: false,
+            HasPlayerCtl: false,
+            HasCanberraGtkPlay: false,
+            HasCudaGpu: false,
+            HasCudaRuntimeLibraries: false);
+
+        Assert.True(snapshot.HasAutomaticPasteTool);
+        Assert.Equal("xdotool available (XWayland only)", snapshot.PasteStatus);
     }
 }

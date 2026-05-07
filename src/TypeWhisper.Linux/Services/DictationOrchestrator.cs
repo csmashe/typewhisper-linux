@@ -14,7 +14,8 @@ namespace TypeWhisper.Linux.Services;
 /// injection into a single dictation loop:
 ///   hotkey → start recording → hotkey → stop → save WAV → transcribe via
 ///   the active transcription plugin → apply dictionary + snippets →
-///   xdotool types the result into the focused window → history record.
+///   the resolved input backend (wtype on Wayland, xdotool on X11/XWayland)
+///   types the result into the focused window → history record.
 ///
 /// If no transcription plugin/model is loaded the WAV is still written so
 /// the user can inspect what was captured.
@@ -45,6 +46,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly MemoryService _memory;
     private readonly RecentTranscriptionsService _recentTranscriptions;
     private readonly IdeFileReferenceService _ideFileReferences;
+    private readonly SystemCommandAvailabilityService _commands;
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly VoiceCommandParser _voiceCommands = new();
     private readonly DeveloperFormattingService _developerFormatting = new();
@@ -106,7 +108,8 @@ public sealed class DictationOrchestrator : IDisposable
         PromptProcessingService promptProcessing,
         MemoryService memory,
         RecentTranscriptionsService recentTranscriptions,
-        IdeFileReferenceService ideFileReferences)
+        IdeFileReferenceService ideFileReferences,
+        SystemCommandAvailabilityService commands)
     {
         _hotkey = hotkey;
         _audio = audio;
@@ -132,6 +135,7 @@ public sealed class DictationOrchestrator : IDisposable
         _memory = memory;
         _recentTranscriptions = recentTranscriptions;
         _ideFileReferences = ideFileReferences;
+        _commands = commands;
     }
 
     public void Initialize()
@@ -717,7 +721,7 @@ public sealed class DictationOrchestrator : IDisposable
                 InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.ActionFailed => "Action failed.",
                 InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-                InsertionResult.MissingPasteTool => "Text insertion failed. Install xdotool to enable automatic paste.",
+                InsertionResult.MissingPasteTool => $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
                 InsertionResult.Failed => "Text insertion failed. Dictated text could not be copied or pasted.",
                 InsertionResult.NoText when commandResult.CancelInsertion => "Dictation canceled.",
                 _ => "Done.",

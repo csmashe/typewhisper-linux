@@ -29,7 +29,8 @@ public sealed record TextInsertionRequest(
 /// <summary>
 /// Text insertion on Linux. The reliable path is clipboard-first: put the
 /// transcription on the clipboard, refocus the captured target window when
-/// available, then ask xdotool to paste. If focus or paste fails, the text is
+/// available, then ask the resolved input backend (wtype on Wayland, xdotool
+/// on X11/XWayland) to paste. If focus or paste fails, the text is
 /// intentionally left on the clipboard so the user can paste manually.
 /// </summary>
 public sealed class TextInsertionService
@@ -307,15 +308,46 @@ internal interface ITextInsertionPlatform
 
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
-    public bool IsClipboardSetAvailable => IsWayland()
+    private enum InputBackend
+    {
+        None,
+        Xdotool,
+        Wtype,
+    }
+
+    private readonly LinuxCapabilitySnapshot _snapshot;
+    private readonly Func<string, IReadOnlyList<string>, Task<int>> _processRunner;
+    private readonly InputBackend _inputBackend;
+    private readonly bool _isWayland;
+
+    public LinuxTextInsertionPlatform()
+        : this(new SystemCommandAvailabilityService().GetSnapshot(), DefaultProcessRunner)
+    {
+    }
+
+    internal LinuxTextInsertionPlatform(
+        LinuxCapabilitySnapshot snapshot,
+        Func<string, IReadOnlyList<string>, Task<int>> processRunner)
+    {
+        _snapshot = snapshot;
+        _processRunner = processRunner;
+        _isWayland = snapshot.SessionType == "Wayland";
+        _inputBackend = _isWayland && snapshot.HasWtype
+            ? InputBackend.Wtype
+            : snapshot.HasXdotool
+                ? InputBackend.Xdotool
+                : InputBackend.None;
+    }
+
+    public bool IsClipboardSetAvailable => _isWayland
         ? IsCommandAvailable("wl-copy")
         : IsCommandAvailable("xclip");
 
-    public bool IsPasteAvailable => IsCommandAvailable("xdotool");
+    public bool IsPasteAvailable => _inputBackend != InputBackend.None;
 
     public async Task<string?> TryGetClipboardTextAsync()
     {
-        var psi = IsWayland()
+        var psi = _isWayland
             ? new ProcessStartInfo("wl-paste", "--no-newline")
             : new ProcessStartInfo("xclip", "-selection clipboard -o");
         psi.RedirectStandardOutput = true;
@@ -339,7 +371,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> SetClipboardTextAsync(string text)
     {
-        var psi = IsWayland()
+        var psi = _isWayland
             ? new ProcessStartInfo("wl-copy")
             : new ProcessStartInfo("xclip", "-selection clipboard");
         psi.RedirectStandardInput = true;
@@ -366,26 +398,53 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public string? GetActiveWindowId()
     {
+        if (_inputBackend != InputBackend.Xdotool)
+            return null;
+
         var output = RunXdotool("getactivewindow");
         return string.IsNullOrWhiteSpace(output) ? null : output;
     }
 
-    public async Task<bool> ActivateWindowAsync(string windowId) =>
-        await RunXdotoolAsync("windowactivate", "--sync", windowId) == 0;
+    public async Task<bool> ActivateWindowAsync(string windowId)
+    {
+        if (_inputBackend == InputBackend.Wtype)
+            return true;
 
-    public async Task<bool> SendPasteAsync() =>
-        await SendModifiedKeyAsync("Control_L", "v");
+        if (_inputBackend == InputBackend.None)
+            return false;
 
-    public async Task<bool> TypeTextAsync(string text) =>
-        await RunXdotoolAsync("type", "--clearmodifiers", "--delay", "8", "--", text) == 0;
+        return await RunXdotoolAsync("windowactivate", "--sync", windowId) == 0;
+    }
 
-    public async Task<bool> SendCopyAsync() =>
-        await SendModifiedKeyAsync("Control_L", "c");
+    public async Task<bool> SendPasteAsync() => _inputBackend switch
+    {
+        InputBackend.Wtype => await RunWtypeAsync("-M", "ctrl", "v", "-m", "ctrl") == 0,
+        InputBackend.Xdotool => await SendModifiedKeyAsync("Control_L", "v"),
+        _ => false,
+    };
 
-    public async Task<bool> SendEnterAsync() =>
-        await RunXdotoolAsync("key", "--clearmodifiers", "Return") == 0;
+    public async Task<bool> TypeTextAsync(string text) => _inputBackend switch
+    {
+        InputBackend.Wtype => await RunWtypeAsync("--", text) == 0,
+        InputBackend.Xdotool => await RunXdotoolAsync("type", "--clearmodifiers", "--delay", "8", "--", text) == 0,
+        _ => false,
+    };
 
-    private static async Task<bool> SendModifiedKeyAsync(string modifier, string key)
+    public async Task<bool> SendCopyAsync() => _inputBackend switch
+    {
+        InputBackend.Wtype => await RunWtypeAsync("-M", "ctrl", "c", "-m", "ctrl") == 0,
+        InputBackend.Xdotool => await SendModifiedKeyAsync("Control_L", "c"),
+        _ => false,
+    };
+
+    public async Task<bool> SendEnterAsync() => _inputBackend switch
+    {
+        InputBackend.Wtype => await RunWtypeAsync("-k", "Return") == 0,
+        InputBackend.Xdotool => await RunXdotoolAsync("key", "--clearmodifiers", "Return") == 0,
+        _ => false,
+    };
+
+    private async Task<bool> SendModifiedKeyAsync(string modifier, string key)
     {
         var keyDown = await RunXdotoolAsync("keydown", "--clearmodifiers", modifier) == 0;
         var keySent = false;
@@ -401,9 +460,6 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
         return keyDown && keySent;
     }
-
-    private static bool IsWayland() =>
-        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
 
     private static bool IsCommandAvailable(string command)
     {
@@ -433,11 +489,17 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    private static async Task<int> RunXdotoolAsync(params string[] args)
+    private Task<int> RunXdotoolAsync(params string[] args) =>
+        _processRunner("xdotool", args);
+
+    private Task<int> RunWtypeAsync(params string[] args) =>
+        _processRunner("wtype", args);
+
+    private static async Task<int> DefaultProcessRunner(string fileName, IReadOnlyList<string> args)
     {
         try
         {
-            var psi = new ProcessStartInfo("xdotool")
+            var psi = new ProcessStartInfo(fileName)
             {
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -452,7 +514,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[TextInsertionService] xdotool failed: {ex.Message}");
+            Trace.WriteLine($"[TextInsertionService] {fileName} failed: {ex.Message}");
             return -1;
         }
     }

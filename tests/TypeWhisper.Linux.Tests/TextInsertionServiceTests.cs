@@ -307,6 +307,138 @@ public sealed class TextInsertionServiceTests
         Assert.Equal("previous", platform.Clipboard);
     }
 
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandWithWtype_PasteCallsWtype()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: false, hasWtype: true), runner.Run);
+
+        Assert.True(platform.IsPasteAvailable);
+
+        var result = await platform.SendPasteAsync();
+
+        Assert.True(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("wtype", call.FileName);
+        Assert.Equal(new[] { "-M", "ctrl", "v", "-m", "ctrl" }, call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandWithoutWtype_FallsBackToXdotool()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: true, hasWtype: false), runner.Run);
+
+        Assert.True(platform.IsPasteAvailable);
+
+        var result = await platform.SendPasteAsync();
+
+        Assert.True(result);
+        Assert.All(runner.Calls, call => Assert.Equal("xdotool", call.FileName));
+        Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(new[] { "keydown", "--clearmodifiers", "Control_L" }));
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_X11WithXdotool_UsesXdotool()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("X11", hasXdotool: true, hasWtype: false), runner.Run);
+
+        Assert.True(platform.IsPasteAvailable);
+
+        var typed = await platform.TypeTextAsync("hello");
+
+        Assert.True(typed);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("xdotool", call.FileName);
+        Assert.Equal(new[] { "type", "--clearmodifiers", "--delay", "8", "--", "hello" }, call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandTypeTextPassesDoubleDashSeparator()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: false, hasWtype: true), runner.Run);
+
+        var result = await platform.TypeTextAsync("--flag value");
+
+        Assert.True(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("wtype", call.FileName);
+        Assert.Equal(new[] { "--", "--flag value" }, call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandSendEnterUsesWtypeKeyArgs()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: false, hasWtype: true), runner.Run);
+
+        var result = await platform.SendEnterAsync();
+
+        Assert.True(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("wtype", call.FileName);
+        Assert.Equal(new[] { "-k", "Return" }, call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandActivateWindowReturnsTrueWithoutInvocation()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: false, hasWtype: true), runner.Run);
+
+        var activated = await platform.ActivateWindowAsync("123");
+
+        Assert.True(activated);
+        Assert.Empty(runner.Calls);
+        Assert.Null(platform.GetActiveWindowId());
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_NoBackend_AllInputMethodsReturnFalse()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("X11", hasXdotool: false, hasWtype: false), runner.Run);
+
+        Assert.False(platform.IsPasteAvailable);
+        Assert.False(await platform.SendPasteAsync());
+        Assert.False(await platform.SendCopyAsync());
+        Assert.False(await platform.SendEnterAsync());
+        Assert.False(await platform.TypeTextAsync("anything"));
+        Assert.False(await platform.ActivateWindowAsync("123"));
+        Assert.Null(platform.GetActiveWindowId());
+        Assert.Empty(runner.Calls);
+    }
+
+    private static LinuxCapabilitySnapshot SnapshotFor(string sessionType, bool hasXdotool, bool hasWtype) =>
+        new(
+            SessionType: sessionType,
+            HasClipboardTool: true,
+            ClipboardToolName: sessionType == "Wayland" ? "wl-clipboard" : "xclip",
+            HasXdotool: hasXdotool,
+            HasWtype: hasWtype,
+            HasFfmpeg: false,
+            HasSpeechFeedback: false,
+            SpeechFeedbackCommand: null,
+            HasPactl: false,
+            HasPlayerCtl: false,
+            HasCanberraGtkPlay: false,
+            HasCudaGpu: false,
+            HasCudaRuntimeLibraries: false);
+
+    private sealed class RecordingProcessRunner
+    {
+        public List<(string FileName, string[] Arguments)> Calls { get; } = new();
+        public int ExitCode { get; set; }
+
+        public Task<int> Run(string fileName, IReadOnlyList<string> args)
+        {
+            Calls.Add((fileName, args.ToArray()));
+            return Task.FromResult(ExitCode);
+        }
+    }
+
     private sealed class FakeTextInsertionPlatform : ITextInsertionPlatform
     {
         public string? Clipboard { get; set; }

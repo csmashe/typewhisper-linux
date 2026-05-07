@@ -15,6 +15,7 @@ public sealed class TransformSelectionService
     private readonly PromptProcessingService _promptProcessing;
     private readonly ISettingsService _settings;
     private readonly ActiveWindowService _activeWindow;
+    private readonly SystemCommandAvailabilityService _commands;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private TransformSelectionSession? _session;
@@ -28,7 +29,8 @@ public sealed class TransformSelectionService
         ModelManagerService models,
         PromptProcessingService promptProcessing,
         ISettingsService settings,
-        ActiveWindowService activeWindow)
+        ActiveWindowService activeWindow,
+        SystemCommandAvailabilityService commands)
     {
         _textInsertion = textInsertion;
         _audio = audio;
@@ -36,6 +38,7 @@ public sealed class TransformSelectionService
         _promptProcessing = promptProcessing;
         _settings = settings;
         _activeWindow = activeWindow;
+        _commands = commands;
     }
 
     public async Task ToggleAsync()
@@ -221,7 +224,7 @@ public sealed class TransformSelectionService
             else if (insertion is InsertionResult.MissingClipboardTool)
                 await ShowWarningAsync(ClipboardToolMissingMessage());
             else if (insertion is InsertionResult.MissingPasteTool)
-                await ShowWarningAsync("Install xdotool to paste transformed text automatically.");
+                await ShowWarningAsync(_commands.GetSnapshot().PasteToolInstallHint);
             else if (insertion is not InsertionResult.Pasted and not InsertionResult.Typed)
                 await ShowWarningAsync("Could not insert transformed text.");
             else

@@ -15,6 +15,7 @@ public sealed class RecentTranscriptionsService
     private readonly TextInsertionService _textInsertion;
     private readonly ISettingsService _settings;
     private readonly ActiveWindowService _activeWindow;
+    private readonly SystemCommandAvailabilityService _commands;
 
     private RecentTranscriptionsPaletteWindow? _paletteWindow;
 
@@ -25,13 +26,15 @@ public sealed class RecentTranscriptionsService
         RecentTranscriptionStore store,
         TextInsertionService textInsertion,
         ISettingsService settings,
-        ActiveWindowService activeWindow)
+        ActiveWindowService activeWindow,
+        SystemCommandAvailabilityService commands)
     {
         _history = history;
         _store = store;
         _textInsertion = textInsertion;
         _settings = settings;
         _activeWindow = activeWindow;
+        _commands = commands;
     }
 
     public void RecordTranscription(
@@ -105,7 +108,7 @@ public sealed class RecentTranscriptionsService
             or InsertionResult.MissingClipboardTool
             or InsertionResult.MissingPasteTool;
 
-    private static string StatusTextFor(InsertionResult result) =>
+    private string StatusTextFor(InsertionResult result) =>
         result switch
         {
             InsertionResult.Typed => "Typed recent transcription.",
@@ -113,7 +116,7 @@ public sealed class RecentTranscriptionsService
             InsertionResult.CopiedToClipboard => "Copied recent transcription to clipboard.",
             InsertionResult.NoText => "No recent transcriptions.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-            InsertionResult.MissingPasteTool => "Install xdotool to paste recent transcriptions automatically.",
+            InsertionResult.MissingPasteTool => _commands.GetSnapshot().PasteToolInstallHint,
             InsertionResult.Failed => "Text insertion failed.",
             _ => "Done."
         };

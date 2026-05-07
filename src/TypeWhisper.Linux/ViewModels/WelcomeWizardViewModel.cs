@@ -326,7 +326,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             "Automatic paste",
             snapshot.PasteStatus,
             snapshot.HasAutomaticPasteTool,
-            "Install xdotool to paste automatically after transcription."));
+            snapshot.PasteToolInstallHint));
         Diagnostics.Add(new WelcomeDiagnosticRow(
             "Audio conversion",
             snapshot.HasFfmpeg ? "ffmpeg available" : "ffmpeg not found",
@@ -423,7 +423,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         if (result is InsertionResult.MissingPasteTool)
         {
-            PasteTestStatus = "Automatic paste helper is missing; install xdotool.";
+            PasteTestStatus = $"Automatic paste helper is missing. {_commands.GetSnapshot().PasteToolInstallHint}";
             return false;
         }
 

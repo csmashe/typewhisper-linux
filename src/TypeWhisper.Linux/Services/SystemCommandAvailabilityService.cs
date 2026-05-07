@@ -14,7 +14,8 @@ public sealed class SystemCommandAvailabilityService
 
     public bool IsWaylandSession { get { var s = _snapshot; return s.SessionType == "Wayland"; } }
     public bool IsX11Session { get { var s = _snapshot; return s.SessionType == "X11"; } }
-    public bool HasXdotool { get { var s = _snapshot; return s.HasAutomaticPasteTool; } }
+    public bool HasXdotool { get { var s = _snapshot; return s.HasXdotool; } }
+    public bool HasWtype { get { var s = _snapshot; return s.HasWtype; } }
     public bool HasXclip { get { var s = _snapshot; return s.ClipboardToolName == "xclip" && s.HasClipboardTool; } }
     public bool HasWlClipboard { get { var s = _snapshot; return s.ClipboardToolName == "wl-clipboard" && s.HasClipboardTool; } }
     public bool HasPactl { get { var s = _snapshot; return s.HasPactl; } }
@@ -120,7 +121,8 @@ public sealed class SystemCommandAvailabilityService
             SessionType: isWayland ? "Wayland" : isX11 ? "X11" : "Unknown",
             HasClipboardTool: isWayland ? hasWlClipboard : hasXclip,
             ClipboardToolName: isWayland ? "wl-clipboard" : "xclip",
-            HasAutomaticPasteTool: IsCommandAvailable("xdotool"),
+            HasXdotool: IsCommandAvailable("xdotool"),
+            HasWtype: IsCommandAvailable("wtype"),
             HasFfmpeg: IsCommandAvailable("ffmpeg"),
             HasSpeechFeedback: speechCommand is not null,
             SpeechFeedbackCommand: speechCommand,
@@ -241,7 +243,8 @@ public sealed record LinuxCapabilitySnapshot(
     string SessionType,
     bool HasClipboardTool,
     string ClipboardToolName,
-    bool HasAutomaticPasteTool,
+    bool HasXdotool,
+    bool HasWtype,
     bool HasFfmpeg,
     bool HasSpeechFeedback,
     string? SpeechFeedbackCommand,
@@ -251,13 +254,25 @@ public sealed record LinuxCapabilitySnapshot(
     bool HasCudaGpu,
     bool HasCudaRuntimeLibraries)
 {
+    public bool HasAutomaticPasteTool => SessionType == "Wayland"
+        ? HasWtype || HasXdotool
+        : HasXdotool;
     public bool CanAutoPaste => HasClipboardTool && HasAutomaticPasteTool;
     public bool CanUseCuda => HasCudaGpu && HasCudaRuntimeLibraries;
     public string ClipboardStatus => HasClipboardTool
         ? $"{ClipboardToolName} available"
         : $"Install {ClipboardToolName} to enable clipboard insertion.";
-    public string PasteStatus => HasAutomaticPasteTool
-        ? "xdotool available"
+    public string PasteStatus => SessionType == "Wayland"
+        ? HasWtype
+            ? "wtype available"
+            : HasXdotool
+                ? "xdotool available (XWayland only)"
+                : PasteToolInstallHint
+        : HasXdotool
+            ? "xdotool available"
+            : PasteToolInstallHint;
+    public string PasteToolInstallHint => SessionType == "Wayland"
+        ? "Install wtype (or xdotool for XWayland apps) to enable automatic paste."
         : "Install xdotool to enable automatic paste.";
     public string CudaStatus => CanUseCuda
         ? "CUDA available"
