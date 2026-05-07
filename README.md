@@ -41,6 +41,8 @@ This branch contains Linux-specific work that is not part of the original branch
 - Transform-selection hotkey that voice-edits the text currently selected in another application
 - Spoken IDE file references such as "at file dot ts" mapped to file tags for editor/IDE workflows
 - Per-app text-insertion strategies (`Auto`, `Clipboard Paste`, `Direct Typing`, `Copy Only`) keyed by process name, with auto-paste retry and clipboard preservation
+- Smart `Auto` insertion in browsers: types directly into web inputs, but falls back to clipboard paste when the active tab looks like a webmail composer
+- Active-window detection covers Chromium, Firefox, and Firefox-derived browsers including Zen Browser, with title-based inference when process metadata is unavailable
 - Correction suggestions generated from user edits in history, with optional auto-learning into the dictionary and confidence scoring
 - Dictionary entries gain starring, priority, source tracking (`Manual`, `Import`, `CorrectionSuggestion`, `AutoLearned`), and times-applied/times-corrected stats
 - Snippets gain an `Exact Phrase` trigger mode alongside `Anywhere`, plus per-profile scoping by profile id
@@ -56,7 +58,8 @@ This branch contains Linux-specific work that is not part of the original branch
 - Plugin-based transcription engines for local and cloud workflows
 - File transcription page for importing and transcribing audio files
 - Batch file transcription queue with per-file status tracking
-- Watch folders for automatic file transcription and export output
+- Watch folders for automatic file transcription with selectable export format (`md`, `txt`, `srt`, `vtt`), optional language override, auto-start on app launch, and an optional delete-source-after-export step
+- Subtitle export to SRT and WebVTT from the File transcription page when the active engine returns segment timing
 - Recorder page for saving longer WAV captures and transcribing them after recording stops
 - Dictation pipeline with post-processing through dictionary corrections and vocabulary boosting
 - Bundled Linux plugins deployed on build and auto-copied into the user plugin directory on first run
@@ -64,9 +67,10 @@ This branch contains Linux-specific work that is not part of the original branch
 ### Dictation
 
 - One main global dictation hotkey
-- Activation modes: `Toggle`, `Push to talk`, and `Hybrid`
+- Activation modes: `Toggle` (press to start, press to stop), `Push to talk` (hold to record), and `Hybrid` (starts on press; a short tap keeps recording, holding past ~600 ms stops on release)
 - Optional prompt palette hotkey
 - Recent transcriptions palette and copy-last-transcription hotkey
+- Cancel-in-flight via the `Escape` key during recording, transcription, or post-processing — only active while a dictation is running so it does not shadow modal dialogs or editors
 - Auto-paste after transcription
 - Whisper mode, silence auto-stop, sound feedback, audio ducking, and media pause settings in the Linux UI
 - Live microphone preview and recording overlay
@@ -76,9 +80,9 @@ Some Linux dictation features depend on external desktop tools:
 - Sound feedback uses `canberra-gtk-play`
 - Audio ducking uses `pactl`
 - Media pause uses `playerctl`
-- Clipboard-backed auto-paste uses `xclip`, `wl-copy`, `wl-paste`, and `xdotool` when available
+- Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session — `wtype` is preferred on Wayland with a fallback to `xdotool` (X11 and XWayland apps)
 
-When one of those tools is missing, the Linux UI disables that control and shows the reason.
+When one of those tools is missing, the Linux UI disables that control and shows the reason, including session-aware install hints (for example, suggesting `wtype` on a Wayland session).
 
 ### Personalization
 
@@ -87,6 +91,17 @@ When one of those tools is missing, the Linux UI disables that control and shows
 - Snippets with placeholder support such as `{date}`, `{time}`, `{datetime}`, `{clipboard}`, `{day}`, and `{year}`
 - Profiles with rule matching, per-profile overrides, enable/disable state, and priority
 - Prompt actions for LLM-driven text processing, provider overrides, and action plugin routing
+- Optional long-term memory: when an `IMemoryStoragePlugin` (for example `FileMemory` or `OpenAiVectorMemory`) is enabled alongside a configured LLM provider, eligible transcriptions are sent to the LLM to extract durable facts that future prompt actions can recall as context
+
+### Advanced Settings
+
+The Advanced page exposes:
+
+- History retention mode — `Duration` (default 90 days), `Forever`, or `Until app closes`
+- `Save to history` toggle for runs you do not want stored
+- Model auto-unload after a configurable idle timeout (`0` disables the auto-unload)
+- Memory enable toggle, gated on having both a memory storage plugin and an available LLM provider
+- Spoken feedback toggle, provider selection (defaults to the bundled Linux system TTS), and voice selection per provider
 
 ### Desktop Integration
 
@@ -106,7 +121,8 @@ When one of those tools is missing, the Linux UI disables that control and shows
   - `playerctl` for media pause during recording
   - `canberra-gtk-play` for sound feedback
   - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
-  - `xclip`, `wl-copy`, `wl-paste`, and `xdotool` for clipboard-backed auto-paste
+  - `xclip` (X11 clipboard) and `wl-copy`/`wl-paste` (Wayland clipboard) for clipboard-backed auto-paste
+  - `wtype` for Wayland keyboard input, with `xdotool` as a fallback on X11 and XWayland apps
 - Optional CUDA backend:
   - NVIDIA GPU and driver
   - CUDA 12 runtime/toolkit libraries providing `libcudart.so.12` and `libcublas.so.12`
@@ -175,10 +191,11 @@ Current model behavior:
 - File transcription and recorder transcription use the same selected model.
 - Model auto-unload is exposed in Advanced settings.
 
+Model state on the Dictation page reports `Ready`, `Loading`, `Downloading <percent>`, or `Error`. Plugins that report `SupportsModelDownload` will trigger a download from the Dictation page when a not-yet-downloaded model is selected, and the API server can pause for that download via `?await_download=1`.
+
 Known model gaps:
 
-- Model download and marketplace-style model management are not fully wired in the Linux UI yet.
-- Available models depend on which bundled or manually installed plugins are present and enabled.
+- Marketplace-style model browsing/management is not wired up in the Linux UI yet — model selection comes from whichever bundled or manually installed plugins are present and enabled.
 - Local model availability depends on the Linux-compatible plugin implementation and any files it requires under the user data directory.
 
 ## HTTP API
@@ -197,25 +214,49 @@ Available endpoints:
 |----------|--------|-------------|
 | `/v1/status` | GET | App status and active model |
 | `/v1/models` | GET | List available models |
-| `/v1/transcribe` | POST | Transcribe uploaded audio. Optional query params include `filename`, `language`, `task`, `model`, `engine`, and `translateTo` |
+| `/v1/transcribe` | POST | Transcribe uploaded audio (see options below) |
 | `/v1/history` | GET | Search history |
 | `/v1/history` | DELETE | Delete history entries |
 | `/v1/profiles` | GET | List profiles |
 | `/v1/profiles/toggle` | PUT | Toggle a profile on or off |
-| `/v1/dictionary` | GET | List dictionary entries and term packs |
-| `/v1/dictionary/entries` | POST | Add dictionary correction entries |
-| `/v1/dictionary/entries` | DELETE | Delete dictionary correction entries |
-| `/v1/dictionary/term-packs/toggle` | PUT | Toggle a term pack on or off |
+| `/v1/dictionary/terms` | GET | List dictionary terms |
+| `/v1/dictionary/terms` | PUT | Add or update dictionary terms |
+| `/v1/dictionary/terms` | DELETE | Delete dictionary terms |
 | `/v1/dictation/start` | POST | Start recording |
 | `/v1/dictation/stop` | POST | Stop recording |
 | `/v1/dictation/status` | GET | Check dictation state |
 
+`/v1/transcribe` accepts these optional form/query fields: `filename`, `language`, `language_hint` (repeatable), `task` (`transcribe` or `translate`), `target_language`, `model`, `engine`, `prompt`, and `response_format` (`json` or `verbose_json`). Append `?await_download=1` to wait while the active engine restores or downloads its model before transcribing.
+
+When `response_format=verbose_json`, the response includes per-segment timing (`start`, `end`, `text`) alongside the standard `text`, `language`, `duration`, `noSpeechProbability`, `engine`, and `model` fields, so callers can build SRT/VTT output themselves if they need it.
+
 Current API limitations:
 
-- `/v1/transcribe` returns text, language, duration, and no-speech probability when available. Segment-level subtitle timing is not exposed by the current Linux plugin result contract.
 - Uploaded audio conversion uses the same `ffmpeg`-based importer as the File transcription page.
 - The API binds to `localhost` only.
-- The CLI uses the local API and can be installed from the General page.
+
+## CLI
+
+The Linux build ships a `typewhisper` CLI client that talks to the local API. Install it from the General page or by running `typewhisper`'s installer logic; it lands in `~/.local/bin/typewhisper`.
+
+Commands:
+
+- `typewhisper status` — show app status and active model
+- `typewhisper models` — list available models
+- `typewhisper transcribe <file|->` — transcribe an audio file (use `-` to read WAV bytes from stdin)
+
+Useful options for `transcribe`: `--language`, `--language-hint` (repeatable), `--task transcribe|translate`, `--translate-to <code>`, `--response-format json|verbose_json`, `--prompt`, `--engine <id>`, `--model <id>`, `--await-download`.
+
+Global options: `--port <N>` (defaults to `9876`), `--token <token>` or the `TYPEWHISPER_API_TOKEN` environment variable, `--json`, `--version`, and `--help`.
+
+Examples:
+
+```bash
+typewhisper status --token "$TYPEWHISPER_API_TOKEN"
+typewhisper transcribe recording.wav --language de --json
+typewhisper transcribe recording.wav --engine groq --model whisper-large-v3-turbo
+typewhisper transcribe - < audio.wav
+```
 
 ## Profiles
 
@@ -273,10 +314,12 @@ TypeWhisper stores its Linux data under the user-local application data director
 
 The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin categories used by this branch include:
 
-- Transcription engines
-- LLM providers
-- Action plugins
-- Event and post-processing plugins
+- Transcription engines — bundled examples include `WhisperCpp`, `SherpaOnnx`, `GraniteSpeech`, `Qwen3Stt`, `Voxtral`, plus cloud engines `OpenAi`, `OpenAiCompatible`, `Groq`, `Deepgram`, `AssemblyAi`, `ElevenLabs`, `Speechmatics`, `Soniox`, `Gladia`, `CloudflareAsr`, and `GoogleCloudStt`
+- LLM providers — `Claude`, `OpenAi`, `OpenAiCompatible`, `OpenRouter`, `Gemini`, `GemmaLocal`, `Groq`, `Cerebras`, `Cohere`, and `Fireworks`
+- Action plugins — `Linear` and `Obsidian`
+- Post-processing plugins — `Script` (run a shell command against the transcription)
+- Memory storage plugins — `FileMemory` (local JSON) and `OpenAiVectorMemory` (embedding-backed recall)
+- Companion plugins — `LiveTranscript` window and `Webhook` notifications
 
 The Linux build currently deploys bundled plugins from `plugins/` into the app output, then copies them into the user plugin directory on first run if they are missing.
 
@@ -308,8 +351,9 @@ The SDK defines the shared plugin contracts used by the Linux app:
 | `ILlmProviderPlugin` | Add an LLM provider for prompt processing |
 | `IPostProcessorPlugin` | Add text cleanup or transformation steps after transcription |
 | `IActionPlugin` | Run custom actions from transcriptions or prompt results |
-| `ITypeWhisperPlugin` | Observe app/plugin events |
+| `IMemoryStoragePlugin` | Persist and recall extracted memory entries |
 | `ITtsProviderPlugin` | Add spoken-feedback voice providers |
+| `ITypeWhisperPlugin` | Observe app/plugin events |
 
 The SDK also includes helper types for plugin manifests, plugin events, transcription results, LLM requests, and action contexts.
 
@@ -322,7 +366,6 @@ These items appeared in the earlier project README or settings surface, but they
 - Interface language switching is not implemented yet. The setting is visible, but the Linux UI does not currently live-switch translations.
 - App self-update is not configured yet. The `Check for Updates` button in the About page is currently a placeholder.
 - Marketplace/store browsing is intentionally not active in the Linux UI right now.
-- Subtitle export formats such as SRT and WebVTT are not currently wired up in the Linux file transcription flow.
 - Windows release channels and Velopack update-channel controls are not used by this Linux branch.
 - The old README described broader platform feature coverage than this branch currently ships. Any feature not described as active above should be treated as pending until it is implemented in this repository.
 
