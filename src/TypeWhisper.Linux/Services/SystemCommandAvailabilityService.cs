@@ -207,12 +207,12 @@ public sealed class SystemCommandAvailabilityService
             if (process is null)
                 return false;
 
+            // Drain both pipes concurrently so a noisy stderr can't block ldconfig
+            // while it's still streaming the (large) library list to stdout.
             var outputTask = process.StandardOutput.ReadToEndAsync();
             var errorTask = process.StandardError.ReadToEndAsync();
-            var exitTask = process.WaitForExitAsync();
-            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(1));
 
-            if (Task.WhenAny(exitTask, timeoutTask).GetAwaiter().GetResult() != exitTask)
+            if (!process.WaitForExit(1000))
             {
                 try
                 {
@@ -226,8 +226,8 @@ public sealed class SystemCommandAvailabilityService
                 return false;
             }
 
-            Task.WhenAll(outputTask, errorTask).GetAwaiter().GetResult();
             var output = outputTask.GetAwaiter().GetResult();
+            errorTask.GetAwaiter().GetResult();
             return output.Contains(libraryName, StringComparison.Ordinal);
         }
         catch

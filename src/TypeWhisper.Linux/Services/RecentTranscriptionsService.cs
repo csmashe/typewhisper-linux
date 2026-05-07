@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
 using Avalonia.Threading;
@@ -68,7 +69,7 @@ public sealed class RecentTranscriptionsService
         var targetWindowId = _activeWindow.GetActiveWindowId();
         var viewModel = new RecentTranscriptionsPaletteViewModel(
             entries,
-            item => _ = InsertEntryAsync(item.Entry, targetWindowId));
+            item => InsertEntryFireAndForget(item.Entry, targetWindowId));
         var window = new RecentTranscriptionsPaletteWindow(viewModel);
         _paletteWindow = window;
         window.Closed += (_, _) =>
@@ -92,6 +93,15 @@ public sealed class RecentTranscriptionsService
 
         var result = await _textInsertion.InsertTextAsync(entry.FinalText, autoPaste: false);
         FeedbackRequested?.Invoke(StatusTextFor(result), IsError(result));
+    }
+
+    private void InsertEntryFireAndForget(RecentTranscriptionEntry entry, string? targetWindowId)
+    {
+        InsertEntryAsync(entry, targetWindowId).ContinueWith(
+            t => Trace.WriteLine($"[RecentTranscriptionsService] InsertEntryAsync faulted: {t.Exception?.GetBaseException().Message}"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task InsertEntryAsync(RecentTranscriptionEntry entry, string? targetWindowId)

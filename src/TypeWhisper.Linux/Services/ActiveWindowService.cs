@@ -613,8 +613,19 @@ public sealed class ActiveWindowService : IActiveWindowService
                 UseShellExecute = false,
             });
             if (p is null) return -1;
-            output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(1000);
+
+            // Drain both pipes concurrently — reading only stdout deadlocks if
+            // stderr's pipe buffer fills while the child is still running.
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(1000))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return -1;
+            }
+
+            output = stdoutTask.GetAwaiter().GetResult();
+            stderrTask.GetAwaiter().GetResult();
             return p.ExitCode;
         }
         catch
@@ -643,8 +654,16 @@ public sealed class ActiveWindowService : IActiveWindowService
             if (p is null)
                 return -1;
 
-            output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(1000);
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(1000))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return -1;
+            }
+
+            output = stdoutTask.GetAwaiter().GetResult();
+            stderrTask.GetAwaiter().GetResult();
             return p.ExitCode;
         }
         catch

@@ -478,8 +478,18 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             };
             using var p = Process.Start(psi);
             if (p is null) return null;
-            var output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit();
+
+            // Drain both pipes concurrently so a noisy stderr can't block the child.
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(1000))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return null;
+            }
+
+            var output = stdoutTask.GetAwaiter().GetResult();
+            stderrTask.GetAwaiter().GetResult();
             return p.ExitCode == 0 ? output.Trim() : null;
         }
         catch (Exception ex)
