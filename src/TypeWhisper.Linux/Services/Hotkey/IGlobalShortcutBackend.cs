@@ -10,6 +10,16 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     string Id { get; }
     string DisplayName { get; }
     bool SupportsPressRelease { get; }
+
+    /// <summary>
+    /// True when the backend delivers shortcuts regardless of which window
+    /// owns focus. False for backends that only see events while the
+    /// application has the keyboard (SharpHook on Wayland) — the status
+    /// panel surfaces this so users aren't told their hotkey is "global"
+    /// when in practice it isn't.
+    /// </summary>
+    bool IsGlobalScope { get; }
+
     bool IsAvailable();
 
     Task<GlobalShortcutRegistrationResult> RegisterAsync(

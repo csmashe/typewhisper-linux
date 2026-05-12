@@ -39,6 +39,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     public string Id => BackendId;
     public string DisplayName => "Linux evdev";
     public bool SupportsPressRelease => true;
+    public bool IsGlobalScope => true;
 
     public event EventHandler? DictationToggleRequested;
     public event EventHandler? DictationStartRequested;

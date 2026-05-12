@@ -60,6 +60,84 @@
                            Margin="0,8,0,0" />
             </StackPanel>
 
+            <TextBlock Text="Status"
+                       Classes="section-label" />
+            <Border Classes="section-panel">
+                <StackPanel>
+                    <Border Classes="section-row">
+                        <StackPanel>
+                            <TextBlock Text="Backend" Classes="row-title" />
+                            <TextBlock Classes="row-hint"
+                                       Text="{Binding ActiveBackendDisplayName, StringFormat='Active: {0}'}" />
+                            <TextBlock Classes="row-hint"
+                                       Text="{Binding SessionType, StringFormat='Display server: {0}'}" />
+                            <TextBlock Classes="row-hint"
+                                       Text="{Binding ScopeText, StringFormat='Capture scope: {0}'}" />
+                            <TextBlock Classes="row-hint"
+                                       Text="{Binding SupportsPressRelease, StringFormat='Press/release support: {0}'}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="#16FFFFFF" Margin="18,0"
+                            IsVisible="{Binding ShowInputGroupBanner}" />
+
+                    <Border Classes="section-row"
+                            IsVisible="{Binding ShowInputGroupBanner}">
+                        <StackPanel>
+                            <TextBlock Text="⚠ Add your user to the input group to enable global hotkeys"
+                                       Classes="row-title"
+                                       Foreground="#FFD27A" />
+                            <TextBlock TextWrapping="Wrap"
+                                       Classes="row-hint"
+                                       Text="On Wayland, TypeWhisper needs read access to /dev/input/event* to detect your dictation key while other apps are focused. Run the command below, then log out and back in." />
+                            <Border Background="#0E1620"
+                                    BorderBrush="#1AFFFFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10,6"
+                                    Margin="0,8,0,0">
+                                <SelectableTextBlock Text="{Binding InputGroupCommand}"
+                                                     FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                     FontSize="12" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="#16FFFFFF" Margin="18,0"
+                            IsVisible="{Binding ShowCapabilityMismatch}" />
+
+                    <Border Classes="section-row"
+                            IsVisible="{Binding ShowCapabilityMismatch}">
+                        <StackPanel>
+                            <TextBlock Text="⚠ Capability mismatch"
+                                       Classes="row-title"
+                                       Foreground="#FFD27A" />
+                            <TextBlock TextWrapping="Wrap"
+                                       Classes="row-hint"
+                                       Text="The active backend can only deliver presses, but your activation mode needs release events too. Push-to-talk and Hybrid won't work — switch to Toggle, or enable a backend that supports press+release." />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
+
+                    <Border Classes="section-row">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel Margin="0,0,16,0">
+                                <TextBlock Text="Read keyboard events globally on Wayland"
+                                           Classes="row-title" />
+                                <TextBlock TextWrapping="Wrap"
+                                           Classes="row-hint"
+                                           Text="When on, TypeWhisper reads /dev/input/event* so the configured hotkey fires regardless of which window has focus. Disable to fall back to focused-only behavior." />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          VerticalAlignment="Center"
+                                          IsChecked="{Binding WaylandEvdevHotkeysEnabled}" />
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </Border>
+
             <TextBlock Text="Main capture"
                        Classes="section-label" />
             <Border Classes="section-panel">

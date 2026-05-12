@@ -105,6 +105,47 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         Assert.Contains("collides", sut.StatusMessage);
     }
 
+    [Fact]
+    public void WaylandEvdevHotkeysEnabled_PersistsToSettings()
+    {
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        settings.Load();
+        var hotkey = new HotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+
+        Assert.True(sut.WaylandEvdevHotkeysEnabled);
+        sut.WaylandEvdevHotkeysEnabled = false;
+
+        Assert.False(settings.Current.WaylandEvdevHotkeysEnabled);
+    }
+
+    [Fact]
+    public void ShowCapabilityMismatch_FalseInDefaultState()
+    {
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        settings.Load();
+        var hotkey = new HotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+
+        // Default backend (SharpHook) supports press/release, so the
+        // mismatch banner stays hidden regardless of mode.
+        Assert.False(sut.ShowCapabilityMismatch);
+    }
+
+    [Fact]
+    public void ActiveBackendId_DefaultsToNotInitialized()
+    {
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        settings.Load();
+        var hotkey = new HotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+
+        // Initialize hasn't been called → coordinator hasn't resolved a
+        // backend yet → status panel shows the placeholder.
+        Assert.Equal("(not initialized)", sut.ActiveBackendId);
+        Assert.Equal("(not initialized)", sut.ActiveBackendDisplayName);
+    }
+
     public void Dispose()
     {
         try

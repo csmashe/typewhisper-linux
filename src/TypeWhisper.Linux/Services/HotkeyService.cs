@@ -82,6 +82,64 @@ public sealed class HotkeyService : IDisposable
     public bool BackendRequiresToggleMode => _backendRequiresToggleMode;
 
     /// <summary>
+    /// Stable identifier of the currently active backend (e.g.
+    /// "linux-sharphook", "linux-evdev", "linux-xdg-portal"). Null until
+    /// <see cref="Initialize"/> has resolved a backend.
+    /// </summary>
+    public string? ActiveBackendId => _backend?.Id;
+
+    /// <summary>Human-readable name of the active backend, e.g. "Linux evdev".</summary>
+    public string? ActiveBackendDisplayName => _backend?.DisplayName;
+
+    /// <summary>
+    /// True if the active backend can deliver both press and release events
+    /// (so PushToTalk and Hybrid modes are functional). Null while no
+    /// backend is resolved.
+    /// </summary>
+    public bool? ActiveBackendSupportsPressRelease => _backend?.SupportsPressRelease;
+
+    /// <summary>
+    /// True if the active backend captures shortcuts regardless of which
+    /// window owns focus. Null while no backend is resolved.
+    /// </summary>
+    public bool? ActiveBackendIsGlobalScope => _backend?.IsGlobalScope;
+
+    /// <summary>
+    /// Disposes the current backend and asks the selector to resolve a
+    /// fresh one — used when a setting that influences backend selection
+    /// flips at runtime (e.g. the Wayland evdev opt-out toggle). Without
+    /// this hot-swap path, flipping that toggle would only take effect on
+    /// the next app launch, leaving the user's keyboard reads active in
+    /// the interim.
+    /// </summary>
+    public async Task SwitchBackendAsync(CancellationToken ct = default)
+    {
+        IGlobalShortcutBackend? previous;
+        lock (_lock)
+        {
+            if (Volatile.Read(ref _disposed) == 1) return;
+            previous = _backend;
+            _backend = null;
+            _backendRequiresToggleMode = false;
+        }
+
+        if (previous is not null)
+        {
+            try { await previous.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception ex) { Trace.WriteLine($"[HotkeyService] Dispose previous backend threw: {ex.Message}"); }
+        }
+
+        Initialize();
+        OnPropertyChangedHook();
+    }
+
+    /// <summary>
+    /// Hook for derived/wrapping logic (e.g. unit-test instrumentation) to
+    /// observe a backend switch. The base implementation is a no-op.
+    /// </summary>
+    private static void OnPropertyChangedHook() { }
+
+    /// <summary>
     /// Gates the Escape cancel shortcut. Only true while a dictation is active
     /// (recording or transcription in flight) — outside that window Escape
     /// passes through to the foreground app so we don't shadow modal dialogs,

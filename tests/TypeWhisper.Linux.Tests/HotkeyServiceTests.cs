@@ -82,6 +82,29 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public async Task SwitchBackend_DisposesPreviousAndResolvesNew()
+    {
+        // Each call to selector.Resolve() must produce a fresh backend so
+        // the dispose path can't be swallowed by sharing the same instance.
+        var backendA = new TestShortcutBackend();
+        var backendB = new TestShortcutBackend();
+        var queue = new Queue<IGlobalShortcutBackend>(new IGlobalShortcutBackend[] { backendA, backendB });
+        var selector = new BackendSelector(() => queue.Dequeue());
+        using var hotkey = new HotkeyService(selector);
+        hotkey.Initialize();
+        await backendA.WaitUntilSettledAsync();
+        Assert.Equal("test", hotkey.ActiveBackendId);
+        Assert.False(backendA.Disposed);
+
+        await hotkey.SwitchBackendAsync();
+        await backendB.WaitUntilSettledAsync();
+
+        Assert.True(backendA.Disposed);
+        Assert.False(backendB.Disposed);
+        Assert.True(backendB.RegisterCount >= 1);
+    }
+
+    [Fact]
     public async Task PushShortcuts_AppliesUpdatesInOrder()
     {
         // Backend records each set it sees. A burst of TrySet* calls must
@@ -112,10 +135,12 @@ public sealed class HotkeyServiceTests
 
         public int RegisterCount { get; private set; }
         public GlobalShortcutSet? LastSet { get; private set; }
+        public bool Disposed { get; private set; }
 
         public string Id => "test";
         public string DisplayName => "Test";
         public bool SupportsPressRelease => true;
+        public bool IsGlobalScope => true;
         public bool IsAvailable() => true;
 
         public event EventHandler? DictationToggleRequested { add { } remove { } }
@@ -139,7 +164,11 @@ public sealed class HotkeyServiceTests
 
         public Task UnregisterAsync(CancellationToken ct) => Task.CompletedTask;
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
 
         public async Task WaitUntilSettledAsync()
         {

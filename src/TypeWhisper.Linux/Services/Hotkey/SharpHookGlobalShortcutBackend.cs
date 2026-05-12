@@ -28,6 +28,17 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
     public string Id => BackendId;
     public string DisplayName => "SharpHook (libuiohook)";
     public bool SupportsPressRelease => true;
+
+    /// <summary>
+    /// SharpHook hooks the X11 server (global) on X11 sessions but only
+    /// receives events while TypeWhisper owns the keyboard focus under
+    /// Wayland. Report scope honestly so the status panel doesn't mislead
+    /// Wayland users into thinking their hotkey works in any window.
+    /// </summary>
+    public bool IsGlobalScope =>
+        !string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"),
+            "wayland", StringComparison.OrdinalIgnoreCase);
+
     public bool IsAvailable() => true;
 
     public event EventHandler? DictationToggleRequested;
