@@ -53,6 +53,39 @@
             </StackPanel>
 
             <Border Classes="panel"
+                    Padding="16">
+                <Grid ColumnDefinitions="*,Auto,Auto"
+                      ColumnSpacing="10">
+                    <StackPanel Spacing="4">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10">
+                            <TextBlock Text="Settings Backup"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ProgressBar Width="90"
+                                         Height="4"
+                                         IsIndeterminate="True"
+                                         IsVisible="{Binding IsBackupBusy}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding BackupStatusText}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            Content="Back Up"
+                            IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
+                            VerticalAlignment="Center"
+                            Click="OnBackupSettings" />
+                    <Button Grid.Column="2"
+                            Content="Restore"
+                            IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
+                            VerticalAlignment="Center"
+                            Click="OnRestoreSettings" />
+                </Grid>
+            </Border>
+
+            <Border Classes="panel"
                     Height="386">
                 <Grid RowDefinitions="Auto,*">
                     <Border Padding="16,12"

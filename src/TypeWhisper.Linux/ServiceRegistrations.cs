@@ -79,6 +79,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
+        services.AddSingleton<SettingsBackupService>();
         services.AddSingleton<HttpApiService>();
         services.AddSingleton<CliInstallService>();
         services.AddSingleton<WatchFolderService>();
