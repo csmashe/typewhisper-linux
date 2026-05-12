@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using SharpHook;
 using SharpHook.Native;
-using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services.Hotkey;
 
@@ -10,31 +9,21 @@ namespace TypeWhisper.Linux.Services.Hotkey;
 /// hook only receives events while the application owns focus — that's the
 /// gap Phase 2's evdev backend closes.
 ///
-/// Owns the OS-level libuiohook lifecycle, the repeat-guard flags, and the
-/// key-down timing used by the Hybrid mode threshold.
+/// Hands off the configured-chord state machine to a shared
+/// <see cref="ShortcutDispatcher"/> so user-visible press/release/mode
+/// behavior stays identical across SharpHook and evdev.
 /// </summary>
 public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
 {
-    private const int PushToTalkThresholdMs = 600;
     public const string BackendId = "linux-sharphook";
 
     private readonly TaskPoolGlobalHook _hook = new();
+    private readonly ShortcutDispatcher _dispatcher = new();
     private readonly object _lock = new();
 
-    private GlobalShortcutSet? _shortcuts;
     private bool _running;
     private int _disposed;
     private Task? _hookTask;
-
-    // Repeat-guard flags so OS auto-repeat doesn't spam events while a key is
-    // held down. Cleared on the matching key release.
-    private bool _dictationKeyDown;
-    private bool _promptKeyDown;
-    private bool _recentKeyDown;
-    private bool _copyLastKeyDown;
-    private bool _transformSelectionKeyDown;
-    private bool _cancelKeyDown;
-    private DateTime _dictationKeyDownTime;
 
     public string Id => BackendId;
     public string DisplayName => "SharpHook (libuiohook)";
@@ -51,12 +40,24 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? CancelRequested;
     public event EventHandler<string>? Failed;
 
+    public SharpHookGlobalShortcutBackend()
+    {
+        _dispatcher.DictationToggleRequested += () => DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.DictationStartRequested += () => DictationStartRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.DictationStopRequested += () => DictationStopRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.PromptPaletteRequested += () => PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.TransformSelectionRequested += () => TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.RecentTranscriptionsRequested += () => RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.CopyLastTranscriptionRequested += () => CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.CancelRequested += () => CancelRequested?.Invoke(this, EventArgs.Empty);
+    }
+
     public Task<GlobalShortcutRegistrationResult> RegisterAsync(GlobalShortcutSet shortcuts, CancellationToken ct)
     {
+        _dispatcher.UpdateShortcuts(shortcuts);
+
         lock (_lock)
         {
-            _shortcuts = shortcuts;
-
             if (!_running && Volatile.Read(ref _disposed) == 0)
             {
                 _hook.KeyPressed += OnKeyPressed;
@@ -86,146 +87,15 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
 
     public Task UnregisterAsync(CancellationToken ct)
     {
-        lock (_lock)
-        {
-            _shortcuts = null;
-        }
+        _dispatcher.ClearShortcuts();
         return Task.CompletedTask;
     }
 
-    private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
-    {
-        var set = Volatile.Read(ref _shortcuts);
-        if (set is null) return;
+    private void OnKeyPressed(object? sender, KeyboardHookEventArgs e) =>
+        _dispatcher.Handle(e.Data.KeyCode, e.RawEvent.Mask, pressed: true);
 
-        var key = e.Data.KeyCode;
-        var mods = e.RawEvent.Mask;
-        var match = ShortcutMatcher.Match(key, mods, set);
-
-        // Cancel: only fires while a dictation is active and only when it
-        // doesn't collide with another binding — otherwise the regular
-        // matcher handles the press below.
-        if (match == ShortcutMatchKind.Cancel)
-        {
-            if (!_cancelKeyDown)
-            {
-                _cancelKeyDown = true;
-                if (set.IsCancelEnabled && !ShortcutMatcher.CancelCollidesWithAnyBinding(set))
-                {
-                    try { CancelRequested?.Invoke(this, EventArgs.Empty); }
-                    catch (Exception ex)
-                    {
-                        Trace.WriteLine($"[SharpHookBackend] Cancel handler threw: {ex.Message}");
-                    }
-                    return;
-                }
-            }
-            // Fall through: cancel collides with a binding — let that binding
-            // handle the press as if cancel didn't exist.
-            match = ShortcutMatcher.Match(key, mods, set with { CancelKey = KeyCode.VcUndefined });
-        }
-
-        switch (match)
-        {
-            case ShortcutMatchKind.RecentTranscriptions:
-                if (_recentKeyDown) return;
-                _recentKeyDown = true;
-                RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
-                return;
-
-            case ShortcutMatchKind.CopyLastTranscription:
-                if (_copyLastKeyDown) return;
-                _copyLastKeyDown = true;
-                CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
-                return;
-
-            case ShortcutMatchKind.TransformSelection:
-                if (_transformSelectionKeyDown) return;
-                _transformSelectionKeyDown = true;
-                TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
-                return;
-
-            case ShortcutMatchKind.PromptPalette:
-                if (_promptKeyDown) return;
-                _promptKeyDown = true;
-                PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
-                return;
-
-            case ShortcutMatchKind.Dictation:
-                if (_dictationKeyDown) return;
-                _dictationKeyDown = true;
-                _dictationKeyDownTime = DateTime.UtcNow;
-                try
-                {
-                    switch (set.Mode)
-                    {
-                        case RecordingMode.Toggle:
-                            DictationToggleRequested?.Invoke(this, EventArgs.Empty);
-                            break;
-                        case RecordingMode.PushToTalk:
-                            DictationStartRequested?.Invoke(this, EventArgs.Empty);
-                            break;
-                        case RecordingMode.Hybrid:
-                            DictationToggleRequested?.Invoke(this, EventArgs.Empty);
-                            break;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Trace.WriteLine($"[SharpHookBackend] Press handler threw: {ex.Message}");
-                }
-                return;
-        }
-    }
-
-    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
-    {
-        var set = Volatile.Read(ref _shortcuts);
-        if (set is null) return;
-
-        var key = e.Data.KeyCode;
-
-        // Clear repeat-guards on the matching key release.
-        if (set.PromptPaletteKey is not null && key == set.PromptPaletteKey.Value)
-            _promptKeyDown = false;
-        if (set.RecentTranscriptionsKey is not null && key == set.RecentTranscriptionsKey.Value)
-            _recentKeyDown = false;
-        if (set.CopyLastTranscriptionKey is not null && key == set.CopyLastTranscriptionKey.Value)
-            _copyLastKeyDown = false;
-        if (set.TransformSelectionKey is not null && key == set.TransformSelectionKey.Value)
-            _transformSelectionKeyDown = false;
-        if (key == set.CancelKey)
-            _cancelKeyDown = false;
-
-        // Modifier-only releases are ignored so the user can let go of
-        // Ctrl/Shift first; only the main key release closes the press.
-        if (key != set.DictationKey) return;
-        if (!_dictationKeyDown) return;
-
-        _dictationKeyDown = false;
-        var heldMs = (DateTime.UtcNow - _dictationKeyDownTime).TotalMilliseconds;
-
-        try
-        {
-            switch (set.Mode)
-            {
-                case RecordingMode.PushToTalk:
-                    DictationStopRequested?.Invoke(this, EventArgs.Empty);
-                    break;
-                case RecordingMode.Hybrid:
-                    if (heldMs >= PushToTalkThresholdMs)
-                        DictationStopRequested?.Invoke(this, EventArgs.Empty);
-                    break;
-                case RecordingMode.Toggle:
-                    // No-op — Toggle handled on press.
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[SharpHookBackend] Release handler threw: {ex.Message}");
-        }
-    }
+    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e) =>
+        _dispatcher.Handle(e.Data.KeyCode, e.RawEvent.Mask, pressed: false);
 
     public ValueTask DisposeAsync()
     {

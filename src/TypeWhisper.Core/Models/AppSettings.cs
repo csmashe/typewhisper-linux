@@ -115,6 +115,12 @@ public record AppSettings
     // Dashboard
     public int DashboardSelectedPeriod { get; init; }
 
+    // Linux: when true (default), the Wayland session uses the evdev backend
+    // to detect global hotkeys regardless of focused window. Reads
+    // /dev/input/event* — user can disable from Settings → Shortcuts to fall
+    // back to focused-only SharpHook behavior.
+    public bool WaylandEvdevHotkeysEnabled { get; init; } = true;
+
     public static AppSettings Default => new();
 }
 
