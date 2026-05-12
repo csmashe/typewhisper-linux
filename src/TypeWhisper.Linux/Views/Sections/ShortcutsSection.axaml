@@ -143,6 +143,58 @@
             <Border Classes="section-panel">
                 <Border Classes="section-row">
                     <StackPanel>
+                        <StackPanel IsVisible="{Binding CanSetupAutomatically}"
+                                    Margin="0,0,0,16">
+                            <TextBlock Classes="row-title"
+                                       Text="{Binding SetupAutomaticallyLabel}" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Classes="row-hint"
+                                       TextWrapping="Wrap"
+                                       Text="Write the dictation shortcut directly to your desktop's settings. The lines below show exactly what will be added — your existing shortcuts are preserved." />
+
+                            <Border Background="#0E1620"
+                                    BorderBrush="#1AFFFFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10,6"
+                                    Margin="0,8,0,0">
+                                <SelectableTextBlock Text="{Binding IntegrationPreview}"
+                                                     FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                     FontSize="12"
+                                                     TextWrapping="Wrap" />
+                            </Border>
+
+                            <StackPanel Orientation="Horizontal"
+                                        Spacing="8"
+                                        Margin="0,10,0,0">
+                                <Button Content="{Binding SetupAutomaticallyLabel}"
+                                        Command="{Binding SetupAutomaticallyCommand}" />
+                                <Button Content="Remove integration"
+                                        Command="{Binding RemoveIntegrationCommand}" />
+                            </StackPanel>
+
+                            <Border Background="#111822"
+                                    BorderBrush="#1AFFFFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="10,6"
+                                    Margin="0,10,0,0"
+                                    IsVisible="{Binding IntegrationStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="{Binding IntegrationStatusMessage}"
+                                           FontSize="12"
+                                           Foreground="#AFC0D3"
+                                           TextWrapping="Wrap" />
+                            </Border>
+
+                            <Border Height="1"
+                                    Background="#16FFFFFF"
+                                    Margin="0,16,0,0" />
+                        </StackPanel>
+
+                        <TextBlock Classes="row-title"
+                                   Text="Show me the commands"
+                                   IsVisible="{Binding CanSetupAutomatically}"
+                                   Margin="0,0,0,6" />
                         <TextBlock TextWrapping="Wrap"
                                    Classes="row-hint"
                                    Margin="0,0,0,10"

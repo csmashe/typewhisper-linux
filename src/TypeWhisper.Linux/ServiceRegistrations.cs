@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.Hotkey.Portal;
 using TypeWhisper.Linux.Services.Ipc;
@@ -75,6 +76,16 @@ internal static class ServiceRegistrations
         services.AddSingleton<XdgPortalGlobalShortcutsBackend>();
         services.AddSingleton<BackendSelector>();
         services.AddSingleton<HotkeyService>();
+
+        // Per-desktop "Set up automatically" writers. Order in the list
+        // is the order the Settings panel evaluates IsCurrentDesktop()
+        // — first hit wins, but on a sane system at most one will be
+        // applicable anyway.
+        services.AddSingleton<IDeShortcutWriter, GnomeShortcutWriter>();
+        services.AddSingleton<IDeShortcutWriter, KdeShortcutWriter>();
+        services.AddSingleton<IDeShortcutWriter, HyprlandShortcutWriter>();
+        services.AddSingleton<IDeShortcutWriter, SwayShortcutWriter>();
+
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
