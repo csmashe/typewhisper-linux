@@ -5,6 +5,7 @@ using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -66,6 +67,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<SessionAudioFileService>();
         services.AddSingleton<SoundFeedbackService>();
         services.AddSingleton<SpeechFeedbackService>();
+        services.AddSingleton<SharpHookGlobalShortcutBackend>();
+        services.AddSingleton<BackendSelector>();
         services.AddSingleton<HotkeyService>();
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<TrayIconService>();
