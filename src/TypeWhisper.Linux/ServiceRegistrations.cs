@@ -8,6 +8,7 @@ using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.Hotkey.Portal;
+using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -90,6 +91,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<HttpApiService>();
         services.AddSingleton<CliInstallService>();
         services.AddSingleton<WatchFolderService>();
+        services.AddSingleton<ControlSocketServer>();
 
         // ViewModels — section VMs are singletons so state stays consistent
         // across the sidebar nav and the onboarding wizard.

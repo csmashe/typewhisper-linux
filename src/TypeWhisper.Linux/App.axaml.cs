@@ -1,10 +1,12 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.Linux;
@@ -73,6 +75,30 @@ public partial class App : Application
             var dictation = services.GetRequiredService<DictationOrchestrator>();
             dictation.Initialize();
             tray.DictationToggleRequested += (_, _) => _ = dictation.ToggleAsync();
+
+            // Bring up the IPC control socket so `typewhisper` (with no args)
+            // from a second terminal can toggle dictation in this instance.
+            // The bind itself is the single-instance guard; if another live
+            // peer beat us to it we shut this instance back down cleanly so
+            // the user doesn't end up with two trays/orchestrators.
+            var controlSocket = services.GetRequiredService<ControlSocketServer>();
+            try
+            {
+                controlSocket.Start();
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            {
+                Console.Error.WriteLine("TypeWhisper is already running.");
+                ShuttingDown = true;
+                TearDownAsync(services).GetAwaiter().GetResult();
+                desktop.Shutdown();
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal: continue without remote-toggle IPC.
+                Debug.WriteLine($"[App] Control socket start failed: {ex.Message}");
+            }
 
             var overlay = services.GetRequiredService<Views.DictationOverlayWindow>();
             overlay.Initialize();
@@ -239,6 +265,13 @@ public partial class App : Application
             hotkey?.Dispose();
         }
         catch (Exception ex) { Debug.WriteLine($"[App] Hotkey dispose failed: {ex.Message}"); }
+
+        try
+        {
+            var controlSocket = services.GetService<ControlSocketServer>();
+            controlSocket?.Dispose();
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] Control socket dispose failed: {ex.Message}"); }
 
         try
         {

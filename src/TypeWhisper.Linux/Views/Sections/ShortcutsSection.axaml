@@ -138,6 +138,49 @@
                 </StackPanel>
             </Border>
 
+            <TextBlock Text="Bind a custom shortcut"
+                       Classes="section-label" />
+            <Border Classes="section-panel">
+                <Border Classes="section-row">
+                    <StackPanel>
+                        <TextBlock TextWrapping="Wrap"
+                                   Classes="row-hint"
+                                   Margin="0,0,0,10"
+                                   Text="You can bind any key combination to toggle dictation through your desktop's keyboard settings. Set the command to:" />
+
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="8">
+                            <Border Grid.Column="0"
+                                    Background="#0E1620"
+                                    BorderBrush="#1AFFFFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10,6">
+                                <SelectableTextBlock Text="{Binding CustomShortcutCommand}"
+                                                     FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                     FontSize="12" />
+                            </Border>
+                            <Button Grid.Column="1"
+                                    Content="Copy"
+                                    Command="{Binding CopyCustomShortcutCommand}" />
+                        </Grid>
+
+                        <TextBlock Margin="0,12,0,0"
+                                   Classes="row-hint"
+                                   Text="{Binding DesktopName, StringFormat='Detected desktop: {0}'}" />
+                        <TextBlock Margin="0,4,0,0"
+                                   Classes="row-hint"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding DesktopInstructions}" />
+                        <TextBlock Margin="0,8,0,0"
+                                   FontSize="11"
+                                   Foreground="#7D8796"
+                                   TextWrapping="Wrap"
+                                   Text="When TypeWhisper is already running, invoking this command toggles dictation in the existing instance — your shortcut won't launch a second copy." />
+                    </StackPanel>
+                </Border>
+            </Border>
+
             <TextBlock Text="Main capture"
                        Classes="section-label" />
             <Border Classes="section-panel">

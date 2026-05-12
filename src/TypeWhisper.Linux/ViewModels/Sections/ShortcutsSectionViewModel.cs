@@ -81,6 +81,85 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     public string InputGroupCommand => AddToInputGroupCommand;
 
+    /// <summary>
+    /// Command users paste into a DE shortcut binding to toggle dictation
+    /// from any focused window. The bare binary name relies on Phase 4's
+    /// single-instance IPC: a second invocation toggles the existing
+    /// instance instead of launching a new one.
+    /// </summary>
+    public string CustomShortcutCommand => "typewhisper";
+
+    /// <summary>
+    /// Best-effort desktop name parsed from <c>XDG_CURRENT_DESKTOP</c>.
+    /// Falls back to "your desktop" so the instructions paragraph stays
+    /// readable on unknown DEs.
+    /// </summary>
+    public string DesktopName
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
+            if (string.IsNullOrWhiteSpace(raw)) return "your desktop";
+            // XDG_CURRENT_DESKTOP may be colon-separated (e.g. "ubuntu:GNOME").
+            // The last meaningful token usually matches the user's mental
+            // model better than the distro prefix.
+            var tokens = raw.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (tokens.Length == 0) return "your desktop";
+            return tokens[^1] switch
+            {
+                "GNOME" => "GNOME",
+                "ubuntu" => "GNOME",
+                "KDE" => "KDE",
+                "Hyprland" => "Hyprland",
+                "sway" => "Sway",
+                "XFCE" => "XFCE",
+                "MATE" => "MATE",
+                "Cinnamon" => "Cinnamon",
+                "Unity" => "Unity",
+                "LXQt" => "LXQt",
+                "Pantheon" => "Pantheon",
+                "Budgie" => "Budgie",
+                "Deepin" => "Deepin",
+                _ => tokens[^1],
+            };
+        }
+    }
+
+    /// <summary>
+    /// DE-tailored instructions for binding a global shortcut to the
+    /// <c>typewhisper</c> command. Falls back to generic wording for
+    /// unknown desktops.
+    /// </summary>
+    public string DesktopInstructions => DesktopName switch
+    {
+        "GNOME" =>
+            "Open Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts.\n" +
+            "Add a new entry, paste the command above, and pick the keys you want.",
+        "KDE" =>
+            "Open System Settings → Shortcuts → Custom Shortcuts.\n" +
+            "Edit → New → Global Shortcut → Command/URL, paste the command above, and assign a trigger.",
+        "Hyprland" =>
+            "Edit ~/.config/hypr/hyprland.conf and add a bind line, e.g.:\n" +
+            "  bind = SUPER, SPACE, exec, typewhisper\n" +
+            "Reload with `hyprctl reload`.",
+        "Sway" =>
+            "Edit ~/.config/sway/config and add a bindsym, e.g.:\n" +
+            "  bindsym $mod+space exec typewhisper\n" +
+            "Reload with `swaymsg reload`.",
+        "XFCE" =>
+            "Open Settings → Keyboard → Application Shortcuts → Add.\n" +
+            "Paste the command above and choose the key combination when prompted.",
+        "Cinnamon" =>
+            "Open System Settings → Keyboard → Shortcuts → Custom Shortcuts.\n" +
+            "Add a custom shortcut with the command above and bind a key.",
+        "MATE" =>
+            "Open System Settings → Keyboard Shortcuts → Add.\n" +
+            "Paste the command above and assign a key combination.",
+        _ =>
+            "Open your desktop's keyboard settings and add a custom shortcut that runs the command above.\n" +
+            "Bind it to any key combination you like (e.g. Ctrl+Shift+Space).",
+    };
+
     public ShortcutsSectionViewModel(HotkeyService hotkey, ISettingsService settings)
     {
         _hotkey = hotkey;
@@ -93,6 +172,14 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         Mode = settings.Current.Mode;
         _waylandEvdevHotkeysEnabled = settings.Current.WaylandEvdevHotkeysEnabled;
     }
+
+    /// <summary>
+    /// Raised when the user clicks the "Copy" button next to the custom
+    /// shortcut command. The view subscribes and performs the actual
+    /// clipboard write via the parent <see cref="Avalonia.Controls.TopLevel"/>
+    /// — VMs don't have direct access to the clipboard in Avalonia.
+    /// </summary>
+    public event EventHandler<string>? CopyCustomShortcutRequested;
 
     private static bool IsWaylandSession() =>
         string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"), "wayland",
@@ -156,6 +243,13 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         {
             StatusMessage = $"Could not parse '{TransformSelectionHotkeyText}' or it collides with another shortcut.";
         }
+    }
+
+    [RelayCommand]
+    private void CopyCustomShortcut()
+    {
+        CopyCustomShortcutRequested?.Invoke(this, CustomShortcutCommand);
+        StatusMessage = $"Copied '{CustomShortcutCommand}' to the clipboard.";
     }
 
     [RelayCommand]

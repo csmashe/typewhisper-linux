@@ -1,17 +1,17 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Sockets;
 using Avalonia;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TypeWhisper.Core;
+using TypeWhisper.Linux.Services.Ipc;
 
 namespace TypeWhisper.Linux;
 
 public static class Program
 {
-    private static FileStream? _singleInstanceLock;
-
     public static IHost Host { get; private set; } = null!;
     public static bool StartMinimized { get; private set; }
 
@@ -24,17 +24,40 @@ public static class Program
         StartMinimized = args.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
         TypeWhisperEnvironment.EnsureDirectories();
 
-        if (!AcquireSingleInstanceLock())
+        // Single-instance + bare-CLI handling. Bare `typewhisper` is the only
+        // launch form that should drive dictation: if an instance is running
+        // we send `toggle` and exit. Argument-bearing launches (autostart's
+        // `--minimized`, etc.) must NOT toggle the existing instance just to
+        // discover it exists, so they use a side-effect-free probe and bail
+        // with a friendly message. The bind that happens later in App
+        // startup remains the authoritative single-instance guard for the
+        // probe-then-bind race window.
+        try
         {
-            Console.Error.WriteLine("TypeWhisper is already running.");
-            return 0;
+            var socketPath = SocketPathResolver.ResolveControlSocketPath();
+            if (args.Length == 0)
+            {
+                if (ControlSocketClient.TrySendToggle(socketPath, out var probeError))
+                    return 0;
+                if (!string.IsNullOrEmpty(probeError))
+                    Trace.WriteLine($"[Program] Control socket probe: {probeError}");
+            }
+            else if (ControlSocketClient.IsLivePeer(socketPath))
+            {
+                Console.Error.WriteLine("TypeWhisper is already running.");
+                return 0;
+            }
         }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Program] Control socket probe failed: {ex.Message}");
+        }
+
+        Host = BuildHost(args);
+        Host.Start();
 
         try
         {
-            Host = BuildHost(args);
-            Host.Start();
-
             var exitCode = BuildAvaloniaApp()
                 .StartWithClassicDesktopLifetime(args);
 
@@ -43,7 +66,6 @@ public static class Program
             // quiet desktop; Host.StopAsync would then hang forever. Cap the
             // wait and fall back to Environment.Exit so the tray icon releases.
             var stopped = Host.StopAsync(TimeSpan.FromSeconds(3)).Wait(TimeSpan.FromSeconds(4));
-            _singleInstanceLock?.Dispose();
 
             if (!stopped)
             {
@@ -52,10 +74,12 @@ public static class Program
             }
             return exitCode;
         }
-        catch
+        catch (Exception ex) when (ex is SocketException sx && sx.SocketErrorCode == SocketError.AddressAlreadyInUse)
         {
-            _singleInstanceLock?.Dispose();
-            throw;
+            // App startup raced another instance to the bind; treat the same
+            // as the early probe finding a live peer.
+            Console.Error.WriteLine("TypeWhisper is already running.");
+            return 0;
         }
     }
 
@@ -85,26 +109,4 @@ public static class Program
         (value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
          value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
          value.Equals("yes", StringComparison.OrdinalIgnoreCase));
-
-    private static bool AcquireSingleInstanceLock()
-    {
-        var runtimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR")
-            ?? Path.Combine(Path.GetTempPath(), $"typewhisper-{Environment.UserName}");
-        Directory.CreateDirectory(runtimeDir);
-
-        var lockPath = Path.Combine(runtimeDir, "typewhisper.lock");
-        try
-        {
-            _singleInstanceLock = new FileStream(
-                lockPath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None);
-            return true;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-    }
 }
