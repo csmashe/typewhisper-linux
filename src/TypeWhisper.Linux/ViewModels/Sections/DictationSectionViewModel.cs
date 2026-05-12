@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -88,6 +89,7 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty] private double _previewLevel;
     [ObservableProperty] private string _microphoneStatus = "";
     [ObservableProperty] private double _audioDuckingLevel = 0.2;
+    [ObservableProperty] private string _cudaSetupStatus = "";
 
     public bool CanUseAudioDucking => _commands.HasPactl;
     public bool ShowAudioDuckingUnavailableReason => !CanUseAudioDucking;
@@ -101,12 +103,29 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
     public string SoundFeedbackUnavailableReason => "Unavailable: canberra-gtk-play is not installed on this system.";
     public bool CanDeleteSelectedModel => SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
+    public bool ShowCudaLibraryPathAction => _commands.HasCudaGpu && !CanUseCuda && FindCuda12LibraryPath() is not null;
+    public string CudaLibraryPathActionText => "Fix CUDA path";
     public bool CanUseCuda => _commands.HasCudaGpu && _commands.HasCudaRuntimeLibraries;
-    public string ComputeBackendHint => CanUseCuda
-        ? "CUDA uses the whisper.cpp CUDA Linux runtime for compatible NVIDIA GPUs. Other local plugins use CPU."
-        : _commands.HasCudaGpu
-            ? "CUDA unavailable: NVIDIA is detected, but libcudart.so.12 and libcublas.so.12 are missing. Install the CUDA 12 runtime/toolkit, then restart TypeWhisper."
-            : "CUDA unavailable: no NVIDIA GPU/driver was detected. CPU is used.";
+    public string ComputeBackendHint
+    {
+        get
+        {
+            if (string.Equals(ComputeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+                return ShowCudaLibraryPathAction
+                    ? "CPU mode is active. CUDA 12 is installed, but TypeWhisper cannot see it yet."
+                    : "CPU mode is active.";
+
+            if (CanUseCuda)
+                return "CUDA is ready for whisper.cpp models. Other local plugins use CPU.";
+
+            if (!_commands.HasCudaGpu)
+                return "CUDA unavailable: no NVIDIA GPU/driver was detected. CPU is used.";
+
+            return FindCuda12LibraryPath() is null
+                ? "CUDA 12 runtime libraries are not installed yet. CPU is used."
+                : "CUDA 12 is installed, but TypeWhisper cannot see it yet.";
+        }
+    }
 
     public ComputeBackendOption? SelectedComputeBackendOption
     {
@@ -361,10 +380,12 @@ public partial class DictationSectionViewModel : ObservableObject
             ModelStatusType.Ready => "Ready",
             ModelStatusType.Loading => "Loading",
             ModelStatusType.Downloading => $"Downloading {status.Progress:P0}",
-            ModelStatusType.Error => status.ErrorMessage ?? "Error",
+            ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
             _ => "Not ready"
         };
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
+        OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
+        OnPropertyChanged(nameof(ComputeBackendHint));
     }
 
     partial void OnSelectedModelChanged(DictationModelOption? value)
@@ -387,8 +408,10 @@ public partial class DictationSectionViewModel : ObservableObject
         {
             ComputeBackend = "cpu";
             StatusText = _commands.HasCudaGpu
-                ? "CUDA runtime libraries are missing. Install libcudart.so.12 and libcublas.so.12, then restart TypeWhisper."
+                ? "CUDA is not ready yet. Click Fix CUDA path, then restart TypeWhisper."
                 : "CUDA is not available on this system. Using CPU.";
+            OnPropertyChanged(nameof(ComputeBackendHint));
+            OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
             return;
         }
 
@@ -396,6 +419,8 @@ public partial class DictationSectionViewModel : ObservableObject
             _settings.Save(_settings.Current with { ComputeBackend = normalized });
 
         OnPropertyChanged(nameof(SelectedComputeBackendOption));
+        OnPropertyChanged(nameof(ComputeBackendHint));
+        OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
 
         if (SelectedModel is { } selected && _models.IsDownloaded(selected.ModelId))
             _ = DownloadAndLoadSelectedModelAsync(selected);
@@ -428,7 +453,7 @@ public partial class DictationSectionViewModel : ObservableObject
         catch (Exception ex)
         {
             if (SelectedModel?.ModelId == selected.ModelId)
-                StatusText = $"Model setup failed: {ex.Message}";
+                StatusText = $"Model setup failed: {FormatModelStatusError(ex.Message)}";
             RefreshModelState();
         }
         finally
@@ -441,6 +466,108 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private static string NormalizeComputeBackend(string? backend) =>
         string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+
+    [RelayCommand]
+    private void AddCudaLibraryPathToShellProfile()
+    {
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(home))
+            {
+                StatusText = "Could not find your home directory.";
+                return;
+            }
+
+            var cudaLibraryPath = FindCuda12LibraryPath();
+            if (cudaLibraryPath is null)
+            {
+                StatusText = "CUDA 12 libraries are not installed yet. Install CUDA 12, then run this action again.";
+                return;
+            }
+
+            var profilePath = ResolveShellProfilePath(home);
+            var exportLine = GetCudaLibraryPathExport(profilePath, cudaLibraryPath);
+            var existing = File.Exists(profilePath) ? File.ReadAllText(profilePath) : string.Empty;
+
+            Directory.CreateDirectory(Path.GetDirectoryName(profilePath)!);
+            if (!existing.Contains(exportLine, StringComparison.Ordinal)
+                && !existing.Contains(cudaLibraryPath, StringComparison.Ordinal))
+            {
+                var prefix = existing.Length > 0 && !existing.EndsWith('\n') ? Environment.NewLine : string.Empty;
+                File.AppendAllText(profilePath,
+                    $"{prefix}{Environment.NewLine}# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}{exportLine}{Environment.NewLine}");
+            }
+
+            WriteDesktopEnvironmentFile(home, cudaLibraryPath);
+            CudaSetupStatus = "Saved. This affects future launches only: open a new terminal, or log out and back in for desktop launches, then restart TypeWhisper.";
+            StatusText = "CUDA path saved. Restart TypeWhisper from a new environment to use CUDA.";
+        }
+        catch (Exception ex)
+        {
+            CudaSetupStatus = $"Could not save CUDA path: {ex.Message}";
+            StatusText = $"Could not update shell startup file: {ex.Message}";
+        }
+    }
+
+    private static string ResolveShellProfilePath(string home)
+    {
+        var shell = Environment.GetEnvironmentVariable("SHELL") ?? string.Empty;
+        if (shell.EndsWith("/zsh", StringComparison.Ordinal))
+            return Path.Combine(home, ".zshrc");
+        if (shell.EndsWith("/fish", StringComparison.Ordinal))
+            return Path.Combine(home, ".config", "fish", "config.fish");
+        return Path.Combine(home, ".bashrc");
+    }
+
+    private static string GetCudaLibraryPathExport(string profilePath, string cudaLibraryPath) =>
+        profilePath.EndsWith("config.fish", StringComparison.Ordinal)
+            ? $"set -gx LD_LIBRARY_PATH {cudaLibraryPath} $LD_LIBRARY_PATH"
+            : $"export LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}";
+
+    private static string WriteDesktopEnvironmentFile(string home, string cudaLibraryPath)
+    {
+        var environmentDir = Path.Combine(home, ".config", "environment.d");
+        Directory.CreateDirectory(environmentDir);
+
+        var path = Path.Combine(environmentDir, "typewhisper-cuda.conf");
+        File.WriteAllText(path,
+            $"# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH}}{Environment.NewLine}");
+        return path;
+    }
+
+    private static string? FindCuda12LibraryPath()
+        => SystemCommandAvailabilityService.FindCuda12RuntimeDirectory();
+
+    partial void OnModelStatusTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
+    }
+
+    private static string FormatModelStatusError(string? message)
+    {
+        if (!IsCudaMissingLibraryError(message))
+            return string.IsNullOrWhiteSpace(message) ? "Error" : message;
+
+        var library = message!.Contains("libcublas.so.12", StringComparison.Ordinal)
+            ? "libcublas.so.12"
+            : "libcudart.so.12";
+        var cudaLibraryPath = FindCuda12LibraryPath();
+        return cudaLibraryPath is null
+            ? "CUDA 12 is not installed yet. Install the CUDA 12 toolkit/runtime, then restart TypeWhisper."
+            : "CUDA 12 is installed, but TypeWhisper cannot see it yet. Click Fix CUDA path, then restart TypeWhisper.";
+    }
+
+    private static bool IsCudaPathSetupMessage(string? message) =>
+        !string.IsNullOrWhiteSpace(message)
+        && message.Contains("CUDA 12", StringComparison.Ordinal)
+        && message.Contains("cannot see", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCudaMissingLibraryError(string? message) =>
+        !string.IsNullOrWhiteSpace(message)
+        && (message.Contains("libcudart.so.12", StringComparison.Ordinal)
+            || message.Contains("libcublas.so.12", StringComparison.Ordinal))
+        && message.Contains("cannot open shared object file", StringComparison.OrdinalIgnoreCase);
 
     public async Task DeleteSelectedModelAsync()
     {

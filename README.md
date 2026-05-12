@@ -111,6 +111,28 @@ The Advanced page exposes:
 - Set `TYPEWHISPER_DISABLE_IME=1` to disable Avalonia X11 IME integration when debugging input-method issues
 - Desktop install script that publishes the app, installs it under the user profile, and creates a launcher icon
 
+#### GNOME Wayland tray icons
+
+GNOME Shell does not show AppIndicator/KStatusNotifier tray icons by default.
+On Fedora GNOME Wayland, install and enable the AppIndicator extension if you
+want TypeWhisper's tray menu/icon in the top bar:
+
+```bash
+sudo dnf install -y gnome-shell-extension-appindicator
+gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
+```
+
+If `gnome-extensions enable` reports that the extension does not exist right
+after installation, log out and back in so GNOME Shell reloads system
+extensions, then run the enable command again. Restart TypeWhisper after the
+extension is loaded.
+
+The tray icon is separate from the launcher/dock icon. When running from
+source with `dotnet run`, GNOME may not match the process to a registered
+desktop entry, so the dock or app switcher can show a generic icon. The
+desktop installer registers the `.desktop` file and icon theme entry for that
+case.
+
 ## Linux Requirements
 
 - A modern Linux desktop session

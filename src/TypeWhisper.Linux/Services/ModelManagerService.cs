@@ -168,6 +168,12 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
+            if (string.Equals(_settings.Current.ComputeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+                && !SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibraries(out var cudaMessage))
+            {
+                throw new InvalidOperationException(cudaMessage);
+            }
+
             plugin.ConfigureComputeBackend(_settings.Current.ComputeBackend);
 
             if (plugin.SupportsModelDownload)

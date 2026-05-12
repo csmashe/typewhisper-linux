@@ -1,10 +1,43 @@
 using System.IO;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace TypeWhisper.Linux.Services;
 
 public sealed class SystemCommandAvailabilityService
 {
+    private const int RtldNow = 2;
+    private const int RtldGlobal = 0x100;
+
+    private static readonly string[] CudaLibraryPathCandidates =
+    [
+        "/usr/local/cuda/lib64",
+        "/usr/local/cuda/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.9/lib64",
+        "/usr/local/cuda-12.9/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.8/lib64",
+        "/usr/local/cuda-12.8/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.7/lib64",
+        "/usr/local/cuda-12.7/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.6/lib64",
+        "/usr/local/cuda-12.6/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.5/lib64",
+        "/usr/local/cuda-12.5/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.4/lib64",
+        "/usr/local/cuda-12.4/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.3/lib64",
+        "/usr/local/cuda-12.3/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.2/lib64",
+        "/usr/local/cuda-12.2/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.1/lib64",
+        "/usr/local/cuda-12.1/targets/x86_64-linux/lib",
+        "/usr/local/cuda-12.0/lib64",
+        "/usr/local/cuda-12.0/targets/x86_64-linux/lib",
+    ];
+
+    private static readonly object CudaPreloadLock = new();
+    private static readonly List<IntPtr> CudaPreloadHandles = [];
+
     private LinuxCapabilitySnapshot _snapshot;
 
     public SystemCommandAvailabilityService()
@@ -38,6 +71,67 @@ public sealed class SystemCommandAvailabilityService
         var snapshot = BuildSnapshot();
         Interlocked.Exchange(ref _snapshot, snapshot);
         return snapshot;
+    }
+
+    public static string? FindCuda12RuntimeDirectory()
+    {
+        foreach (var path in CudaLibraryPathCandidates)
+        {
+            try
+            {
+                if (File.Exists(Path.Combine(path, "libcudart.so.12"))
+                    && File.Exists(Path.Combine(path, "libcublas.so.12")))
+                    return path;
+            }
+            catch
+            {
+                // Ignore inaccessible paths.
+            }
+        }
+
+        return null;
+    }
+
+    public static bool TryPreloadCuda12RuntimeLibraries(out string message)
+    {
+        if (IsLibraryAvailable("libcudart.so.12") && IsLibraryAvailable("libcublas.so.12"))
+        {
+            message = "CUDA 12 runtime libraries are already visible.";
+            return true;
+        }
+
+        var directory = FindCuda12RuntimeDirectory();
+        if (directory is null)
+        {
+            message = "CUDA 12 runtime libraries are not installed.";
+            return false;
+        }
+
+        lock (CudaPreloadLock)
+        {
+            if (CudaPreloadHandles.Count > 0)
+            {
+                message = $"CUDA 12 runtime libraries were preloaded from {directory}.";
+                return true;
+            }
+
+            foreach (var library in new[] { "libcudart.so.12", "libcublas.so.12" })
+            {
+                var path = Path.Combine(directory, library);
+                var handle = dlopen(path, RtldNow | RtldGlobal);
+                if (handle == IntPtr.Zero)
+                {
+                    var error = Marshal.PtrToStringAnsi(dlerror());
+                    message = $"Could not load {library} from {directory}: {error ?? "unknown error"}";
+                    return false;
+                }
+
+                CudaPreloadHandles.Add(handle);
+            }
+        }
+
+        message = $"CUDA 12 runtime libraries were loaded from {directory}.";
+        return true;
     }
 
     public async Task<CudaBenchmarkResult> RunCudaBenchmarkAsync(CancellationToken cancellationToken = default)
@@ -130,8 +224,9 @@ public sealed class SystemCommandAvailabilityService
             HasPlayerCtl: hasPlayerCtl,
             HasCanberraGtkPlay: hasCanberraGtkPlay,
             HasCudaGpu: IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
-            HasCudaRuntimeLibraries: IsLibraryAvailable("libcudart.so.12")
-                                     && IsLibraryAvailable("libcublas.so.12"));
+            HasCudaRuntimeLibraries: (IsLibraryAvailable("libcudart.so.12")
+                                      && IsLibraryAvailable("libcublas.so.12"))
+                                     || FindCuda12RuntimeDirectory() is not null);
     }
 
     private static string? ResolveSpeechFeedbackCommand()
@@ -170,10 +265,13 @@ public sealed class SystemCommandAvailabilityService
         if (FindInLdCache(libraryName))
             return true;
 
+        if (FindInEnvironmentLibraryPath(libraryName))
+            return true;
+
         foreach (var directory in new[]
                  {
-                     "/usr/local/cuda/lib64",
-                     "/usr/local/cuda-13.0/lib64",
+                     "/usr/lib64",
+                     "/lib64",
                      "/usr/lib/x86_64-linux-gnu",
                      "/lib/x86_64-linux-gnu"
                  })
@@ -186,6 +284,28 @@ public sealed class SystemCommandAvailabilityService
             catch
             {
                 // Ignore inaccessible library directories.
+            }
+        }
+
+        return false;
+    }
+
+    private static bool FindInEnvironmentLibraryPath(string libraryName)
+    {
+        var value = Environment.GetEnvironmentVariable("LD_LIBRARY_PATH");
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        foreach (var directory in value.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            try
+            {
+                if (File.Exists(Path.Combine(directory, libraryName)))
+                    return true;
+            }
+            catch
+            {
+                // Ignore invalid entries.
             }
         }
 
@@ -235,6 +355,12 @@ public sealed class SystemCommandAvailabilityService
             return false;
         }
     }
+
+    [DllImport("libdl.so.2", CharSet = CharSet.Ansi)]
+    private static extern IntPtr dlopen(string fileName, int flags);
+
+    [DllImport("libdl.so.2")]
+    private static extern IntPtr dlerror();
 }
 
 public sealed record CudaBenchmarkResult(bool Success, string Message, TimeSpan? Elapsed);

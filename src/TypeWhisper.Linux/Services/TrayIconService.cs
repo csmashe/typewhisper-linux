@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Platform;
 
@@ -15,6 +16,7 @@ namespace TypeWhisper.Linux.Services;
 public sealed class TrayIconService : IDisposable
 {
     private TrayIcon? _trayIcon;
+    private TrayIcons? _trayIcons;
     private bool _disposed;
 
     public event EventHandler? ShowSettingsRequested;
@@ -33,6 +35,12 @@ public sealed class TrayIconService : IDisposable
                 Icon = LoadIcon(),
             };
             _trayIcon.Clicked += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
+
+            if (Application.Current is { } app)
+            {
+                _trayIcons = new TrayIcons { _trayIcon };
+                TrayIcon.SetIcons(app, _trayIcons);
+            }
         }
         catch (Exception ex)
         {
@@ -97,6 +105,9 @@ public sealed class TrayIconService : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        if (Application.Current is { } app)
+            TrayIcon.SetIcons(app, null);
+        _trayIcons?.Clear();
         _trayIcon?.Dispose();
     }
 }

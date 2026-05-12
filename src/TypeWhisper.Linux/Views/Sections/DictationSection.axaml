@@ -85,16 +85,18 @@
                     <Border Grid.Row="4"
                             Classes="row"
                             Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1439B980|False=Transparent'}">
-                        <Grid ColumnDefinitions="*,240">
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
                             <TextBlock Text="Model status"
                                        Classes="row-label" />
                             <Border Grid.Column="1"
                                     HorizontalAlignment="Right"
+                                    MaxWidth="760"
                                     CornerRadius="999"
                                     Padding="12,6"
                                     Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1E39B980|False=#1A2B3A4B'}">
                                 <TextBlock Text="{Binding ModelStatusText}"
                                            Classes="row-value"
+                                           TextWrapping="Wrap"
                                            Foreground="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#39B980|False=#F5F8FC'}" />
                             </Border>
                         </Grid>
@@ -105,7 +107,8 @@
 
                     <Border Grid.Row="6"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,320">
+                        <Grid ColumnDefinitions="*,320,Auto"
+                              ColumnSpacing="10">
                             <TextBlock Text="Compute backend"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
@@ -118,6 +121,10 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <Button Grid.Column="2"
+                                    Content="{Binding CudaLibraryPathActionText}"
+                                    Command="{Binding AddCudaLibraryPathToShellProfileCommand}"
+                                    IsVisible="{Binding ShowCudaLibraryPathAction}" />
                         </Grid>
                     </Border>
 
@@ -125,10 +132,17 @@
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
-                        <TextBlock Text="{Binding ComputeBackendHint}"
-                                   FontSize="12"
-                                   Foreground="#8A9AAE"
-                                   TextWrapping="Wrap" />
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="{Binding ComputeBackendHint}"
+                                       FontSize="12"
+                                       Foreground="#8A9AAE"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding CudaSetupStatus}"
+                                       FontSize="12"
+                                       Foreground="#D6B45F"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding CudaSetupStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
                     </Border>
                 </Grid>
             </Border>
