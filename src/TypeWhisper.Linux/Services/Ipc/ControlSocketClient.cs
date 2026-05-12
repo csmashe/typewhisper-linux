@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 
 namespace TypeWhisper.Linux.Services.Ipc;
 
@@ -96,6 +97,102 @@ internal static class ControlSocketClient
         {
             // Stale socket: file exists but nobody is listening. Remove so
             // the new GUI instance can bind without hitting EADDRINUSE.
+            try { File.Delete(path); } catch { /* best-effort */ }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Sends one JSON request line to the running instance and reads back
+    /// the JSON response line. Returns true if the wire exchange completed
+    /// (the server replied with valid bytes); inspect <paramref name="responseJson"/>
+    /// for the <c>ok</c> field to determine logical success.
+    /// </summary>
+    /// <remarks>
+    /// One request per connection — the server reads exactly one line and
+    /// closes. We cap the response read at 4 KB to match the server's own
+    /// line cap; any reasonable response (the longest is <c>status</c>) fits
+    /// in well under that.
+    /// </remarks>
+    /// <param name="path">Absolute path to the control socket file.</param>
+    /// <param name="request">Object to serialize as the JSON request line.</param>
+    /// <param name="responseJson">JSON response line, trimmed of trailing newline. Empty on error.</param>
+    /// <param name="error">Set to a diagnostic message on wire failures.</param>
+    public static bool TrySendJson(string path, object request, out string responseJson, out string? error)
+    {
+        responseJson = "";
+        error = null;
+
+        if (!File.Exists(path))
+        {
+            // No socket file means no running instance. Don't treat this as
+            // an exception path; callers (CLI subcommands) use this signal
+            // to print "not running" and exit non-zero.
+            return false;
+        }
+
+        try
+        {
+            using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified)
+            {
+                SendTimeout = TimeoutMillis,
+                ReceiveTimeout = TimeoutMillis,
+            };
+            sock.Connect(new UnixDomainSocketEndPoint(path));
+
+            var json = JsonSerializer.Serialize(request, JsonControlProtocol.JsonOptions);
+            // Enforce the protocol's 4 KB cap on the request side too — the
+            // server will reject anything larger, but failing fast here gives
+            // a clearer error than a remote line-too-long bounce.
+            var payload = Encoding.UTF8.GetBytes(json + "\n");
+            if (payload.Length > JsonControlProtocol.MaxLineBytes)
+            {
+                error = "request exceeds 4 KB protocol cap";
+                return false;
+            }
+
+            sock.Send(payload);
+
+            // Read until newline or socket close, capped at MaxLineBytes.
+            // We can't use NetworkStream/StreamReader here because
+            // StreamReader buffers ahead and would swallow the EOF that the
+            // server emits right after the single response line.
+            var buf = new byte[JsonControlProtocol.MaxLineBytes];
+            var total = 0;
+            while (total < buf.Length)
+            {
+                var n = sock.Receive(buf, total, buf.Length - total, SocketFlags.None);
+                if (n <= 0) break;
+                total += n;
+                // Stop at the first newline so we don't block waiting for
+                // a follow-up that will never come.
+                var nl = Array.IndexOf(buf, (byte)'\n', 0, total);
+                if (nl >= 0)
+                {
+                    total = nl;
+                    break;
+                }
+            }
+
+            if (total == 0)
+            {
+                error = "control socket closed without reply";
+                return false;
+            }
+
+            responseJson = Encoding.UTF8.GetString(buf, 0, total).TrimEnd();
+            return true;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
+        {
+            // Stale socket file with no listener. Clean it up so a follow-up
+            // GUI launch can bind cleanly; report as "not running" to the
+            // caller by returning false with no error.
             try { File.Delete(path); } catch { /* best-effort */ }
             return false;
         }

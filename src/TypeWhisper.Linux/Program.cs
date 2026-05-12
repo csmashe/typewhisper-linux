@@ -6,6 +6,8 @@ using Avalonia;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TypeWhisper.Core;
+using TypeWhisper.Linux.Cli;
+using TypeWhisper.Linux.Cli.Commands;
 using TypeWhisper.Linux.Services.Ipc;
 
 namespace TypeWhisper.Linux;
@@ -21,21 +23,47 @@ public static class Program
         // visible when the app runs from a terminal.
         Trace.Listeners.Add(new ConsoleTraceListener());
 
-        StartMinimized = args.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
         TypeWhisperEnvironment.EnsureDirectories();
+
+        var action = CommandLineParser.Parse(args);
+        StartMinimized = action.StartMinimized;
+
+        switch (action.Kind)
+        {
+            case CliActionKind.PrintHelp:
+                Console.Write(CommandLineParser.UsageText);
+                return 0;
+
+            case CliActionKind.Invalid:
+                Console.Error.WriteLine($"typewhisper: {action.ErrorMessage}");
+                Console.Error.Write(CommandLineParser.UsageText);
+                return 2;
+
+            case CliActionKind.Record:
+                // RecordVerb is always non-null on this branch — see parser.
+                return RecordCommand.Run(action.RecordVerb!);
+
+            case CliActionKind.Status:
+                return StatusCommand.Run();
+
+            case CliActionKind.BareToggle:
+            case CliActionKind.LaunchGui:
+                // Fall through to single-instance handling + GUI startup.
+                break;
+        }
 
         // Single-instance + bare-CLI handling. Bare `typewhisper` is the only
         // launch form that should drive dictation: if an instance is running
-        // we send `toggle` and exit. Argument-bearing launches (autostart's
-        // `--minimized`, etc.) must NOT toggle the existing instance just to
-        // discover it exists, so they use a side-effect-free probe and bail
-        // with a friendly message. The bind that happens later in App
+        // we send `toggle` and exit. Argument-bearing GUI launches
+        // (`--minimized`, etc.) must NOT toggle the existing instance just
+        // to discover it exists, so they use a side-effect-free probe and
+        // bail with a friendly message. The bind that happens later in App
         // startup remains the authoritative single-instance guard for the
         // probe-then-bind race window.
         try
         {
             var socketPath = SocketPathResolver.ResolveControlSocketPath();
-            if (args.Length == 0)
+            if (action.Kind == CliActionKind.BareToggle)
             {
                 if (ControlSocketClient.TrySendToggle(socketPath, out var probeError))
                     return 0;

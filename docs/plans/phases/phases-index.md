@@ -8,7 +8,7 @@ Working plan for the Wayland global-hotkey fix. See `cl-recommendation.md` for t
 | 2 | [phase-2-evdev-backend.md](phase-2-evdev-backend.md) | blocked on 1 | **Fixes the reported bug.** Add evdev backend as primary Wayland path. |
 | 3 | [phase-3-portal-and-settings-ui.md](phase-3-portal-and-settings-ui.md) | blocked on 2 | XDG portal backend (toggle-only fallback) + Settings → Shortcuts status panel + shortcut test modal. |
 | 4 | [phase-4-single-instance-cli.md](done/phase-4-single-instance-cli.md) | done | Unix socket; bare `typewhisper` toggles existing instance; single-instance enforcement. |
-| 5 | [phase-5-full-cli-subcommands.md](phase-5-full-cli-subcommands.md) | blocked on 4 | `typewhisper record start/stop/toggle/cancel`, `status`. Enables Hyprland/Sway true PTT via compositor binds. |
+| 5 | [phase-5-full-cli-subcommands.md](done/phase-5-full-cli-subcommands.md) | done | `typewhisper record start/stop/toggle/cancel`, `status`. Enables Hyprland/Sway true PTT via compositor binds. |
 | 6 | [phase-6-de-helpers.md](phase-6-de-helpers.md) | blocked on 5 | "Set up automatically" buttons for GNOME / KDE / Hyprland / Sway. Polish. |
 
 ## Critical path

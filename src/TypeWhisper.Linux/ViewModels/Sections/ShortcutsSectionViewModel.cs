@@ -90,6 +90,57 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public string CustomShortcutCommand => "typewhisper";
 
     /// <summary>
+    /// True when the detected desktop supports separate press/release binds
+    /// (Hyprland's <c>bind</c>+<c>bindr</c>, Sway's <c>bindsym</c> +
+    /// <c>--release</c>). When true the UI shows a two-line PTT snippet
+    /// alongside the toggle command; when false only the toggle snippet is
+    /// shown.
+    /// </summary>
+    public bool ShowPushToTalkSnippet => DesktopName is "Hyprland" or "Sway";
+
+    /// <summary>
+    /// First line of the desktop-specific push-to-talk binding snippet
+    /// (key press → <c>record start</c>). Empty for desktops that don't
+    /// support the press/release pair.
+    /// </summary>
+    public string PushToTalkPressSnippet => DesktopName switch
+    {
+        // Hyprland: `bind` fires on press. CTRL+SHIFT+SPACE is the same
+        // default suggested elsewhere in the UI so users don't have to
+        // pick a key just to read the example.
+        "Hyprland" => "bind  = CTRL SHIFT, SPACE, exec, typewhisper record start",
+        // Sway: `--no-repeat` prevents the press-bind from auto-repeating
+        // while the key is held, which would otherwise hammer record.start
+        // many times per second. The orchestrator is idempotent so this is
+        // safe, but the noise is unhelpful.
+        "Sway"     => "bindsym --no-repeat $mod+space exec typewhisper record start",
+        _          => "",
+    };
+
+    /// <summary>
+    /// Second line of the push-to-talk binding snippet (key release →
+    /// <c>record stop</c>). Empty for desktops without press/release.
+    /// </summary>
+    public string PushToTalkReleaseSnippet => DesktopName switch
+    {
+        "Hyprland" => "bindr = CTRL SHIFT, SPACE, exec, typewhisper record stop",
+        "Sway"     => "bindsym --release $mod+space exec typewhisper record stop",
+        _          => "",
+    };
+
+    /// <summary>
+    /// Short label describing what the PTT snippet does, surfaced above the
+    /// command lines so a user copying the snippet knows they're getting
+    /// true hold-to-talk rather than the toggle shown elsewhere on the page.
+    /// </summary>
+    public string PushToTalkSnippetHint => DesktopName switch
+    {
+        "Hyprland" => "Hyprland supports separate press/release binds. Use this pair for true push-to-talk:",
+        "Sway"     => "Sway supports a press/release pair. Use these two binds for true push-to-talk:",
+        _          => "",
+    };
+
+    /// <summary>
     /// Best-effort desktop name parsed from <c>XDG_CURRENT_DESKTOP</c>.
     /// Falls back to "your desktop" so the instructions paragraph stays
     /// readable on unknown DEs.
@@ -250,6 +301,31 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         CopyCustomShortcutRequested?.Invoke(this, CustomShortcutCommand);
         StatusMessage = $"Copied '{CustomShortcutCommand}' to the clipboard.";
+    }
+
+    [RelayCommand]
+    private void CopyPushToTalkPressSnippet()
+    {
+        if (string.IsNullOrEmpty(PushToTalkPressSnippet)) return;
+        CopyCustomShortcutRequested?.Invoke(this, PushToTalkPressSnippet);
+        StatusMessage = "Copied press bind to the clipboard.";
+    }
+
+    [RelayCommand]
+    private void CopyPushToTalkReleaseSnippet()
+    {
+        if (string.IsNullOrEmpty(PushToTalkReleaseSnippet)) return;
+        CopyCustomShortcutRequested?.Invoke(this, PushToTalkReleaseSnippet);
+        StatusMessage = "Copied release bind to the clipboard.";
+    }
+
+    [RelayCommand]
+    private void CopyPushToTalkPair()
+    {
+        if (!ShowPushToTalkSnippet) return;
+        var combined = $"{PushToTalkPressSnippet}\n{PushToTalkReleaseSnippet}";
+        CopyCustomShortcutRequested?.Invoke(this, combined);
+        StatusMessage = "Copied push-to-talk binds to the clipboard.";
     }
 
     [RelayCommand]

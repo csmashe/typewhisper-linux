@@ -84,6 +84,52 @@ public sealed class DictationOrchestrator : IDisposable
 
     public bool IsRecording => _audio.IsRecording;
 
+    /// <summary>
+    /// Snapshot of the current dictation pipeline phase, suitable for the
+    /// <c>typewhisper status</c> JSON response. Derived from the audio
+    /// capture state plus the live overlay state — no new mutable surface,
+    /// just a read-only projection of state we already track.
+    /// </summary>
+    /// <remarks>
+    /// The audio recorder is the source of truth for <c>recording</c>. Once
+    /// recording stops, the overlay's StatusText drives transcribing /
+    /// injecting / idle: "Processing…" / "Transcribing…" indicate the
+    /// transcription engine is active; "Typed", "Pasted", "Copied" mean
+    /// the inject phase is in progress or just completed. Anything else
+    /// (Ready, Canceled, Too short, an error) falls through to idle.
+    /// </remarks>
+    public string CurrentStateLabel
+    {
+        get
+        {
+            if (_audio.IsRecording) return "recording";
+
+            DictationOverlayState snapshot;
+            lock (_overlayStateLock)
+            {
+                snapshot = _overlayState;
+            }
+
+            // Compare against the same status strings used by SetOverlayState
+            // call sites elsewhere in this file. Keep the matcher cheap —
+            // status reads must not block the UI thread.
+            var status = snapshot.StatusText;
+            if (status is null) return "idle";
+            if (status.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
+                || status.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase))
+            {
+                return "transcribing";
+            }
+            // The injection phase doesn't currently update StatusText to a
+            // dedicated "Injecting" label before TextInsertionService runs;
+            // the completion messages ("Typed N char(s)", "Pasted…",
+            // "Copied to clipboard…") fire after the inject call has
+            // returned. Treat those terminal labels as idle — the inject
+            // is no longer in flight by the time the user sees them.
+            return "idle";
+        }
+    }
+
     public DictationOrchestrator(
         HotkeyService hotkey,
         AudioRecordingService audio,

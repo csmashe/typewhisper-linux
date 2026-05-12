@@ -165,6 +165,54 @@
                                     Command="{Binding CopyCustomShortcutCommand}" />
                         </Grid>
 
+                        <StackPanel Margin="0,14,0,0"
+                                    IsVisible="{Binding ShowPushToTalkSnippet}">
+                            <TextBlock Classes="row-hint"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding PushToTalkSnippetHint}" />
+
+                            <Grid ColumnDefinitions="*,Auto"
+                                  ColumnSpacing="8"
+                                  Margin="0,8,0,0">
+                                <Border Grid.Column="0"
+                                        Background="#0E1620"
+                                        BorderBrush="#1AFFFFFF"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="10,6">
+                                    <SelectableTextBlock Text="{Binding PushToTalkPressSnippet}"
+                                                         FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                         FontSize="12" />
+                                </Border>
+                                <Button Grid.Column="1"
+                                        Content="Copy"
+                                        Command="{Binding CopyPushToTalkPressSnippetCommand}" />
+                            </Grid>
+
+                            <Grid ColumnDefinitions="*,Auto"
+                                  ColumnSpacing="8"
+                                  Margin="0,6,0,0">
+                                <Border Grid.Column="0"
+                                        Background="#0E1620"
+                                        BorderBrush="#1AFFFFFF"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="10,6">
+                                    <SelectableTextBlock Text="{Binding PushToTalkReleaseSnippet}"
+                                                         FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                         FontSize="12" />
+                                </Border>
+                                <Button Grid.Column="1"
+                                        Content="Copy"
+                                        Command="{Binding CopyPushToTalkReleaseSnippetCommand}" />
+                            </Grid>
+
+                            <Button Margin="0,8,0,0"
+                                    HorizontalAlignment="Left"
+                                    Content="Copy both lines"
+                                    Command="{Binding CopyPushToTalkPairCommand}" />
+                        </StackPanel>
+
                         <TextBlock Margin="0,12,0,0"
                                    Classes="row-hint"
                                    Text="{Binding DesktopName, StringFormat='Detected desktop: {0}'}" />
