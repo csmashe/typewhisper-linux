@@ -330,8 +330,13 @@ public sealed class BrowserAccessibilitySetupHelper
                 detail.Append("Fully quit the affected browsers and relaunch from the application menu — running instances are not retroactively patched.");
             }
 
-            return Task.FromResult(new SetupResult(true,
-                "Browser accessibility enabled.",
+            var success = firefoxPrefResult.Success
+                || firefoxPatched.Count > 0
+                || chromiumPatched.Count > 0
+                || IsCurrentlyConfigured().IsFullyConfigured;
+
+            return Task.FromResult(new SetupResult(success,
+                success ? "Browser accessibility enabled." : "Could not enable browser accessibility.",
                 detail.ToString()));
         }
         catch (Exception ex)

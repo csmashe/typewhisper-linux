@@ -121,10 +121,37 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             "X-KDE-StartupNotify=false\n" +
             "X-TypeWhisper-Managed=true\n" +
             "X-TypeWhisper-ShortcutId={3}\n",
-            spec.DisplayName,
-            spec.OnPressCommand,
-            spec.Trigger,
-            spec.ShortcutId);
+            EscapeDesktopValue(spec.DisplayName),
+            EscapeDesktopValue(spec.OnPressCommand),
+            EscapeDesktopValue(spec.Trigger),
+            EscapeDesktopValue(spec.ShortcutId));
+    }
+
+    private static string EscapeDesktopValue(string value)
+    {
+        // Desktop Entry Specification escape rules for string values:
+        // \\ for backslash, \n / \r / \t for newline/carriage-return/tab,
+        // and other ASCII control bytes as \uXXXX-style \xNN to avoid
+        // breaking parsers that read line-by-line.
+        if (string.IsNullOrEmpty(value)) return value;
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            switch (c)
+            {
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 0x20 || c == 0x7f)
+                        sb.Append('\\').Append('x').Append(((int)c).ToString("x2", CultureInfo.InvariantCulture));
+                    else
+                        sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
     }
 
     private static async Task AtomicWriteAsync(string target, string contents, CancellationToken ct)

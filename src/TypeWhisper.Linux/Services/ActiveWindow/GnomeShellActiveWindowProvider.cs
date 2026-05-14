@@ -100,11 +100,31 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
             var bodyStart = i + idMatch.Index + idMatch.Length;
             var depth = 1;
             var j = bodyStart;
+            var inString = false;
+            var stringQuote = '\0';
             while (j < output.Length && depth > 0)
             {
                 var c = output[j];
-                if (c == '{') depth++;
-                else if (c == '}') depth--;
+                if (inString)
+                {
+                    if (c == '\\' && j + 1 < output.Length)
+                    {
+                        j += 2;
+                        continue;
+                    }
+                    if (c == stringQuote)
+                        inString = false;
+                }
+                else
+                {
+                    if (c == '\'' || c == '"')
+                    {
+                        inString = true;
+                        stringQuote = c;
+                    }
+                    else if (c == '{') depth++;
+                    else if (c == '}') depth--;
+                }
                 j++;
             }
 

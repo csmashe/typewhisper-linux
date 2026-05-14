@@ -539,7 +539,12 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         // Hot-swap immediately so disabling actually stops the evdev
         // reader — a delayed (restart-only) opt-out is a real consent gap
         // for a setting that controls global keyboard event access.
-        _ = SwitchBackendAndNotifyAsync();
+        var task = SwitchBackendAndNotifyAsync();
+        task.ContinueWith(
+            t => StatusMessage = $"Backend switch failed: {t.Exception?.GetBaseException().Message}",
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     private async Task SwitchBackendAndNotifyAsync()

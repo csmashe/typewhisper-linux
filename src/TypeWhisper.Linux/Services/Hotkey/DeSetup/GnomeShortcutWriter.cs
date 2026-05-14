@@ -408,6 +408,10 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             var stderr = await stderrTask.ConfigureAwait(false);
             return (proc.ExitCode == 0, stdout, stderr);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             return (false, string.Empty, ex.Message);

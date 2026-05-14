@@ -174,9 +174,17 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     private static async Task AtomicWriteAsync(string target, string contents, CancellationToken ct)
     {
         var dir = Path.GetDirectoryName(target)!;
-        var tmp = Path.Combine(dir, $".{Path.GetFileName(target)}.tmp");
-        await File.WriteAllTextAsync(tmp, contents, ct).ConfigureAwait(false);
-        File.Move(tmp, target, overwrite: true);
+        var tmp = Path.Combine(dir, $".{Path.GetFileName(target)}.{Path.GetRandomFileName()}.tmp");
+        try
+        {
+            await File.WriteAllTextAsync(tmp, contents, ct).ConfigureAwait(false);
+            File.Move(tmp, target, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            throw;
+        }
     }
 
     private static async Task<(bool ok, string stdout, string stderr)> RunAsync(string fileName, IReadOnlyList<string> args, CancellationToken ct)

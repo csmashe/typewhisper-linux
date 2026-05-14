@@ -135,13 +135,16 @@ public sealed class AtSpiUrlExtractor
 
         lock (_cacheLock)
         {
-            _cachedProcessName = processHint;
-            _cachedTitle = focusedTitle;
             // Only write the cache on success — caching a null would
             // suppress retries for 10s, which is the wrong tradeoff
             // when the walker is just racing against its own budget.
+            // Updating the (process, title) keys on miss would re-key
+            // the still-valid previous _cachedUrl, so leave the cache
+            // untouched on failure.
             if (!string.IsNullOrWhiteSpace(url))
             {
+                _cachedProcessName = processHint;
+                _cachedTitle = focusedTitle;
                 _cachedUrl = url;
                 _cachedUrlAt = DateTime.UtcNow;
             }

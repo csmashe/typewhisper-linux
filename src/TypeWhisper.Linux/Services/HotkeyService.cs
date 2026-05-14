@@ -48,6 +48,15 @@ public sealed class HotkeyService : IDisposable
     private volatile bool _cancelShortcutEnabled;
 
     private IGlobalShortcutBackend? _backend;
+    private EventHandler? _onDictationToggleRequested;
+    private EventHandler? _onDictationStartRequested;
+    private EventHandler? _onDictationStopRequested;
+    private EventHandler? _onPromptPaletteRequested;
+    private EventHandler? _onRecentTranscriptionsRequested;
+    private EventHandler? _onCopyLastTranscriptionRequested;
+    private EventHandler? _onTransformSelectionRequested;
+    private EventHandler? _onCancelRequested;
+    private EventHandler<string>? _onBackendFailed;
     // Serializes backend updates so a burst of TrySet*/Mode= calls can't apply
     // out of order and leave the backend listening for stale bindings.
     private Task _pendingBackendUpdate = Task.CompletedTask;
@@ -121,6 +130,7 @@ public sealed class HotkeyService : IDisposable
             previous = _backend;
             _backend = null;
             _backendRequiresToggleMode = false;
+            UnsubscribeBackendHandlers(previous);
         }
 
         if (previous is not null)
@@ -171,19 +181,51 @@ public sealed class HotkeyService : IDisposable
         {
             if (_backend is not null || Volatile.Read(ref _disposed) == 1) return;
             var backend = _selector.Resolve();
-            backend.DictationToggleRequested += (_, _) => DictationToggleRequested?.Invoke(this, EventArgs.Empty);
-            backend.DictationStartRequested += (_, _) => DictationStartRequested?.Invoke(this, EventArgs.Empty);
-            backend.DictationStopRequested += (_, _) => DictationStopRequested?.Invoke(this, EventArgs.Empty);
-            backend.PromptPaletteRequested += (_, _) => PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
-            backend.RecentTranscriptionsRequested += (_, _) => RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
-            backend.CopyLastTranscriptionRequested += (_, _) => CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
-            backend.TransformSelectionRequested += (_, _) => TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
-            backend.CancelRequested += (_, _) => CancelRequested?.Invoke(this, EventArgs.Empty);
-            backend.Failed += (_, message) => HookFailed?.Invoke(this, message);
+            _onDictationToggleRequested = (_, _) => DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+            _onDictationStartRequested = (_, _) => DictationStartRequested?.Invoke(this, EventArgs.Empty);
+            _onDictationStopRequested = (_, _) => DictationStopRequested?.Invoke(this, EventArgs.Empty);
+            _onPromptPaletteRequested = (_, _) => PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
+            _onRecentTranscriptionsRequested = (_, _) => RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
+            _onCopyLastTranscriptionRequested = (_, _) => CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            _onTransformSelectionRequested = (_, _) => TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
+            _onCancelRequested = (_, _) => CancelRequested?.Invoke(this, EventArgs.Empty);
+            _onBackendFailed = (_, message) => HookFailed?.Invoke(this, message);
+            backend.DictationToggleRequested += _onDictationToggleRequested;
+            backend.DictationStartRequested += _onDictationStartRequested;
+            backend.DictationStopRequested += _onDictationStopRequested;
+            backend.PromptPaletteRequested += _onPromptPaletteRequested;
+            backend.RecentTranscriptionsRequested += _onRecentTranscriptionsRequested;
+            backend.CopyLastTranscriptionRequested += _onCopyLastTranscriptionRequested;
+            backend.TransformSelectionRequested += _onTransformSelectionRequested;
+            backend.CancelRequested += _onCancelRequested;
+            backend.Failed += _onBackendFailed;
             _backend = backend;
         }
 
         PushShortcutsIfRunning();
+    }
+
+    private void UnsubscribeBackendHandlers(IGlobalShortcutBackend? backend)
+    {
+        if (backend is null) return;
+        if (_onDictationToggleRequested is not null) backend.DictationToggleRequested -= _onDictationToggleRequested;
+        if (_onDictationStartRequested is not null) backend.DictationStartRequested -= _onDictationStartRequested;
+        if (_onDictationStopRequested is not null) backend.DictationStopRequested -= _onDictationStopRequested;
+        if (_onPromptPaletteRequested is not null) backend.PromptPaletteRequested -= _onPromptPaletteRequested;
+        if (_onRecentTranscriptionsRequested is not null) backend.RecentTranscriptionsRequested -= _onRecentTranscriptionsRequested;
+        if (_onCopyLastTranscriptionRequested is not null) backend.CopyLastTranscriptionRequested -= _onCopyLastTranscriptionRequested;
+        if (_onTransformSelectionRequested is not null) backend.TransformSelectionRequested -= _onTransformSelectionRequested;
+        if (_onCancelRequested is not null) backend.CancelRequested -= _onCancelRequested;
+        if (_onBackendFailed is not null) backend.Failed -= _onBackendFailed;
+        _onDictationToggleRequested = null;
+        _onDictationStartRequested = null;
+        _onDictationStopRequested = null;
+        _onPromptPaletteRequested = null;
+        _onRecentTranscriptionsRequested = null;
+        _onCopyLastTranscriptionRequested = null;
+        _onTransformSelectionRequested = null;
+        _onCancelRequested = null;
+        _onBackendFailed = null;
     }
 
     public void SetHotkey(KeyCode key, ModifierMask modifiers)
@@ -514,6 +556,7 @@ public sealed class HotkeyService : IDisposable
         {
             backend = _backend;
             _backend = null;
+            UnsubscribeBackendHandlers(backend);
         }
 
         if (backend is null) return;

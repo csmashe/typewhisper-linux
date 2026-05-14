@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -52,7 +53,7 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
             if (node.TryGetProperty("pid", out var pidProp) && pidProp.ValueKind == JsonValueKind.Number
                 && pidProp.TryGetInt32(out var pidInt))
                 pidValue = pidInt;
-            var rawIdentity = pidValue is > 0 ? TryReadProcComm(pidValue.Value) : null;
+            var rawIdentity = pidValue is > 0 ? await TryReadProcCommAsync(pidValue.Value, ct).ConfigureAwait(false) : null;
             if (string.IsNullOrWhiteSpace(rawIdentity))
                 rawIdentity = !string.IsNullOrWhiteSpace(appId) ? appId : xClass;
             var processName = !string.IsNullOrWhiteSpace(rawIdentity)
@@ -71,8 +72,26 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
                 Source: Name,
                 IsTrusted: true);
         }
-        catch
+        catch (OperationCanceledException)
         {
+            throw;
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (Win32Exception)
+        {
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            Console.Error.WriteLine($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}");
             return null;
         }
     }
@@ -115,13 +134,13 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
         return prop.ValueKind == JsonValueKind.String ? prop.GetString() : null;
     }
 
-    private static string? TryReadProcComm(int pid)
+    private static async Task<string?> TryReadProcCommAsync(int pid, CancellationToken ct)
     {
         try
         {
             var path = $"/proc/{pid}/comm";
             if (!File.Exists(path)) return null;
-            return File.ReadAllText(path).Trim();
+            return (await File.ReadAllTextAsync(path, ct).ConfigureAwait(false)).Trim();
         }
         catch
         {

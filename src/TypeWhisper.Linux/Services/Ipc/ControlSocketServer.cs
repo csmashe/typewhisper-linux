@@ -401,16 +401,12 @@ internal sealed class ControlSocketServer : IDisposable
     /// </summary>
     private static void DispatchOrchestratorAsync(Func<Task> start, string label)
     {
-        Task task;
-        try
-        {
-            task = start();
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[ControlSocketServer] {label} threw synchronously: {ex.Message}");
-            return;
-        }
+        var task = Task.Factory.StartNew(
+                start,
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default)
+            .Unwrap();
         task.ContinueWith(
             t => Trace.WriteLine($"[ControlSocketServer] {label} faulted: {t.Exception?.GetBaseException().Message}"),
             CancellationToken.None,

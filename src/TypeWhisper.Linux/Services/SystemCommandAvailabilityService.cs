@@ -102,7 +102,14 @@ public sealed class SystemCommandAvailabilityService
     internal void RaiseSnapshotChangedForTests(LinuxCapabilitySnapshot snapshot)
     {
         Interlocked.Exchange(ref _snapshot, snapshot);
-        SnapshotChanged?.Invoke(this, snapshot);
+        try
+        {
+            SnapshotChanged?.Invoke(this, snapshot);
+        }
+        catch
+        {
+            // Match RefreshSnapshot's swallow-on-subscriber-throw behavior.
+        }
     }
 
     public static string? FindCuda12RuntimeDirectory()

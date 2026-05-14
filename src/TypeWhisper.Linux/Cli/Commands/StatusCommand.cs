@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json;
 using TypeWhisper.Linux.Services.Ipc;
 
 namespace TypeWhisper.Linux.Cli.Commands;
@@ -24,6 +25,22 @@ internal static class StatusCommand
         }
 
         Console.WriteLine(responseJson);
-        return responseJson.Contains("\"ok\":true") ? 0 : 1;
+        return IsOk(responseJson) ? 0 : 1;
+    }
+
+    private static bool IsOk(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("ok", out var ok)
+                   && (ok.ValueKind == JsonValueKind.True || ok.ValueKind == JsonValueKind.False)
+                   && ok.GetBoolean();
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 }

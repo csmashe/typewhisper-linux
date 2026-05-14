@@ -56,6 +56,10 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider
                 Source: Name,
                 IsTrusted: true);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch
         {
             return null;

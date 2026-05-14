@@ -9,14 +9,13 @@ namespace TypeWhisper.Linux.Services.Hotkey;
 /// Picks which <see cref="IGlobalShortcutBackend"/> to use for the current
 /// session.
 ///
-/// Selection order on Wayland: evdev → SharpHook (focused-only).
+/// Selection order on Wayland: evdev → XDG portal → SharpHook (focused-only).
 /// Selection order on X11 or unknown sessions: SharpHook.
 ///
 /// The evdev backend reads <c>/dev/input/event*</c>, so we respect a user
 /// opt-out via <c>AppSettings.WaylandEvdevHotkeysEnabled</c> — when set
-/// false the selector skips evdev even if it would otherwise pick it.
-/// Phase 3 will splice an XDG-portal backend between evdev and SharpHook
-/// on Wayland sessions where the user isn't in the <c>input</c> group.
+/// false the selector skips evdev and falls through to the portal (or
+/// SharpHook if the portal is unavailable).
 /// </summary>
 public sealed class BackendSelector
 {

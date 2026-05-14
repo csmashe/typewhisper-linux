@@ -532,7 +532,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
         var path = Path.Combine(environmentDir, "typewhisper-cuda.conf");
         File.WriteAllText(path,
-            $"# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH}}{Environment.NewLine}");
+            $"# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}{Environment.NewLine}");
         return path;
     }
 

@@ -72,6 +72,7 @@ public partial class DictationOverlayViewModel : ObservableObject
             {
                 FeedbackText = e.Reason;
                 FeedbackIsError = true;
+                ShowFeedback = false;
                 ShowFeedback = true;
             });
         };

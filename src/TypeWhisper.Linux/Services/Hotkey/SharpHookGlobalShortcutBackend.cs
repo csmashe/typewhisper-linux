@@ -79,6 +79,8 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
                     if (Volatile.Read(ref _disposed) == 1 || task.IsCanceled)
                         return;
 
+                    lock (_lock) { _running = false; }
+
                     var error = task.Exception?.GetBaseException().Message
                         ?? "Global hotkey hook stopped unexpectedly.";
                     Trace.WriteLine($"[SharpHookBackend] Hook failed: {error}");

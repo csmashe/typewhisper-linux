@@ -57,26 +57,94 @@ internal static class SocketPathResolver
         // subsequent verification still shows wrong bits we fall back to a
         // per-process scratch directory so we never bind inside an
         // attacker-controlled path.
-        if (!Directory.Exists(fallback))
-            Directory.CreateDirectory(fallback);
-        TryChmod(fallback, 0b111_000_000); // 0700
-
-        if (!DirectoryHasExpectedMode(fallback, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute))
+        try
         {
-            // The directory wasn't ours to begin with (someone else owns
-            // it) or the mode can't be tightened. Refuse to share that
-            // path; use a private subdirectory inside our process scratch
-            // so we still get an IPC endpoint without trusting hostile
-            // state. The fallback-fallback path is intentionally not the
-            // shape that any other tool would predict.
-            var privatePath = Path.Combine(Path.GetTempPath(), $"typewhisper-{uid}-{Environment.ProcessId}");
-            Directory.CreateDirectory(privatePath);
-            TryChmod(privatePath, 0b111_000_000); // 0700
-            Trace.WriteLine($"[SocketPathResolver] {fallback} is not 0700-private; falling back to {privatePath}.");
-            return Path.Combine(privatePath, SocketFileName);
+            if (!Directory.Exists(fallback))
+                Directory.CreateDirectory(fallback);
+            TryChmod(fallback, 0b111_000_000); // 0700
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[SocketPathResolver] Could not prepare {fallback}: {ex.Message}");
+            return CreatePrivateSocketPath(uid);
         }
 
+        if (!IsDirectoryPrivateAndOwned(fallback, uid))
+            return CreatePrivateSocketPath(uid);
+
         return Path.Combine(fallback, SocketFileName);
+    }
+
+    private static string CreatePrivateSocketPath(int uid)
+    {
+        var privatePath = Path.Combine(Path.GetTempPath(), $"typewhisper-{uid}-{Environment.ProcessId}");
+        Directory.CreateDirectory(privatePath);
+        TryChmod(privatePath, 0b111_000_000); // 0700
+        Trace.WriteLine($"[SocketPathResolver] Using private socket directory {privatePath}.");
+        return Path.Combine(privatePath, SocketFileName);
+    }
+
+    private static bool IsDirectoryPrivateAndOwned(string path, int uid)
+    {
+        try
+        {
+            if (!TryGetOwnerUid(path, out var ownerUid))
+            {
+                Trace.WriteLine($"[SocketPathResolver] Could not determine owner of {path}.");
+                return false;
+            }
+            if (ownerUid != uid)
+            {
+                Trace.WriteLine($"[SocketPathResolver] {path} not owned by uid {uid} (actual {ownerUid}).");
+                return false;
+            }
+            return DirectoryHasExpectedMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[SocketPathResolver] Could not validate {path}: {ex.Message}");
+            return false;
+        }
+    }
+
+    // statx(2) ABI: kernel-defined struct, arch-independent. stx_uid is at
+    // offset 20 (after stx_mask:4, stx_blksize:4, stx_attributes:8, stx_nlink:4).
+    // We allocate the full 256-byte buffer the kernel writes into and read
+    // only the owner uid.
+    private const int StatxBufSize = 256;
+    private const int StatxUidOffset = 20;
+    private const int AT_FDCWD = -100;
+    private const int AT_SYMLINK_NOFOLLOW = 0x100;
+    private const uint STATX_UID = 0x00000008;
+
+    private static bool TryGetOwnerUid(string path, out int ownerUid)
+    {
+        ownerUid = -1;
+        var buffer = Marshal.AllocHGlobal(StatxBufSize);
+        try
+        {
+            for (var i = 0; i < StatxBufSize; i++)
+                Marshal.WriteByte(buffer, i, 0);
+
+            var rc = statx(AT_FDCWD, path, AT_SYMLINK_NOFOLLOW, STATX_UID, buffer);
+            if (rc != 0)
+            {
+                Trace.WriteLine($"[SocketPathResolver] statx({path}) returned {rc}.");
+                return false;
+            }
+
+            ownerUid = Marshal.ReadInt32(buffer, StatxUidOffset);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[SocketPathResolver] statx({path}) threw: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
     }
 
     private static bool DirectoryHasExpectedMode(string path, UnixFileMode expected)
@@ -118,4 +186,7 @@ internal static class SocketPathResolver
 
     [DllImport("libc", SetLastError = true)]
     private static extern int chmod(string path, uint mode);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int statx(int dirfd, string pathname, int flags, uint mask, IntPtr statxbuf);
 }

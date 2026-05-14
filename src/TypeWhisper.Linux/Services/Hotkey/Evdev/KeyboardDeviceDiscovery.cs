@@ -19,6 +19,7 @@ internal static class KeyboardDeviceDiscovery
         if (!Directory.Exists(ByPathDir)) return Array.Empty<string>();
 
         var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         IEnumerable<string> entries;
         try
         {
@@ -35,7 +36,11 @@ internal static class KeyboardDeviceDiscovery
             if (!entry.EndsWith("-event-kbd", StringComparison.Ordinal)) continue;
             var resolved = ResolveSymlink(entry);
             if (resolved is null) continue;
-            if (File.Exists(resolved)) result.Add(resolved);
+            string normalized;
+            try { normalized = Path.GetFullPath(resolved); }
+            catch { normalized = resolved; }
+            if (!seen.Add(normalized)) continue;
+            if (File.Exists(normalized)) result.Add(normalized);
         }
 
         return result;

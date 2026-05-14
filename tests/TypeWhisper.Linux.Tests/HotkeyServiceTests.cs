@@ -155,6 +155,7 @@ public sealed class HotkeyServiceTests
 
         public Task<GlobalShortcutRegistrationResult> RegisterAsync(GlobalShortcutSet shortcuts, CancellationToken ct)
         {
+            _gate.TrySetResult();
             Interlocked.Increment(ref _pending);
             RegisterCount++;
             LastSet = shortcuts;
@@ -175,6 +176,7 @@ public sealed class HotkeyServiceTests
             // Spin briefly to let the coordinator's chained continuations
             // drain — they run on the thread-pool scheduler so a yield is
             // enough in normal cases; a short timeout guards against hangs.
+            await Task.WhenAny(_gate.Task, Task.Delay(TimeSpan.FromSeconds(2)));
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
             while (DateTime.UtcNow < deadline)
             {

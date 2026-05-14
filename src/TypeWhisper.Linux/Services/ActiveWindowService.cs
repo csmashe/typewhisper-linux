@@ -127,8 +127,11 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     public string? GetBrowserUrl(bool allowInteractiveCapture = true)
     {
-        var processName = GetActiveWindowProcessName();
-        var title = GetActiveWindowTitle();
+        var snapshot = GetActiveWindowSnapshotSync();
+        var title = snapshot?.Title;
+        var processName = snapshot?.ProcessName is { Length: > 0 } name
+            ? name
+            : TryInferBrowserProcessNameFromTitle(title);
 
         var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(processName, title);
         if (atSpiUrl is not null)
@@ -138,10 +141,15 @@ public sealed class ActiveWindowService : IActiveWindowService
         if (inferredUrl is not null)
             return inferredUrl;
 
-        if (!allowInteractiveCapture || !IsXclipAvailable || !IsSupportedBrowserWindow(processName, title))
+        if (!allowInteractiveCapture || !IsXclipAvailable || !IsXdotoolAvailable || !IsSupportedBrowserWindow(processName, title))
             return null;
 
-        var windowId = IsXdotoolAvailable ? RunXdotool("getactivewindow") : null;
+        // Only reuse the snapshot's WindowId when it came from the X11/xdotool
+        // provider — Wayland providers (sway, kwin, gnome-shell, hyprland)
+        // expose compositor-specific ids that xdotool can't address.
+        var windowId = snapshot?.Source == "xdotool" ? snapshot.WindowId : null;
+        if (string.IsNullOrWhiteSpace(windowId))
+            windowId = RunXdotool("getactivewindow");
         if (string.IsNullOrWhiteSpace(windowId))
             return null;
 

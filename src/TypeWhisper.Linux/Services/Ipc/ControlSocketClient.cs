@@ -74,19 +74,42 @@ internal static class ControlSocketClient
             sock.Connect(new UnixDomainSocketEndPoint(path));
 
             var msg = Encoding.UTF8.GetBytes("toggle\n");
-            sock.Send(msg);
+            var sent = 0;
+            while (sent < msg.Length)
+            {
+                var w = sock.Send(msg, sent, msg.Length - sent, SocketFlags.None);
+                if (w <= 0)
+                {
+                    error = "control socket closed during send";
+                    return false;
+                }
+                sent += w;
+            }
 
             // The server replies with a short line ("ok\n" or "err ..."). 64
             // bytes is more than enough for any current or near-future reply.
             var buf = new byte[64];
-            var n = sock.Receive(buf);
-            if (n <= 0)
+            var total = 0;
+            while (total < buf.Length)
+            {
+                var n = sock.Receive(buf, total, buf.Length - total, SocketFlags.None);
+                if (n <= 0) break;
+                total += n;
+                var nl = Array.IndexOf(buf, (byte)'\n', 0, total);
+                if (nl >= 0)
+                {
+                    total = nl;
+                    break;
+                }
+            }
+
+            if (total == 0)
             {
                 error = "control socket closed without reply";
                 return false;
             }
 
-            var reply = Encoding.UTF8.GetString(buf, 0, n).TrimEnd();
+            var reply = Encoding.UTF8.GetString(buf, 0, total).TrimEnd();
             if (reply.StartsWith("ok", StringComparison.Ordinal))
                 return true;
 
@@ -156,7 +179,17 @@ internal static class ControlSocketClient
                 return false;
             }
 
-            sock.Send(payload);
+            var sent = 0;
+            while (sent < payload.Length)
+            {
+                var w = sock.Send(payload, sent, payload.Length - sent, SocketFlags.None);
+                if (w <= 0)
+                {
+                    error = "control socket closed during send";
+                    return false;
+                }
+                sent += w;
+            }
 
             // Read until newline or socket close, capped at MaxLineBytes.
             // We can't use NetworkStream/StreamReader here because

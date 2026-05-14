@@ -472,7 +472,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private readonly Func<string, IReadOnlyList<string>, Task<(int exitCode, string stderr)>>? _processRunnerWithStderr;
     private IReadOnlyList<InputBackend> _chain;
     private readonly bool _isWayland;
-    private readonly HashSet<InputBackend> _disabled = new();
+    private HashSet<InputBackend> _disabled = new();
     private InsertionFailureReason _lastFailureReason = InsertionFailureReason.None;
     private readonly SystemCommandAvailabilityService? _commands;
 
@@ -542,12 +542,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     /// </summary>
     internal void ApplyRefreshedSnapshot(LinuxCapabilitySnapshot snapshot)
     {
+        var newChain = BuildChain(snapshot);
+        var newDisabled = new HashSet<InputBackend>();
         _snapshot = snapshot;
-        _chain = BuildChain(snapshot);
-        // Clear sticky disables: e.g. wtype was marked unsupported on
-        // last try, but the user has now switched compositors or
-        // installed ydotool — give every backend another shot.
-        _disabled.Clear();
+        _chain = newChain;
+        _disabled = newDisabled;
         _lastFailureReason = InsertionFailureReason.None;
     }
 
@@ -679,17 +678,19 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private async Task<bool> WalkChainAsync(Func<InputBackend, Task<bool>> attempt)
     {
+        var chain = _chain;
+        var disabled = _disabled;
         _lastFailureReason = InsertionFailureReason.None;
-        if (_chain.Count == 0)
+        if (chain.Count == 0)
         {
             _lastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
             return false;
         }
 
         var anyAttempted = false;
-        foreach (var backend in _chain)
+        foreach (var backend in chain)
         {
-            if (_disabled.Contains(backend))
+            if (disabled.Contains(backend))
                 continue;
             anyAttempted = true;
             if (await attempt(backend))

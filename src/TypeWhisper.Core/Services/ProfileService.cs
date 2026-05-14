@@ -62,7 +62,7 @@ public sealed class ProfileService : IProfileService
         {
             var forced = _cache.FirstOrDefault(p => p.Id == forcedProfileId);
             if (forced is not null)
-                return new MatchResult(forced, MatchKind.ManualOverride, null, 1, true);
+                return new MatchResult(forced, MatchKind.ManualOverride, null, 1, false);
         }
 
         var enabled = _cache.Where(p => p.IsEnabled).ToList();

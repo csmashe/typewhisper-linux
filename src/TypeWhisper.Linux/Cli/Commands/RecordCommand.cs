@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json;
 using TypeWhisper.Linux.Services.Ipc;
 
 namespace TypeWhisper.Linux.Cli.Commands;
@@ -53,11 +54,22 @@ internal static class RecordCommand
         }
 
         Console.WriteLine(responseJson);
+        return IsOk(responseJson) ? 0 : 1;
+    }
 
-        // Crude but reliable success detection without re-parsing the JSON.
-        // The server controls the exact field order via JsonOptions, so the
-        // substring match is stable; a future protocol bump that changes
-        // formatting would need a parser swap anyway.
-        return responseJson.Contains("\"ok\":true") ? 0 : 1;
+    private static bool IsOk(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("ok", out var ok)
+                   && (ok.ValueKind == JsonValueKind.True || ok.ValueKind == JsonValueKind.False)
+                   && ok.GetBoolean();
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 }
