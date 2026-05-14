@@ -43,6 +43,10 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
 
             return ParseFocusedWindow(output);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch
         {
             return null;
