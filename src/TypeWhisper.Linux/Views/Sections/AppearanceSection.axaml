@@ -34,6 +34,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayPositions}"
                                       SelectedItem="{Binding SelectedOverlayPosition}">
                                 <ComboBox.ItemTemplate>
@@ -54,6 +55,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayWidgets}"
                                       SelectedItem="{Binding SelectedLeftWidget}">
                                 <ComboBox.ItemTemplate>
@@ -74,6 +76,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayWidgets}"
                                       SelectedItem="{Binding SelectedRightWidget}">
                                 <ComboBox.ItemTemplate>

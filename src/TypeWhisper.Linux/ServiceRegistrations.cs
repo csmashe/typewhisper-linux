@@ -5,6 +5,7 @@ using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
@@ -60,6 +61,16 @@ internal static class ServiceRegistrations
         services.AddSingleton<ModelManagerService>();
 
         // Linux-native platform services
+        services.AddSingleton<IDetectionFailureTracker, DetectionFailureTracker>();
+        services.AddSingleton<IActiveWindowProvider, HyprlandActiveWindowProvider>();
+        services.AddSingleton<IActiveWindowProvider, SwayActiveWindowProvider>();
+        services.AddSingleton<IActiveWindowProvider, KWinActiveWindowProvider>();
+        // Window Calls extension wins on GNOME when installed — modern
+        // GNOME blocks the built-in Introspect API for unprivileged apps.
+        services.AddSingleton<IActiveWindowProvider, GnomeWindowCallsProvider>();
+        services.AddSingleton<IActiveWindowProvider, GnomeShellActiveWindowProvider>();
+        services.AddSingleton<IActiveWindowProvider, XdotoolActiveWindowProvider>();
+        services.AddSingleton<AtSpiUrlExtractor>();
         services.AddSingleton<ActiveWindowService>();
         services.AddSingleton<IActiveWindowService>(sp => sp.GetRequiredService<ActiveWindowService>());
         services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
@@ -89,6 +100,8 @@ internal static class ServiceRegistrations
 
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<YdotoolSetupHelper>();
+        services.AddSingleton<BrowserAccessibilitySetupHelper>();
+        services.AddSingleton<GnomeWindowCallsSetupHelper>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();

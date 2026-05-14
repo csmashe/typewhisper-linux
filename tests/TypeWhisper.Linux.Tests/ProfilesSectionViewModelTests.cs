@@ -2,6 +2,7 @@ using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using Xunit;
@@ -26,7 +27,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions);
+        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions, Mock.Of<IDetectionFailureTracker>(), new GnomeWindowCallsSetupHelper(), new BrowserAccessibilitySetupHelper());
 
         var option = Assert.Single(sut.ModelOptions);
         Assert.Null(option.Value);
@@ -41,7 +42,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions);
+        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions, Mock.Of<IDetectionFailureTracker>(), new GnomeWindowCallsSetupHelper(), new BrowserAccessibilitySetupHelper());
         sut.AddProfileCommand.Execute(null);
 
         sut.EditName = "Docs";
@@ -97,7 +98,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions);
+        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions, Mock.Of<IDetectionFailureTracker>(), new GnomeWindowCallsSetupHelper(), new BrowserAccessibilitySetupHelper());
 
         Assert.Equal("firefox", sut.CurrentProcessName);
         Assert.True(sut.HasMatchedProfile);
@@ -114,7 +115,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions);
+        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions, Mock.Of<IDetectionFailureTracker>(), new GnomeWindowCallsSetupHelper(), new BrowserAccessibilitySetupHelper());
         sut.AddProfileCommand.Execute(null);
 
         sut.AddCurrentProcessRuleCommand.Execute(null);

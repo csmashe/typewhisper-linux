@@ -387,7 +387,7 @@ public partial class DictationViewModel : ObservableObject, IDisposable
         }
         else
         {
-            _activeProfile = _profiles.MatchProfile(_capturedProcessName, url);
+            _activeProfile = _profiles.MatchProfile(_capturedProcessName, url).Profile;
         }
 
         var desiredModelId = EffectiveModelId ?? _settings.Current.SelectedModelId;

@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 
@@ -27,6 +28,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private readonly AudioRecordingService _audio;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly TextInsertionService _textInsertion;
+    private readonly YdotoolSetupHelper _ydotoolSetup;
     private readonly ISettingsService _settings;
     private readonly EventHandler _pluginStateChangedHandler;
     private readonly PropertyChangedEventHandler _modelStateChangedHandler;
@@ -56,6 +58,9 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [ObservableProperty] private string _firstDictationText = "";
     [ObservableProperty] private bool _isCudaBenchmarkRunning;
     [ObservableProperty] private string _cudaBenchmarkStatus = "Run CUDA check if you plan to use GPU acceleration.";
+    [ObservableProperty] private bool _isYdotoolSetupRunning;
+    [ObservableProperty] private string _ydotoolSetupStatus = "";
+    [ObservableProperty] private bool _showYdotoolSetupSection;
     public ObservableCollection<AudioInputDevice> Mics { get; } = [];
 
     public int StepCount => 6;
@@ -78,6 +83,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         AudioRecordingService audio,
         SystemCommandAvailabilityService commands,
         TextInsertionService textInsertion,
+        YdotoolSetupHelper ydotoolSetup,
         ISettingsService settings)
     {
         _models = models;
@@ -86,6 +92,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         _audio = audio;
         _commands = commands;
         _textInsertion = textInsertion;
+        _ydotoolSetup = ydotoolSetup;
         _settings = settings;
 
         _pluginStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(RefreshPluginState);
@@ -201,6 +208,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         if (value == 3)
             RefreshDiagnostics();
+
+        // Final step: if we're on Wayland and ydotool needs setup, run it
+        // automatically. The user already saw the System Check page, so
+        // arriving here implies they're ready to finalize — surprising
+        // them with the pkexec prompt is fine because it's the explicit
+        // last action of the wizard. If ydotool is already configured
+        // or the binary isn't installed, the section stays hidden.
+        if (value == StepCount - 1)
+            _ = RunYdotoolSetupIfNeededAsync();
     }
 
     partial void OnIsMicTestRunningChanged(bool value) =>
@@ -208,6 +224,62 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     partial void OnIsFirstDictationRecordingChanged(bool value) =>
         OnPropertyChanged(nameof(FirstDictationButtonText));
+
+    /// <summary>
+    /// Runs the ydotool setup helper from inside the wizard's final step
+    /// when (a) we're on Wayland, (b) the ydotool binary is installed,
+    /// and (c) the integration isn't already fully configured. The
+    /// helper itself prompts pkexec for the one udev-rule install.
+    /// Idempotent: a fully-configured install becomes a no-op and the
+    /// section stays hidden.
+    /// </summary>
+    private async Task RunYdotoolSetupIfNeededAsync()
+    {
+        var snapshot = _commands.GetSnapshot();
+        if (snapshot.SessionType != "Wayland")
+        {
+            ShowYdotoolSetupSection = false;
+            return;
+        }
+
+        var status = _ydotoolSetup.IsCurrentlyConfigured();
+        if (status.IsFullyConfigured)
+        {
+            ShowYdotoolSetupSection = false;
+            return;
+        }
+
+        if (!status.BinaryInstalled)
+        {
+            ShowYdotoolSetupSection = true;
+            YdotoolSetupStatus =
+                "Automatic paste needs ydotool. Install it through your package manager, "
+                + "then open the Text insertion section to finish the setup.";
+            return;
+        }
+
+        ShowYdotoolSetupSection = true;
+        IsYdotoolSetupRunning = true;
+        YdotoolSetupStatus = "Setting up automatic paste — you'll be prompted for your admin password once.";
+
+        try
+        {
+            var result = await _ydotoolSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
+            YdotoolSetupStatus = result.Success
+                ? $"{result.Message} You can now dictate into any Wayland window."
+                : $"{result.Message} {result.Detail} You can retry from the Text insertion section.";
+        }
+        catch (Exception ex)
+        {
+            YdotoolSetupStatus = $"Setup failed: {ex.Message}. Open the Text insertion section to retry.";
+        }
+        finally
+        {
+            IsYdotoolSetupRunning = false;
+            _commands.RefreshSnapshot();
+            RefreshDiagnostics();
+        }
+    }
 
     partial void OnIsCudaBenchmarkRunningChanged(bool value) =>
         OnPropertyChanged(nameof(CudaBenchmarkButtonEnabled));

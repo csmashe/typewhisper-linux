@@ -19,12 +19,16 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private readonly IActiveWindowService _activeWindow;
     private readonly PluginManager _pluginManager;
     private readonly IPromptActionService _promptActions;
+    private readonly IDetectionFailureTracker _failureTracker;
+    private readonly GnomeWindowCallsSetupHelper _gnomeSetup;
+    private readonly BrowserAccessibilitySetupHelper _browserSetup;
     private readonly DispatcherTimer _windowTimer;
     private readonly string _hostProcessName = Process.GetCurrentProcess().ProcessName;
     private ProfilesContextWindow? _contextWindow;
     private string _lastExternalProcessName = "-";
     private string _lastExternalWindowTitle = "-";
     private string _lastExternalUrl = "-";
+    private MatchResult _lastMatchResult = MatchResult.NoMatch;
 
     public ObservableCollection<Profile> Profiles { get; } = [];
     public ObservableCollection<ProfileModelOption> ModelOptions { get; } = [];
@@ -72,6 +76,26 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [ObservableProperty] private string _currentUrl = "-";
     [ObservableProperty] private string _matchedProfileName = "No profile";
     [ObservableProperty] private bool _hasMatchedProfile;
+    [ObservableProperty] private string? _waylandDetectionWarning;
+    [ObservableProperty] private bool _canInstallWindowCallsExtension;
+    [ObservableProperty] private string? _browserAccessibilityStatusMessage;
+    [ObservableProperty] private bool _canEnableBrowserAccessibility;
+    [ObservableProperty] private bool _canRevertBrowserAccessibility;
+
+    /// <summary>
+    /// True when the URL Patterns block in the profile editor should be
+    /// rendered. URL-based profile rules need a working URL extraction
+    /// path: on X11 that's always available (xdotool + xclip); on Wayland
+    /// it needs browser accessibility configured. Hiding the section when
+    /// it can't possibly work avoids leading the user into building rules
+    /// that silently never match — but we keep the section visible when
+    /// the profile already has saved URL patterns so existing data isn't
+    /// orphaned from view.
+    /// </summary>
+    public bool IsUrlPatternsSectionVisible =>
+        !_browserSetup.IsApplicable()
+        || _browserSetup.IsCurrentlyConfigured().IsFullyConfigured
+        || UrlPatternChips.Count > 0;
 
     public IReadOnlyList<string> LanguageChoices { get; } =
         ["", "auto", "en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
@@ -205,16 +229,35 @@ public partial class ProfilesSectionViewModel : ObservableObject
         IProfileService profiles,
         IActiveWindowService activeWindow,
         PluginManager pluginManager,
-        IPromptActionService promptActions)
+        IPromptActionService promptActions,
+        IDetectionFailureTracker failureTracker,
+        GnomeWindowCallsSetupHelper gnomeSetup,
+        BrowserAccessibilitySetupHelper browserSetup)
     {
         _profiles = profiles;
         _activeWindow = activeWindow;
         _pluginManager = pluginManager;
         _promptActions = promptActions;
+        _failureTracker = failureTracker;
+        _gnomeSetup = gnomeSetup;
+        _browserSetup = browserSetup;
+        RefreshBrowserAccessibilityStatus();
 
         _profiles.ProfilesChanged += () => Dispatcher.UIThread.Post(RefreshProfiles);
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModelOptions);
         _promptActions.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshPromptActionOptions);
+        UrlPatternChips.CollectionChanged += (_, _) =>
+            OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
+        _failureTracker.OnFailure += (_, e) =>
+        {
+            if (!e.ShouldShowPersistentBanner) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                WaylandDetectionWarning = e.Reason;
+                CanInstallWindowCallsExtension =
+                    _gnomeSetup.IsApplicable() && !_gnomeSetup.IsCurrentlyInstalled();
+            });
+        };
 
         RefreshModelOptions();
         RefreshPromptActionOptions();
@@ -430,6 +473,39 @@ public partial class ProfilesSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void CaptureCurrentProcessName()
+    {
+        // Read from the live-context cache (CurrentProcessName) rather than
+        // re-querying the active-window service — when the user clicks this
+        // button, *TypeWhisper* is the focused window, so a fresh query
+        // would return our own process name and the self-host guard would
+        // bail. The live-context timer tracks the most-recent non-host
+        // process name and exposes it via CurrentProcessName.
+        if (string.IsNullOrWhiteSpace(CurrentProcessName)
+            || CurrentProcessName == "-"
+            || string.Equals(CurrentProcessName, _hostProcessName, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        ProcessNameInput = CurrentProcessName;
+    }
+
+    [RelayCommand]
+    private void CaptureCurrentUrlPattern()
+    {
+        // Same rationale as CaptureCurrentProcessName: use the live-context
+        // value, not a fresh GetBrowserUrl call (which would target the
+        // TypeWhisper window itself and return null).
+        if (string.IsNullOrWhiteSpace(CurrentUrl) || CurrentUrl == "-")
+            return;
+
+        var pattern = TryExtractUrlPattern(CurrentUrl);
+        if (string.IsNullOrWhiteSpace(pattern))
+            return;
+
+        UrlPatternInput = pattern;
+    }
+
+    [RelayCommand]
     private void AddCurrentProcessRule()
     {
         if (!HasCurrentProcess)
@@ -563,11 +639,160 @@ public partial class ProfilesSectionViewModel : ObservableObject
         CurrentWindowTitle = title ?? "-";
         CurrentUrl = url ?? "-";
 
-        var matched = _profiles.MatchProfile(processName, url);
-        HasMatchedProfile = matched is not null;
-        MatchedProfileName = matched?.Name ?? "No profile";
+        _lastMatchResult = _profiles.MatchProfile(processName, url);
+        HasMatchedProfile = _lastMatchResult.Profile is not null;
+        MatchedProfileName = _lastMatchResult.Profile?.Name ?? "No profile";
+
+        WaylandDetectionWarning = _failureTracker.ShouldShowPersistentBanner
+            ? _failureTracker.LastFailureReason
+            : null;
+
+        CanInstallWindowCallsExtension = WaylandDetectionWarning is not null
+            && _gnomeSetup.IsApplicable()
+            && !_gnomeSetup.IsCurrentlyInstalled();
 
         NotifyStateChanged();
+    }
+
+    [RelayCommand]
+    private void InstallWindowCallsExtension()
+    {
+        if (!_gnomeSetup.TryOpenInstallPage())
+            return;
+
+        // The provider picks the extension up automatically on the next
+        // snapshot tick — no app restart needed. Recheck so the button
+        // disappears as soon as the user finishes installing.
+        Dispatcher.UIThread.Post(() =>
+        {
+            CanInstallWindowCallsExtension = !_gnomeSetup.IsCurrentlyInstalled();
+        }, DispatcherPriority.Background);
+    }
+
+    [RelayCommand]
+    private async Task EnableBrowserAccessibility()
+    {
+        // Show the user every file path we're about to touch before doing
+        // anything — modifying browser launchers and Firefox profile
+        // overrides is the kind of "magic" that deserves explicit
+        // consent. Items already done in a prior run are omitted from
+        // the list so the dialog is honest about what's left.
+        var actions = _browserSetup.DescribePendingActions();
+        if (actions.Count == 0)
+        {
+            RefreshBrowserAccessibilityStatus();
+            return;
+        }
+
+        var message =
+            "TypeWhisper will make the following changes to enable URL-based profile rules on Wayland:\n\n"
+            + string.Join("\n\n", actions)
+            + "\n\nAll changes are user-local and can be reverted from this panel. "
+            + "Fully quit and relaunch the affected browsers afterward to pick up the changes.";
+
+        var dialog = new MessageDialogWindow();
+        var confirmed = await dialog.ShowConfirmationAsync(
+            "Enable browser URL detection",
+            message,
+            confirmText: "Apply changes",
+            cancelText: "Cancel");
+
+        if (!confirmed)
+            return;
+
+        var result = await _browserSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
+        // Re-evaluate the whole panel state — SetUpAsync just flipped both
+        // "is configured" and "has installed changes", so Enable should
+        // disappear and Revert should appear in the same beat.
+        RefreshBrowserAccessibilityStatus();
+        BrowserAccessibilityStatusMessage = result.Success
+            ? $"{result.Message} Restart your browsers (or log out + back in) for the change to take effect."
+            : $"{result.Message} {result.Detail}";
+    }
+
+    private void RefreshBrowserAccessibilityStatus()
+    {
+        // X11 has xdotool + xclip Ctrl+L for URL capture, so the AT-SPI
+        // setup is Wayland-only. Suppress the whole panel elsewhere.
+        if (!_browserSetup.IsApplicable())
+        {
+            BrowserAccessibilityStatusMessage = null;
+            CanEnableBrowserAccessibility = false;
+            CanRevertBrowserAccessibility = false;
+            return;
+        }
+
+        var status = _browserSetup.IsCurrentlyConfigured();
+        var hasAnyInstall = _browserSetup.HasInstalledChanges();
+
+        if (status.IsFullyConfigured)
+        {
+            BrowserAccessibilityStatusMessage =
+                "Browser accessibility is configured. If URL detection still fails, restart the browser.";
+            CanEnableBrowserAccessibility = false;
+        }
+        else if (hasAnyInstall)
+        {
+            // Partial state — typically happens when a new browser is
+            // installed after the user ran Enable, or when one of the
+            // multi-profile / multi-launcher pieces wasn't covered the
+            // first time. The confirmation dialog lists only the
+            // missing pieces, so the user can finish the job without
+            // re-touching the parts already in place.
+            BrowserAccessibilityStatusMessage =
+                "Browser accessibility is partially configured — at least one browser, profile, or launcher "
+                + "still needs setup. Click Enable to finish (the confirmation dialog will list only what's missing), "
+                + "or Revert to undo everything TypeWhisper installed.";
+            CanEnableBrowserAccessibility = true;
+        }
+        else
+        {
+            BrowserAccessibilityStatusMessage =
+                "URL-based profile rules require enabling browser accessibility. "
+                + "Click below to see exactly what TypeWhisper will change.";
+            CanEnableBrowserAccessibility = true;
+        }
+
+        // Revert is offered whenever there's anything we installed — even
+        // in a partial state. That gives the user an escape hatch if they
+        // ran Enable and want to back out before completing.
+        CanRevertBrowserAccessibility = hasAnyInstall;
+
+        OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
+    }
+
+    [RelayCommand]
+    private async Task RevertBrowserAccessibility()
+    {
+        var actions = _browserSetup.DescribeRevertActions();
+        if (actions.Count == 0)
+        {
+            RefreshBrowserAccessibilityStatus();
+            return;
+        }
+
+        var message =
+            "TypeWhisper will revert the following browser-accessibility changes:\n\n"
+            + string.Join("\n\n", actions)
+            + "\n\nFirefox prefs.js entries you set yourself via about:config will be left alone — "
+            + "this only removes the changes TypeWhisper made. "
+            + "Fully restart the affected browsers afterward to drop the previous settings.";
+
+        var dialog = new MessageDialogWindow();
+        var confirmed = await dialog.ShowConfirmationAsync(
+            "Revert browser URL detection",
+            message,
+            confirmText: "Revert",
+            cancelText: "Cancel");
+
+        if (!confirmed)
+            return;
+
+        var result = await _browserSetup.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
+        BrowserAccessibilityStatusMessage = result.Success
+            ? $"{result.Message} Restart your browsers for the change to take effect."
+            : $"{result.Message} {result.Detail}";
+        RefreshBrowserAccessibilityStatus();
     }
 
     private void NotifyStateChanged()

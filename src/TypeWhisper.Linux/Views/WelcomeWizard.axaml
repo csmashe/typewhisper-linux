@@ -304,6 +304,33 @@
                     <TextBlock TextWrapping="Wrap" HorizontalAlignment="Center" MaxWidth="480"
                                TextAlignment="Center"
                                Text="Open any text field, press your hotkey, speak a sentence, then press the hotkey again. TypeWhisper will transcribe locally and type the result into the focused window." />
+
+                    <!-- Auto-run ydotool setup on entering this step. The
+                         section is hidden when the integration is already
+                         fully configured (or we're on X11 / Snapshot says
+                         Wayland-not-applicable). -->
+                    <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                            CornerRadius="6"
+                            Padding="14,12"
+                            MaxWidth="480"
+                            HorizontalAlignment="Center"
+                            Margin="0,16,0,0"
+                            IsVisible="{Binding ShowYdotoolSetupSection}">
+                        <Grid ColumnDefinitions="Auto,*"
+                              ColumnSpacing="10">
+                            <ProgressBar Grid.Column="0"
+                                         Width="16"
+                                         Height="16"
+                                         IsIndeterminate="True"
+                                         VerticalAlignment="Center"
+                                         IsVisible="{Binding IsYdotoolSetupRunning}" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding YdotoolSetupStatus}"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
                 </StackPanel>
             </TabItem>
         </TabControl>

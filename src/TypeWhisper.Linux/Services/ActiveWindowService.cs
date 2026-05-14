@@ -1,20 +1,30 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.ActiveWindow;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Linux active-window lookup via xdotool (X11 only). On Wayland there's no
-/// cross-compositor equivalent — callers should treat nulls as "unknown" and
-/// degrade gracefully.
+/// Linux active-window orchestrator. The compositor-specific work lives in
+/// the <see cref="IActiveWindowProvider"/> chain (xdotool, Hyprland, Sway,
+/// KWin, GNOME Shell) — this class iterates the chain and returns the
+/// first non-null snapshot. The synchronous <see cref="GetActiveWindowProcessName"/>
+/// and <see cref="GetActiveWindowTitle"/> getters walk the same chain with
+/// a tight per-provider budget so legacy callers keep working unchanged.
+/// AT-SPI URL extraction is delegated to <see cref="AtSpiUrlExtractor"/>;
+/// xclip clipboard capture remains here as the last-resort X11 fallback.
 /// </summary>
 public sealed class ActiveWindowService : IActiveWindowService
 {
+    private static readonly TimeSpan ProviderSyncBudget = TimeSpan.FromMilliseconds(150);
+
+    private readonly IReadOnlyList<IActiveWindowProvider> _providers;
+    private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
+
     private static readonly bool IsXdotoolAvailable = CheckXdotoolAvailable();
     private static readonly bool IsXclipAvailable = CheckCommandAvailable("xclip", "-version");
-    private static readonly bool IsBusctlAvailable = CheckCommandAvailable("busctl", "--version");
-    private static readonly bool IsGdbusAvailable = CheckCommandAvailable("gdbus", "--version");
+
     private static readonly HashSet<string> BrowserProcessNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "chrome",
@@ -29,6 +39,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         "zen-browser",
         "zen-bin"
     };
+
     private static readonly string[] BrowserAppNameHints =
     [
         "google chrome",
@@ -44,81 +55,97 @@ public sealed class ActiveWindowService : IActiveWindowService
         "zen browser",
         "zen"
     ];
-    private const string AtSpiRegistryBusName = "org.a11y.atspi.Registry";
-    private const string AtSpiRootPath = "/org/a11y/atspi/accessible/root";
-    private const int AtSpiStateActive = 1;
+
     private const int AtSpiStateFocused = 11;
     private const int AtSpiStateEditable = 18;
-    private const int AtSpiStateShowing = 25;
-    private const int AtSpiStateVisible = 30;
-    private const int AtSpiRoleFrame = 23;
-    private const int AtSpiRoleWindow = 69;
     private const int AtSpiRoleEditBar = 77;
     private const int AtSpiRoleEntry = 79;
 
-    private string? _lastWindowId;
-    private string? _lastTitle;
-    private string? _cachedUrl;
+    public ActiveWindowService(IEnumerable<IActiveWindowProvider> providers, AtSpiUrlExtractor atSpiUrlExtractor)
+    {
+        _providers = providers.ToList();
+        _atSpiUrlExtractor = atSpiUrlExtractor;
+    }
+
+    public async Task<ActiveWindowSnapshot?> GetActiveWindowSnapshotAsync(CancellationToken ct)
+    {
+        foreach (var provider in _providers)
+        {
+            if (!provider.IsApplicable()) continue;
+            try
+            {
+                // Give each provider its own slice of the caller's budget
+                // so a slow earlier provider can't starve later fallbacks.
+                // Without this, a single 50 ms caller CTS that's mostly
+                // consumed by the first applicable provider leaves every
+                // remaining provider with a near-cancelled token and they
+                // all early-return null. We still link the caller token
+                // so external cancellation (e.g. shutdown) propagates.
+                using var perProviderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                perProviderCts.CancelAfter(ProviderSyncBudget);
+                var snapshot = await provider.TryGetActiveWindowAsync(perProviderCts.Token).ConfigureAwait(false);
+                if (snapshot is not null) return snapshot;
+            }
+            catch
+            {
+                // Providers should never throw, but defensively skip any that do.
+            }
+        }
+        return null;
+    }
 
     public string? GetActiveWindowProcessName()
     {
-        if (!IsXdotoolAvailable) return null;
-        var pid = RunXdotool("getactivewindow getwindowpid");
-        if (string.IsNullOrWhiteSpace(pid) || !int.TryParse(pid, out var pidInt))
-            return TryInferBrowserProcessNameFromTitle(GetActiveWindowTitle());
+        var snapshot = GetActiveWindowSnapshotSync();
+        if (snapshot?.ProcessName is { Length: > 0 } name)
+            return name;
 
-        try
-        {
-            using var proc = Process.GetProcessById(pidInt);
-            return proc.ProcessName;
-        }
-        catch
-        {
-            return TryInferBrowserProcessNameFromTitle(GetActiveWindowTitle());
-        }
+        return TryInferBrowserProcessNameFromTitle(snapshot?.Title);
     }
 
-    public string? GetActiveWindowTitle()
+    public string? GetActiveWindowTitle() => GetActiveWindowSnapshotSync()?.Title;
+
+    private ActiveWindowSnapshot? GetActiveWindowSnapshotSync()
     {
-        if (!IsXdotoolAvailable) return null;
-        var title = RunXdotool("getactivewindow getwindowname");
-        return string.IsNullOrWhiteSpace(title) ? null : title;
+        foreach (var provider in _providers)
+        {
+            if (!provider.IsApplicable()) continue;
+
+            using var cts = new CancellationTokenSource(ProviderSyncBudget);
+            try
+            {
+                var snapshot = provider.TryGetActiveWindowAsync(cts.Token).GetAwaiter().GetResult();
+                if (snapshot is not null) return snapshot;
+            }
+            catch
+            {
+                // Skip misbehaving providers — orchestration must never throw.
+            }
+        }
+        return null;
     }
 
     public string? GetBrowserUrl(bool allowInteractiveCapture = true)
     {
-        var windowId = IsXdotoolAvailable ? RunXdotool("getactivewindow") : null;
+        var processName = GetActiveWindowProcessName();
         var title = GetActiveWindowTitle();
 
-        if (!string.IsNullOrWhiteSpace(windowId)
-            && windowId == _lastWindowId
-            && title == _lastTitle
-            && _cachedUrl is not null)
-        {
-            return _cachedUrl;
-        }
-
-        _lastWindowId = windowId;
-        _lastTitle = title;
-        _cachedUrl = null;
-
-        var atSpiUrl = TryGetBrowserUrlViaAtSpi();
+        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(processName, title);
         if (atSpiUrl is not null)
-            return _cachedUrl = atSpiUrl;
+            return atSpiUrl;
 
         var inferredUrl = TryInferBrowserUrlFromTitle(title);
         if (inferredUrl is not null)
-            return _cachedUrl = inferredUrl;
+            return inferredUrl;
 
-        if (allowInteractiveCapture
-            && !string.IsNullOrWhiteSpace(windowId)
-            && IsXclipAvailable
-            && IsSupportedBrowserWindow(GetActiveWindowProcessName(), title))
-        {
-            return _cachedUrl = TryCaptureBrowserUrl(windowId);
-        }
+        if (!allowInteractiveCapture || !IsXclipAvailable || !IsSupportedBrowserWindow(processName, title))
+            return null;
 
-        return null;
+        var windowId = IsXdotoolAvailable ? RunXdotool("getactivewindow") : null;
+        if (string.IsNullOrWhiteSpace(windowId))
+            return null;
+
+        return TryCaptureBrowserUrl(windowId);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
@@ -192,226 +219,6 @@ public sealed class ActiveWindowService : IActiveWindowService
             if (previousClipboard is not null)
                 TryWriteClipboardText(previousClipboard);
         }
-    }
-
-    private static string? TryGetBrowserUrlViaAtSpi()
-    {
-        if (!IsBusctlAvailable || !IsGdbusAvailable)
-            return null;
-
-        var address = GetAtSpiBusAddress();
-        if (string.IsNullOrWhiteSpace(address))
-            return null;
-
-        foreach (var app in GetAccessibleChildren(address, new AccessibleRef(AtSpiRegistryBusName, AtSpiRootPath)))
-        {
-            var appName = GetAccessibleName(address, app);
-            if (!IsSupportedBrowserIdentity(appName))
-                continue;
-
-            var activeWindow = FindActiveBrowserWindow(address, app);
-            if (activeWindow is null)
-                continue;
-
-            var url = FindLikelyBrowserUrlInSubtree(address, activeWindow.Value);
-            if (url is not null)
-                return url;
-        }
-
-        return null;
-    }
-
-    private static string? GetAtSpiBusAddress()
-    {
-        var exitCode = RunProcess(
-            "gdbus",
-            "call --session --dest org.a11y.Bus --object-path /org/a11y/bus --method org.a11y.Bus.GetAddress",
-            out var output);
-
-        if (exitCode != 0 || string.IsNullOrWhiteSpace(output))
-            return null;
-
-        var match = Regex.Match(output, @"\('(?<value>.+)'\s*,?\)");
-        return match.Success ? match.Groups["value"].Value : null;
-    }
-
-    private static AccessibleRef? FindActiveBrowserWindow(string address, AccessibleRef app)
-    {
-        var queue = new Queue<(AccessibleRef Node, int Depth)>();
-        queue.Enqueue((app, 0));
-
-        while (queue.Count > 0)
-        {
-            var (node, depth) = queue.Dequeue();
-            if (depth > 3)
-                continue;
-
-            var role = GetAccessibleRole(address, node);
-            var states = GetAccessibleState(address, node);
-            if ((role == AtSpiRoleFrame || role == AtSpiRoleWindow) && HasState(states, AtSpiStateActive))
-                return node;
-
-            foreach (var child in GetAccessibleChildren(address, node))
-                queue.Enqueue((child, depth + 1));
-        }
-
-        return null;
-    }
-
-    private static string? FindLikelyBrowserUrlInSubtree(string address, AccessibleRef root)
-    {
-        var queue = new Queue<(AccessibleRef Node, int Depth)>();
-        queue.Enqueue((root, 0));
-
-        var seen = 0;
-        string? bestUrl = null;
-        var bestScore = int.MinValue;
-
-        while (queue.Count > 0 && seen < 500)
-        {
-            var (node, depth) = queue.Dequeue();
-            seen++;
-            if (depth > 8)
-                continue;
-
-            var role = GetAccessibleRole(address, node);
-            var states = GetAccessibleState(address, node);
-            if (!HasState(states, AtSpiStateShowing) || !HasState(states, AtSpiStateVisible))
-                continue;
-
-            var name = GetAccessibleName(address, node);
-            var interfaces = GetAccessibleInterfaces(address, node);
-            var candidate = TryGetAccessibleText(address, node, interfaces) ?? name;
-            var score = ScoreBrowserUrlCandidate(role, states, name, candidate, interfaces);
-            if (score > bestScore)
-            {
-                bestScore = score;
-                bestUrl = SanitizeCapturedBrowserUrl(candidate);
-            }
-
-            foreach (var child in GetAccessibleChildren(address, node))
-                queue.Enqueue((child, depth + 1));
-        }
-
-        return bestUrl;
-    }
-
-    private static string? TryGetAccessibleText(string address, AccessibleRef node, IReadOnlyList<string> interfaces)
-    {
-        if (interfaces.Contains("org.a11y.atspi.Value", StringComparer.Ordinal))
-        {
-            var valueText = GetBusctlStringProperty(address, node.BusName, node.ObjectPath, "org.a11y.atspi.Value", "Text");
-            if (!string.IsNullOrWhiteSpace(valueText))
-                return valueText;
-        }
-
-        if (!interfaces.Contains("org.a11y.atspi.Text", StringComparer.Ordinal))
-            return null;
-
-        var characterCount = GetBusctlUInt32Property(address, node.BusName, node.ObjectPath, "org.a11y.atspi.Text", "CharacterCount");
-        if (characterCount <= 0)
-            return null;
-
-        var output = RunBusctlCall(
-            address,
-            node.BusName,
-            node.ObjectPath,
-            "org.a11y.atspi.Text",
-            "GetText",
-            "ii",
-            "0",
-            characterCount.ToString());
-
-        return ParseFirstQuotedString(output);
-    }
-
-    private static IReadOnlyList<AccessibleRef> GetAccessibleChildren(string address, AccessibleRef node)
-    {
-        var output = RunBusctlCall(address, node.BusName, node.ObjectPath, "org.a11y.atspi.Accessible", "GetChildren");
-        if (string.IsNullOrWhiteSpace(output))
-            return [];
-
-        var values = ParseQuotedStrings(output);
-        var children = new List<AccessibleRef>(values.Count / 2);
-        for (var i = 0; i + 1 < values.Count; i += 2)
-            children.Add(new AccessibleRef(values[i], values[i + 1]));
-
-        return children;
-    }
-
-    private static IReadOnlyList<string> GetAccessibleInterfaces(string address, AccessibleRef node)
-    {
-        var output = RunBusctlCall(address, node.BusName, node.ObjectPath, "org.a11y.atspi.Accessible", "GetInterfaces");
-        return string.IsNullOrWhiteSpace(output) ? [] : ParseQuotedStrings(output);
-    }
-
-    private static string? GetAccessibleName(string address, AccessibleRef node) =>
-        GetBusctlStringProperty(address, node.BusName, node.ObjectPath, "org.a11y.atspi.Accessible", "Name");
-
-    private static int GetAccessibleRole(string address, AccessibleRef node)
-    {
-        var output = RunBusctlCall(address, node.BusName, node.ObjectPath, "org.a11y.atspi.Accessible", "GetRole");
-        return ParseLastInt(output);
-    }
-
-    private static IReadOnlyList<uint> GetAccessibleState(string address, AccessibleRef node)
-    {
-        var output = RunBusctlCall(address, node.BusName, node.ObjectPath, "org.a11y.atspi.Accessible", "GetState");
-        if (string.IsNullOrWhiteSpace(output))
-            return [];
-
-        var ints = new List<uint>();
-        foreach (Match match in Regex.Matches(output, @"\b\d+\b"))
-        {
-            if (uint.TryParse(match.Value, out var value))
-                ints.Add(value);
-        }
-
-        return ints.Count > 1 ? ints[1..] : [];
-    }
-
-    private static string? GetBusctlStringProperty(string address, string destination, string path, string @interface, string property)
-    {
-        var output = RunBusctlGetProperty(address, destination, path, @interface, property);
-        return ParseFirstQuotedString(output);
-    }
-
-    private static int GetBusctlUInt32Property(string address, string destination, string path, string @interface, string property)
-    {
-        var output = RunBusctlGetProperty(address, destination, path, @interface, property);
-        return ParseLastInt(output);
-    }
-
-    private static string? RunBusctlCall(
-        string address,
-        string destination,
-        string path,
-        string @interface,
-        string method,
-        params string[] signatureAndArgs)
-    {
-        var args = new List<string>
-        {
-            $"--address={address}",
-            "call",
-            destination,
-            path,
-            @interface,
-            method
-        };
-        args.AddRange(signatureAndArgs);
-
-        var exitCode = RunProcess("busctl", args, out var output);
-        return exitCode == 0 ? output?.Trim() : null;
-    }
-
-    private static string? RunBusctlGetProperty(string address, string destination, string path, string @interface, string property)
-    {
-        var exitCode = RunProcess(
-            "busctl",
-            [$"--address={address}", "get-property", destination, path, @interface, property],
-            out var output);
-        return exitCode == 0 ? output?.Trim() : null;
     }
 
     private static bool SendBrowserAddressBarCaptureKeys(string windowId)
@@ -634,44 +441,6 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
-    private static int RunProcess(string fileName, IReadOnlyList<string> args, out string? output)
-    {
-        output = null;
-
-        try
-        {
-            var startInfo = new ProcessStartInfo(fileName)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            };
-            foreach (var arg in args)
-                startInfo.ArgumentList.Add(arg);
-
-            using var p = Process.Start(startInfo);
-
-            if (p is null)
-                return -1;
-
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                return -1;
-            }
-
-            output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode;
-        }
-        catch
-        {
-            return -1;
-        }
-    }
-
     private static int RunProcessWithInput(string fileName, string args, string input)
     {
         try
@@ -695,29 +464,4 @@ public sealed class ActiveWindowService : IActiveWindowService
             return -1;
         }
     }
-
-    private static List<string> ParseQuotedStrings(string value) =>
-        Regex.Matches(value, "\"((?:[^\"\\\\]|\\\\.)*)\"")
-            .Select(match => Regex.Unescape(match.Groups[1].Value))
-            .ToList();
-
-    private static string? ParseFirstQuotedString(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        var values = ParseQuotedStrings(value);
-        return values.Count > 0 ? values[0] : null;
-    }
-
-    private static int ParseLastInt(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return 0;
-
-        var match = Regex.Matches(value, @"\b\d+\b").LastOrDefault();
-        return match is not null && int.TryParse(match.Value, out var result) ? result : 0;
-    }
 }
-
-internal readonly record struct AccessibleRef(string BusName, string ObjectPath);

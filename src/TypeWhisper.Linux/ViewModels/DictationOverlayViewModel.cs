@@ -30,7 +30,8 @@ public partial class DictationOverlayViewModel : ObservableObject
         DictationOrchestrator dictation,
         TransformSelectionService transformSelection,
         AudioRecordingService audio,
-        ISettingsService settings)
+        ISettingsService settings,
+        IDetectionFailureTracker failureTracker)
     {
         _audio = audio;
         _settings = settings;
@@ -63,6 +64,17 @@ public partial class DictationOverlayViewModel : ObservableObject
             Dispatcher.UIThread.Post(() => AudioLevel = level);
 
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(RefreshOverlaySlots);
+
+        failureTracker.OnFailure += (_, e) =>
+        {
+            if (e.ShouldShowPersistentBanner) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                FeedbackText = e.Reason;
+                FeedbackIsError = true;
+                ShowFeedback = true;
+            });
+        };
     }
 
     public bool HasVisibleContent => IsOverlayVisible || ShowFeedback;

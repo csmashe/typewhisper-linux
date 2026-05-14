@@ -174,7 +174,7 @@ public partial class ProfilesViewModel : ObservableObject
         CurrentWindowTitle = title ?? "-";
         CurrentUrl = url ?? "-";
 
-        var matched = _profiles.MatchProfile(processName, url);
+        var matched = _profiles.MatchProfile(processName, url).Profile;
         HasMatchedProfile = matched is not null;
         MatchedProfileName = matched?.Name ?? Loc.Instance["Profiles.NoProfile"];
 

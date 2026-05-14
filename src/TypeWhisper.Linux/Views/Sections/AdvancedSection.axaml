@@ -63,6 +63,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding AutoUnloadOptions}"
                                       SelectedItem="{Binding SelectedAutoUnloadOption}">
                                 <ComboBox.ItemTemplate>
@@ -98,6 +99,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding SpokenFeedbackProviders}"
                                       SelectedItem="{Binding SelectedSpokenFeedbackProviderOption}"
                                       IsEnabled="{Binding CanUseSpokenFeedback}">
@@ -119,6 +121,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding SpokenFeedbackVoices}"
                                       SelectedItem="{Binding SelectedSpokenFeedbackVoiceOption}"
                                       IsEnabled="{Binding CanUseSpokenFeedback}">
@@ -168,6 +171,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding HistoryRetentionOptions}"
                                       SelectedItem="{Binding SelectedHistoryRetention}">
                                 <ComboBox.ItemTemplate>

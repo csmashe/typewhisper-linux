@@ -40,11 +40,15 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     /// "ydotool recommended" framing.</summary>
     public bool CompositorRejectsWtype => Snapshot.CompositorRejectsWtype;
 
-    /// <summary>True when ydotool is a sensible thing to set up: we're on
-    /// Wayland and the binary is present (or might be once the user
-    /// installs the package). Hides the auto-setup UI on X11 where it's
-    /// pure noise.</summary>
-    public bool ShowYdotoolSetup => Snapshot.SessionType == "Wayland";
+    /// <summary>True when ydotool is a sensible thing to surface: we're
+    /// on Wayland AND there's something the user can actually do here
+    /// (install manually, run the one-click setup, or revert a setup we
+    /// previously installed). Hides the whole section on X11 and also
+    /// hides it once ydotool is fully configured and we don't own any
+    /// integration — at that point the page would be all-status,
+    /// no-action, which is just noise.</summary>
+    public bool ShowYdotoolSetup => Snapshot.SessionType == "Wayland"
+        && (ShowManualInstructions || CanSetUpAutomatically || CanRemoveIntegration);
 
     public string XdotoolStatusText
     {

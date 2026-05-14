@@ -4,6 +4,7 @@ using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -64,6 +65,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly RecentTranscriptionsService _recentTranscriptions;
     private readonly IdeFileReferenceService _ideFileReferences;
     private readonly SystemCommandAvailabilityService _commands;
+    private readonly IDetectionFailureTracker _failureTracker;
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly VoiceCommandParser _voiceCommands = new();
     private readonly DeveloperFormattingService _developerFormatting = new();
@@ -181,7 +183,8 @@ public sealed class DictationOrchestrator : IDisposable
         MemoryService memory,
         RecentTranscriptionsService recentTranscriptions,
         IdeFileReferenceService ideFileReferences,
-        SystemCommandAvailabilityService commands)
+        SystemCommandAvailabilityService commands,
+        IDetectionFailureTracker failureTracker)
     {
         _hotkey = hotkey;
         _audio = audio;
@@ -208,6 +211,7 @@ public sealed class DictationOrchestrator : IDisposable
         _recentTranscriptions = recentTranscriptions;
         _ideFileReferences = ideFileReferences;
         _commands = commands;
+        _failureTracker = failureTracker;
     }
 
     public void Initialize()
@@ -377,27 +381,54 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingWindowId = _activeWindow.GetActiveWindowId();
                 _recordingProfile = null;
             }
-            recordingSnapshotTask = Task.Run(() =>
+            recordingSnapshotTask = Task.Run(async () =>
             {
+                ActiveWindowSnapshot? initialSnap = null;
                 string? appProcess = null;
                 string? appTitle = null;
                 string? appUrl = null;
+                MatchResult initialMatch = MatchResult.NoMatch;
                 Profile? matchedProfile = null;
                 try
                 {
-                    appProcess = _activeWindow.GetActiveWindowProcessName();
-                    appTitle = _activeWindow.GetActiveWindowTitle();
-                    appUrl = _activeWindow.GetBrowserUrl(allowInteractiveCapture: false);
-                    matchedProfile = _profiles.MatchProfile(appProcess, appUrl);
+                    // 50 ms was too tight: the per-provider budget alone is
+                    // 150 ms, and xdotool's chain (window-id + title + pid →
+                    // ProcessName) is three sequential subprocesses that
+                    // together can exceed half a second under normal load.
+                    // The whole task runs in the background of audio
+                    // recording, so a half-second budget here doesn't add
+                    // user-visible latency — it just guarantees we get a
+                    // process+title hit before the deferred URL pass runs.
+                    using var initialCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+                    initialSnap = await _activeWindow.GetActiveWindowSnapshotAsync(initialCts.Token).ConfigureAwait(false);
+                    appProcess = initialSnap?.ProcessName;
+                    appTitle = initialSnap?.Title;
+                    initialMatch = _profiles.MatchProfile(appProcess, url: null);
+                    matchedProfile = initialMatch.Profile;
+
+                    if (initialSnap is null)
+                    {
+                        _failureTracker.RecordFailure(
+                            DesktopDetector.DetectId() switch
+                            {
+                                "gnome" => "gnome-shell",
+                                "kde" => "kwin",
+                                "hyprland" => "hyprland",
+                                "sway" => "sway",
+                                _ => "xdotool"
+                            },
+                            "No active-window provider returned a snapshot");
+                    }
+                    else
+                    {
+                        _failureTracker.RecordSuccess();
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[Dictation] Active-window snapshot failed: {ex.Message}");
+                    Trace.WriteLine($"[Dictation] Initial active-window snapshot failed: {ex.Message}");
                 }
 
-                // Commit only if this session is still active. If StopAsync has
-                // already advanced _recordingSession (timeout or a fresh Start),
-                // dropping the writes preserves the new dictation's context.
                 bool committed;
                 lock (_recordingSessionLock)
                 {
@@ -429,6 +460,89 @@ public sealed class DictationOrchestrator : IDisposable
                     AppName = appTitle,
                     AppProcessName = appProcess
                 });
+
+                try
+                {
+                    // AT-SPI URL walks on Wayland can take 2+ seconds on a
+                    // busy Gmail tree (busctl process spawn + D-Bus round
+                    // trip per node). Our orchestrator timeout has to
+                    // exceed the walker's own budget by a healthy margin —
+                    // otherwise this await cancels in the same window the
+                    // walker returns its result, and a perfectly good URL
+                    // gets discarded. Dictation has already finished by
+                    // this point, so the user isn't waiting on it.
+                    using var deferredCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(4000));
+                    var deferredUrl = await Task.Run(
+                        () => _activeWindow.GetBrowserUrl(allowInteractiveCapture: false),
+                        deferredCts.Token).ConfigureAwait(false);
+
+                    if (!string.IsNullOrWhiteSpace(deferredUrl))
+                    {
+                        // The URL came from whatever window is focused right now, which
+                        // may have changed since recording started. Re-snapshot and only
+                        // apply the rematch if we're still on the same window — otherwise
+                        // we'd bind this dictation to a URL from an unrelated tab/window.
+                        ActiveWindowSnapshot? verifySnap = null;
+                        try
+                        {
+                            // Match the initial-snapshot budget — 50 ms was
+                            // tighter than the per-provider 150 ms slice and
+                            // could return null on xdotool's multi-subprocess
+                            // chain, causing us to discard a valid URL just
+                            // because the same provider chain didn't finish
+                            // in time on the verification pass.
+                            using var verifyCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+                            verifySnap = await _activeWindow
+                                .GetActiveWindowSnapshotAsync(verifyCts.Token)
+                                .ConfigureAwait(false);
+                        }
+                        catch { }
+
+                        if (initialSnap is null || verifySnap is null || !IsSameWindow(initialSnap, verifySnap))
+                        {
+                            Trace.WriteLine("[Dictation] Deferred URL discarded — focused window changed mid-capture.");
+                        }
+                        else
+                        {
+                            // The URL is valid metadata regardless of whether it changes the
+                            // profile match — history records and downstream prompt processing
+                            // both consume _recordingAppUrl. Commit it once window identity is
+                            // verified, then separately decide whether the rematch should swap
+                            // the active profile (which we gate on a tier upgrade to avoid
+                            // churn/downgrade).
+                            lock (_recordingSessionLock)
+                            {
+                                if (_recordingSession != sessionId)
+                                    return;
+                                _recordingAppUrl = deferredUrl;
+                            }
+
+                            var rematch = _profiles.MatchProfile(appProcess, deferredUrl);
+                            if (rematch.Profile is not null && (int)rematch.Kind < (int)initialMatch.Kind)
+                            {
+                                lock (_recordingSessionLock)
+                                {
+                                    if (_recordingSession != sessionId)
+                                        return;
+                                    _recordingProfile = rematch.Profile;
+                                }
+
+                                SetOverlayState(state => state with
+                                {
+                                    ActiveProfileName = rematch.Profile.Name
+                                });
+
+                                _audio.WhisperModeEnabled =
+                                    rematch.Profile.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
+                            }
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.Message}");
+                }
             });
             _recordingSnapshotTask = recordingSnapshotTask;
         }
@@ -1303,6 +1417,14 @@ public sealed class DictationOrchestrator : IDisposable
     // there's no need to hide it for the paste to land correctly.
     private static Task YieldFocusForInsertionAsync() => Task.Delay(90);
 
+    private static bool IsSameWindow(ActiveWindowSnapshot a, ActiveWindowSnapshot b)
+    {
+        if (a.WindowId is not null && b.WindowId is not null)
+            return string.Equals(a.WindowId, b.WindowId, StringComparison.Ordinal);
+        return string.Equals(a.ProcessName, b.ProcessName, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(a.AppId, b.AppId, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// <see cref="ReportStatus"/> variant that suppresses overlay/status updates
     /// once a newer dictation has taken over the overlay. The
@@ -1508,7 +1630,25 @@ public sealed class DictationOrchestrator : IDisposable
 
         try
         {
-            await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(500));
+            // Cover the deferred URL re-match's full background pipeline:
+            //   - initial snapshot         up to 500 ms
+            //   - AT-SPI URL walker        up to 2 500 ms (WalkBudget)
+            //   - verification snapshot    up to 500 ms (matches initial)
+            //   - rematch + lock overhead  small
+            // Worst case ~3.5 s, so 4 s gives margin without being absurd.
+            // Without this, any dictation shorter than the walker's runtime
+            // would advance _recordingSession before the late URL write
+            // lands, and the session-id guard would drop the write —
+            // silently dropping URL-based profile matches for short
+            // browser dictations.
+            //
+            // Cost: stop-to-transcription latency grows by up to ~4 s on
+            // browser tabs when the walker uses its full budget. Non-
+            // browser processes early-return from GetBrowserUrl in
+            // milliseconds and aren't affected. Long dictations (>3 s of
+            // recording) also aren't affected because the walker has
+            // already completed in the background by the time Stop fires.
+            await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(4000));
         }
         catch (TimeoutException)
         {

@@ -10,5 +10,5 @@ public interface IProfileService
     void AddProfile(Profile profile);
     void UpdateProfile(Profile profile);
     void DeleteProfile(string id);
-    Profile? MatchProfile(string? processName, string? url);
+    MatchResult MatchProfile(string? processName, string? url, string? forcedProfileId = null);
 }

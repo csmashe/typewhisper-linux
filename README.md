@@ -133,6 +133,81 @@ desktop entry, so the dock or app switcher can show a generic icon. The
 desktop installer registers the `.desktop` file and icon theme entry for that
 case.
 
+#### GNOME Wayland active-window detection
+
+Profile matching by process name (e.g. matching on `firefox`, `code`,
+`soffice.bin`) requires TypeWhisper to know which window has focus.
+TypeWhisper picks a compositor-native provider per session — `xdotool` on
+X11/XWayland, `hyprctl` on Hyprland, `swaymsg` on Sway, `kdotool` on KDE
+Plasma — and falls back to a Linux process-name lookup via `/proc/PID/comm`
+so user profiles built against X11 keep working unchanged on Wayland.
+
+On GNOME Wayland there is no built-in way for an unprivileged app to ask
+"what's the active window" — the built-in `org.gnome.Shell.Introspect`
+D-Bus API returns `AccessDenied` for everyone except trusted clients. The
+fix is the user-installed **Window Calls** GNOME Shell extension:
+
+1. Install from <https://extensions.gnome.org/extension/4974/window-calls/>
+   (the Profiles section in TypeWhisper has an **Install Window Calls
+   extension** button that opens this page when the extension is missing).
+2. Once enabled, restart TypeWhisper — no logout required. The extension's
+   D-Bus interface (`org.gnome.Shell.Extensions.Windows`) is detected at
+   the next snapshot tick.
+
+Without the extension, GNOME Wayland users can still use URL-only profile
+rules and any global (no-match) profile, but app-name matching will not
+fire.
+
+#### Wayland URL detection for browser-based profile rules
+
+URL-based profile rules (`mail.google.com`, `*.github.com`, etc.) need
+TypeWhisper to read the browser's address bar. On X11 the existing
+`xdotool` + `xclip` Ctrl+L/Ctrl+C trick covers this without any browser
+configuration. On Wayland synthetic-input shortcuts are blocked by the
+compositor, so TypeWhisper falls back to walking the browser's
+[AT-SPI](https://docs.gtk.org/atspi2/) accessibility tree — which only
+works if the browser is exposing it.
+
+The Profiles section in TypeWhisper has an **Enable browser URL
+detection** button that:
+
+- Writes `~/.config/environment.d/typewhisper-accessibility.conf` setting
+  `MOZ_ENABLE_ACCESSIBILITY=1` and `GTK_MODULES=gail:atk-bridge` for
+  Firefox-family browsers.
+- Patches user-local `.desktop` launchers for Firefox / Zen / LibreWolf
+  and Chromium / Chrome / Edge / Brave / Vivaldi / Opera so the
+  appropriate flag (`MOZ_ENABLE_ACCESSIBILITY=1` for Firefox-family,
+  `--force-renderer-accessibility` for Chromium-family) is set inline on
+  every menu launch — independent of whether `systemd --user` reloaded
+  the `environment.d` file across logouts.
+- Backs up any non-owned user `.desktop` files in
+  `~/.local/share/typewhisper/launcher-backups/` so the integration can
+  be cleanly removed without losing user customizations.
+
+**Firefox additionally needs the lazy-init gate flipped.** Modern Firefox
+(100+) refuses to register on AT-SPI until either an assistive
+technology connects or `accessibility.force_disabled` is explicitly set:
+
+1. Open `about:config` in Firefox, accept the warning.
+2. Search for `accessibility.force_disabled`.
+3. Edit the value from `0` to `-1` (force-enable always).
+4. Restart Firefox. Verify by visiting `about:support` — the
+   **Accessibility** section should now say `Activated: Yes`.
+
+After Firefox is on the AT-SPI bus, the TypeWhisper walker finds the
+address-bar element automatically and surfaces the URL to the profile
+matcher. The walker has a 1.2 s per-call budget and caches the matched
+URL for 10 s, so transient title bumps (Gmail badge updates,
+draft-saved overlays, etc.) do not force constant re-walking.
+
+When URL detection fails, the Profiles section banner explains what's
+missing, and the Error Log on the About page records a one-line
+diagnostic per unique state. Look for entries like
+`AT-SPI URL walk: process=firefox matched-app='Firefox' nodes-walked=N
+best-score=... result=...` — `matched-app=none` means the browser
+isn't exposing AT-SPI, `result=null` with a non-null `best-score` means
+the walker reached the address bar but didn't recognise it.
+
 ## Linux Requirements
 
 - A modern Linux desktop session
@@ -152,15 +227,24 @@ case.
 
 ## Tested On
 
-This Linux branch has only been tested on the maintainer's current setup so far:
+This Linux branch has been tested on the maintainer's current setups:
 
-- Pop!_OS 22.04 LTS
-- GNOME 42.9
-- X11 session
+- Pop!_OS 22.04 LTS / GNOME 42.9 / X11 session
+- Fedora 44 / GNOME 46+ / Wayland session (with the Window Calls
+  extension installed for active-window detection)
 
-Linux desktop behavior can vary by distribution, compositor, desktop environment, and especially Wayland implementation. Wayland support paths are included where possible, but they may not behave the same across all setups.
+Linux desktop behavior can vary by distribution, compositor, desktop
+environment, and especially Wayland implementation. Compositor-native
+window providers exist for Hyprland, Sway, KDE Plasma (via `kdotool`),
+and GNOME (via the Window Calls extension); URL detection on Wayland
+uses AT-SPI and requires browser-side accessibility to be enabled — see
+*Wayland URL detection for browser-based profile rules* above.
 
-If you run into a setup-specific issue, please create an issue or open a pull request with the distribution, desktop environment, display server, reproduction steps, and any relevant logs.
+If you run into a setup-specific issue, please create an issue or open a
+pull request with the distribution, desktop environment, display server,
+reproduction steps, and any relevant logs (the Error Log section on the
+About page has a per-window AT-SPI walk diagnostic for URL detection
+issues).
 
 ## Build and Run
 
@@ -300,10 +384,27 @@ Example profile uses:
 - Use a different transcription model for one app
 - Run a specific prompt action for text captured in a matching context
 
+Profile-rule prerequisites on Wayland:
+
+- App-name rules need a compositor-native window provider — installed by
+  default on Hyprland (`hyprctl`) and Sway (`swaymsg`), available via
+  `kdotool` on KDE Plasma, and via the user-installed **Window Calls**
+  extension on GNOME. See *GNOME Wayland active-window detection* above.
+- URL-pattern rules need browser-side AT-SPI accessibility enabled. The
+  Profiles section has an **Enable browser URL detection** button that
+  patches the relevant launchers and writes the env file; Firefox users
+  additionally need the `about:config` flip described in *Wayland URL
+  detection* above.
+- The Profiles section shows live diagnostic banners when window detection
+  fails repeatedly, with a one-click remediation button for the missing
+  piece. The Error Log on the About page records per-state walk
+  diagnostics that pinpoint exactly which step failed.
+
 Known profile gaps:
 
-- Active-window and URL detection can vary by desktop environment, browser, and display server.
-- Some Wayland sessions may restrict app/window metadata more than X11.
+- Active-window detection on KDE Plasma requires `kdotool` to be
+  installed; without it, app-name matching is unavailable in that
+  session.
 
 ## Project Layout
 

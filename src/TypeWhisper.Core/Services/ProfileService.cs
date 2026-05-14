@@ -54,29 +54,74 @@ public sealed class ProfileService : IProfileService
         ProfilesChanged?.Invoke();
     }
 
-    public Profile? MatchProfile(string? processName, string? url)
+    public MatchResult MatchProfile(string? processName, string? url, string? forcedProfileId = null)
     {
         EnsureCacheLoaded();
 
-        foreach (var profile in _cache.Where(p => p.IsEnabled))
+        if (forcedProfileId is not null)
         {
-            if (processName is not null && profile.ProcessNames.Count > 0)
-            {
-                if (profile.ProcessNames.Any(pn =>
-                    processName.Equals(pn, StringComparison.OrdinalIgnoreCase)))
-                    return profile;
-            }
-
-            if (url is not null && profile.UrlPatterns.Count > 0)
-            {
-                var host = ExtractHost(url);
-                if (host is not null && profile.UrlPatterns.Any(pattern =>
-                    MatchesUrlPattern(host, url, pattern)))
-                    return profile;
-            }
+            var forced = _cache.FirstOrDefault(p => p.Id == forcedProfileId);
+            if (forced is not null)
+                return new MatchResult(forced, MatchKind.ManualOverride, null, 1, true);
         }
 
-        return null;
+        var enabled = _cache.Where(p => p.IsEnabled).ToList();
+        var host = url is not null ? ExtractHost(url) : null;
+
+        var appAndWebsite = new List<(Profile Profile, string? MatchedPattern)>();
+        var websiteOnly = new List<(Profile Profile, string? MatchedPattern)>();
+        var appOnly = new List<Profile>();
+        var global = new List<Profile>();
+
+        foreach (var profile in enabled)
+        {
+            var processMatches = processName is not null
+                && profile.ProcessNames.Count > 0
+                && profile.ProcessNames.Any(pn =>
+                    processName.Equals(pn, StringComparison.OrdinalIgnoreCase));
+
+            string? urlMatchPattern = null;
+            if (url is not null && profile.UrlPatterns.Count > 0)
+            {
+                urlMatchPattern = profile.UrlPatterns.FirstOrDefault(pattern =>
+                    host is not null && MatchesUrlPattern(host, url, pattern));
+            }
+
+            if (processMatches && urlMatchPattern is not null)
+                appAndWebsite.Add((profile, urlMatchPattern));
+            else if (urlMatchPattern is not null && profile.ProcessNames.Count == 0)
+                websiteOnly.Add((profile, urlMatchPattern));
+            else if (processMatches && profile.UrlPatterns.Count == 0)
+                appOnly.Add(profile);
+            else if (profile.ProcessNames.Count == 0 && profile.UrlPatterns.Count == 0)
+                global.Add(profile);
+        }
+
+        if (appAndWebsite.Count > 0)
+            return BuildResult(appAndWebsite, MatchKind.AppAndWebsite, includeDomain: true);
+        if (websiteOnly.Count > 0)
+            return BuildResult(websiteOnly, MatchKind.Website, includeDomain: true);
+        if (appOnly.Count > 0)
+            return BuildResult(appOnly.Select(p => (p, (string?)null)).ToList(), MatchKind.App, includeDomain: false);
+        if (global.Count > 0)
+            return BuildResult(global.Select(p => (p, (string?)null)).ToList(), MatchKind.Global, includeDomain: false);
+
+        return MatchResult.NoMatch;
+    }
+
+    private static MatchResult BuildResult(
+        List<(Profile Profile, string? MatchedPattern)> tier,
+        MatchKind kind,
+        bool includeDomain)
+    {
+        var maxPriority = tier.Max(t => t.Profile.Priority);
+        var top = tier.Where(t => t.Profile.Priority == maxPriority).ToList();
+        var competing = top.Count;
+        var hasLowerPriority = tier.Any(t => t.Profile.Priority < maxPriority);
+        var winner = top[0];
+        var matchedDomain = includeDomain ? winner.MatchedPattern : null;
+        var wonByPriority = competing == 1 && hasLowerPriority;
+        return new MatchResult(winner.Profile, kind, matchedDomain, competing, wonByPriority);
     }
 
     private static string? ExtractHost(string url)
