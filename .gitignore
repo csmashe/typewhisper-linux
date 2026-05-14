@@ -14,9 +14,7 @@ TestResults/
 *~
 .DS_Store
 releases/
-!docs/releases/
-!docs/releases/*.md
-docs/local/
+docs/
 publish/
 .agents/
 .claude/
