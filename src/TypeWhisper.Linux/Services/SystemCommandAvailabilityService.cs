@@ -1,6 +1,7 @@
 using System.IO;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -45,6 +46,15 @@ public sealed class SystemCommandAvailabilityService
         _snapshot = BuildSnapshot();
     }
 
+    /// <summary>
+    /// Fired after <see cref="RefreshSnapshot"/> rebuilds the cached
+    /// snapshot. Subscribers (notably the live insertion platform) re-read
+    /// their derived state so a one-click ydotool setup takes effect
+    /// without an app restart. Handlers must not throw — the refresh
+    /// flow can't usefully report a subscriber failure to the user.
+    /// </summary>
+    public event EventHandler<LinuxCapabilitySnapshot>? SnapshotChanged;
+
     public bool IsWaylandSession { get { var s = _snapshot; return s.SessionType == "Wayland"; } }
     public bool IsX11Session { get { var s = _snapshot; return s.SessionType == "X11"; } }
     public bool HasXdotool { get { var s = _snapshot; return s.HasXdotool; } }
@@ -70,7 +80,29 @@ public sealed class SystemCommandAvailabilityService
     {
         var snapshot = BuildSnapshot();
         Interlocked.Exchange(ref _snapshot, snapshot);
+        try
+        {
+            SnapshotChanged?.Invoke(this, snapshot);
+        }
+        catch
+        {
+            // A misbehaving subscriber must not turn a successful refresh
+            // (e.g. ydotool just got set up) into a failure surfaced to
+            // the user. Swallow and continue.
+        }
         return snapshot;
+    }
+
+    /// <summary>
+    /// Test seam: replaces the cached snapshot with a supplied one and
+    /// raises <see cref="SnapshotChanged"/>. Lets the chain-rebuild
+    /// integration be exercised without relying on whatever ydotool /
+    /// wtype binaries happen to live on the test host.
+    /// </summary>
+    internal void RaiseSnapshotChangedForTests(LinuxCapabilitySnapshot snapshot)
+    {
+        Interlocked.Exchange(ref _snapshot, snapshot);
+        SnapshotChanged?.Invoke(this, snapshot);
     }
 
     public static string? FindCuda12RuntimeDirectory()
@@ -210,6 +242,8 @@ public sealed class SystemCommandAvailabilityService
         var hasPactl = IsCommandAvailable("pactl");
         var hasPlayerCtl = IsCommandAvailable("playerctl");
         var hasCanberraGtkPlay = IsCommandAvailable("canberra-gtk-play");
+        var hasYdotool = IsCommandAvailable("ydotool");
+        var ydotoolSocket = ResolveYdotoolSocketPath();
 
         return new LinuxCapabilitySnapshot(
             SessionType: isWayland ? "Wayland" : isX11 ? "X11" : "Unknown",
@@ -226,7 +260,79 @@ public sealed class SystemCommandAvailabilityService
             HasCudaGpu: IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
             HasCudaRuntimeLibraries: (IsLibraryAvailable("libcudart.so.12")
                                       && IsLibraryAvailable("libcublas.so.12"))
-                                     || FindCuda12RuntimeDirectory() is not null);
+                                     || FindCuda12RuntimeDirectory() is not null,
+            Compositor: DesktopDetector.DetectId(),
+            HasYdotool: hasYdotool,
+            HasYdotoolSocket: ydotoolSocket is not null,
+            YdotoolSocketPath: ydotoolSocket);
+    }
+
+    /// <summary>
+    /// Resolve the ydotoold socket using the same priority list voxtype
+    /// settled on. Returns null if no candidate path exists or is
+    /// readable. We do not stat-check permissions here — the daemon is
+    /// the authoritative answer; we only need to know whether *some*
+    /// candidate is reachable so the snapshot can advertise availability.
+    /// </summary>
+    internal static string? ResolveYdotoolSocketPath()
+    {
+        var candidates = new List<string?>
+        {
+            Environment.GetEnvironmentVariable("YDOTOOL_SOCKET"),
+        };
+
+        var runtimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+        if (!string.IsNullOrWhiteSpace(runtimeDir))
+            candidates.Add(Path.Combine(runtimeDir, ".ydotool_socket"));
+
+        candidates.Add("/tmp/.ydotool_socket");
+
+        var uid = TryReadUserId();
+        if (uid is not null)
+            candidates.Add($"/run/user/{uid}/.ydotool_socket");
+
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+                continue;
+            try
+            {
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            catch
+            {
+                // Inaccessible socket path — skip it.
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryReadUserId()
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo("id", "-u")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+            if (p is null) return null;
+            var output = p.StandardOutput.ReadToEnd().Trim();
+            if (!p.WaitForExit(500))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return null;
+            }
+            return string.IsNullOrWhiteSpace(output) ? null : output;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string? ResolveSpeechFeedbackCommand()
@@ -378,27 +484,45 @@ public sealed record LinuxCapabilitySnapshot(
     bool HasPlayerCtl,
     bool HasCanberraGtkPlay,
     bool HasCudaGpu,
-    bool HasCudaRuntimeLibraries)
+    bool HasCudaRuntimeLibraries,
+    string Compositor = "unknown",
+    bool HasYdotool = false,
+    bool HasYdotoolSocket = false,
+    string? YdotoolSocketPath = null)
 {
     public bool HasAutomaticPasteTool => SessionType == "Wayland"
-        ? HasWtype || HasXdotool
+        ? HasWtype || HasXdotool || (HasYdotool && HasYdotoolSocket)
         : HasXdotool;
     public bool CanAutoPaste => HasClipboardTool && HasAutomaticPasteTool;
     public bool CanUseCuda => HasCudaGpu && HasCudaRuntimeLibraries;
+    /// <summary>
+    /// True when wtype's virtual-keyboard protocol is unlikely to be
+    /// implemented by the running compositor. GNOME Mutter and KDE
+    /// Plasma's KWin both omit <c>zwp_virtual_keyboard_v1</c>, which
+    /// makes wtype fail with "Compositor does not support…" — we want
+    /// the chain to demote wtype below ydotool in that case.
+    /// </summary>
+    public bool CompositorRejectsWtype =>
+        SessionType == "Wayland" && Compositor is "gnome" or "kde";
+    public bool HasYdotoolAvailable => HasYdotool && HasYdotoolSocket;
     public string ClipboardStatus => HasClipboardTool
         ? $"{ClipboardToolName} available"
         : $"Install {ClipboardToolName} to enable clipboard insertion.";
     public string PasteStatus => SessionType == "Wayland"
-        ? HasWtype
-            ? "wtype available"
-            : HasXdotool
-                ? "xdotool available (XWayland only)"
-                : PasteToolInstallHint
+        ? HasYdotoolAvailable
+            ? "ydotool available"
+            : HasWtype && !CompositorRejectsWtype
+                ? "wtype available"
+                : HasXdotool
+                    ? "xdotool available (XWayland only)"
+                    : PasteToolInstallHint
         : HasXdotool
             ? "xdotool available"
             : PasteToolInstallHint;
     public string PasteToolInstallHint => SessionType == "Wayland"
-        ? "Install wtype (or xdotool for XWayland apps) to enable automatic paste."
+        ? CompositorRejectsWtype
+            ? "Set up ydotool to enable automatic paste on GNOME / KDE Wayland."
+            : "Install wtype (or ydotool / xdotool) to enable automatic paste."
         : "Install xdotool to enable automatic paste.";
     public string CudaStatus => CanUseCuda
         ? "CUDA available"

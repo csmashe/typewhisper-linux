@@ -58,17 +58,34 @@ public partial class DictationOverlayWindow : Window
         if (_viewModel is null)
             return;
 
-        if (_viewModel.HasVisibleContent)
-        {
-            if (!IsVisible)
-                Show();
+        // WORKAROUND (docs/plans/2026-05-13-linux-backlog.md item 16):
+        // Show() once and never Hide() — on Wayland with
+        // ShowActivated="False" / Topmost="True" / ShowInTaskbar="False",
+        // Avalonia's Window.Show() after a prior Hide() is unreliable
+        // on GNOME Mutter: some shows succeed, some leave the window
+        // invisible until the app is restarted. The recording overlay
+        // would appear for the first one or two dictations and then
+        // disappear permanently even though dictation kept working.
+        // Driving visibility via Opacity keeps the window alive
+        // throughout the app's lifetime and avoids the race entirely.
+        // The inner Border bindings (IsVisible="{Binding ...}") still
+        // handle which content (if any) is drawn, and a fully
+        // transparent surface is essentially free on modern Wayland
+        // compositors.
+        //
+        // Revisit if Avalonia ships a fix for Show()-after-Hide() on
+        // Wayland utility windows, or if we switch to recreating the
+        // overlay window per-dictation.
+        var hasContent = _viewModel.HasVisibleContent;
 
+        if (!IsVisible)
+            Show();
+
+        Opacity = hasContent ? 1.0 : 0.0;
+        IsHitTestVisible = hasContent;
+
+        if (hasContent)
             Dispatcher.UIThread.Post(PositionOverlay, DispatcherPriority.Loaded);
-        }
-        else if (IsVisible)
-        {
-            Hide();
-        }
     }
 
     private void PositionOverlay()

@@ -832,6 +832,19 @@ public sealed class DictationOrchestrator : IDisposable
             transcriptionCompletedPublished = true;
 
             var actionPlugin = ResolveActionPlugin(promptAction);
+
+            // Yield focus back to the user's target window before any
+            // synthesized keystroke fires. The dictation overlay is a
+            // Topmost / ShowActivated=False window, but on Wayland a
+            // visible app-owned surface can still hold keyboard focus —
+            // and when ydotool's virtual keyboard fires Ctrl+V it goes
+            // to whatever has focus, so a still-visible overlay would
+            // swallow the paste. wtype never sent a key on GNOME/KDE
+            // (compositor-rejected), so this path was latent until the
+            // ydotool backend went in.
+            if (actionPlugin is null && !commandResult.CancelInsertion)
+                await YieldFocusForInsertionAsync().ConfigureAwait(false);
+
             InsertionResult insertion;
             try
             {
@@ -875,7 +888,7 @@ public sealed class DictationOrchestrator : IDisposable
                 InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 => "Pressed Enter.",
                 InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
                 InsertionResult.Typed => $"Typed {finalText.Length} char(s).",
-                InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
+                InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
                 InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.ActionFailed => "Action failed.",
                 InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
@@ -1061,6 +1074,27 @@ public sealed class DictationOrchestrator : IDisposable
         Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
             ? "Text insertion failed. Install wl-clipboard to enable clipboard insertion."
             : "Text insertion failed. Install xclip to enable clipboard insertion.";
+
+    /// <summary>
+    /// Reason-aware fallback notification for the
+    /// <see cref="InsertionResult.CopiedToClipboard"/> branch. The detail
+    /// comes from <see cref="TextInsertionService.LastFailureReason"/>,
+    /// which the service sets on the same call that produced this result —
+    /// so we can guide the user to the actual setup gap (e.g. ydotool not
+    /// running) instead of the generic "paste with Ctrl+V" line.
+    /// </summary>
+    private string ClipboardFallbackMessage() => _textInsertion.LastFailureReason switch
+    {
+        InsertionFailureReason.WtypeCompositorUnsupported =>
+            "Copied to clipboard. Compositor doesn't support direct typing — set up ydotool from Settings → Text insertion to enable auto-paste.",
+        InsertionFailureReason.YdotoolSocketUnreachable =>
+            "Copied to clipboard. ydotool socket not reachable — open Settings → Text insertion to check daemon status.",
+        InsertionFailureReason.NoWaylandTypingTool =>
+            $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
+        InsertionFailureReason.FocusFailed =>
+            "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
+        _ => "Copied to clipboard (paste with Ctrl+V).",
+    };
 
     private IActionPlugin? ResolveActionPlugin(PromptAction? promptAction)
     {
@@ -1255,6 +1289,19 @@ public sealed class DictationOrchestrator : IDisposable
             FeedbackText = null
         });
     }
+
+    // Wait a short beat before firing the synthesized paste/type so the
+    // compositor has time to settle any in-flight focus state. We
+    // deliberately do NOT mutate the overlay here — an earlier version
+    // hid the overlay via SetOverlayState, which flipped
+    // HasVisibleContent off and triggered Avalonia's Window.Hide().
+    // On Wayland with ShowActivated=False / Topmost=True, the matching
+    // Show() that fires on the next StartAsync can fail to re-display
+    // the window — the overlay "disappears" for every dictation after
+    // the first, even though dictation itself keeps working. The
+    // overlay is already configured to not grab keyboard focus, so
+    // there's no need to hide it for the paste to land correctly.
+    private static Task YieldFocusForInsertionAsync() => Task.Delay(90);
 
     /// <summary>
     /// <see cref="ReportStatus"/> variant that suppresses overlay/status updates

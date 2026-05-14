@@ -59,7 +59,7 @@ public sealed class SystemCommandAvailabilityServiceTests
 
     [Theory]
     [InlineData("X11", "Install xdotool to enable automatic paste.")]
-    [InlineData("Wayland", "Install wtype (or xdotool for XWayland apps) to enable automatic paste.")]
+    [InlineData("Wayland", "Install wtype (or ydotool / xdotool) to enable automatic paste.")]
     public void LinuxCapabilitySnapshot_PasteToolInstallHintIsSessionAware(
         string sessionType,
         string expectedHint)

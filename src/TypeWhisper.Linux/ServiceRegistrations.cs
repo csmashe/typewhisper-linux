@@ -9,6 +9,7 @@ using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.Hotkey.Portal;
+using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels;
@@ -87,6 +88,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IDeShortcutWriter, SwayShortcutWriter>();
 
         services.AddSingleton<TextInsertionService>();
+        services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
@@ -112,6 +114,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<AppearanceSectionViewModel>();
         services.AddSingleton<AdvancedSectionViewModel>();
         services.AddSingleton<ShortcutsSectionViewModel>();
+        services.AddSingleton<TextInsertionSectionViewModel>();
         services.AddSingleton<FileTranscriptionSectionViewModel>();
         services.AddSingleton<RecorderSectionViewModel>();
         services.AddSingleton<PluginsSectionViewModel>();

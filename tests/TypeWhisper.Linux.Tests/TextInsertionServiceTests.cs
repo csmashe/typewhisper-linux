@@ -273,6 +273,116 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_unknown_target_with_ascii_text_types_directly()
+    {
+        // Wayland-without-xdotool: PrefersDirectTypingForUnknownTarget=true.
+        // Pure-ASCII text is layout-safe for ydotool synthesis, so the
+        // unknown-target path should direct-type to avoid the
+        // terminal/Claude-Code Ctrl+V paste failure modes.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            PrefersDirectTypingForUnknownTarget = true,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "hello world",
+            autoPaste: true,
+            targetProcessName: null,
+            targetWindowTitle: null);
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("hello world", platform.TypedText);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Theory]
+    [InlineData("smart “quotes”")]            // smart quotes
+    [InlineData("em — dash")]                       // em dash
+    [InlineData("café")]                            // accented letter (é)
+    [InlineData("price €42")]                       // currency (€)
+    [InlineData("emoji \U0001F600 face")]                // emoji
+    public async Task InsertTextAsync_unknown_target_with_non_ascii_text_falls_back_to_clipboard_paste(
+        string text)
+    {
+        // Codex adversarial review finding: ydotool's `type` synthesizes
+        // evdev keycodes through the user's keyboard layout, so non-ASCII
+        // chars (smart quotes, em-dashes, accented letters, currency
+        // symbols, emoji) can silently render as the wrong glyph on
+        // non-US layouts. For unknown targets on Wayland we must fall
+        // back to clipboard paste rather than risk silent corruption.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            PrefersDirectTypingForUnknownTarget = true,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            text,
+            autoPaste: true,
+            targetProcessName: null,
+            targetWindowTitle: null);
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_unknown_target_ascii_safe_check_allows_tab_and_newline()
+    {
+        // Whitespace control chars (\t \n \r) are layout-independent —
+        // ydotool synthesizes them via dedicated keycodes, no layout
+        // lookup. Keep them in the direct-typing path so that dictated
+        // multi-line text (common for notes / chat / code) still types
+        // into terminals and Claude Code.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PrefersDirectTypingForUnknownTarget = true,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "line one\nline\ttwo",
+            autoPaste: true,
+            targetProcessName: null,
+            targetWindowTitle: null);
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("line one\nline\ttwo", platform.TypedText);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_known_terminal_with_non_ascii_still_direct_types()
+    {
+        // The ASCII-safe gate only applies to the *unknown-target*
+        // fallback. When the user has explicitly registered a terminal
+        // (or one of the known direct-typing apps), respect that — they
+        // know paste won't work in their app, and a layout-mangled
+        // character is still a better fix than silently doing nothing.
+        // If they want pristine unicode, they can switch to clipboard
+        // strategy in their settings.
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            autoPaste: true,
+            targetProcessName: "ghostty",
+            targetWindowTitle: null);
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("café", platform.TypedText);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_copy_only_strategy_ignores_auto_paste()
     {
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
@@ -412,6 +522,15 @@ public sealed class TextInsertionServiceTests
     }
 
     private static LinuxCapabilitySnapshot SnapshotFor(string sessionType, bool hasXdotool, bool hasWtype) =>
+        SnapshotFor(sessionType, hasXdotool, hasWtype, compositor: "unknown", hasYdotool: false, hasYdotoolSocket: false);
+
+    private static LinuxCapabilitySnapshot SnapshotFor(
+        string sessionType,
+        bool hasXdotool,
+        bool hasWtype,
+        string compositor,
+        bool hasYdotool,
+        bool hasYdotoolSocket) =>
         new(
             SessionType: sessionType,
             HasClipboardTool: true,
@@ -425,7 +544,218 @@ public sealed class TextInsertionServiceTests
             HasPlayerCtl: false,
             HasCanberraGtkPlay: false,
             HasCudaGpu: false,
-            HasCudaRuntimeLibraries: false);
+            HasCudaRuntimeLibraries: false,
+            Compositor: compositor,
+            HasYdotool: hasYdotool,
+            HasYdotoolSocket: hasYdotoolSocket,
+            YdotoolSocketPath: hasYdotoolSocket ? "/run/user/1000/.ydotool_socket" : null);
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_GnomeWayland_PrefersYdotoolOverWtype()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", hasXdotool: true, hasWtype: true,
+                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true),
+            runner.Run);
+
+        var typed = await platform.TypeTextAsync("hi");
+
+        Assert.True(typed);
+        var call = Assert.Single(runner.Calls);
+        // GNOME rejects wtype, so the chain leads with ydotool — wtype
+        // should not even be attempted on the happy path.
+        Assert.Equal("ydotool", call.FileName);
+        // Speed flags --key-delay 2 --key-hold 2 are part of TypeArgs to
+        // bring ydotool's ~40 ms/char default down to ~4 ms/char.
+        Assert.Equal(
+            new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "hi" },
+            call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_KdeWayland_PrefersYdotoolOverWtype()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+                compositor: "kde", hasYdotool: true, hasYdotoolSocket: true),
+            runner.Run);
+
+        var result = await platform.SendPasteAsync();
+
+        Assert.True(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("ydotool", call.FileName);
+    }
+
+    [Fact]
+    public void LinuxTextInsertionPlatform_KdeWayland_ReportsKdePlasma()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+                compositor: "kde", hasYdotool: true, hasYdotoolSocket: true),
+            runner.Run);
+
+        Assert.True(platform.IsKdePlasma);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandWayland_PrefersWtypeOverYdotool()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+                compositor: "hyprland", hasYdotool: true, hasYdotoolSocket: true),
+            runner.Run);
+
+        var typed = await platform.TypeTextAsync("hi");
+
+        Assert.True(typed);
+        var call = Assert.Single(runner.Calls);
+        // wlroots compositors keep wtype as the canonical fast path.
+        Assert.Equal("wtype", call.FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_GnomeWaylandWithoutYdotoolSocket_FallsThroughChain()
+    {
+        // ydotool binary installed but socket missing — ydotool is
+        // un-runnable, so the chain must skip it and try wtype next.
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: false),
+            runner.Run);
+
+        var typed = await platform.TypeTextAsync("hi");
+
+        Assert.True(typed);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("wtype", call.FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_YdotoolFailure_KeepsReasonAndDisablesBackend()
+    {
+        // Regression: when ydotool exits non-zero (stale socket, EACCES
+        // on /dev/uinput, etc.) the platform must record a
+        // ydotool-specific reason. A following wtype attempt with
+        // compositor-rejection must NOT overwrite that reason —
+        // otherwise the user sees "Set up ydotool" advice when ydotool
+        // is the actual broken thing. The chain falls through to
+        // xdotool (XWayland) as the final attempt; we use that to
+        // observe the full walk happened.
+        var runner = new ScriptedProcessRunner();
+        runner.Queue.Enqueue(("ydotool", 1, string.Empty));
+        runner.Queue.Enqueue(("wtype", 1, "Compositor does not support the virtual keyboard protocol"));
+        runner.Queue.Enqueue(("xdotool", 0, string.Empty));
+
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", hasXdotool: true, hasWtype: true,
+                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true),
+            (file, args, env) => runner.Run(file, args),
+            (file, args) => runner.RunWithStderr(file, args));
+
+        var ok = await platform.TypeTextAsync("hi");
+
+        Assert.True(ok);
+        // ydotool was tried first, then wtype, then xdotool succeeded.
+        Assert.Equal(new[] { "ydotool", "wtype", "xdotool" },
+            runner.Calls.Select(c => c.FileName).ToArray());
+
+        // Second dictation: both ydotool and wtype should be skipped
+        // — only xdotool should be attempted.
+        runner.Calls.Clear();
+        runner.Queue.Enqueue(("xdotool", 0, string.Empty));
+        var ok2 = await platform.TypeTextAsync("hello");
+
+        Assert.True(ok2);
+        Assert.Equal("xdotool", Assert.Single(runner.Calls).FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_YdotoolFailure_ReasonNotOverwrittenByWtype()
+    {
+        // Tightly scoped: just verify wtype's reason-setter respects a
+        // prior reason. ydotool fails (no xdotool fallback) → wtype
+        // tries and rejects → reason must remain YdotoolSocketUnreachable.
+        var runner = new ScriptedProcessRunner();
+        runner.Queue.Enqueue(("ydotool", 1, string.Empty));
+        runner.Queue.Enqueue(("wtype", 1, "Compositor does not support the virtual keyboard protocol"));
+
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true),
+            (file, args, env) => runner.Run(file, args),
+            (file, args) => runner.RunWithStderr(file, args));
+
+        var ok = await platform.TypeTextAsync("hi");
+
+        Assert.False(ok);
+        Assert.Equal(InsertionFailureReason.YdotoolSocketUnreachable, platform.LastFailureReason);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ApplyRefreshedSnapshot_RebuildsChainOnSameInstance()
+    {
+        // Regression for the Codex-flagged race: TextInsertionService is a
+        // DI singleton that constructs its platform once at startup. If
+        // YdotoolSetupHelper.SetUpAsync installs ydotool after the user
+        // clicks the one-click setup button, the live platform must pick
+        // up the new backend on the *same* instance — otherwise the UI
+        // reports "ydotool is ready" but auto-paste keeps falling back
+        // until the next app restart.
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+                compositor: "gnome", hasYdotool: false, hasYdotoolSocket: false),
+            runner.Run);
+
+        // Pre-refresh: GNOME with no ydotool falls back to wtype.
+        Assert.True(await platform.TypeTextAsync("before"));
+        Assert.Equal("wtype", Assert.Single(runner.Calls).FileName);
+        runner.Calls.Clear();
+
+        platform.ApplyRefreshedSnapshot(
+            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true));
+
+        // Post-refresh: GNOME now prefers ydotool — same instance.
+        Assert.True(await platform.TypeTextAsync("after"));
+        Assert.Equal("ydotool", Assert.Single(runner.Calls).FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_SnapshotChangedSubscription_TriggersChainRebuild()
+    {
+        // End-to-end check that the SystemCommandAvailabilityService
+        // event wiring works: subscribing via the DI ctor must update
+        // the live chain when RefreshSnapshot fires the event.
+        var commands = new SystemCommandAvailabilityService();
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            commands,
+            (file, args, env) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args).ConfigureAwait(false), string.Empty));
+
+        platform.ApplyRefreshedSnapshot(
+            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+                compositor: "gnome", hasYdotool: false, hasYdotoolSocket: false));
+        Assert.True(await platform.TypeTextAsync("before"));
+        Assert.Equal("wtype", Assert.Single(runner.Calls).FileName);
+        runner.Calls.Clear();
+
+        // Fire the event directly: this models what RefreshSnapshot
+        // does after YdotoolSetupHelper installs the daemon.
+        var refreshed = SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
+            compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true);
+        commands.RaiseSnapshotChangedForTests(refreshed);
+
+        Assert.True(await platform.TypeTextAsync("after"));
+        Assert.Equal("ydotool", Assert.Single(runner.Calls).FileName);
+    }
 
     private sealed class RecordingProcessRunner
     {
@@ -436,6 +766,31 @@ public sealed class TextInsertionServiceTests
         {
             Calls.Add((fileName, args.ToArray()));
             return Task.FromResult(ExitCode);
+        }
+    }
+
+    /// <summary>
+    /// Process runner that returns scripted (exit, stderr) tuples from a
+    /// queue, in order. Lets failure-surfacing tests model a sequence of
+    /// per-backend outcomes inside a single insertion attempt.
+    /// </summary>
+    private sealed class ScriptedProcessRunner
+    {
+        public List<(string FileName, string[] Arguments)> Calls { get; } = new();
+        public Queue<(string Expected, int ExitCode, string Stderr)> Queue { get; } = new();
+
+        public Task<int> Run(string fileName, IReadOnlyList<string> args)
+        {
+            Calls.Add((fileName, args.ToArray()));
+            var next = Queue.Count > 0 ? Queue.Dequeue() : (Expected: fileName, ExitCode: 0, Stderr: string.Empty);
+            return Task.FromResult(next.ExitCode);
+        }
+
+        public Task<(int exitCode, string stderr)> RunWithStderr(string fileName, IReadOnlyList<string> args)
+        {
+            Calls.Add((fileName, args.ToArray()));
+            var next = Queue.Count > 0 ? Queue.Dequeue() : (Expected: fileName, ExitCode: 0, Stderr: string.Empty);
+            return Task.FromResult((next.ExitCode, next.Stderr));
         }
     }
 
@@ -457,6 +812,12 @@ public sealed class TextInsertionServiceTests
         public bool IsClipboardSetAvailable => ClipboardSetAvailable;
 
         public bool IsPasteAvailable => PasteAvailable;
+
+        public bool IsKdePlasma { get; set; }
+
+        public bool PrefersDirectTypingForUnknownTarget { get; set; }
+
+        public InsertionFailureReason LastFailureReason { get; set; } = InsertionFailureReason.None;
 
         public Task<string?> TryGetClipboardTextAsync() => Task.FromResult(Clipboard);
 

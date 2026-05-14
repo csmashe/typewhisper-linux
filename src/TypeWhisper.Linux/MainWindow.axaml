@@ -131,6 +131,9 @@
                 <DataTemplate DataType="vms:ShortcutsSectionViewModel">
                     <sections:ShortcutsSection />
                 </DataTemplate>
+                <DataTemplate DataType="vms:TextInsertionSectionViewModel">
+                    <sections:TextInsertionSection />
+                </DataTemplate>
                 <DataTemplate DataType="vms:FileTranscriptionSectionViewModel">
                     <sections:FileTranscriptionSection />
                 </DataTemplate>

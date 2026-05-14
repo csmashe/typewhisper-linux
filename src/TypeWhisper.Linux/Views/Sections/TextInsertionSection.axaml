@@ -1,0 +1,220 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             x:Class="TypeWhisper.Linux.Views.Sections.TextInsertionSection"
+             x:DataType="vm:TextInsertionSectionViewModel">
+    <UserControl.Styles>
+        <Style Selector="Border.section-panel">
+            <Setter Property="Background" Value="#141D26" />
+            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Margin" Value="0,0,0,18" />
+        </Style>
+        <Style Selector="Border.section-row">
+            <Setter Property="Padding" Value="18,14" />
+        </Style>
+        <Style Selector="TextBlock.page-title">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+        <Style Selector="TextBlock.page-subtitle">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.section-label">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style Selector="TextBlock.row-title">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="TextBlock.row-hint">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+        </Style>
+        <Style Selector="TextBlock.status-pill">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="6,2" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28"
+                    MaxWidth="860">
+            <StackPanel Margin="0,0,0,18">
+                <TextBlock Text="Text insertion"
+                           Classes="page-title" />
+                <TextBlock Text="Control how dictated text reaches your focused app. GNOME and KDE Wayland sessions need ydotool for auto-paste; wlroots compositors (Hyprland, Sway) use wtype; X11 uses xdotool."
+                           Classes="page-subtitle" />
+            </StackPanel>
+
+            <TextBlock Text="Session"
+                       Classes="section-label" />
+            <Border Classes="section-panel">
+                <Border Classes="section-row">
+                    <StackPanel>
+                        <TextBlock Classes="row-title"
+                                   Text="{Binding CompositorDisplayName, StringFormat='Desktop: {0}'}" />
+                        <TextBlock Classes="row-hint"
+                                   Text="{Binding SessionType, StringFormat='Display server: {0}'}" />
+                        <TextBlock Classes="row-hint"
+                                   Text="{Binding ClipboardToolStatus}" />
+                    </StackPanel>
+                </Border>
+            </Border>
+
+            <TextBlock Text="Backends"
+                       Classes="section-label" />
+            <Border Classes="section-panel">
+                <StackPanel>
+                    <Border Classes="section-row">
+                        <StackPanel>
+                            <TextBlock Text="xdotool" Classes="row-title" />
+                            <TextBlock Classes="row-hint"
+                                       Text="{Binding XdotoolStatusText}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
+
+                    <Border Classes="section-row">
+                        <StackPanel>
+                            <TextBlock Text="wtype" Classes="row-title" />
+                            <TextBlock Classes="row-hint"
+                                       Text="{Binding WtypeStatusText}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
+
+                    <Border Classes="section-row">
+                        <StackPanel>
+                            <TextBlock Text="ydotool" Classes="row-title" />
+                            <TextBlock Classes="row-hint"
+                                       Text="{Binding YdotoolStatusText}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
+
+                    <Border Classes="section-row">
+                        <Button Content="Refresh status"
+                                Command="{Binding RefreshStatusCommand}" />
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <StackPanel IsVisible="{Binding ShowYdotoolSetup}">
+                <TextBlock Text="Set up ydotool"
+                           Classes="section-label" />
+                <Border Classes="section-panel">
+                    <Border Classes="section-row">
+                        <StackPanel>
+                            <StackPanel IsVisible="{Binding ShowManualInstructions}"
+                                        Margin="0,0,0,16">
+                                <TextBlock Classes="row-title"
+                                           Text="Install ydotool first" />
+                                <TextBlock Classes="row-hint"
+                                           TextWrapping="Wrap"
+                                           Text="ydotool isn't installed yet. Install it through your package manager, then come back here to finish the one-click setup." />
+
+                                <Border Background="#0E1620"
+                                        BorderBrush="#1AFFFFFF"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="10,6"
+                                        Margin="0,8,0,0">
+                                    <SelectableTextBlock Text="{Binding ManualInstallCommand}"
+                                                         FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                         FontSize="12"
+                                                         TextWrapping="Wrap" />
+                                </Border>
+                            </StackPanel>
+
+                            <StackPanel IsVisible="{Binding CanSetUpAutomatically}">
+                                <TextBlock Classes="row-title"
+                                           Text="Set up automatically" />
+                                <TextBlock Classes="row-hint"
+                                           TextWrapping="Wrap"
+                                           Text="TypeWhisper will install a udev rule so /dev/uinput is accessible, then start the ydotoold user service. The udev rule install runs through pkexec — it asks for your admin password once." />
+
+                                <Border Background="#0E1620"
+                                        BorderBrush="#1AFFFFFF"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="10,6"
+                                        Margin="0,8,0,0">
+                                    <SelectableTextBlock Text="{Binding SetupPreview}"
+                                                         FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                         FontSize="12"
+                                                         TextWrapping="Wrap" />
+                                </Border>
+
+                                <StackPanel Orientation="Horizontal"
+                                            Spacing="8"
+                                            Margin="0,10,0,0">
+                                    <Button Content="Set up ydotool"
+                                            Command="{Binding SetUpYdotoolCommand}" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Remove lives in its own visibility block so it
+                                 survives IsFullyConfigured flipping CanSetUpAutomatically
+                                 to false — otherwise users have no way to revert
+                                 the udev rule / user unit from the panel. -->
+                            <StackPanel IsVisible="{Binding CanRemoveIntegration}"
+                                        Margin="0,10,0,0">
+                                <TextBlock Classes="row-title"
+                                           Text="Remove integration" />
+                                <TextBlock Classes="row-hint"
+                                           TextWrapping="Wrap"
+                                           Text="Disables the ydotoold user service and deletes the TypeWhisper-owned udev rule. Rules installed by other tools or by you are left untouched." />
+                                <StackPanel Orientation="Horizontal"
+                                            Spacing="8"
+                                            Margin="0,10,0,0">
+                                    <Button Content="Remove integration"
+                                            Command="{Binding RemoveYdotoolCommand}" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <Border Background="#111822"
+                                    BorderBrush="#1AFFFFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="10,6"
+                                    Margin="0,10,0,0"
+                                    IsVisible="{Binding IntegrationStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="{Binding IntegrationStatusMessage}"
+                                           FontSize="12"
+                                           Foreground="#AFC0D3"
+                                           TextWrapping="Wrap" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </Border>
+            </StackPanel>
+
+            <Border Background="#111822"
+                    BorderBrush="#1AFFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="16,12"
+                    IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding StatusMessage}"
+                           FontSize="12"
+                           Foreground="#AFC0D3"
+                           TextWrapping="Wrap" />
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

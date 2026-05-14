@@ -17,6 +17,7 @@ public partial class MainWindowViewModel : ObservableObject
     public DashboardSectionViewModel Dashboard { get; }
     public DictationSectionViewModel Dictation { get; }
     public ShortcutsSectionViewModel Shortcuts { get; }
+    public TextInsertionSectionViewModel TextInsertion { get; }
     public FileTranscriptionSectionViewModel FileTranscription { get; }
     public RecorderSectionViewModel Recorder { get; }
     public HistorySectionViewModel History { get; }
@@ -43,6 +44,7 @@ public partial class MainWindowViewModel : ObservableObject
         DashboardSectionViewModel dashboard,
         DictationSectionViewModel dictation,
         ShortcutsSectionViewModel shortcuts,
+        TextInsertionSectionViewModel textInsertion,
         FileTranscriptionSectionViewModel fileTranscription,
         RecorderSectionViewModel recorder,
         HistorySectionViewModel history,
@@ -60,6 +62,7 @@ public partial class MainWindowViewModel : ObservableObject
         Dashboard = dashboard;
         Dictation = dictation;
         Shortcuts = shortcuts;
+        TextInsertion = textInsertion;
         FileTranscription = fileTranscription;
         Recorder = recorder;
         History = history;
@@ -80,6 +83,7 @@ public partial class MainWindowViewModel : ObservableObject
             new NavItem("Capture", null, null, true),
             new NavItem("Dictation", Symbol.Mic, Dictation, false),
             new NavItem("Shortcuts", Symbol.Keyboard, Shortcuts, false),
+            new NavItem("Text insertion", Symbol.TextAlignLeft, TextInsertion, false),
             new NavItem("File transcription", Symbol.DocumentText, FileTranscription, false),
             new NavItem("Recorder", Symbol.Record, Recorder, false),
             new NavItem("Library", null, null, true),
