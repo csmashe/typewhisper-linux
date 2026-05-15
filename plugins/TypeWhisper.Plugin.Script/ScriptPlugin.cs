@@ -4,7 +4,6 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -15,11 +14,20 @@ public sealed record ScriptEntry
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; init; } = "";
     public string Command { get; init; } = "";
-    public string Shell { get; init; } = "cmd";
+
+    /// <summary>
+    /// Shell to run the command with. When empty, the OS-default shell is used.
+    /// Supported values: "bash", "sh", and "pwsh".
+    /// </summary>
+    public string Shell { get; init; } = "";
     public bool IsEnabled { get; init; } = true;
 }
 
-public sealed class ScriptService
+/// <summary>
+/// Host-independent persistence for <see cref="ScriptEntry"/> collections.
+/// Owns the JSON serialization options and the on-disk config path.
+/// </summary>
+internal sealed class ScriptStore
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -28,15 +36,50 @@ public sealed class ScriptService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private readonly IPluginHostServices _host;
+    private readonly string _dataDir;
     private readonly string _configPath;
+
+    public ScriptStore(string dataDir)
+    {
+        _dataDir = dataDir;
+        _configPath = Path.Combine(dataDir, "scripts.json");
+    }
+
+    public List<ScriptEntry> Load()
+    {
+        if (!File.Exists(_configPath)) return [];
+
+        try
+        {
+            var json = File.ReadAllText(_configPath);
+            var scripts = JsonSerializer.Deserialize<List<ScriptEntry>>(json, s_jsonOptions);
+            return scripts ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    public void Save(IEnumerable<ScriptEntry> entries)
+    {
+        Directory.CreateDirectory(_dataDir);
+        var json = JsonSerializer.Serialize(entries.ToList(), s_jsonOptions);
+        File.WriteAllText(_configPath, json);
+    }
+}
+
+public sealed class ScriptService
+{
+    private readonly IPluginHostServices _host;
+    private readonly ScriptStore _store;
 
     public ObservableCollection<ScriptEntry> Scripts { get; } = [];
 
     public ScriptService(IPluginHostServices host)
     {
         _host = host;
-        _configPath = Path.Combine(host.PluginDataDirectory, "scripts.json");
+        _store = new ScriptStore(host.PluginDataDirectory);
         Load();
     }
 
@@ -115,11 +158,24 @@ public sealed class ScriptService
         return current;
     }
 
+    private static (string FileName, string Arguments) ResolveShell(ScriptEntry script)
+    {
+        var shell = string.IsNullOrWhiteSpace(script.Shell)
+            ? "bash"
+            : script.Shell.Trim().ToLowerInvariant();
+
+        return shell switch
+        {
+            "pwsh" or "powershell" => ("pwsh", $"-NoProfile -Command {script.Command}"),
+            "sh" => ("sh", $"-c \"{script.Command.Replace("\"", "\\\"")}\""),
+            // bash + any legacy/unknown value (e.g. an old "cmd" entry).
+            _ => ("bash", $"-c \"{script.Command.Replace("\"", "\\\"")}\""),
+        };
+    }
+
     private async Task<string> RunSingleAsync(ScriptEntry script, string text, PostProcessingContext context, CancellationToken ct)
     {
-        var (fileName, arguments) = script.Shell.Equals("powershell", StringComparison.OrdinalIgnoreCase)
-            ? ("powershell.exe", $"-NoProfile -Command {script.Command}")
-            : ("cmd.exe", $"/c {script.Command}");
+        var (fileName, arguments) = ResolveShell(script);
 
         var psi = new ProcessStartInfo
         {
@@ -191,32 +247,28 @@ public sealed class ScriptService
         return -1;
     }
 
+    /// <summary>
+    /// Replaces the entire script collection with <paramref name="entries"/> and persists.
+    /// </summary>
+    public void ReplaceAll(IEnumerable<ScriptEntry> entries)
+    {
+        Scripts.Clear();
+        foreach (var entry in entries)
+            Scripts.Add(entry);
+        Save();
+    }
+
     private void Load()
     {
-        if (!File.Exists(_configPath)) return;
-
-        try
-        {
-            var json = File.ReadAllText(_configPath);
-            var scripts = JsonSerializer.Deserialize<List<ScriptEntry>>(json, s_jsonOptions);
-            if (scripts is null) return;
-
-            foreach (var script in scripts)
-                Scripts.Add(script);
-        }
-        catch
-        {
-            _host.Log(PluginLogLevel.Warning, "Failed to load script configuration");
-        }
+        foreach (var script in _store.Load())
+            Scripts.Add(script);
     }
 
     public void Save()
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
-            var json = JsonSerializer.Serialize(Scripts.ToList(), s_jsonOptions);
-            File.WriteAllText(_configPath, json);
+            _store.Save(Scripts);
         }
         catch (Exception ex)
         {
@@ -225,9 +277,14 @@ public sealed class ScriptService
     }
 }
 
-public sealed class ScriptPlugin : IPostProcessorPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed class ScriptPlugin : IPostProcessorPlugin, IPluginCollectionSettingsProvider, IPluginDataLocationAware
 {
+    private const string ScriptsCollectionKey = "scripts";
+
+    private static readonly string[] s_allowedShells = ["", "bash", "sh", "pwsh"];
+
     private IPluginHostServices? _host;
+    private string? _dataDirectory;
 
     public string PluginId => "com.typewhisper.script";
     public string PluginName => "Script Runner";
@@ -256,7 +313,124 @@ public sealed class ScriptPlugin : IPostProcessorPlugin, TypeWhisper.PluginSDK.W
         return await Service.RunScriptsAsync(text, context, ct);
     }
 
-    public UserControl? CreateSettingsView() => new ScriptSettingsView(this);
+    public void SetDataDirectory(string pluginDataDirectory)
+    {
+        _dataDirectory = pluginDataDirectory;
+    }
+
+    public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions()
+    {
+        var itemFields = new PluginSettingDefinition[]
+        {
+            new("name", "Name", Kind: PluginSettingKind.Text),
+            new("command", "Command", Kind: PluginSettingKind.Multiline),
+            new("shell", "Shell", Kind: PluginSettingKind.Dropdown, Options:
+            [
+                new PluginSettingOption("", "OS default"),
+                new PluginSettingOption("bash", "bash"),
+                new PluginSettingOption("sh", "sh"),
+                new PluginSettingOption("pwsh", "PowerShell"),
+            ]),
+            new("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
+            new("__id", "__id", Kind: PluginSettingKind.Text),
+        };
+
+        return
+        [
+            new PluginCollectionDefinition(
+                ScriptsCollectionKey,
+                "Scripts",
+                "Shell scripts run on the transcript, in order.",
+                itemFields,
+                ItemLabelFieldKey: "name",
+                AddButtonLabel: "Add script"),
+        ];
+    }
+
+    public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(string collectionKey, CancellationToken ct = default)
+    {
+        if (!string.Equals(collectionKey, ScriptsCollectionKey, StringComparison.Ordinal))
+            return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
+
+        var source = Service is not null
+            ? Service.Scripts.ToList()
+            : new ScriptStore(ResolveDataDir()).Load();
+
+        var items = source
+            .Select(s => new PluginCollectionItem(new Dictionary<string, string?>
+            {
+                ["name"] = s.Name,
+                ["command"] = s.Command,
+                ["shell"] = s.Shell,
+                ["enabled"] = s.IsEnabled ? "true" : "false",
+                ["__id"] = s.Id.ToString("D"),
+            }))
+            .ToList();
+
+        return Task.FromResult<IReadOnlyList<PluginCollectionItem>>(items);
+    }
+
+    public Task<PluginSettingsValidationResult> SetItemsAsync(
+        string collectionKey, IReadOnlyList<PluginCollectionItem> items, CancellationToken ct = default)
+    {
+        if (!string.Equals(collectionKey, ScriptsCollectionKey, StringComparison.Ordinal))
+            return Task.FromResult(new PluginSettingsValidationResult(false, "Unknown collection."));
+
+        var entries = new List<ScriptEntry>(items.Count);
+
+        foreach (var item in items)
+        {
+            item.Values.TryGetValue("name", out var rawName);
+            item.Values.TryGetValue("command", out var rawCommand);
+            item.Values.TryGetValue("shell", out var rawShell);
+
+            var name = (rawName ?? "").Trim();
+            var command = (rawCommand ?? "").Trim();
+            var displayName = name.Length == 0 ? "(unnamed)" : name;
+
+            if (name.Length == 0)
+                return Task.FromResult(new PluginSettingsValidationResult(
+                    false, $"Script '{displayName}': name is required."));
+
+            if (command.Length == 0)
+                return Task.FromResult(new PluginSettingsValidationResult(
+                    false, $"Script '{displayName}': command is required."));
+
+            var shell = (rawShell ?? "").Trim().ToLowerInvariant();
+            if (Array.IndexOf(s_allowedShells, shell) < 0)
+                return Task.FromResult(new PluginSettingsValidationResult(
+                    false, $"Script '{displayName}': unknown shell '{rawShell}'."));
+
+            var id = item.Values.TryGetValue("__id", out var rawId) && Guid.TryParse(rawId, out var parsedId)
+                ? parsedId
+                : Guid.NewGuid();
+
+            var isEnabled = !item.Values.TryGetValue("enabled", out var rawEnabled)
+                || rawEnabled is null
+                || !bool.TryParse(rawEnabled, out var parsedEnabled)
+                || parsedEnabled;
+
+            entries.Add(new ScriptEntry
+            {
+                Id = id,
+                Name = name,
+                Command = command,
+                Shell = shell,
+                IsEnabled = isEnabled,
+            });
+        }
+
+        if (Service is not null)
+            Service.ReplaceAll(entries);
+        else
+            new ScriptStore(ResolveDataDir()).Save(entries);
+
+        return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
+    }
+
+    private string ResolveDataDir()
+        => _dataDirectory
+           ?? throw new InvalidOperationException("Plugin data directory has not been set.");
 
     public void Dispose()
     {

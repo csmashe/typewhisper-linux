@@ -3,14 +3,12 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAiVectorMemory;
 
-public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSettingsProvider
 {
     private const string EmbeddingModel = "text-embedding-3-small";
     private const string EmbeddingUrl = "https://api.openai.com/v1/embeddings";
@@ -48,55 +46,42 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
         return Task.CompletedTask;
     }
 
-    public UserControl? CreateSettingsView()
+    // IPluginSettingsProvider
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "api-key",
+            Label: "API key",
+            IsSecret: true,
+            Placeholder: "sk-...",
+            Description: "OpenAI API key used to generate embeddings for vector memory.")
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "api-key" ? _apiKey : null);
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
     {
-        var panel = new StackPanel { Margin = new Thickness(8) };
+        if (key != "api-key")
+            return;
 
-        var label = new TextBlock
+        _apiKey = string.IsNullOrWhiteSpace(value) ? null : value;
+
+        if (_host is not null)
         {
-            Text = "OpenAI API Key",
-            Margin = new Thickness(0, 0, 0, 4),
-        };
-
-        var box = new PasswordBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_apiKey))
-            box.Password = _apiKey;
-
-        var status = new TextBlock
-        {
-            Margin = new Thickness(0, 4, 0, 0),
-            FontSize = 12,
-        };
-
-        var btn = new Button
-        {
-            Content = "Save",
-            Margin = new Thickness(0, 8, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-
-        btn.Click += async (_, _) =>
-        {
-            var key = box.Password;
-            _apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
-
-            if (_host is not null)
-            {
-                if (string.IsNullOrWhiteSpace(key))
-                    await _host.DeleteSecretAsync("api-key");
-                else
-                    await _host.StoreSecretAsync("api-key", key);
-            }
-
-            status.Text = string.IsNullOrWhiteSpace(key) ? "API key cleared" : "API key saved";
-        };
-
-        panel.Children.Add(label);
-        panel.Children.Add(box);
-        panel.Children.Add(btn);
-        panel.Children.Add(status);
-        return new UserControl { Content = panel };
+            if (string.IsNullOrWhiteSpace(value))
+                await _host.DeleteSecretAsync("api-key");
+            else
+                await _host.StoreSecretAsync("api-key", value);
+        }
     }
+
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
+        Task.FromResult<PluginSettingsValidationResult?>(
+            string.IsNullOrWhiteSpace(_apiKey)
+                ? new PluginSettingsValidationResult(false, "Enter an API key first.")
+                : new PluginSettingsValidationResult(true, "API key configured."));
 
     // IMemoryStoragePlugin
 

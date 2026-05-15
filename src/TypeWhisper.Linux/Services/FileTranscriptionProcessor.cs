@@ -2,6 +2,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -50,12 +51,8 @@ public sealed class FileTranscriptionProcessor(
         if (string.IsNullOrWhiteSpace(modelId))
             throw new InvalidOperationException("No transcription model loaded.");
 
-        if (!await modelManager.EnsureModelLoadedAsync(modelId, cancellationToken))
-            throw new InvalidOperationException("No transcription model loaded.");
-
-        var plugin = modelManager.ActiveTranscriptionPlugin
-            ?? throw new InvalidOperationException("No transcription engine loaded.");
-
+        // Decode audio before acquiring the lease — ffmpeg shells out and must
+        // not monopolize the global model lock while no transcription runs.
         var wav = await audioFile.LoadAudioAsWavAsync(filePath, cancellationToken);
 
         onProgress(new FileTranscriptionProcessProgress(
@@ -70,12 +67,19 @@ public sealed class FileTranscriptionProcessor(
             : TranscriptionTask.Transcribe);
 
         var startedAt = DateTime.UtcNow;
-        var pluginResult = await plugin.TranscribeAsync(
-            wav,
-            language,
-            task == TranscriptionTask.Translate,
-            prompt: null,
-            cancellationToken);
+
+        // Hold the transcription lease only around plugin.TranscribeAsync so a
+        // concurrent caller cannot swap the shared plugin's model mid-run.
+        PluginTranscriptionResult pluginResult;
+        await using (var lease = await modelManager.AcquireTranscriptionAsync(modelId, cancellationToken))
+        {
+            pluginResult = await lease.Plugin.TranscribeAsync(
+                wav,
+                language,
+                task == TranscriptionTask.Translate,
+                prompt: null,
+                cancellationToken);
+        }
 
         var result = new TranscriptionResult
         {

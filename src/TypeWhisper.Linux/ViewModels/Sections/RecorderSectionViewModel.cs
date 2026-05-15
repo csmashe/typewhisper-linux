@@ -104,17 +104,22 @@ public partial class RecorderSectionViewModel : ObservableObject
         try
         {
             var effectiveModelId = _settings.Current.SelectedModelId;
-            if (!string.IsNullOrWhiteSpace(effectiveModelId))
-                await _models.EnsureModelLoadedAsync(effectiveModelId);
-
-            var plugin = _models.ActiveTranscriptionPlugin;
-            if (plugin is not null)
+            await using var lease = await _models.AcquireTranscriptionAsync(effectiveModelId);
+            try
             {
-                var result = await plugin.TranscribeAsync(wav, null, false, null, CancellationToken.None);
+                var result = await lease.Plugin.TranscribeAsync(wav, null, false, null, CancellationToken.None);
                 transcript = result.Text;
-                if (!string.IsNullOrWhiteSpace(transcript))
-                    await File.WriteAllTextAsync(Path.ChangeExtension(filePath, ".txt"), transcript);
             }
+            finally
+            {
+                // Native transcription is done — release _modelLock before the
+                // transcript-to-disk write so a concurrent dictation isn't
+                // blocked by it. The scope-end dispose is a harmless
+                // idempotent no-op.
+                await lease.DisposeAsync();
+            }
+            if (!string.IsNullOrWhiteSpace(transcript))
+                await File.WriteAllTextAsync(Path.ChangeExtension(filePath, ".txt"), transcript);
         }
         catch
         {

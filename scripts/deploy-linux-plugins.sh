@@ -54,9 +54,21 @@ declare -A PLUGINS=(
   ["com.typewhisper.obsidian"]="TypeWhisper.Plugin.Obsidian"
   ["com.typewhisper.linear"]="TypeWhisper.Plugin.Linear"
   ["com.typewhisper.openai-compatible"]="TypeWhisper.Plugin.OpenAiCompatible"
+  ["com.typewhisper.gemma-local"]="TypeWhisper.Plugin.GemmaLocal"
+  ["com.typewhisper.openai-vector-memory"]="TypeWhisper.Plugin.OpenAiVectorMemory"
+  ["com.typewhisper.script"]="TypeWhisper.Plugin.Script"
+  ["com.typewhisper.webhook"]="TypeWhisper.Plugin.Webhook"
 )
 
 mkdir -p "$OUT"
+
+# Build the shared PluginSDK once up front so the parallel plugin publishes
+# below can skip rebuilding it (-p:BuildProjectReferences=false). Concurrent
+# builds otherwise race and corrupt PluginSDK's obj/ intermediates. The RID is
+# deliberately omitted: it does not propagate to this project reference, so the
+# plugin publishes resolve the non-RID ref assembly under obj/$CONFIG/net10.0/.
+dotnet build "$ROOT/src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" \
+  -c "$CONFIG" -f net10.0 --nologo -v quiet > /dev/null
 
 publish_plugin() {
   local id="$1"
@@ -68,7 +80,8 @@ publish_plugin() {
 
   {
     echo "==> $id ($project)"
-    dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" --self-contained false --nologo -v quiet > /dev/null
+    dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" \
+      --self-contained false -p:BuildProjectReferences=false --nologo -v quiet
 
     rm -rf "$dest"
     mkdir -p "$dest"

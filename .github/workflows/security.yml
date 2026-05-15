@@ -32,7 +32,7 @@ jobs:
       - uses: actions/dependency-review-action@v4
 
   codeql:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -44,7 +44,7 @@ jobs:
 
       - name: Ensure NuGet global packages folder
         shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE '.nuget\packages') | Out-Null
+        run: New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.nuget/packages') | Out-Null
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -100,14 +100,14 @@ jobs:
       - uses: github/codeql-action/analyze@v3
 
   dotnet-package-audit:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
 
       - name: Ensure NuGet global packages folder
         shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE '.nuget\packages') | Out-Null
+        run: New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.nuget/packages') | Out-Null
 
       - uses: actions/setup-dotnet@v5
         with:

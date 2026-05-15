@@ -202,7 +202,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (translate)
                 builder.WithTranslate();
 
-            using var processor = builder.Build();
+            await using var processor = builder.Build();
             await using var audioStream = new MemoryStream(wavAudio, writable: false);
 
             var text = new StringBuilder();

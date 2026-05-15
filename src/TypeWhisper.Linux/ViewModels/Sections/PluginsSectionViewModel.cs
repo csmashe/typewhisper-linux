@@ -50,8 +50,11 @@ public partial class PluginsSectionViewModel : ObservableObject
                     description: p.Manifest.Description ?? "",
                     category: InferCategory(p.Manifest),
                     isLocal: InferIsLocal(p.Manifest),
-                    hasExpandableSettings: p.Instance is IPluginSettingsProvider provider &&
-                                           provider.GetSettingDefinitions().Count > 0,
+                    hasExpandableSettings:
+                        (p.Instance is IPluginSettingsProvider sp &&
+                         sp.GetSettingDefinitions().Count > 0) ||
+                        (p.Instance is IPluginCollectionSettingsProvider cp &&
+                         cp.GetCollectionDefinitions().Count > 0),
                     isEnabled: _pluginManager.IsEnabled(p.Manifest.Id));
             })
             .OrderBy(p => p.CategorySortOrder)
@@ -125,11 +128,31 @@ public partial class PluginsSectionViewModel : ObservableObject
         if (!_pluginById.TryGetValue(row.Id, out var loaded))
             return;
 
-        if (loaded.Instance is not IPluginSettingsProvider provider)
-            return;
+        if (loaded.Instance is IPluginSettingsProvider provider)
+        {
+            foreach (var field in row.SettingFields)
+                await provider.SetSettingValueAsync(field.Key, field.Value);
+        }
 
-        foreach (var field in row.SettingFields)
-            await provider.SetSettingValueAsync(field.Key, field.Value);
+        if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider)
+        {
+            foreach (var collection in row.Collections)
+            {
+                var items = collection.Items
+                    .Select(item => new PluginCollectionItem(
+                        item.Fields.ToDictionary(
+                            field => field.Key,
+                            field => (string?)field.Value)))
+                    .ToList();
+
+                var result = await collectionProvider.SetItemsAsync(collection.Key, items);
+                if (!result.IsSuccess)
+                {
+                    row.Status = result.Message;
+                    return;
+                }
+            }
+        }
 
         row.Status = "Settings saved.";
     }
@@ -154,6 +177,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     private async Task LoadPluginSettingsAsync(PluginRow row, bool preserveStatus = false)
     {
         row.SettingFields.Clear();
+        row.Collections.Clear();
         row.CanEditSettings = false;
         row.CanValidateSettings = false;
 
@@ -163,30 +187,49 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
-        if (loaded.Instance is not IPluginSettingsProvider provider)
+        var flatProvider = loaded.Instance as IPluginSettingsProvider;
+        var collectionProvider = loaded.Instance as IPluginCollectionSettingsProvider;
+
+        if (flatProvider is null && collectionProvider is null)
         {
             row.Status = "This plugin does not expose host-neutral settings yet.";
             return;
         }
 
-        foreach (var definition in provider.GetSettingDefinitions())
+        if (flatProvider is not null)
         {
-            var value = await provider.GetSettingValueAsync(definition.Key) ?? string.Empty;
-            row.SettingFields.Add(new PluginSettingFieldRow(
-                definition.Key,
-                definition.Label,
-                definition.Description ?? string.Empty,
-                definition.Placeholder ?? string.Empty,
-                definition.Options ?? [],
-                definition.IsSecret,
-                value));
+            foreach (var definition in flatProvider.GetSettingDefinitions())
+            {
+                var value = await flatProvider.GetSettingValueAsync(definition.Key) ?? string.Empty;
+                row.SettingFields.Add(new PluginSettingFieldRow(
+                    definition.Key,
+                    definition.Label,
+                    definition.Description ?? string.Empty,
+                    definition.Placeholder ?? string.Empty,
+                    definition.Options ?? [],
+                    definition.IsSecret,
+                    definition.Kind,
+                    value));
+            }
         }
 
-        row.CanEditSettings = row.SettingFields.Count > 0;
-        row.CanValidateSettings = true;
+        if (collectionProvider is not null)
+        {
+            foreach (var definition in collectionProvider.GetCollectionDefinitions())
+            {
+                var items = await collectionProvider.GetItemsAsync(definition.Key);
+                row.Collections.Add(new PluginCollectionRow(definition, row, items));
+            }
+        }
+
+        var hasFlatFields = row.SettingFields.Count > 0;
+        var hasCollections = row.Collections.Count > 0;
+
+        row.CanEditSettings = hasFlatFields || hasCollections;
+        row.CanValidateSettings = flatProvider is not null;
         if (!preserveStatus)
         {
-            row.Status = row.SettingFields.Count > 0
+            row.Status = (hasFlatFields || hasCollections)
                 ? "Edit the values below and click Save."
                 : "This plugin exposes a settings provider, but no editable fields.";
         }
@@ -336,8 +379,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.linear",
         "com.typewhisper.obsidian",
         "com.typewhisper.script",
-        "com.typewhisper.webhook",
-        "com.typewhisper.live-transcript"
+        "com.typewhisper.webhook"
     ];
 
     private static readonly HashSet<string> MemoryPluginIds =
@@ -390,6 +432,7 @@ public partial class PluginRow : ObservableObject
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
     public bool HasExpandableSettings { get; }
     public ObservableCollection<PluginSettingFieldRow> SettingFields { get; } = [];
+    public ObservableCollection<PluginCollectionRow> Collections { get; } = [];
 
     [ObservableProperty] private bool _isEnabled;
     [ObservableProperty] private bool _isExpanded;
@@ -443,6 +486,8 @@ public sealed record PluginFailureRow(
 
 public sealed partial class PluginSettingFieldRow : ObservableObject
 {
+    private bool _syncingBoolValue;
+
     public string Key { get; }
     public string Label { get; }
     public string Description { get; }
@@ -451,9 +496,19 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
     public IReadOnlyList<PluginSettingOption> Options { get; }
     public bool HasOptions => Options.Count > 0;
     public bool IsSecret { get; }
+    public PluginSettingKind Kind { get; }
+
+    public bool IsTextKind => Kind == PluginSettingKind.Text;
+    public bool IsSecretKind => Kind == PluginSettingKind.Secret;
+    public bool IsDropdownKind => Kind == PluginSettingKind.Dropdown;
+    public bool IsBooleanKind => Kind == PluginSettingKind.Boolean;
+    public bool IsMultilineKind => Kind == PluginSettingKind.Multiline;
+
+    public bool IsHidden => Key.StartsWith("__", StringComparison.Ordinal);
 
     [ObservableProperty] private string _value;
     [ObservableProperty] private PluginSettingOption? _selectedOption;
+    [ObservableProperty] private bool _boolValue;
 
     public PluginSettingFieldRow(
         string key,
@@ -462,6 +517,7 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         string placeholder,
         IReadOnlyList<PluginSettingOption> options,
         bool isSecret,
+        PluginSettingKind kind,
         string value)
     {
         Key = key;
@@ -470,10 +526,24 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         Placeholder = placeholder;
         Options = options;
         IsSecret = isSecret;
+        Kind = ResolveKind(kind, options, isSecret);
         _value = value;
         _selectedOption = Options.FirstOrDefault(o => o.Value == value) ?? Options.FirstOrDefault();
         if (_selectedOption is not null && string.IsNullOrEmpty(_value))
             _value = _selectedOption.Value;
+        _boolValue = string.Equals(_value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static PluginSettingKind ResolveKind(
+        PluginSettingKind kind,
+        IReadOnlyList<PluginSettingOption> options,
+        bool isSecret)
+    {
+        if (kind != PluginSettingKind.Auto)
+            return kind;
+        if (options.Count > 0)
+            return PluginSettingKind.Dropdown;
+        return isSecret ? PluginSettingKind.Secret : PluginSettingKind.Text;
     }
 
     partial void OnSelectedOptionChanged(PluginSettingOption? value)
@@ -484,12 +554,29 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
 
     partial void OnValueChanged(string value)
     {
-        if (!HasOptions)
+        if (HasOptions)
+        {
+            var option = Options.FirstOrDefault(o => o.Value == value);
+            if (!Equals(_selectedOption, option))
+                SelectedOption = option;
+        }
+
+        if (!_syncingBoolValue)
+        {
+            _syncingBoolValue = true;
+            BoolValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+            _syncingBoolValue = false;
+        }
+    }
+
+    partial void OnBoolValueChanged(bool value)
+    {
+        if (_syncingBoolValue)
             return;
 
-        var option = Options.FirstOrDefault(o => o.Value == value);
-        if (!Equals(_selectedOption, option))
-            SelectedOption = option;
+        _syncingBoolValue = true;
+        Value = value ? "true" : "false";
+        _syncingBoolValue = false;
     }
 }
 

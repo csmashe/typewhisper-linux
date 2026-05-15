@@ -173,23 +173,36 @@ public sealed class TransformSelectionService
         try
         {
             using var cts = new CancellationTokenSource(ProcessingTimeout);
-            if (!await _models.EnsureModelLoadedAsync(cancellationToken: cts.Token))
+            ModelManagerService.TranscriptionLease lease;
+            try
+            {
+                lease = await _models.AcquireTranscriptionAsync(cancellationToken: cts.Token);
+            }
+            catch (InvalidOperationException)
             {
                 await ShowWarningAsync("No transcription model is configured.");
                 return;
             }
 
-            var plugin = _models.ActiveTranscriptionPlugin;
-            if (plugin is null)
-            {
-                await ShowWarningAsync("No transcription model is loaded.");
-                return;
-            }
+            await using var leaseScope = lease;
+            var plugin = lease.Plugin;
 
             PublishStatus("Transcribing transform command...");
             var language = _settings.Current.Language is { Length: > 0 } lang && lang != "auto" ? lang : null;
-            var transcription = await plugin.TranscribeAsync(wav, language, translate: false, prompt: null, ct: cts.Token);
-            var command = transcription.Text?.Trim();
+            string? command;
+            try
+            {
+                var transcription = await plugin.TranscribeAsync(wav, language, translate: false, prompt: null, ct: cts.Token);
+                command = transcription.Text?.Trim();
+            }
+            finally
+            {
+                // Native transcription is done — release _modelLock before the
+                // LLM transform and text insertion below so a concurrent
+                // dictation isn't blocked by them. The scope-end dispose is a
+                // harmless idempotent no-op.
+                await leaseScope.DisposeAsync();
+            }
             if (string.IsNullOrWhiteSpace(command))
             {
                 await ShowWarningAsync("The transform command returned no text.");

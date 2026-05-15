@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   discover-plugins:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     outputs:
       projects: ${{ steps.discover.outputs.projects }}
       has_projects: ${{ steps.discover.outputs.has_projects }}
@@ -94,7 +94,7 @@ jobs:
           "scan_mode=$scanMode" >> $env:GITHUB_OUTPUT
 
   validate-metadata:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -147,7 +147,7 @@ jobs:
   build-plugin:
     needs: discover-plugins
     if: needs.discover-plugins.outputs.has_projects == 'true'
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -158,7 +158,7 @@ jobs:
 
       - name: Ensure NuGet global packages folder
         shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE '.nuget\packages') | Out-Null
+        run: New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.nuget/packages') | Out-Null
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -185,7 +185,7 @@ jobs:
           $projectDir = Split-Path $projectPath -Parent
           $manifestPath = Join-Path $projectDir 'manifest.json'
           $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-          $outputDir = Join-Path $projectDir 'bin/Release/net10.0-windows'
+          $outputDir = Join-Path $projectDir 'bin/Release/net10.0'
           $assemblyPath = Join-Path $outputDir $manifest.assemblyName
           $copiedManifestPath = Join-Path $outputDir 'manifest.json'
 

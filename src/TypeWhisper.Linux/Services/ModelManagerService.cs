@@ -15,6 +15,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private readonly Dictionary<string, ModelStatus> _modelStatuses = new();
     private string? _activeModelId;
     private System.Timers.Timer? _autoUnloadTimer;
+    private readonly SemaphoreSlim _modelLock = new(1, 1);
     private bool _disposed;
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -123,6 +124,19 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     public async Task DownloadAndLoadModelAsync(string modelId, CancellationToken cancellationToken = default)
     {
+        await _modelLock.WaitAsync(cancellationToken);
+        try
+        {
+            await DownloadAndLoadModelCoreAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    private async Task DownloadAndLoadModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
         if (!IsPluginModel(modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
 
@@ -141,7 +155,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
             }
 
-            await LoadModelAsync(modelId, cancellationToken);
+            await LoadModelCoreAsync(modelId, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -151,6 +165,19 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     public async Task LoadModelAsync(string modelId, CancellationToken cancellationToken = default)
+    {
+        await _modelLock.WaitAsync(cancellationToken);
+        try
+        {
+            await LoadModelCoreAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    private async Task LoadModelCoreAsync(string modelId, CancellationToken cancellationToken)
     {
         if (!IsPluginModel(modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
@@ -190,20 +217,50 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public void UnloadModel()
+    /// <summary>
+    /// Fire-and-forget unload. Mirrors <see cref="DeleteModel"/>: callers on
+    /// non-blockable threads (the auto-unload timer, app shutdown) use this so
+    /// they never block waiting on <c>_modelLock</c>.
+    /// </summary>
+    public void UnloadModel() => _ = UnloadModelAsync();
+
+    public async Task UnloadModelAsync()
+    {
+        await _modelLock.WaitAsync();
+        try
+        {
+            await UnloadModelCoreAsync();
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    private async Task UnloadModelCoreAsync()
     {
         CancelAutoUnload();
-        if (ActiveModelId is not null)
+        if (ActiveModelId is not { } modelId)
+            return;
+
+        // Await the native teardown before releasing _modelLock so a queued
+        // load/acquire/delete cannot enter the exclusive section while the
+        // plugin's native model is still being disposed.
+        var plugin = ActiveTranscriptionPlugin;
+        if (plugin is not null)
         {
-            var plugin = ActiveTranscriptionPlugin;
-            plugin?.UnloadModelAsync().ContinueWith(t =>
+            try
             {
-                if (t.IsFaulted)
-                    System.Diagnostics.Debug.WriteLine($"UnloadModelAsync failed: {t.Exception?.Message}");
-            });
-            SetStatus(ActiveModelId, ModelStatus.NotDownloaded);
-            ActiveModelId = null;
+                await plugin.UnloadModelAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"UnloadModelAsync failed: {ex.Message}");
+            }
         }
+
+        SetStatus(modelId, ModelStatus.NotDownloaded);
+        ActiveModelId = null;
     }
 
     public void ScheduleAutoUnload()
@@ -247,6 +304,19 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     public async Task DeleteModelAsync(string modelId, CancellationToken cancellationToken = default)
     {
+        await _modelLock.WaitAsync(cancellationToken);
+        try
+        {
+            await DeleteModelCoreAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    private async Task DeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
         if (ActiveModelId == modelId)
         {
             var plugin = ActiveTranscriptionPlugin;
@@ -274,6 +344,19 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     public async Task<bool> EnsureModelLoadedAsync(string? modelId = null, CancellationToken cancellationToken = default)
     {
+        await _modelLock.WaitAsync(cancellationToken);
+        try
+        {
+            return await EnsureModelLoadedCoreAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    private async Task<bool> EnsureModelLoadedCoreAsync(string? modelId, CancellationToken cancellationToken)
+    {
         var targetModelId = modelId ?? _settings.Current.SelectedModelId;
         if (string.IsNullOrWhiteSpace(targetModelId))
             return false;
@@ -285,11 +368,102 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
 
         if (!IsDownloaded(targetModelId))
-            await DownloadAndLoadModelAsync(targetModelId, cancellationToken);
+            await DownloadAndLoadModelCoreAsync(targetModelId, cancellationToken);
         else
-            await LoadModelAsync(targetModelId, cancellationToken);
+            await LoadModelCoreAsync(targetModelId, cancellationToken);
 
         return true;
+    }
+
+    /// <summary>
+    /// Acquires exclusive use of the transcription engine: ensures the requested
+    /// model is loaded under <c>_modelLock</c> and returns a lease pinning the
+    /// active plugin. While the lease is held no other acquire — and no model
+    /// load, download, unload, or delete — can run, so the plugin's native model
+    /// cannot be swapped underneath the holder. The lease MUST be disposed.
+    /// </summary>
+    public async Task<TranscriptionLease> AcquireTranscriptionAsync(
+        string? modelId = null, CancellationToken cancellationToken = default)
+    {
+        await _modelLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (!await EnsureModelLoadedCoreAsync(modelId, cancellationToken))
+                throw new InvalidOperationException("No transcription model loaded.");
+
+            var plugin = ActiveTranscriptionPlugin
+                ?? throw new InvalidOperationException("No transcription engine loaded.");
+
+            return new TranscriptionLease(_modelLock, plugin);
+        }
+        catch
+        {
+            _modelLock.Release();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Like <see cref="AcquireTranscriptionAsync"/>, but never loads a model and
+    /// returns <c>null</c> immediately when the model lock is already held, no
+    /// model resolves, or the requested model is not the one currently loaded.
+    /// Used for best-effort callers (partial transcripts) which must never
+    /// initiate a heavyweight load/download from the recording loop.
+    /// </summary>
+    public async Task<TranscriptionLease?> TryAcquireTranscriptionAsync(
+        string? modelId = null, CancellationToken cancellationToken = default)
+    {
+        if (!await _modelLock.WaitAsync(0, cancellationToken))
+            return null;
+
+        try
+        {
+            var targetModelId = modelId ?? _settings.Current.SelectedModelId;
+            if (string.IsNullOrWhiteSpace(targetModelId)
+                || ActiveModelId != targetModelId
+                || ActiveTranscriptionPlugin is not { } plugin)
+            {
+                _modelLock.Release();
+                return null;
+            }
+
+            CancelAutoUnload();
+            return new TranscriptionLease(_modelLock, plugin);
+        }
+        catch
+        {
+            _modelLock.Release();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Exclusive lease over the transcription engine. While a lease is held no
+    /// other acquire — and no model load, download, unload, or delete — can run,
+    /// so the plugin's native model cannot be swapped underneath the holder.
+    /// Disposing releases the model lock; a double dispose releases it only once.
+    /// </summary>
+    public sealed class TranscriptionLease : IAsyncDisposable
+    {
+        private readonly SemaphoreSlim _modelLock;
+        private int _released;
+
+        internal TranscriptionLease(SemaphoreSlim modelLock, ITranscriptionEnginePlugin plugin)
+        {
+            _modelLock = modelLock;
+            Plugin = plugin;
+        }
+
+        /// <summary>The plugin pinned for the lifetime of this lease.</summary>
+        public ITranscriptionEnginePlugin Plugin { get; }
+
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                _modelLock.Release();
+
+            return ValueTask.CompletedTask;
+        }
     }
 
     public void MigrateSettings()
@@ -326,11 +500,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
-        if (!_disposed)
-        {
-            CancelAutoUnload();
-            _disposed = true;
-        }
+        if (_disposed)
+            return;
+        _disposed = true;
+        CancelAutoUnload();
+        // _modelLock is intentionally NOT disposed: an outstanding TranscriptionLease
+        // or an in-flight fire-and-forget UnloadModelAsync() may still Release() it
+        // after teardown. SemaphoreSlim needs disposal only if AvailableWaitHandle
+        // was accessed (it never is here), so skipping it leaks nothing.
     }
 }
 

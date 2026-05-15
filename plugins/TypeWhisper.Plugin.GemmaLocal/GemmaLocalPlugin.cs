@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
-using System.Windows.Controls;
 using LLama;
 using LLama.Common;
 using LLama.Sampling;
@@ -10,7 +9,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GemmaLocal;
 
-public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
     private static readonly IReadOnlyList<GemmaModelDefinition> Models =
     [
@@ -73,7 +72,78 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
         return Task.CompletedTask;
     }
 
-    public UserControl? CreateSettingsView() => new GemmaLocalSettingsView(this);
+    // IPluginSettingsProvider
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+    [
+        new(
+            Key: "selectedModel",
+            Label: "Model",
+            Description: "Local Gemma model used for LLM processing. "
+                + "Selecting a model downloads it (if needed) and loads it; "
+                + "downloads can be several gigabytes and progress is reported to the plugin log.",
+            Options: Models
+                .Select(m => new PluginSettingOption(m.Id, $"{m.DisplayName} ({m.SizeDescription})"))
+                .ToList())
+    ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "selectedModel" ? _selectedModelId : null);
+
+    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    {
+        if (key != "selectedModel")
+            return;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            _selectedModelId = null;
+            _host?.SetSetting("selectedModel", string.Empty);
+            UnloadModel();
+            _host?.NotifyCapabilitiesChanged();
+            return;
+        }
+
+        SelectModel(value);
+        await EnsureModelReadyAsync(value, ct);
+    }
+
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_selectedModelId))
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(false, "Select a model first."));
+
+        return Task.FromResult<PluginSettingsValidationResult?>(
+            _loadedModelId == _selectedModelId
+                ? new PluginSettingsValidationResult(true, "Model loaded and ready.")
+                : new PluginSettingsValidationResult(false, "Model selected but not loaded yet."));
+    }
+
+    /// <summary>
+    /// Lazily downloads (if missing) and loads the given model. Progress is
+    /// reported to the plugin log since there is no progress-bar UI on Linux.
+    /// </summary>
+    internal async Task EnsureModelReadyAsync(string modelId, CancellationToken ct)
+    {
+        if (!IsModelDownloaded(modelId))
+        {
+            var lastPct = -1;
+            var progress = new Progress<double>(p =>
+            {
+                var pct = (int)(p * 100);
+                if (pct != lastPct && pct % 5 == 0)
+                {
+                    lastPct = pct;
+                    Log(PluginLogLevel.Info, $"Downloading model '{modelId}': {pct}%");
+                }
+            });
+
+            await DownloadModelAsync(modelId, progress, ct);
+        }
+
+        await LoadModelAsync(modelId, ct);
+    }
 
     // ILlmProviderPlugin
 

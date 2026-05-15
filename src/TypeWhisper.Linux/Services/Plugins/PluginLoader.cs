@@ -3,6 +3,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
+using TypeWhisper.Core;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -176,6 +177,12 @@ public sealed class PluginLoader
             Trace.WriteLine($"[PluginLoader] Failed to create instance of '{manifest.PluginClass}'");
             loadContext.Unload();
             return null;
+        }
+
+        if (instance is IPluginDataLocationAware dataLocationAware)
+        {
+            dataLocationAware.SetDataDirectory(
+                Path.Combine(TypeWhisperEnvironment.PluginDataPath, manifest.Id));
         }
 
         return new LoadedPlugin(manifest, instance, loadContext, pluginDir);

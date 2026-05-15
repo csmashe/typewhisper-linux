@@ -580,26 +580,27 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         try
         {
-            if (SelectedModel is { } selected)
+            ModelManagerService.TranscriptionLease lease;
+            try
             {
-                var loaded = await _models.EnsureModelLoadedAsync(selected.ModelId);
-                if (!loaded)
-                {
-                    FirstDictationStatus = "Could not load the selected transcription model.";
-                    return;
-                }
+                lease = await _models.AcquireTranscriptionAsync(SelectedModel?.ModelId);
             }
-
-            var plugin = _models.ActiveTranscriptionPlugin;
-            if (plugin is null)
+            catch (InvalidOperationException)
             {
-                FirstDictationStatus = "No transcription model is loaded.";
+                FirstDictationStatus = "Could not load the selected transcription model.";
                 return;
             }
 
-            FirstDictationStatus = $"Transcribing with {plugin.ProviderDisplayName}...";
-            var result = await plugin.TranscribeAsync(wav, null, false, null, CancellationToken.None);
-            FirstDictationText = result.Text?.Trim() ?? "";
+            string transcript;
+            await using (lease)
+            {
+                var plugin = lease.Plugin;
+                FirstDictationStatus = $"Transcribing with {plugin.ProviderDisplayName}...";
+                var result = await plugin.TranscribeAsync(wav, null, false, null, CancellationToken.None);
+                transcript = result.Text?.Trim() ?? "";
+            }
+
+            FirstDictationText = transcript;
             FirstDictationStatus = string.IsNullOrWhiteSpace(FirstDictationText)
                 ? "The model returned no text."
                 : "First dictation test passed.";

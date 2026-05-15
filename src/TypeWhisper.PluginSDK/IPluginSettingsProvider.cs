@@ -9,13 +9,24 @@ public interface IPluginSettingsProvider
         => Task.FromResult<PluginSettingsValidationResult?>(null);
 }
 
+public enum PluginSettingKind
+{
+    Auto,
+    Text,
+    Secret,
+    Dropdown,
+    Boolean,
+    Multiline
+}
+
 public sealed record PluginSettingDefinition(
     string Key,
     string Label,
     bool IsSecret = false,
     string? Placeholder = null,
     string? Description = null,
-    IReadOnlyList<PluginSettingOption>? Options = null);
+    IReadOnlyList<PluginSettingOption>? Options = null,
+    PluginSettingKind Kind = PluginSettingKind.Auto);
 
 public sealed record PluginSettingOption(
     string Value,

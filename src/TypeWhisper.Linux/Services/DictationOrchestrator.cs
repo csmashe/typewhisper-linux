@@ -756,41 +756,41 @@ public sealed class DictationOrchestrator : IDisposable
     {
         var cancelToken = context.CancelToken;
         var effectiveModelId = context.Profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
-        if (!string.IsNullOrWhiteSpace(effectiveModelId) && _models.ActiveModelId != effectiveModelId)
-        {
-            try
-            {
-                var loaded = await _models.EnsureModelLoadedAsync(effectiveModelId, cancelToken);
-                if (!loaded)
-                {
-                    ReportStatus(context, $"Configured model '{effectiveModelId}' is not available.");
-                    ShowFeedback(context, "Model unavailable.", isError: true);
-                    return;
-                }
-            }
-            catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
-            {
-                Trace.WriteLine($"[Dictation] Model load canceled by user ('{effectiveModelId}').");
-                ReportStatus(context, "Canceled");
-                ShowFeedback(context, "Canceled", isError: false);
-                return;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}");
-                ReportStatus(context, $"Failed to load configured model: {ex.Message}");
-                ShowFeedback(context, "Model load failed.", isError: true);
-                return;
-            }
-        }
 
-        var plugin = _models.ActiveTranscriptionPlugin;
-        if (plugin is null)
+        // Acquire an exclusive transcription lease: this serializes model-load +
+        // transcribe so a concurrently-starting dictation cannot swap the shared
+        // plugin's native model underneath this in-flight transcription. The
+        // lease is held for the whole method; `await using` releases it across
+        // every early return and exception below.
+        ModelManagerService.TranscriptionLease lease;
+        try
         {
-            ReportStatus(context, "No transcription model loaded. WAV saved for review.");
-            ShowFeedback(context, "No transcription model loaded.", isError: true);
+            lease = await _models.AcquireTranscriptionAsync(effectiveModelId, cancelToken);
+        }
+        catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
+        {
+            Trace.WriteLine($"[Dictation] Model load canceled by user ('{effectiveModelId}').");
+            ReportStatus(context, "Canceled");
+            ShowFeedback(context, "Canceled", isError: false);
             return;
         }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}");
+            ReportStatus(context, $"Failed to load configured model: {ex.Message}");
+            ShowFeedback(context, "Model load failed.", isError: true);
+            return;
+        }
+
+        await using var leaseScope = lease;
+        var plugin = lease.Plugin;
+
+        // Capture engine metadata while the lease is still held. The lease is
+        // released as soon as native transcription returns (see the finally
+        // below), so reading plugin.ProviderId / plugin.SelectedModelId during
+        // post-processing would race a concurrent dictation's model swap.
+        var engineProviderId = plugin.ProviderId;
+        string? engineModelId = plugin.SelectedModelId;
 
         ReportStatus(context, $"Transcribing via {plugin.ProviderDisplayName}…");
 
@@ -824,13 +824,22 @@ public sealed class DictationOrchestrator : IDisposable
                 _models.PluginManager.EventBus.Publish(new TranscriptionFailedEvent
                 {
                     ErrorMessage = ex.Message,
-                    ModelId = plugin.SelectedModelId,
+                    ModelId = engineModelId,
                     AppName = context.AppTitle
                 });
                 ReportStatus(context, $"Transcription failed: {ex.Message}");
                 _speechFeedback.AnnounceError(ex.Message);
                 ShowFeedback(context, "Transcription failed.", isError: true);
                 return;
+            }
+            finally
+            {
+                // Native transcription is done — the shared plugin's model is
+                // no longer in use. Release _modelLock now so a concurrently
+                // starting dictation isn't blocked by the post-processing,
+                // insertion, and history work below. The scope-end dispose is
+                // a harmless idempotent no-op.
+                await leaseScope.DisposeAsync();
             }
 
             var rawText = result?.Text?.Trim();
@@ -936,8 +945,8 @@ public sealed class DictationOrchestrator : IDisposable
                 Text = finalText,
                 DetectedLanguage = result?.DetectedLanguage,
                 DurationSeconds = duration,
-                EngineUsed = plugin.ProviderId,
-                ModelId = plugin.SelectedModelId,
+                EngineUsed = engineProviderId,
+                ModelId = engineModelId,
                 ProfileName = context.Profile?.Name,
                 AppName = context.AppTitle,
                 AppProcessName = context.AppProcess,
@@ -1052,7 +1061,9 @@ public sealed class DictationOrchestrator : IDisposable
                     wavPath,
                     insertion,
                     pipelineResult,
-                    cleanupLevel);
+                    cleanupLevel,
+                    engineProviderId,
+                    engineModelId);
 
             if (_settings.Current.MemoryEnabled)
                 FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
@@ -1078,7 +1089,7 @@ public sealed class DictationOrchestrator : IDisposable
             _models.PluginManager.EventBus.Publish(new TranscriptionFailedEvent
             {
                 ErrorMessage = ex.Message,
-                ModelId = plugin.SelectedModelId,
+                ModelId = engineModelId,
                 AppName = context.AppTitle
             });
             ReportStatus(context, $"Transcription failed: {ex.Message}");
@@ -1319,12 +1330,14 @@ public sealed class DictationOrchestrator : IDisposable
         string wavPath,
         InsertionResult insertion,
         PostProcessingResult pipelineResult,
-        CleanupLevel cleanupLevel)
+        CleanupLevel cleanupLevel,
+        string engineUsed,
+        string? modelUsed)
     {
         try
         {
-            var engine = _models.ActiveTranscriptionPlugin?.ProviderId ?? "unknown";
-            var model = _models.ActiveTranscriptionPlugin?.SelectedModelId;
+            var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
+            var model = modelUsed;
             var language = result?.DetectedLanguage
                 ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
 
@@ -1711,13 +1724,20 @@ public sealed class DictationOrchestrator : IDisposable
                 if (DateTime.UtcNow >= nextPartialPollAtUtc)
                 {
                     var wav = _audio.GetCurrentBuffer();
-                    var plugin = _models.ActiveTranscriptionPlugin;
+                    // Partials are best-effort/cosmetic. Only poll when a model is
+                    // already loaded (never *initiate* a load for a partial), and
+                    // use TryAcquire so a partial silently skips when a final
+                    // transcription holds the lease.
                     if (wav is not null
                         && wav.Length > 44
-                        && plugin is not null
-                        && _audio.HasSpeechEnergy)
+                        && _audio.HasSpeechEnergy
+                        && _models.ActiveModelId is not null)
                     {
-                        await PollPartialTranscriptOnceAsync(plugin, wav, sessionVersion, ct);
+                        var partialModelId = _recordingProfile?.TranscriptionModelOverride
+                            ?? _settings.Current.SelectedModelId;
+                        await using var lease = await _models.TryAcquireTranscriptionAsync(partialModelId, ct);
+                        if (lease is not null)
+                            await PollPartialTranscriptOnceAsync(lease.Plugin, wav, sessionVersion, ct);
                     }
 
                     nextPartialPollAtUtc = DateTime.UtcNow + partialPollInterval;

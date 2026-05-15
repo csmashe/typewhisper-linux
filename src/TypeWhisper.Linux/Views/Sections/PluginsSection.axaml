@@ -3,6 +3,59 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              x:Class="TypeWhisper.Linux.Views.Sections.PluginsSection"
              x:DataType="vm:PluginsSectionViewModel">
+    <UserControl.Resources>
+        <DataTemplate x:Key="PluginSettingFieldTemplate"
+                      x:DataType="vm:PluginSettingFieldRow">
+            <StackPanel Spacing="6"
+                        Margin="0,0,0,14"
+                        IsVisible="{Binding !IsHidden}">
+                <TextBlock Text="{Binding Label}"
+                           FontWeight="SemiBold"
+                           IsVisible="{Binding !IsBooleanKind}" />
+
+                <TextBlock Text="{Binding Description}"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Foreground="#8A9AAE"
+                           IsVisible="{Binding HasDescription}" />
+
+                <ComboBox ItemsSource="{Binding Options}"
+                          SelectedItem="{Binding SelectedOption}"
+                          HorizontalAlignment="Stretch"
+                          IsVisible="{Binding IsDropdownKind}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <TextBox Text="{Binding Value}"
+                         PlaceholderText="{Binding Placeholder}"
+                         HorizontalAlignment="Stretch"
+                         IsVisible="{Binding IsTextKind}" />
+
+                <TextBox Text="{Binding Value}"
+                         PlaceholderText="{Binding Placeholder}"
+                         PasswordChar="•"
+                         HorizontalAlignment="Stretch"
+                         IsVisible="{Binding IsSecretKind}" />
+
+                <TextBox Text="{Binding Value}"
+                         PlaceholderText="{Binding Placeholder}"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         MinHeight="80"
+                         HorizontalAlignment="Stretch"
+                         IsVisible="{Binding IsMultilineKind}" />
+
+                <CheckBox IsChecked="{Binding BoolValue}"
+                          Content="{Binding Label}"
+                          IsVisible="{Binding IsBooleanKind}" />
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+
     <UserControl.Styles>
         <Style Selector="Border.panel">
             <Setter Property="Background" Value="#141D26" />
@@ -210,35 +263,63 @@
                                                                            FontSize="11.5"
                                                                            Foreground="#8A9AAE" />
 
-                                                                <ItemsControl ItemsSource="{Binding SettingFields}">
+                                                                <ItemsControl ItemsSource="{Binding SettingFields}"
+                                                                              ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
+
+                                                                <ItemsControl ItemsSource="{Binding Collections}">
                                                                     <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:PluginSettingFieldRow">
-                                                                            <StackPanel Spacing="6"
+                                                                        <DataTemplate x:DataType="vm:PluginCollectionRow">
+                                                                            <StackPanel Spacing="10"
                                                                                         Margin="0,0,0,14">
                                                                                 <TextBlock Text="{Binding Label}"
                                                                                            FontWeight="SemiBold" />
-
                                                                                 <TextBlock Text="{Binding Description}"
                                                                                            FontSize="11"
                                                                                            TextWrapping="Wrap"
                                                                                            Foreground="#8A9AAE"
                                                                                            IsVisible="{Binding HasDescription}" />
 
-                                                                                <ComboBox ItemsSource="{Binding Options}"
-                                                                                          SelectedItem="{Binding SelectedOption}"
-                                                                                          HorizontalAlignment="Stretch"
-                                                                                          IsVisible="{Binding HasOptions}">
-                                                                                    <ComboBox.ItemTemplate>
-                                                                                        <DataTemplate>
-                                                                                            <TextBlock Text="{Binding Label}" />
-                                                                                        </DataTemplate>
-                                                                                    </ComboBox.ItemTemplate>
-                                                                                </ComboBox>
+                                                                                <ItemsControl ItemsSource="{Binding Items}">
+                                                                                    <ItemsControl.ItemTemplate>
+                                                                                        <DataTemplate x:DataType="vm:PluginCollectionItemRow">
+                                                                                            <Border Background="#17212B"
+                                                                                                    BorderBrush="#1AFFFFFF"
+                                                                                                    BorderThickness="1"
+                                                                                                    CornerRadius="10"
+                                                                                                    Padding="12"
+                                                                                                    Margin="0,0,0,8">
+                                                                                                <StackPanel Spacing="8">
+                                                                                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto"
+                                                                                                          ColumnSpacing="6">
+                                                                                                        <TextBlock Grid.Column="0"
+                                                                                                                   Text="{Binding HeaderText}"
+                                                                                                                   FontWeight="SemiBold"
+                                                                                                                   VerticalAlignment="Center" />
+                                                                                                        <Button Grid.Column="1"
+                                                                                                                Content="Up"
+                                                                                                                Command="{Binding OwnerCollection.MoveUpCommand}"
+                                                                                                                CommandParameter="{Binding}" />
+                                                                                                        <Button Grid.Column="2"
+                                                                                                                Content="Down"
+                                                                                                                Command="{Binding OwnerCollection.MoveDownCommand}"
+                                                                                                                CommandParameter="{Binding}" />
+                                                                                                        <Button Grid.Column="3"
+                                                                                                                Content="Remove"
+                                                                                                                Command="{Binding OwnerCollection.RemoveItemCommand}"
+                                                                                                                CommandParameter="{Binding}" />
+                                                                                                    </Grid>
 
-                                                                                <TextBox Text="{Binding Value}"
-                                                                                         PlaceholderText="{Binding Placeholder}"
-                                                                                         HorizontalAlignment="Stretch"
-                                                                                         IsVisible="{Binding !HasOptions}" />
+                                                                                                    <ItemsControl ItemsSource="{Binding Fields}"
+                                                                                                                  ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
+                                                                                                </StackPanel>
+                                                                                            </Border>
+                                                                                        </DataTemplate>
+                                                                                    </ItemsControl.ItemTemplate>
+                                                                                </ItemsControl>
+
+                                                                                <Button Content="{Binding AddButtonLabel}"
+                                                                                        HorizontalAlignment="Left"
+                                                                                        Command="{Binding AddItemCommand}" />
                                                                             </StackPanel>
                                                                         </DataTemplate>
                                                                     </ItemsControl.ItemTemplate>

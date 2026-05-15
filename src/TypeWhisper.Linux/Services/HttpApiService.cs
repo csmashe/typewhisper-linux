@@ -291,18 +291,15 @@ public sealed class HttpApiService : IDisposable
         var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(request, MaxTranscribeRequestBytes, ct);
         var transcribeRequest = HttpApiRequestParser.ParseTranscribe(apiRequest);
         var modelId = ResolveRequestedModelId(transcribeRequest);
-        if (!await _models.EnsureModelLoadedAsync(modelId, ct))
-            return (503, Serialize(new { error = "No model loaded" }));
-
-        var plugin = _models.ActiveTranscriptionPlugin;
-        if (plugin is null)
-            return (503, Serialize(new { error = "No transcription engine loaded" }));
 
         var tempPath = Path.Combine(
             Path.GetTempPath(),
             $"typewhisper-api-{Guid.NewGuid():N}.{SanitizeExtension(transcribeRequest.FileExtension)}");
         try
         {
+            // Decode audio before acquiring the lease — ffmpeg shells out and
+            // must not monopolize the global model lock while no transcription
+            // runs.
             await File.WriteAllBytesAsync(tempPath, transcribeRequest.AudioData, ct);
 
             var wav = await _audioFiles.LoadAudioAsWavAsync(tempPath, ct);
@@ -313,12 +310,35 @@ public sealed class HttpApiService : IDisposable
                 BuildLanguageHintsPrompt(transcribeRequest.LanguageHints),
                 _dictionary.GetTermsForPrompt());
 
-            var result = await plugin.TranscribeAsync(
-                wav,
-                language,
-                transcribeRequest.Task == TranscriptionTask.Translate,
-                prompt,
-                ct);
+            // Hold the transcription lease only around plugin.TranscribeAsync so
+            // a concurrent caller cannot swap the shared plugin's model mid-run.
+            PluginTranscriptionResult result;
+            string engineProviderId;
+            string? selectedModelId;
+
+            ModelManagerService.TranscriptionLease lease;
+            try
+            {
+                lease = await _models.AcquireTranscriptionAsync(modelId, ct);
+            }
+            catch (InvalidOperationException)
+            {
+                return (503, Serialize(new { error = "No model loaded" }));
+            }
+
+            await using (lease)
+            {
+                var plugin = lease.Plugin;
+                result = await plugin.TranscribeAsync(
+                    wav,
+                    language,
+                    transcribeRequest.Task == TranscriptionTask.Translate,
+                    prompt,
+                    ct);
+                engineProviderId = plugin.ProviderId;
+                selectedModelId = plugin.SelectedModelId;
+            }
+
             var processed = await _pipeline.ProcessAsync(result.Text, new PipelineOptions
             {
                 VocabularyBooster = settings.VocabularyBoostingEnabled ? _vocabularyBoosting.Apply : null,
@@ -354,8 +374,8 @@ public sealed class HttpApiService : IDisposable
                     language = result.DetectedLanguage,
                     duration = result.DurationSeconds,
                     noSpeechProbability = result.NoSpeechProbability,
-                    engine = plugin.ProviderId,
-                    model = plugin.SelectedModelId,
+                    engine = engineProviderId,
+                    model = selectedModelId,
                     segments = result.Segments.Select(segment => new
                     {
                         text = segment.Text,
@@ -371,8 +391,8 @@ public sealed class HttpApiService : IDisposable
                 language = result.DetectedLanguage,
                 duration = result.DurationSeconds,
                 noSpeechProbability = result.NoSpeechProbability,
-                engine = plugin.ProviderId,
-                model = plugin.SelectedModelId
+                engine = engineProviderId,
+                model = selectedModelId
             }));
         }
         finally
