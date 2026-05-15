@@ -122,9 +122,10 @@ public sealed class DictationOrchestrator : IDisposable
     /// The audio recorder is the source of truth for <c>recording</c>. Once
     /// recording stops, the overlay's StatusText drives transcribing /
     /// injecting / idle: "Processing…" / "Transcribing…" indicate the
-    /// transcription engine is active; "Typed", "Pasted", "Copied" mean
-    /// the inject phase is in progress or just completed. Anything else
-    /// (Ready, Canceled, Too short, an error) falls through to idle.
+    /// transcription engine is active; "Inserting…" means text is actively
+    /// being typed/pasted into the target app. The completion messages
+    /// ("Typed", "Pasted", "Copied") and anything else (Ready, Canceled,
+    /// Too short, an error) fall through to idle.
     /// </remarks>
     public string CurrentStateLabel
     {
@@ -138,24 +139,27 @@ public sealed class DictationOrchestrator : IDisposable
                 snapshot = _overlayState;
             }
 
-            // Compare against the same status strings used by SetOverlayState
-            // call sites elsewhere in this file. Keep the matcher cheap —
-            // status reads must not block the UI thread.
-            var status = snapshot.StatusText;
-            if (status is null) return "idle";
-            if (status.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
-                || status.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase))
-            {
-                return "transcribing";
-            }
-            // The injection phase doesn't currently update StatusText to a
-            // dedicated "Injecting" label before TextInsertionService runs;
-            // the completion messages ("Typed N char(s)", "Pasted…",
-            // "Copied to clipboard…") fire after the inject call has
-            // returned. Treat those terminal labels as idle — the inject
-            // is no longer in flight by the time the user sees them.
-            return "idle";
+            return MapOverlayStatusToStateLabel(snapshot.StatusText);
         }
+    }
+
+    /// <summary>
+    /// Projects an overlay StatusText string to one of the documented
+    /// <c>typewhisper status</c> state labels (transcribing / injecting /
+    /// idle). The <c>recording</c> label is sourced from the audio recorder,
+    /// not StatusText, so it is not produced here. Kept pure and cheap —
+    /// status reads must not block the UI thread.
+    /// </summary>
+    internal static string MapOverlayStatusToStateLabel(string? statusText)
+    {
+        if (statusText is null) return "idle";
+        if (statusText.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
+            || statusText.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase))
+            return "transcribing";
+        // Overlay shows "Inserting…"; the documented CLI state is "injecting".
+        if (statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase))
+            return "injecting";
+        return "idle";
     }
 
     public DictationOrchestrator(
@@ -966,7 +970,12 @@ public sealed class DictationOrchestrator : IDisposable
             // (compositor-rejected), so this path was latent until the
             // ydotool backend went in.
             if (actionPlugin is null && !commandResult.CancelInsertion)
+            {
+                // Surface the inject phase so `typewhisper status` reports
+                // `injecting` while a long transcript is still being typed.
+                ReportStatus(context, "Inserting…");
                 await YieldFocusForInsertionAsync().ConfigureAwait(false);
+            }
 
             InsertionResult insertion;
             try

@@ -134,6 +134,21 @@ public static class SentinelBlock
     private static string JoinLines(List<string> lines, string original)
     {
         var sep = original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        return string.Join(sep, lines);
+        var joined = string.Join(sep, lines);
+
+        // Make JoinLines the single authority for trailing-newline
+        // state: a clean round-trip must preserve whether the original
+        // file ended with a newline. The append path in particular
+        // consumes the trailing empty element as its "blank separator"
+        // signal and would otherwise drop the final newline.
+        var originalEndsWithNewline = original.EndsWith('\n');
+        var joinedEndsWithNewline = joined.EndsWith(sep, StringComparison.Ordinal);
+        if (originalEndsWithNewline && !joinedEndsWithNewline)
+            joined += sep;
+        else if (!originalEndsWithNewline && joinedEndsWithNewline)
+            // Slice exactly one separator — TrimEnd would over-trim a
+            // file that legitimately ends in multiple blank lines.
+            joined = joined[..^sep.Length];
+        return joined;
     }
 }

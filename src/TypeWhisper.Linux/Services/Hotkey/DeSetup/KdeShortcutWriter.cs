@@ -44,7 +44,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         var contents = BuildDesktopFile(spec);
         try
         {
-            await AtomicWriteAsync(target, contents, ct).ConfigureAwait(false);
+            await AtomicFileWriter.WriteAsync(target, contents, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -152,16 +152,5 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             }
         }
         return sb.ToString();
-    }
-
-    private static async Task AtomicWriteAsync(string target, string contents, CancellationToken ct)
-    {
-        // Write to a sibling temp file then File.Move overwrite — keeps
-        // the .desktop file from existing in a half-written state if
-        // we crash mid-write.
-        var dir = Path.GetDirectoryName(target)!;
-        var tmp = Path.Combine(dir, $".{Path.GetFileName(target)}.tmp");
-        await File.WriteAllTextAsync(tmp, contents, ct).ConfigureAwait(false);
-        File.Move(tmp, target, overwrite: true);
     }
 }

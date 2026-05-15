@@ -59,7 +59,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         var updated = SentinelBlock.ReplaceOrAppend(existing, managed);
         try
         {
-            await AtomicWriteAsync(path, updated, ct).ConfigureAwait(false);
+            await AtomicFileWriter.WriteAsync(path, updated, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -97,7 +97,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         var updated = SentinelBlock.Remove(existing);
         try
         {
-            await AtomicWriteAsync(path, updated, ct).ConfigureAwait(false);
+            await AtomicFileWriter.WriteAsync(path, updated, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -181,14 +181,6 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         var configHome = string.IsNullOrEmpty(xdg) ? Path.Combine(home, ".config") : xdg;
         return Path.Combine(configHome, "hypr", "hyprland.conf");
-    }
-
-    private static async Task AtomicWriteAsync(string target, string contents, CancellationToken ct)
-    {
-        var dir = Path.GetDirectoryName(target)!;
-        var tmp = Path.Combine(dir, $".{Path.GetFileName(target)}.tmp");
-        await File.WriteAllTextAsync(tmp, contents, ct).ConfigureAwait(false);
-        File.Move(tmp, target, overwrite: true);
     }
 
     private static async Task<(bool ok, string stdout, string stderr)> RunAsync(string fileName, IReadOnlyList<string> args, CancellationToken ct)

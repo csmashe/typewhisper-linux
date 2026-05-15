@@ -118,6 +118,37 @@ public sealed class SentinelBlockTests
         Assert.Contains("killactive", output);
     }
 
+    [Fact]
+    public void ReplaceOrAppend_AppendToFileEndingWithNewline_PreservesTrailingNewline()
+    {
+        var input = "bind = SUPER, q, killactive\n";
+        var output = SentinelBlock.ReplaceOrAppend(input, new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" });
+        Assert.EndsWith("\n", output);
+    }
+
+    [Fact]
+    public void ReplaceOrAppend_AppendToFileWithoutTrailingNewline_StaysWithoutTrailingNewline()
+    {
+        var input = "bind = SUPER, q, killactive";
+        var output = SentinelBlock.ReplaceOrAppend(input, new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" });
+        Assert.False(output.EndsWith("\n"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Remove_RoundTrip_PreservesTrailingNewlineState(bool trailingNewline)
+    {
+        var input =
+            "bind = SUPER, q, killactive\n" +
+            SentinelBlock.OpenSentinel + "\n" +
+            "bind  = CTRL SHIFT, SPACE, exec, typewhisper\n" +
+            SentinelBlock.CloseSentinel +
+            (trailingNewline ? "\n" : string.Empty);
+        var output = SentinelBlock.Remove(input);
+        Assert.Equal(trailingNewline, output.EndsWith("\n"));
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         var count = 0;

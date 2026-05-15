@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using Avalonia;
+using Avalonia.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TypeWhisper.Core;
@@ -112,7 +113,8 @@ public static class Program
     }
 
     public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
+    {
+        var builder = AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .With(new X11PlatformOptions
             {
@@ -126,6 +128,16 @@ public static class Program
 #endif
             .WithInterFont()
             .LogToTrace();
+
+        // .LogToTrace() above assigned Logger.Sink synchronously. Wrap it so
+        // the harmless XSMP "SESSION_MANAGER ... not defined" warning the X11
+        // backend emits on every Wayland startup is dropped — see
+        // SuppressXsmpWarningLogSink for why it's safe to ignore.
+        if (Logger.Sink is { } sink)
+            Logger.Sink = new SuppressXsmpWarningLogSink(sink);
+
+        return builder;
+    }
 
     private static IHost BuildHost(string[] args)
         => Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder(args)
