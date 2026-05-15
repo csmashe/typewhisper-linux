@@ -109,7 +109,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
                 {
                     return Task.FromResult(new GlobalShortcutRegistrationResult(
                         Success: false, BackendId: BackendId,
-                        UserMessage: "No accessible keyboards under /dev/input/by-path. Add your user to the 'input' group.",
+                        UserMessage: "No accessible keyboards under /dev/input. Add your user to the 'input' group.",
                         RequiresToggleMode: false,
                         TroubleshootingCommand: "sudo usermod -aG input $USER"));
                 }

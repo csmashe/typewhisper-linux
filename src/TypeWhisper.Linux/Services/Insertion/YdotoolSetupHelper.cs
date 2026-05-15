@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 namespace TypeWhisper.Linux.Services.Insertion;
@@ -42,11 +42,111 @@ public sealed class YdotoolSetupHelper
         "# logind (Devuan, Alpine without elogind, etc.).\n" +
         "KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n";
 
-    private readonly SystemCommandAvailabilityService _commands;
+    // The user-level systemd unit name. Fedora's ydotool package ships
+    // only a system-level `ydotool.service` (runs ydotoold as root, with
+    // a root-owned socket the user can't reach), so on a clean install no
+    // user unit by this name resolves and we write our own.
+    internal const string UserUnitName = "ydotoold.service";
 
-    public YdotoolSetupHelper(SystemCommandAvailabilityService commands)
+    /// <summary>
+    /// Absolute path to the user-level systemd unit we install when the
+    /// distro doesn't ship one. Honors <c>XDG_CONFIG_HOME</c>, falling
+    /// back to <c>~/.config</c>. Pure — no disk touch.
+    /// </summary>
+    internal static string UserUnitFilePath()
+    {
+        var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        var configHome = !string.IsNullOrEmpty(xdg)
+            ? xdg
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
+        return Path.Combine(configHome, "systemd", "user", UserUnitName);
+    }
+
+    /// <summary>
+    /// Builds the user-level <c>ydotoold.service</c> unit text. The first
+    /// line carries <see cref="OwnershipMarker"/> so <see cref="RemoveAsync"/>
+    /// can confirm we own the file before deleting it. Pure.
+    /// </summary>
+    internal static string BuildUserUnitContent(string ydotooldPath)
+    {
+        return
+            "# " + OwnershipMarker + " — user-level ydotoold service so direct-typing\n" +
+            "# works without a system unit. Delete this file to roll back.\n" +
+            "[Unit]\n" +
+            "Description=ydotool daemon (user) — installed by TypeWhisper\n" +
+            "Documentation=https://github.com/ReimuNotMoe/ydotool\n" +
+            "After=default.target\n" +
+            "\n" +
+            "[Service]\n" +
+            "Type=simple\n" +
+            $"ExecStart={ydotooldPath}\n" +
+            "Restart=on-failure\n" +
+            "RestartSec=2\n" +
+            "\n" +
+            "[Install]\n" +
+            "WantedBy=default.target\n";
+    }
+
+    /// <summary>
+    /// Walks <c>$PATH</c> and returns the absolute path of the named
+    /// binary, or <c>null</c> if it isn't reachable. Mirrors
+    /// <see cref="DesktopDetector.BinaryExists"/> but returns the path —
+    /// kept local to this helper since no other caller needs it.
+    /// </summary>
+    internal static string? ResolveBinaryPath(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(path)) return null;
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrEmpty(dir)) continue;
+            try
+            {
+                var candidate = Path.Combine(dir, name);
+                if (File.Exists(candidate)) return candidate;
+            }
+            catch
+            {
+                // Bad PATH entry — skip.
+            }
+        }
+        return null;
+    }
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int access(string pathname, int mode);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern uint geteuid();
+
+    /// <summary>
+    /// True only when this process can already read+write <c>/dev/uinput</c>
+    /// (R_OK|W_OK = 6) — the ground-truth signal that the udev rule is
+    /// unnecessary. Running as root is treated as "not accessible": root
+    /// can always write the node, but the real non-root user still needs
+    /// the rule, so we don't let a root-run GUI skip installing it.
+    /// </summary>
+    private static bool UinputIsAccessible()
+    {
+        try
+        {
+            if (geteuid() == 0) return false;
+            return File.Exists("/dev/uinput") && access("/dev/uinput", 6) == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private readonly SystemCommandAvailabilityService _commands;
+    private readonly IProcessRunner _runner;
+
+    public YdotoolSetupHelper(SystemCommandAvailabilityService commands, IProcessRunner runner)
     {
         _commands = commands;
+        _runner = runner;
     }
 
     public sealed record Status(
@@ -55,6 +155,7 @@ public sealed class YdotoolSetupHelper
         bool SystemdUnitActive,
         bool SocketReachable,
         bool ProbeSucceeded,
+        bool UinputAccessible,
         string? SocketPath)
     {
         /// <summary>
@@ -62,16 +163,19 @@ public sealed class YdotoolSetupHelper
         /// write to /dev/uinput. <see cref="ProbeSucceeded"/> guards against
         /// the "socket exists but every keystroke fails EACCES" failure
         /// mode that happens on older systems where <c>TAG+="uaccess"</c>
-        /// didn't apply and the user isn't in the input group. Without
-        /// the probe field this property would lie and the status panel
-        /// would say "Ready" alongside a setup-failed message.
+        /// didn't apply and the user isn't in the input group. The udev
+        /// rule is satisfied either by our installed rule
+        /// (<see cref="UdevRulePresent"/>) or by the kernel already
+        /// granting access (<see cref="UinputAccessible"/>) — setup skips
+        /// installing the rule in the latter case, so it can't be a hard
+        /// requirement here.
         /// </summary>
         public bool IsFullyConfigured =>
             BinaryInstalled
-            && UdevRulePresent
             && SystemdUnitActive
             && SocketReachable
-            && ProbeSucceeded;
+            && ProbeSucceeded
+            && (UdevRulePresent || UinputAccessible);
     }
 
     public sealed record SetupResult(bool Success, string Message, string? Detail = null);
@@ -88,48 +192,32 @@ public sealed class YdotoolSetupHelper
     {
         var binary = DesktopDetector.BinaryExists(YdotoolBackend.ExecutableName);
         var rule = File.Exists(UdevRulePath);
-        var unitActive = IsUserUnitActive("ydotoold.service");
+        var unitActive = IsUserUnitActive(UserUnitName);
         var socket = SystemCommandAvailabilityService.ResolveYdotoolSocketPath();
         // Only probe when the socket is reachable — without it the probe
         // would fail anyway and we'd burn a subprocess on a known-bad
         // state.
         var probed = socket is not null && RunSyncProbe(socket);
-        return new Status(binary, rule, unitActive, socket is not null, probed, socket);
+        var uinputAccessible = UinputIsAccessible();
+        return new Status(binary, rule, unitActive, socket is not null, probed, uinputAccessible, socket);
     }
 
     /// <summary>
     /// Synchronous probe used by <see cref="IsCurrentlyConfigured"/>.
     /// One-shot subprocess (~5 ms), tight 500 ms ceiling so a hung
-    /// daemon can't wedge the status panel.
+    /// daemon can't wedge the status panel. Blocks the caller — same as
+    /// before the <see cref="IProcessRunner"/> seam; the runner uses
+    /// ConfigureAwait(false) throughout so there is no UI-thread deadlock.
     /// </summary>
-    private static bool RunSyncProbe(string socketPath)
+    private bool RunSyncProbe(string socketPath)
     {
-        try
-        {
-            var psi = new ProcessStartInfo(YdotoolBackend.ExecutableName)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                Environment = { ["YDOTOOL_SOCKET"] = socketPath },
-            };
-            foreach (var arg in YdotoolBackend.ProbeArgs())
-                psi.ArgumentList.Add(arg);
-
-            using var p = Process.Start(psi);
-            if (p is null) return false;
-            if (!p.WaitForExit(500))
-            {
-                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                return false;
-            }
-            return p.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
+        var result = _runner.RunAsync(
+            YdotoolBackend.ExecutableName,
+            YdotoolBackend.ProbeArgs(),
+            environment: new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath },
+            timeout: TimeSpan.FromMilliseconds(500))
+            .GetAwaiter().GetResult();
+        return result.Succeeded;
     }
 
     /// <summary>
@@ -140,10 +228,12 @@ public sealed class YdotoolSetupHelper
     public string PreviewLines()
     {
         return
-            $"Write {UdevRulePath} via pkexec (one-time, requires admin password)\n" +
-            "  KERNEL==\"uinput\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n" +
+            $"If /dev/uinput isn't already accessible: install {UdevRulePath} via\n" +
+            "  pkexec (one-time admin prompt).\n" +
+            $"If no ydotoold user service exists: write {UserUnitFilePath()}\n" +
+            "  and run `systemctl --user daemon-reload`.\n" +
             "systemctl --user enable --now ydotoold.service\n" +
-            "Verify $XDG_RUNTIME_DIR/.ydotool_socket appears";
+            "Verify the ydotool socket appears";
     }
 
     public async Task<SetupResult> SetUpAsync(CancellationToken ct)
@@ -156,28 +246,45 @@ public sealed class YdotoolSetupHelper
         }
 
         // pkexec presence is only required when we actually need to write
-        // the udev rule. If the rule is already on disk (manual install,
-        // earlier setup run, distro default), we should be able to
-        // finish setup with just the user-level systemctl invocation.
-        if (!File.Exists(UdevRulePath))
+        // the udev rule. Skip it entirely when the rule is already on disk
+        // (manual install, earlier setup run, distro default) OR when the
+        // kernel already grants this process read/write on /dev/uinput —
+        // in that case the rule is genuinely unnecessary and prompting for
+        // an admin password would just be a needless nag.
+        if (!File.Exists(UdevRulePath) && !UinputIsAccessible())
         {
             var ruleInstalled = await InstallUdevRuleAsync(ct).ConfigureAwait(false);
             if (!ruleInstalled.Success)
                 return ruleInstalled;
         }
 
-        if (DesktopDetector.BinaryExists("systemctl"))
-        {
-            var unitOk = await EnableUserUnitAsync("ydotoold.service", ct).ConfigureAwait(false);
-            if (!unitOk.Success)
-                return unitOk;
-        }
-        else
+        if (!DesktopDetector.BinaryExists("systemctl"))
         {
             return new SetupResult(false,
                 "systemctl is not available on this system.",
                 Detail: "Start ydotoold manually (it will not survive logout): nohup ydotoold &");
         }
+
+        // Fedora's ydotool package ships only a system-level unit, so on a
+        // clean install no user `ydotoold.service` resolves. Write our own
+        // before trying to enable it.
+        var (unitFile, wroteUnit) = await EnsureUserUnitExistsAsync(ct).ConfigureAwait(false);
+        if (!unitFile.Success)
+            return unitFile;
+        if (wroteUnit)
+        {
+            var reload = await _runner.RunAsync(
+                "systemctl", new[] { "--user", "daemon-reload" }, ct: ct).ConfigureAwait(false);
+            if (!reload.Succeeded)
+                return new SetupResult(false,
+                    "Could not reload the systemd user manager.",
+                    Detail: string.IsNullOrWhiteSpace(reload.StandardError)
+                        ? "Check `systemctl --user status`."
+                        : reload.StandardError.Trim());
+        }
+        var unitOk = await EnableUserUnitAsync(UserUnitName, ct).ConfigureAwait(false);
+        if (!unitOk.Success)
+            return unitOk;
 
         var socket = await WaitForSocketAsync(ct).ConfigureAwait(false);
         if (socket is null)
@@ -200,7 +307,8 @@ public sealed class YdotoolSetupHelper
         if (!probe.Success)
             return probe;
 
-        return new SetupResult(true, $"ydotool is ready. Socket: {socket}");
+        return new SetupResult(true,
+            $"ydotool is ready. Socket: {socket}. It starts automatically on login.");
     }
 
     /// <summary>
@@ -210,16 +318,16 @@ public sealed class YdotoolSetupHelper
     /// </summary>
     private async Task<SetupResult> ProbeYdotoolAsync(string socketPath, CancellationToken ct)
     {
-        var (ok, _, stderr) = await RunWithEnvAsync(
+        var probe = await _runner.RunAsync(
             YdotoolBackend.ExecutableName,
             YdotoolBackend.ProbeArgs(),
-            new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath },
-            ct).ConfigureAwait(false);
+            environment: new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath },
+            ct: ct).ConfigureAwait(false);
 
-        if (ok)
+        if (probe.Succeeded)
             return new SetupResult(true, "ydotool probe succeeded.");
 
-        if (LooksLikePermissionError(stderr))
+        if (LooksLikePermissionError(probe.StandardError))
         {
             return new SetupResult(false,
                 "ydotoold can't write to /dev/uinput (permission denied).",
@@ -231,7 +339,9 @@ public sealed class YdotoolSetupHelper
 
         return new SetupResult(false,
             "ydotool probe failed.",
-            Detail: string.IsNullOrWhiteSpace(stderr) ? "Check `journalctl --user -u ydotoold`." : stderr.Trim());
+            Detail: string.IsNullOrWhiteSpace(probe.StandardError)
+                ? "Check `journalctl --user -u ydotoold`."
+                : probe.StandardError.Trim());
     }
 
     private static bool LooksLikePermissionError(string stderr) =>
@@ -242,10 +352,67 @@ public sealed class YdotoolSetupHelper
 
     public async Task<SetupResult> RemoveAsync(CancellationToken ct)
     {
-        // Disable the user unit first so the socket goes away before we
-        // pull the udev rule out from under it.
-        if (DesktopDetector.BinaryExists("systemctl"))
-            await RunAsync("systemctl", new[] { "--user", "disable", "--now", "ydotoold.service" }, ct).ConfigureAwait(false);
+        // Ownership gate for *both* the disable and the file delete. We only
+        // touch a user unit we wrote: SetUpAsync respects a pre-existing
+        // foreign ydotoold user unit (distro/AUR/manual) and won't overwrite
+        // its file — but it does `enable --now` whatever unit resolves. If we
+        // then unconditionally `disable --now`d here, clicking Remove would
+        // disable a service the user relies on, leaving it dead after the
+        // next login while the foreign file stays in place. So: foreign unit
+        // → leave its enablement state entirely alone.
+        var unitPath = UserUnitFilePath();
+        var weOwnUnit = File.Exists(unitPath) && IsFileOwnedByTypeWhisper(unitPath);
+
+        // Disable our user unit first so the socket goes away before we pull
+        // the udev rule out from under it. Fail closed: if `disable --now`
+        // fails, ydotoold may still be running and — worse — the enablement
+        // symlink may survive; deleting the unit file then would leave a
+        // dangling symlink that makes every later `systemctl --user` call
+        // warn. Abort before the delete and surface the error instead.
+        if (weOwnUnit && DesktopDetector.BinaryExists("systemctl"))
+        {
+            var disable = await _runner.RunAsync(
+                "systemctl", new[] { "--user", "disable", "--now", UserUnitName }, ct: ct).ConfigureAwait(false);
+            if (!disable.Succeeded)
+                return new SetupResult(false,
+                    $"Could not disable {UserUnitName} — left {unitPath} in place so you can retry.",
+                    Detail: string.IsNullOrWhiteSpace(disable.StandardError)
+                        ? "Check `systemctl --user status ydotoold.service`."
+                        : disable.StandardError.Trim());
+        }
+
+        // Delete our user unit file if we own it. Mirrors the udev-rule
+        // ownership guard: a unit a distro package or the user wrote at
+        // the same path stays in place. Teardown order: disable → delete
+        // file → daemon-reload.
+        var removedUnit = false;
+        string? unitNotOursMessage = null;
+        if (File.Exists(unitPath))
+        {
+            if (weOwnUnit)
+            {
+                try
+                {
+                    File.Delete(unitPath);
+                    removedUnit = true;
+                }
+                catch (Exception ex)
+                {
+                    // Fail closed, mirroring the disable-failure path above:
+                    // a TypeWhisper-owned unit still on disk means removal
+                    // did not complete, so don't report success.
+                    return new SetupResult(false,
+                        $"Could not delete {unitPath}: {ex.Message}");
+                }
+            }
+            else
+            {
+                unitNotOursMessage =
+                    $"Left {unitPath} in place and untouched — it has no TypeWhisper ownership marker, so its ydotoold service stays enabled.";
+            }
+        }
+        if (removedUnit && DesktopDetector.BinaryExists("systemctl"))
+            await _runner.RunAsync("systemctl", new[] { "--user", "daemon-reload" }, ct: ct).ConfigureAwait(false);
 
         var ruleNotOursMessage = (string?)null;
         if (File.Exists(UdevRulePath))
@@ -255,28 +422,33 @@ public sealed class YdotoolSetupHelper
             // (or a distro package) may have written one before
             // discovering TypeWhisper. Don't pkexec-rm privileged
             // config we didn't put there.
-            if (!IsRuleOwnedByTypeWhisper(UdevRulePath))
+            if (!IsFileOwnedByTypeWhisper(UdevRulePath))
             {
                 ruleNotOursMessage =
                     $"Left {UdevRulePath} in place — it doesn't carry TypeWhisper's ownership marker, so we won't delete it. Remove it manually if you want to.";
             }
             else if (DesktopDetector.BinaryExists("pkexec"))
             {
-                var (ok, _, err) = await RunAsync("pkexec",
+                var rm = await _runner.RunAsync("pkexec",
                     new[] { "rm", "-f", UdevRulePath },
-                    ct).ConfigureAwait(false);
-                if (!ok)
-                    return new SetupResult(false, $"Could not remove udev rule: {err.Trim()}");
+                    ct: ct).ConfigureAwait(false);
+                if (!rm.Succeeded)
+                    return new SetupResult(false, $"Could not remove udev rule: {rm.StandardError.Trim()}");
             }
         }
 
         _commands.RefreshSnapshot();
+
+        var detail = string.Join(
+            "\n",
+            new[] { unitNotOursMessage, ruleNotOursMessage }
+                .Where(m => !string.IsNullOrWhiteSpace(m)));
         return new SetupResult(true,
             "ydotool integration removed.",
-            Detail: ruleNotOursMessage);
+            Detail: string.IsNullOrEmpty(detail) ? null : detail);
     }
 
-    private static bool IsRuleOwnedByTypeWhisper(string path)
+    internal static bool IsFileOwnedByTypeWhisper(string path)
     {
         try
         {
@@ -322,30 +494,92 @@ public sealed class YdotoolSetupHelper
             "udevadm control --reload\n" +
             "udevadm trigger --subsystem-match=misc --action=change || true\n";
 
-        var (ok, stdout, stderr) = await RunWithStdinAsync(
+        var run = await _runner.RunAsync(
             "pkexec",
             new[] { "/bin/sh" },
-            script,
-            ct).ConfigureAwait(false);
+            standardInput: script,
+            ct: ct).ConfigureAwait(false);
 
-        if (!ok)
+        if (!run.Succeeded)
             return new SetupResult(false,
                 "Could not install udev rule (pkexec failed or was canceled).",
-                Detail: string.IsNullOrWhiteSpace(stderr) ? stdout : stderr);
+                Detail: string.IsNullOrWhiteSpace(run.StandardError) ? run.StandardOutput : run.StandardError);
 
         return new SetupResult(true, "Installed udev rule.");
     }
 
+    /// <summary>
+    /// Ensures a user-level <c>ydotoold.service</c> resolves. If one
+    /// already does (the user, or a distro/AUR package, set one up) we
+    /// respect it and don't overwrite. Otherwise we atomically write our
+    /// own to <see cref="UserUnitFilePath"/>. Returns whether the unit
+    /// file was newly written so the caller can decide whether a
+    /// <c>daemon-reload</c> is needed — keeping <see cref="SetUpAsync"/>
+    /// free of mutable instance state (this helper is a DI singleton).
+    /// </summary>
+    private async Task<(SetupResult result, bool wroteUnitFile)> EnsureUserUnitExistsAsync(
+        CancellationToken ct)
+    {
+        // `systemctl --user cat` exits 0 only when a unit by this name
+        // resolves through the full unit search path — covers a unit the
+        // user wrote, or one shipped by a distro/AUR package, wherever it
+        // lives. Respect any such unit rather than shadowing it.
+        var cat = await _runner.RunAsync(
+            "systemctl", new[] { "--user", "cat", UserUnitName }, ct: ct).ConfigureAwait(false);
+        if (cat.Succeeded)
+            return (new SetupResult(true, "A ydotoold user service already exists."), false);
+
+        // No user unit resolves — we must write our own, which needs the
+        // daemon's absolute path for ExecStart. Resolve it only here, not up
+        // front in SetUpAsync: an already-resolving unit (handled above) may
+        // legitimately point ExecStart at a ydotoold outside this process's
+        // $PATH, and rejecting that working setup just because we can't find
+        // the binary ourselves would be wrong.
+        var ydotooldPath = ResolveBinaryPath("ydotoold");
+        if (ydotooldPath is null)
+            return (new SetupResult(false,
+                "ydotoold (the ydotool daemon) is not installed.",
+                Detail: "On Fedora the `ydotool` package includes it: sudo dnf install ydotool"), false);
+
+        var unitPath = UserUnitFilePath();
+        try
+        {
+            // Ownership guard, mirroring the udev-rule check: if a file is
+            // already at our path but lacks our marker, the user put it
+            // there — don't clobber it.
+            if (File.Exists(unitPath) && !IsFileOwnedByTypeWhisper(unitPath))
+            {
+                return (new SetupResult(false,
+                    $"A ydotoold user unit already exists at {unitPath} but doesn't carry TypeWhisper's ownership marker.",
+                    Detail: "Remove or fix that file manually, then run setup again."), false);
+            }
+
+            // Atomic write: temp file + move, same pattern as
+            // BrowserAccessibilitySetupHelper.WriteEnvFile.
+            Directory.CreateDirectory(Path.GetDirectoryName(unitPath)!);
+            var tempPath = unitPath + ".tmp";
+            await File.WriteAllTextAsync(tempPath, BuildUserUnitContent(ydotooldPath), ct).ConfigureAwait(false);
+            File.Move(tempPath, unitPath, overwrite: true);
+            return (new SetupResult(true, $"Wrote {unitPath}."), true);
+        }
+        catch (Exception ex)
+        {
+            return (new SetupResult(false,
+                "Could not write the ydotoold user unit.",
+                Detail: ex.Message), false);
+        }
+    }
+
     private async Task<SetupResult> EnableUserUnitAsync(string unit, CancellationToken ct)
     {
-        var (ok, _, err) = await RunAsync(
+        var enable = await _runner.RunAsync(
             "systemctl",
             new[] { "--user", "enable", "--now", unit },
-            ct).ConfigureAwait(false);
-        if (!ok)
+            ct: ct).ConfigureAwait(false);
+        if (!enable.Succeeded)
         {
             return new SetupResult(false,
-                $"Could not enable {unit}: {err.Trim()}",
+                $"Could not enable {unit}: {enable.StandardError.Trim()}",
                 Detail:
                     "If your distro doesn't run user-instance systemd, start the daemon manually:\n" +
                     "  nohup ydotoold &\n" +
@@ -369,103 +603,13 @@ public sealed class YdotoolSetupHelper
         return null;
     }
 
-    private static bool IsUserUnitActive(string unit)
+    private bool IsUserUnitActive(string unit)
     {
-        try
-        {
-            using var p = Process.Start(new ProcessStartInfo("systemctl")
-            {
-                ArgumentList = { "--user", "is-active", "--quiet", unit },
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            });
-            if (p is null) return false;
-            if (!p.WaitForExit(500))
-            {
-                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                return false;
-            }
-            return p.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static Task<(bool ok, string stdout, string stderr)> RunAsync(
-        string fileName,
-        IReadOnlyList<string> args,
-        CancellationToken ct) =>
-        RunWithEnvAsync(fileName, args, env: null, ct);
-
-    private static async Task<(bool ok, string stdout, string stderr)> RunWithEnvAsync(
-        string fileName,
-        IReadOnlyList<string> args,
-        IReadOnlyDictionary<string, string>? env,
-        CancellationToken ct)
-    {
-        var psi = new ProcessStartInfo(fileName)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        if (env is not null)
-        {
-            foreach (var (k, v) in env)
-                psi.Environment[k] = v;
-        }
-
-        try
-        {
-            using var p = Process.Start(psi);
-            if (p is null) return (false, string.Empty, $"Could not start {fileName}");
-            var stdoutTask = p.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = p.StandardError.ReadToEndAsync(ct);
-            await p.WaitForExitAsync(ct).ConfigureAwait(false);
-            return (p.ExitCode == 0, await stdoutTask.ConfigureAwait(false), await stderrTask.ConfigureAwait(false));
-        }
-        catch (Exception ex)
-        {
-            return (false, string.Empty, ex.Message);
-        }
-    }
-
-    private static async Task<(bool ok, string stdout, string stderr)> RunWithStdinAsync(
-        string fileName,
-        IReadOnlyList<string> args,
-        string input,
-        CancellationToken ct)
-    {
-        var psi = new ProcessStartInfo(fileName)
-        {
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-
-        try
-        {
-            using var p = Process.Start(psi);
-            if (p is null) return (false, string.Empty, $"Could not start {fileName}");
-            await p.StandardInput.WriteAsync(input.AsMemory(), ct).ConfigureAwait(false);
-            p.StandardInput.Close();
-            var stdoutTask = p.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = p.StandardError.ReadToEndAsync(ct);
-            await p.WaitForExitAsync(ct).ConfigureAwait(false);
-            return (p.ExitCode == 0, await stdoutTask.ConfigureAwait(false), await stderrTask.ConfigureAwait(false));
-        }
-        catch (Exception ex)
-        {
-            return (false, string.Empty, ex.Message);
-        }
+        var result = _runner.RunAsync(
+            "systemctl",
+            new[] { "--user", "is-active", "--quiet", unit },
+            timeout: TimeSpan.FromMilliseconds(500))
+            .GetAwaiter().GetResult();
+        return result.Succeeded;
     }
 }

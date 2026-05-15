@@ -14,10 +14,11 @@ namespace TypeWhisper.Linux.Services;
 public sealed record LinuxPreferences
 {
     /// <summary>
-    /// When true, clicking the window's close (X) button hides to the
-    /// system tray and keeps the process alive. When false (default),
-    /// the X button fully quits the app — safer on desktops without
-    /// a working SNI tray.
+    /// When true, clicking the window's close (X) button hides the window
+    /// to the tray icon — it leaves the dock/taskbar and the process keeps
+    /// running, with the tray menu as the only entry point. When false
+    /// (default), the X button fully quits the app — safer on desktops
+    /// without a working SNI tray.
     /// </summary>
     public bool CloseToTray { get; init; }
 

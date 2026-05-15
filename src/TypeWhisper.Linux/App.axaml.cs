@@ -32,34 +32,52 @@ public partial class App : Application
             var settings = services.GetRequiredService<ISettingsService>();
             settings.Load();
 
+            // Resolve + initialize the tray before MainWindow is built. The
+            // probe sets TrayIconService.IsTrayAvailable, which GeneralSection
+            // binds to (the close-to-tray toggle, backlog #18). Building the
+            // window first would let that binding latch the default `false`
+            // and — the one-shot probe raises no PropertyChanged — keep the
+            // toggle wrongly disabled all session on a machine with a tray.
+            // It also has to be ready before the close handler is wired.
+            var tray = services.GetRequiredService<TrayIconService>();
+            tray.Initialize();
+
             var main = services.GetRequiredService<MainWindow>();
             desktop.MainWindow = main;
+
+            var prefs = services.GetRequiredService<LinuxPreferencesService>();
 
             // Close-button behavior is user-configurable. Default
             // (CloseToTray=false): X fully quits, same path as tray Exit.
             // With CloseToTray=true the window hides and the tray stays the
             // entry point. Tray Exit always quits (flips ShuttingDown first).
-            var prefs = services.GetRequiredService<LinuxPreferencesService>();
             main.Closing += (_, e) =>
             {
                 if (ShuttingDown) return;
 
-                if (prefs.Current.CloseToTray)
+                // Only hide to the tray when one actually exists to restore
+                // the window from. Hiding with no tray (stock GNOME has none)
+                // would strand the user with no UI — backlog #18 — so an X
+                // with no tray falls through to quitting.
+                if (prefs.Current.CloseToTray && tray.IsTrayAvailable)
                 {
                     e.Cancel = true;
-                    main.Hide();
+                    HideToTray(main);
                 }
                 else
                 {
                     ShuttingDown = true;
                     TearDownAsync(services).GetAwaiter().GetResult();
-                    // Let the close proceed; ClassicDesktopStyle shuts down
-                    // when the main window closes.
+                    // Shut the lifetime down explicitly. The default
+                    // OnLastWindowClose mode would leave the process alive:
+                    // DictationOverlayWindow is a persistent always-shown
+                    // window (backlog #16's Opacity workaround), so closing
+                    // the main window is never the *last* window close.
+                    // Same path as the tray Exit handler.
+                    desktop.Shutdown();
                 }
             };
 
-            var tray = services.GetRequiredService<TrayIconService>();
-            tray.Initialize();
             tray.ShowSettingsRequested += (_, _) =>
             {
                 ShowMainWindow(main);
@@ -175,9 +193,9 @@ public partial class App : Application
             var transformSelection = services.GetRequiredService<TransformSelectionService>();
             hotkey.TransformSelectionRequested += (_, _) => _ = transformSelection.ToggleAsync();
 
-            // Launch minimized / hidden if --minimized was passed.
+            // Launch hidden to the tray if --minimized was passed.
             if (Program.StartMinimized)
-                main.Opened += (_, _) => main.Hide();
+                main.Opened += (_, _) => HideToTray(main);
 
             var bootstrapTask = BootstrapDeferredAsync(services);
 
@@ -230,12 +248,63 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// True on wlroots-based compositors (Hyprland, Sway), which have no
+    /// "minimize" concept — an X11 iconify request is a no-op there, so the
+    /// minimize-based hide-to-tray would leave the window on screen. wlroots
+    /// does handle Window.Hide()/Show() cleanly; the unpainted-surface-on-
+    /// Show() bug behind backlog #3/#16 is specific to GNOME Mutter.
+    /// </summary>
+    private static bool TrayHideUsesWindowHide()
+        => Services.Hotkey.DeSetup.DesktopDetector.DetectId() is "hyprland" or "sway";
+
+    /// <summary>
+    /// Hide the window to the tray so the tray icon becomes the only entry
+    /// point. Compositor-dependent — no single mechanism both removes the
+    /// window from screen *and* from the dock everywhere:
+    /// <list type="bullet">
+    /// <item>GNOME Mutter (and other minimize-honoring desktops): minimize
+    /// FIRST, then ShowInTaskbar=false. Mutter ignores an iconify request on
+    /// a window that already has SKIP_TASKBAR set (minimize means "send it to
+    /// the dash," and a skip-taskbar window has nowhere to go), so the order
+    /// matters. Keeps the surface mapped, dodging the Hide()/Show() repaint
+    /// bug — backlog #3/#16.</item>
+    /// <item>wlroots (Hyprland/Sway): no minimize concept, so a real
+    /// Window.Hide() — which repaints correctly on Show() there.</item>
+    /// </list>
+    /// </summary>
+    private static void HideToTray(MainWindow window)
+    {
+        if (TrayHideUsesWindowHide())
+        {
+            window.Hide();
+            return;
+        }
+
+        window.WindowState = Avalonia.Controls.WindowState.Minimized;
+        window.ShowInTaskbar = false;
+    }
+
     private static void ShowMainWindow(MainWindow window)
     {
-        if (!window.IsVisible) window.Show();
+        // Reverse HideToTray. The hide path is compositor-dependent, so
+        // restore covers both: re-add the dock entry, un-minimize if we
+        // minimized (GNOME — and re-add the dock entry FIRST, since Mutter
+        // won't un-iconify a skip-taskbar window), and Show() if we Hid()
+        // (wlroots).
+        window.ShowInTaskbar = true;
+
         if (window.WindowState == Avalonia.Controls.WindowState.Minimized)
             window.WindowState = Avalonia.Controls.WindowState.Normal;
+
+        // wlroots hide-to-tray uses a real Hide(); bring the surface back.
+        if (!window.IsVisible)
+            window.Show();
+
         window.Activate();
+        // GNOME Wayland may ignore an Activate() issued in the same UI turn
+        // as the state change; re-issue it once the change has been applied.
+        Avalonia.Threading.Dispatcher.UIThread.Post(window.Activate);
     }
 
     /// <summary>

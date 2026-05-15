@@ -260,7 +260,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         ShowYdotoolSetupSection = true;
         IsYdotoolSetupRunning = true;
-        YdotoolSetupStatus = "Setting up automatic paste — you'll be prompted for your admin password once.";
+        YdotoolSetupStatus = "Setting up automatic paste… (you may be asked for your admin password).";
 
         try
         {

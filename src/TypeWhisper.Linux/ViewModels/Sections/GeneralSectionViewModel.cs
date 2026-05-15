@@ -12,8 +12,11 @@ public partial class GeneralSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
     private readonly HttpApiService _api;
     private readonly CliInstallService _cliInstall;
+    private readonly LinuxPreferencesService _linuxPrefs;
+    private readonly TrayIconService _tray;
     [ObservableProperty] private string? _uiLanguage;
     [ObservableProperty] private bool _startWithSystem;
+    [ObservableProperty] private bool _closeToTray;
     [ObservableProperty] private bool _apiServerEnabled;
     [ObservableProperty] private int _apiServerPort;
     [ObservableProperty] private string _apiBearerToken = "";
@@ -61,13 +64,31 @@ public partial class GeneralSectionViewModel : ObservableObject
         }
     }
 
-    public GeneralSectionViewModel(ISettingsService settings, HttpApiService api, CliInstallService cliInstall)
+    /// <summary>
+    /// Whether a usable system tray was detected. The close-to-tray toggle is
+    /// disabled without one — hiding the window with no tray to restore it
+    /// would strand the user (backlog #18). Read live (not cached) so it is
+    /// correct regardless of whether this VM is built before or after the
+    /// tray's one-shot probe at startup.
+    /// </summary>
+    public bool IsTrayAvailable => _tray.IsTrayAvailable;
+    public bool IsTrayUnavailable => !_tray.IsTrayAvailable;
+
+    public GeneralSectionViewModel(
+        ISettingsService settings,
+        HttpApiService api,
+        CliInstallService cliInstall,
+        LinuxPreferencesService linuxPrefs,
+        TrayIconService tray)
     {
         _settings = settings;
         _api = api;
         _cliInstall = cliInstall;
+        _linuxPrefs = linuxPrefs;
+        _tray = tray;
         Refresh(settings.Current);
         StartWithSystem = StartupService.IsEnabled;
+        CloseToTray = _linuxPrefs.Current.CloseToTray;
         _settings.SettingsChanged += Refresh;
         _api.StateChanged += () => ApiStatusText = _api.StatusText;
         ApiStatusText = _api.StatusText;
@@ -152,6 +173,14 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
 
         _settings.Save(_settings.Current with { ApiServerPort = value });
+    }
+
+    partial void OnCloseToTrayChanged(bool value)
+    {
+        if (_linuxPrefs.Current.CloseToTray == value)
+            return;
+
+        _linuxPrefs.Save(_linuxPrefs.Current with { CloseToTray = value });
     }
 }
 

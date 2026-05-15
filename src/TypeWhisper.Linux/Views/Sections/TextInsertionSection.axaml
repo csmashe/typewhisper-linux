@@ -146,7 +146,7 @@
                                            Text="Set up automatically" />
                                 <TextBlock Classes="row-hint"
                                            TextWrapping="Wrap"
-                                           Text="TypeWhisper will install a udev rule so /dev/uinput is accessible, then start the ydotoold user service. The udev rule install runs through pkexec — it asks for your admin password once." />
+                                           Text="TypeWhisper creates a ydotoold user service if your distro doesn't ship one, and grants /dev/uinput access if needed. Granting access runs through pkexec — it asks for your admin password once." />
 
                                 <Border Background="#0E1620"
                                         BorderBrush="#1AFFFFFF"

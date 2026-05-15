@@ -88,7 +88,10 @@ public partial class TextInsertionSectionViewModel : ObservableObject
             var status = YdotoolStatus;
             if (!status.BinaryInstalled)
                 return "ydotool not installed. Install it via your package manager.";
-            if (!status.UdevRulePresent)
+            // Only flag the missing rule when /dev/uinput isn't already
+            // writable — when the kernel grants access directly the rule
+            // genuinely isn't needed and the warning would be wrong.
+            if (!status.UdevRulePresent && !status.UinputAccessible)
                 return "ydotool installed, but the /dev/uinput udev rule is missing.";
             if (!status.SystemdUnitActive)
                 return "ydotoold systemd user unit is not active.";
@@ -130,7 +133,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     [RelayCommand]
     private async Task SetUpYdotoolAsync()
     {
-        IntegrationStatusMessage = "Installing udev rule (pkexec prompt) and starting ydotoold…";
+        IntegrationStatusMessage = "Setting up ydotool… (you may be asked for your admin password)";
         try
         {
             var result = await _setup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);

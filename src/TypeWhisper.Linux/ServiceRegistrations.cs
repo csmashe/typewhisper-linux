@@ -76,6 +76,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<SystemCommandAvailabilityService>();
+        services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton<AudioRecordingService>();
         services.AddSingleton<AudioFileService>();
         services.AddSingleton<IFileTranscriptionProcessor, FileTranscriptionProcessor>();

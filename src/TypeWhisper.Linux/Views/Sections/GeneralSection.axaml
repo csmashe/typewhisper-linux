@@ -83,6 +83,42 @@
                 </Grid>
             </Border>
 
+            <TextBlock Text="Window"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <TextBlock Text="Close button hides to tray"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding CloseToTray}"
+                                          IsEnabled="{Binding IsTrayAvailable}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="On: the close (X) button hides the window to the tray icon — it leaves the dock and the app keeps running, reachable from the tray menu. Off: the close button quits TypeWhisper."
+                                       FontSize="12"
+                                       Foreground="#8A9AAE"
+                                       TextWrapping="Wrap" />
+                            <TextBlock IsVisible="{Binding IsTrayUnavailable}"
+                                       Text="No system tray was detected on this desktop, so this option is unavailable — the close button will quit TypeWhisper. On GNOME, install the AppIndicator extension to enable it."
+                                       FontSize="12"
+                                       Foreground="#E0A845"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
             <TextBlock Text="Services"
                        Classes="section-title" />
 

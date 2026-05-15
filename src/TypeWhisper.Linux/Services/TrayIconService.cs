@@ -15,6 +15,7 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class TrayIconService : IDisposable
 {
+    private readonly IProcessRunner _runner;
     private TrayIcon? _trayIcon;
     private TrayIcons? _trayIcons;
     private bool _disposed;
@@ -23,8 +24,28 @@ public sealed class TrayIconService : IDisposable
     public event EventHandler? ExitRequested;
     public event EventHandler? DictationToggleRequested;
 
+    public TrayIconService(IProcessRunner runner)
+    {
+        _runner = runner;
+    }
+
+    /// <summary>
+    /// Whether a usable system tray was detected at <see cref="Initialize"/>
+    /// time. Consulted before the close button hides the window — see
+    /// backlog #18: hiding with no tray strands the user with no UI.
+    /// </summary>
+    public bool IsTrayAvailable { get; private set; }
+
     public void Initialize()
     {
+        // A StatusNotifier host existing (the D-Bus probe) is necessary but
+        // not sufficient — IsTrayAvailable must also mean our icon actually
+        // registered. Set it true only after SetIcons succeeds; any failure
+        // (no host, TrayIcon/SetIcons throwing, no Application.Current) leaves
+        // it false so close-to-tray won't hide the window into a tray entry
+        // that isn't there (backlog #18).
+        var hostPresent = ProbeTrayAvailable();
+
         try
         {
             _trayIcon = new TrayIcon
@@ -40,12 +61,54 @@ public sealed class TrayIconService : IDisposable
             {
                 _trayIcons = new TrayIcons { _trayIcon };
                 TrayIcon.SetIcons(app, _trayIcons);
+                IsTrayAvailable = hostPresent;
             }
         }
         catch (Exception ex)
         {
+            IsTrayAvailable = false;
             Debug.WriteLine($"[TrayIconService] Tray init failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// True when a StatusNotifierItem host (system tray) is present on the
+    /// session bus. Avalonia's <see cref="TrayIcon"/> silently no-ops when
+    /// there is no host — it never throws or otherwise reports failure — so
+    /// a successful <see cref="Initialize"/> proves nothing. We read the
+    /// StatusNotifierWatcher's <c>IsStatusNotifierHostRegistered</c> property
+    /// over D-Bus: it is true only when a watcher exists <em>and</em> a host
+    /// has registered with it (KDE's panel, GNOME's AppIndicator extension,
+    /// waybar's tray module — all qualify). Checking the watcher's mere name
+    /// ownership instead would mis-report a stale watcher left behind with no
+    /// host. Fails safe: any probe error (gdbus missing, bus unreachable, no
+    /// watcher at all) counts as "no tray" so close-to-tray falls back to
+    /// quitting rather than stranding the user — backlog #18.
+    /// </summary>
+    internal bool ProbeTrayAvailable()
+    {
+        // gdbus ships with glib2 — present on every Linux desktop. One
+        // property read covers every case: no watcher → gdbus errors →
+        // false; a watcher with no host → "(<false>,)" → false; a watcher
+        // with a registered host → "(<true>,)" → true.
+        var result = _runner.RunAsync(
+            "gdbus",
+            new[]
+            {
+                "call", "--session",
+                "--dest", "org.kde.StatusNotifierWatcher",
+                "--object-path", "/StatusNotifierWatcher",
+                "--method", "org.freedesktop.DBus.Properties.Get",
+                "org.kde.StatusNotifierWatcher",
+                "IsStatusNotifierHostRegistered",
+            },
+            timeout: TimeSpan.FromSeconds(2))
+            .GetAwaiter().GetResult();
+
+        // gdbus prints the bool variant as "(<true>,)" / "(<false>,)";
+        // a non-zero exit (no watcher, gdbus missing) is treated as no tray.
+        return result.Succeeded
+            && result.StandardOutput.Contains("true", StringComparison.Ordinal);
     }
 
     public void UpdateTooltip(string text)
