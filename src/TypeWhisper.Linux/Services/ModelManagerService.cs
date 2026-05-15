@@ -255,11 +255,21 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
             catch (Exception ex)
             {
+                // Teardown failed: the native model may still be loaded. Leave
+                // ActiveModelId and the tracked status untouched so we neither
+                // misreport availability nor lose the active model a retry
+                // would target.
                 System.Diagnostics.Debug.WriteLine($"UnloadModelAsync failed: {ex.Message}");
+                return;
             }
         }
 
-        SetStatus(modelId, ModelStatus.NotDownloaded);
+        // Unload succeeded. The model is no longer loaded but, for
+        // download-capable plugins, still on disk — so drop the tracked
+        // override and let GetStatus recompute real availability rather than
+        // pinning NotDownloaded on a model that is merely unloaded.
+        _modelStatuses.Remove(modelId);
+        OnPropertyChanged(nameof(GetStatus));
         ActiveModelId = null;
     }
 

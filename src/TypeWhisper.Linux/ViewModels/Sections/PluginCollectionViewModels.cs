@@ -164,6 +164,15 @@ public partial class PluginCollectionItemRow : ObservableObject
                 "__id", "Id", string.Empty, string.Empty, [],
                 false, PluginSettingKind.Text, idValue));
         }
+        else
+        {
+            // The plugin declares an "__id" field, but the source item may
+            // carry it empty (or omit it). Generate one so HiddenId is always
+            // populated and item identity stays stable across saves.
+            var idField = Fields.First(f => f.Key == "__id");
+            if (string.IsNullOrEmpty(idField.Value))
+                idField.Value = Guid.NewGuid().ToString("D");
+        }
 
         if (!string.IsNullOrEmpty(itemLabelFieldKey))
         {

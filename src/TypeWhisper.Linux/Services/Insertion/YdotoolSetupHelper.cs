@@ -386,10 +386,23 @@ public sealed class YdotoolSetupHelper
         // the same path stays in place. Teardown order: disable → delete
         // file → daemon-reload.
         var removedUnit = false;
-        string? unitNotOursMessage = null;
+        string? unitLeftMessage = null;
         if (File.Exists(unitPath))
         {
-            if (weOwnUnit)
+            if (!weOwnUnit)
+            {
+                unitLeftMessage =
+                    $"Left {unitPath} in place and untouched — it has no TypeWhisper ownership marker, so its ydotoold service stays enabled.";
+            }
+            else if (!DesktopDetector.BinaryExists("systemctl"))
+            {
+                // Fail closed, mirroring the disable gate above: with no
+                // systemctl we never disabled the unit, so deleting the file
+                // would orphan any enablement symlink. Leave it for the user.
+                unitLeftMessage =
+                    $"Left {unitPath} in place — systemctl is not available to disable the unit or reload the user manager. Delete it manually once systemctl is back.";
+            }
+            else
             {
                 try
                 {
@@ -404,11 +417,6 @@ public sealed class YdotoolSetupHelper
                     return new SetupResult(false,
                         $"Could not delete {unitPath}: {ex.Message}");
                 }
-            }
-            else
-            {
-                unitNotOursMessage =
-                    $"Left {unitPath} in place and untouched — it has no TypeWhisper ownership marker, so its ydotoold service stays enabled.";
             }
         }
         if (removedUnit && DesktopDetector.BinaryExists("systemctl"))
@@ -427,7 +435,16 @@ public sealed class YdotoolSetupHelper
                 ruleNotOursMessage =
                     $"Left {UdevRulePath} in place — it doesn't carry TypeWhisper's ownership marker, so we won't delete it. Remove it manually if you want to.";
             }
-            else if (DesktopDetector.BinaryExists("pkexec"))
+            else if (!DesktopDetector.BinaryExists("pkexec"))
+            {
+                // Fail closed: the rule is ours and still on disk, but
+                // without pkexec we can't delete root-owned config. Don't
+                // report success while leaving privileged state behind.
+                return new SetupResult(false,
+                    $"Could not remove {UdevRulePath} — pkexec is not available to delete root-owned config.",
+                    Detail: $"Remove it manually: sudo rm -f {UdevRulePath}");
+            }
+            else
             {
                 var rm = await _runner.RunAsync("pkexec",
                     new[] { "rm", "-f", UdevRulePath },
@@ -441,7 +458,7 @@ public sealed class YdotoolSetupHelper
 
         var detail = string.Join(
             "\n",
-            new[] { unitNotOursMessage, ruleNotOursMessage }
+            new[] { unitLeftMessage, ruleNotOursMessage }
                 .Where(m => !string.IsNullOrWhiteSpace(m)));
         return new SetupResult(true,
             "ydotool integration removed.",

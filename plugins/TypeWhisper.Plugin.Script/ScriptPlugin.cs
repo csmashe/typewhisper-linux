@@ -55,9 +55,13 @@ internal sealed class ScriptStore
             var scripts = JsonSerializer.Deserialize<List<ScriptEntry>>(json, s_jsonOptions);
             return scripts ?? [];
         }
-        catch
+        catch (Exception ex)
         {
-            return [];
+            // Surface I/O and JSON errors instead of masking them as "no
+            // scripts" — a silent empty list would let the next Save()
+            // overwrite a config file that is merely corrupt or locked.
+            throw new InvalidOperationException(
+                $"Failed to read script configuration from {_configPath}: {ex.Message}", ex);
         }
     }
 
@@ -260,8 +264,15 @@ public sealed class ScriptService
 
     private void Load()
     {
-        foreach (var script in _store.Load())
-            Scripts.Add(script);
+        try
+        {
+            foreach (var script in _store.Load())
+                Scripts.Add(script);
+        }
+        catch (Exception ex)
+        {
+            _host.Log(PluginLogLevel.Warning, $"Failed to load script configuration: {ex.Message}");
+        }
     }
 
     public void Save()

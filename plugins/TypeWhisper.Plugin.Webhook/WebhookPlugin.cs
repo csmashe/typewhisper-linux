@@ -51,20 +51,17 @@ internal sealed class WebhookStore
         _configPath = Path.Combine(dataDir, "webhooks.json");
     }
 
-    /// <summary>Loads stored configs; returns an empty list when missing or unreadable.</summary>
+    /// <summary>
+    /// Loads stored configs; returns an empty list only when the file does not
+    /// exist. Read or JSON-parse failures propagate so the caller can log them
+    /// rather than mistaking a corrupt file for "no webhooks" and overwriting it.
+    /// </summary>
     public List<WebhookConfig> Load()
     {
         if (!File.Exists(_configPath)) return [];
 
-        try
-        {
-            var json = File.ReadAllText(_configPath);
-            return JsonSerializer.Deserialize<List<WebhookConfig>>(json, s_jsonOptions) ?? [];
-        }
-        catch
-        {
-            return [];
-        }
+        var json = File.ReadAllText(_configPath);
+        return JsonSerializer.Deserialize<List<WebhookConfig>>(json, s_jsonOptions) ?? [];
     }
 
     /// <summary>Persists the supplied configs, creating the data directory if needed.</summary>
@@ -375,9 +372,10 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
                 return Fail(label, "name is required.");
 
             var url = (Get(item, "url") ?? "").Trim();
-            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                return Fail(label, "URL must start with http:// or https://.");
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUrl)
+                || (parsedUrl.Scheme != Uri.UriSchemeHttp && parsedUrl.Scheme != Uri.UriSchemeHttps)
+                || string.IsNullOrEmpty(parsedUrl.Host))
+                return Fail(label, "URL must be a valid absolute http:// or https:// URL.");
 
             var rawMethod = (Get(item, "method") ?? "").Trim();
             if (!rawMethod.Equals("POST", StringComparison.OrdinalIgnoreCase)
@@ -406,9 +404,24 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
         }
 
         if (Service is not null)
+        {
             Service.ReplaceAll(configs);
+        }
         else
-            new WebhookStore(ResolveDataDir()).Save(configs);
+        {
+            // No active service to absorb (and log) save errors, so a failed
+            // write here would escape SetItemsAsync. Convert it into a
+            // validation failure the settings UI can surface.
+            try
+            {
+                new WebhookStore(ResolveDataDir()).Save(configs);
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(new PluginSettingsValidationResult(
+                    false, $"Failed to save settings: {ex.Message}"));
+            }
+        }
 
         return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
 
