@@ -4,9 +4,18 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+/// Extracts lasting personal facts from dictated speech via an LLM and
+/// stores them in the configured memory plugin. Facts are queried at
+/// prompt-processing time to inject relevant context into LLM requests.
+/// </summary>
 public sealed class MemoryService
 {
     private const int MinTextLength = 30;
+    // Per-session rate-limit: extraction is an LLM call and should not fire
+    // on every short dictation. 30 s is long enough to batch conversational
+    // speech but short enough that a single long session still gets facts
+    // extracted in a timely manner.
     private static readonly TimeSpan Cooldown = TimeSpan.FromSeconds(30);
 
     private readonly PluginManager _pluginManager;

@@ -8,9 +8,9 @@ namespace TypeWhisper.Core.Services;
 
 public sealed class VocabularyBoostingService : IVocabularyBoostingService
 {
-    private const int MaxWindowTokens = 4;
-    private const int MaxReplacements = 10;
-    private const double AmbiguityMargin = 0.08;
+    private const int MaxWindowTokens = 4;       // sliding window of up to 4 words checked against each term
+    private const int MaxReplacements = 10;      // safety cap to avoid runaway substitutions on long transcripts
+    private const double AmbiguityMargin = 0.08; // discard best candidate when the runner-up is within this score gap
 
     private readonly IDictionaryService _dictionary;
     private readonly object _sync = new();
@@ -241,6 +241,9 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
         var sameFirst = term.FirstAlphaNumeric == GetFirstAlphaNumeric(normalizedWindow);
         var sameLast = term.LastAlphaNumeric == GetLastAlphaNumeric(normalizedWindow);
 
+        // Single-token terms get stricter matching: first and last characters must agree, and
+        // the edit distance must be small relative to length. This avoids spurious replacements
+        // on short common words that happen to resemble a technical term.
         if (term.TokenCount == 1)
         {
             if (!sameFirst || !sameLast)
@@ -251,10 +254,12 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
         }
         else
         {
+            // Multi-token terms tolerate a 1-token count difference (e.g. one word dropped/merged by Whisper)
             if (Math.Abs(term.TokenCount - windowTokenCount) > 1 || charSimilarity < 0.80d)
                 return null;
         }
 
+        // Boost when anchoring characters and token count agree; penalise large length gaps
         var score = charSimilarity;
         if (sameFirst)
             score += 0.02d;

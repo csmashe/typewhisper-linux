@@ -59,7 +59,7 @@ public sealed class ErrorLogService : IErrorLogService
             app = new
             {
                 version = GetAppVersion(),
-                platform = "Windows",
+                platform = "Windows", // TODO: replace with RuntimeInformation.OSDescription or similar
                 os_version = Environment.OSVersion.VersionString,
                 dotnet_version = Environment.Version.ToString(),
                 locale = System.Globalization.CultureInfo.CurrentCulture.Name,
@@ -96,7 +96,7 @@ public sealed class ErrorLogService : IErrorLogService
         }
         catch
         {
-            // Corrupted log file - start fresh
+            // Corrupted or unreadable log — start fresh rather than surfacing an error about the error log
         }
     }
 
@@ -117,7 +117,7 @@ public sealed class ErrorLogService : IErrorLogService
         }
         catch
         {
-            // Ignore save failures
+            // Best-effort persistence — silently discard save failures so callers are unaffected
         }
     }
 

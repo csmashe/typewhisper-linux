@@ -33,6 +33,8 @@ internal static class StatusCommand
         try
         {
             using var doc = JsonDocument.Parse(json);
+            // The explicit kind check guards against GetBoolean() throwing if
+            // a misbehaving server sends a non-boolean "ok" value.
             return doc.RootElement.ValueKind == JsonValueKind.Object
                    && doc.RootElement.TryGetProperty("ok", out var ok)
                    && (ok.ValueKind == JsonValueKind.True || ok.ValueKind == JsonValueKind.False)

@@ -70,6 +70,9 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         {
             EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini"
         };
+        // Simulate the guard flag that the view-model sets while it rebuilds
+        // the provider list — a null selection during that window must not
+        // clear a previously configured override.
         SetPrivateField(sut, "_isRefreshingProviders", true);
 
         sut.SelectedEditProvider = null;

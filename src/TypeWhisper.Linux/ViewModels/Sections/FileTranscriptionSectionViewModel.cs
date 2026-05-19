@@ -17,8 +17,12 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
     private readonly AudioFileService _audioFiles;
     private readonly WatchFolderService _watchFolder;
+    // One concurrent transcription at a time — shared between manual queue
+    // and the watch folder so they don't race over the model.
     private readonly SemaphoreSlim _transcriptionGate = new(1, 1);
     private bool _isProcessingQueue;
+    // Suppresses the SaveXxx callbacks while RefreshFromSettings applies bulk
+    // values — prevents saving half-written settings mid-load.
     private bool _isLoadingSettings;
 
     [ObservableProperty] private string? _filePath;
@@ -477,6 +481,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(HasWatchFolderHistory));
     }
 
+    // Normalises ComboBox placeholder values ("__default__" and whitespace)
+    // to null so they're never persisted as a real engine/model override.
     private static string? CleanSettingValue(string? value)
     {
         var cleaned = value?.Trim();

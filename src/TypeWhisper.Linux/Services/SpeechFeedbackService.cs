@@ -187,6 +187,9 @@ public sealed class SpeechFeedbackService : IDisposable
                 return;
             }
 
+            // Check that no newer Speak / Stop call has superseded us while
+            // SpeakAsync was awaited. If the version has advanced, discard
+            // this session so the newer request's session owns the slot.
             var accepted = false;
             lock (_lock)
             {

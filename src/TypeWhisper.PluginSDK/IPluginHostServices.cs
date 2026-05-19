@@ -7,7 +7,7 @@ namespace TypeWhisper.PluginSDK;
 /// </summary>
 public interface IPluginHostServices
 {
-    /// <summary>Stores a secret value using DPAPI, scoped to the plugin.</summary>
+    /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
     Task StoreSecretAsync(string key, string value);
 
     /// <summary>Loads a previously stored secret, or null if not found.</summary>
@@ -53,8 +53,9 @@ public interface IPluginHostServices
     IPluginLocalization Localization { get; }
 
     /// <summary>
-    /// Sets whether the plugin is handling streaming text display itself.
-    /// When active, the host suppresses its own streaming text overlay.
+    /// Tells the host whether the plugin is currently rendering its own streaming text overlay.
+    /// Pass <c>true</c> when starting a custom streaming display; <c>false</c> when done.
+    /// While active, the host suppresses its built-in streaming overlay to avoid duplication.
     /// </summary>
     void SetStreamingDisplayActive(bool active) { }
 }

@@ -6,6 +6,8 @@ namespace TypeWhisper.Linux.Views.Sections;
 
 public partial class ShortcutsSection : UserControl
 {
+    // Tracks the currently-subscribed view model so the handler can be
+    // unsubscribed before a new DataContext is wired in.
     private ShortcutsSectionViewModel? _wired;
 
     public ShortcutsSection()
@@ -16,6 +18,8 @@ public partial class ShortcutsSection : UserControl
 
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
+        // Clipboard access requires a TopLevel reference that only the view has,
+        // so the ViewModel raises an event and the view performs the actual copy.
         if (_wired is not null)
         {
             _wired.CopyCustomShortcutRequested -= OnCopyCustomShortcutRequested;

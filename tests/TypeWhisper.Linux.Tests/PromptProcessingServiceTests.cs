@@ -159,6 +159,8 @@ public sealed class PromptProcessingServiceTests : IDisposable
             pluginDir);
     }
 
+    // PluginManager exposes no public seam for injecting pre-loaded plugins;
+    // reflection is the only way to seed test doubles into the private lists.
     private static void SetPrivateField(object target, string fieldName, object value)
     {
         var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)

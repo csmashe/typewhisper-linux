@@ -22,6 +22,9 @@
                  TextChanged="SearchBox_OnTextChanged"
                  KeyDown="SearchBox_OnKeyDown" />
 
+        <!-- Overlaid below the search box (top margin ≈ search box height)
+             to show a snippet of the selected text that will be processed.
+             Hidden until SourceText is set by the caller. -->
         <Border Grid.Row="0"
                 x:Name="SourcePreviewBorder"
                 Margin="0,44,0,6"

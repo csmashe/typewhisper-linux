@@ -205,6 +205,10 @@ public sealed class AudioRecordingService : IDisposable
         return StreamCallbackResult.Continue;
     }
 
+    // Simple per-chunk AGC for "whisper mode": boosts quiet speech so it
+    // registers reliably with noise-gated transcription models. The gain
+    // is capped at AgcMaxGain (20×) to avoid amplifying silence into noise,
+    // and clamped to [-1, 1] to prevent clipping artefacts.
     internal static float[] ApplyWhisperModeGain(float[] samples, bool whisperModeEnabled)
     {
         if (!whisperModeEnabled || samples.Length == 0)
@@ -253,6 +257,11 @@ public sealed class AudioRecordingService : IDisposable
 
     private bool ShouldPostLevelUpdate(long nowTicks)
     {
+        // Rate-limit UI-thread posts to ~15 Hz (66 ms). The callback fires
+        // from the PortAudio realtime thread; flooding the UI dispatcher
+        // at callback rate (~30 Hz for 512-frame buffers at 16 kHz) causes
+        // visible input lag. CAS loop ensures only one caller wins even when
+        // multiple callbacks race.
         var minIntervalTicks = TimeSpan.FromMilliseconds(66).Ticks;
 
         while (true)
@@ -376,6 +385,11 @@ public sealed class AudioRecordingService : IDisposable
 
     private static IReadOnlyList<int> CandidateSampleRates(double defaultSampleRate)
     {
+        // Try the device's native rate first so PortAudio doesn't have to
+        // resample internally. Fall through to common rates in descending
+        // order, ending with the transcription target (16 kHz); the
+        // captured audio is always resampled to 16 kHz in software before
+        // being handed to the transcription engine.
         var rates = new List<int>();
         AddRate((int)Math.Round(defaultSampleRate));
         AddRate(48000);
@@ -418,6 +432,9 @@ public sealed class AudioRecordingService : IDisposable
         }
     }
 
+    // Linear interpolation resampler. Quality is adequate for speech (the
+    // band of interest is well below Nyquist for any of our capture rates)
+    // and avoids the dependency on a native resampling library.
     internal static float[] ResampleToSampleRate(float[] samples, int sourceSampleRate, int targetSampleRate)
     {
         if (samples.Length == 0 || sourceSampleRate <= 0 || sourceSampleRate == targetSampleRate)

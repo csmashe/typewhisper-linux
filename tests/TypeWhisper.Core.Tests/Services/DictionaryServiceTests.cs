@@ -92,7 +92,6 @@ public class DictionaryServiceTests : IDisposable
         var pack = new TermPack("test", "Test Pack", "T", ["React", "Vue"]);
         _sut.ActivatePack(pack);
 
-        // Add a manual entry that shouldn't be removed
         _sut.AddEntry(new DictionaryEntry
         {
             Id = "manual",

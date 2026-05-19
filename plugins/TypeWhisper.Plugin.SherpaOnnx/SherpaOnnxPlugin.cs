@@ -247,8 +247,6 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _httpClient.Dispose();
     }
 
-    // --- Private helpers ---
-
     private string GetModelDirectory(string modelId) =>
         Path.Combine(_host?.PluginDataDirectory ?? ".", "Models", modelId);
 
@@ -311,6 +309,8 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
         if (srcLang == _canarySrcLang && tgtLang == _canaryTgtLang) return;
 
+        // Canary bakes src/tgt language into the recognizer config, so a
+        // language or translation change requires recreating the recognizer.
         _recognizer?.Dispose();
         _recognizer = CreateCanaryRecognizer(_loadedModelDir, srcLang, tgtLang);
         _canarySrcLang = srcLang;

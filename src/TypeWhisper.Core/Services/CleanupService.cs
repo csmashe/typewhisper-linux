@@ -43,6 +43,8 @@ public sealed partial class CleanupService
         cleaned = ApplyBacktrack(cleaned);
         cleaned = ApplySpokenPunctuation(cleaned);
         cleaned = ApplySmartFormatting(cleaned);
+        // Re-strip leading/trailing noise because spoken-punctuation and backtrack transforms
+        // can introduce new noise at the edges (e.g. a leading comma after "scratch that").
         cleaned = LeadingNoiseRegex().Replace(cleaned, "");
         cleaned = TrailingNoiseRegex().Replace(cleaned, "");
         cleaned = DuplicateCommaRegex().Replace(cleaned, ",");

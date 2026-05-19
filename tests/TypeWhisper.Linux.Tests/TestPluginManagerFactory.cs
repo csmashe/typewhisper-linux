@@ -63,6 +63,9 @@ internal static class TestPluginManagerFactory
             new PluginAssemblyLoadContext(pluginDir),
             pluginDir);
 
+    // PluginManager's plugin lists are populated by the loader at runtime;
+    // there's no public seam for injecting test doubles. Reflection is the
+    // pragmatic solution until the production API exposes one.
     private static void SetPrivateField(object target, string fieldName, object value)
     {
         var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)

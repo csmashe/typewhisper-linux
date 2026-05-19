@@ -296,15 +296,11 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
         Service?.Dispose();
     }
 
-    // --- IPluginDataLocationAware ---------------------------------------
-
     public void SetDataDirectory(string pluginDataDirectory) => _dataDirectory = pluginDataDirectory;
 
     private string ResolveDataDir()
         => _dataDirectory
            ?? throw new InvalidOperationException("Webhook plugin data directory has not been set.");
-
-    // --- IPluginCollectionSettingsProvider ------------------------------
 
     public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
     [
@@ -441,8 +437,6 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
         return false;
     }
 
-    // --- Header serialization helpers -----------------------------------
-
     /// <summary>Serializes headers to one <c>Name: Value</c> line each.</summary>
     internal static string SerializeHeaders(IReadOnlyDictionary<string, string> headers)
         => string.Join("\n", headers.Select(h => $"{h.Key}: {h.Value}"));
@@ -483,8 +477,6 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
 
         return true;
     }
-
-    // --- Profile filter serialization helpers ---------------------------
 
     /// <summary>Serializes the profile filter to one profile name per line.</summary>
     internal static string SerializeProfiles(IEnumerable<string> profiles)

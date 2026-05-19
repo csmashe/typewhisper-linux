@@ -106,6 +106,10 @@ public sealed class ProcessRunner : IProcessRunner
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
+                    // The inner timeout fired (not the caller's ct). Kill and
+                    // return a TimedOut result without propagating the exception
+                    // so the caller can handle a timeout differently from a
+                    // hard cancellation.
                     try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                     return new ProcessRunResult(
                         Started: true, TimedOut: true, ExitCode: -1,

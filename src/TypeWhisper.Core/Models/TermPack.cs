@@ -46,6 +46,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
             "OWASP", "CVE", "Pentest", "Firewall", "Zero Trust", "OAuth", "JWT", "SAML",
             "XSS", "CSRF", "SQL Injection", "SIEM", "SOC", "Ransomware", "Phishing"
         ]),
+        // Packs below use German display names ("Datenbanken", "Medizin", etc.) \u2014 the terms themselves are language-neutral
         new("databases", "Datenbanken", "\U0001F5C4\uFE0F",
         [
             "PostgreSQL", "MongoDB", "Redis", "Elasticsearch", "Cassandra", "DynamoDB", "SQLite",

@@ -9,6 +9,9 @@ public partial class DictationSection : UserControl
     public DictationSection()
     {
         InitializeComponent();
+        // Activate the live mic-level preview only while this section is
+        // actually on screen; deactivate when navigated away from to avoid
+        // holding the audio device open unnecessarily.
         AttachedToVisualTree += (_, _) => (DataContext as DictationSectionViewModel)?.ActivatePreview();
         DetachedFromVisualTree += (_, _) => (DataContext as DictationSectionViewModel)?.DeactivatePreview();
     }

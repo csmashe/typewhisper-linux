@@ -65,12 +65,10 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
             if (File.Exists(filePath))
             {
-                // Append to existing daily note
                 await File.AppendAllTextAsync(filePath, entry, Encoding.UTF8, ct);
             }
             else
             {
-                // Create new daily note with header
                 var header = $"# {now:yyyy-MM-dd}\n\n";
                 await File.WriteAllTextAsync(filePath, header + entry, Encoding.UTF8, ct);
             }
@@ -79,8 +77,6 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         {
             filename = BuildFilename(filenameTemplate, context, now) + ".md";
             filePath = Path.Combine(targetDir, filename);
-
-            // Ensure unique filename
             filePath = EnsureUniqueFilePath(filePath);
             filename = Path.GetFileName(filePath);
 
@@ -96,7 +92,6 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     {
         var sb = new StringBuilder();
 
-        // YAML frontmatter
         sb.AppendLine("---");
         sb.AppendLine($"date: {now:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine("source: TypeWhisper");
@@ -110,7 +105,6 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         sb.AppendLine("---");
         sb.AppendLine();
 
-        // Body
         sb.AppendLine(input);
 
         return sb.ToString();

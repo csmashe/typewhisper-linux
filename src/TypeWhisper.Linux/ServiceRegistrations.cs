@@ -142,7 +142,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<AboutSectionViewModel>();
         services.AddTransient<WelcomeWizardViewModel>();
 
-        // Windows
+        // Avalonia windows
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();
         services.AddTransient<PromptPaletteWindow>();

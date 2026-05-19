@@ -17,6 +17,10 @@
         RequestedThemeVariant="Dark"
         Background="#0E131B">
     <Window.Resources>
+        <!-- Named template kept as a stable hook for the Avalonia previewer,
+             which cannot resolve DataType-only templates in a ContentControl
+             at design time. The actual runtime binding lives in the inline
+             DataTemplates on the ContentControl below. -->
         <DataTemplate x:Key="SectionTemplate_Dashboard" DataType="vms:DashboardSectionViewModel">
             <sections:DashboardSection />
         </DataTemplate>

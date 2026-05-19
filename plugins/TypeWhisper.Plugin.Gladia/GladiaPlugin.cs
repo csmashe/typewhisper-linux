@@ -20,8 +20,6 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         new("default", "Gladia (Auto)"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.gladia";
     public string PluginName => "Gladia";
     public string PluginVersion => "1.0.0";
@@ -39,8 +37,6 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "gladia";
     public string ProviderDisplayName => "Gladia";
@@ -66,7 +62,6 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
 
-        // Gladia pre-recorded endpoint with multipart form data
         using var content = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(wavAudio);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");

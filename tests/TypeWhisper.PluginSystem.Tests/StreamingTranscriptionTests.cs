@@ -11,15 +11,14 @@ public class StreamingTranscriptionTests
     public void SupportsStreaming_DefaultIsFalse()
     {
         var mock = new Mock<ITranscriptionEnginePlugin>();
-        // DIMs return default values — SupportsStreaming defaults to false
         Assert.False(mock.Object.SupportsStreaming);
     }
 
     [Fact]
     public void SupportedLanguages_DefaultIsEmpty()
     {
+        // CallBase required so Moq invokes the default interface implementation.
         var mock = new Mock<ITranscriptionEnginePlugin> { CallBase = true };
-        // CallBase invokes the DIM — SupportedLanguages defaults to empty
         var languages = mock.Object.SupportedLanguages;
         Assert.Empty(languages);
     }
@@ -34,8 +33,7 @@ public class StreamingTranscriptionTests
         mock.Setup(e => e.TranscribeAsync(audio, "en", false, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedResult);
 
-        // TranscribeStreamingAsync should delegate to TranscribeAsync by default
-        // Since Moq doesn't call DIMs directly, we verify the TranscribeAsync call
+        // Moq doesn't call DIMs — verify the underlying TranscribeAsync, which the DIM delegates to.
         var result = await mock.Object.TranscribeAsync(audio, "en", false, null, CancellationToken.None);
 
         Assert.Equal("Hello world", result.Text);

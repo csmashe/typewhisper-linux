@@ -4,6 +4,12 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+/// Applies rule-based and optional LLM cleanup to transcribed text.
+/// Light cleanup is always local (no LLM). Medium / High first run the
+/// local pass, then send the lightened text to the configured LLM
+/// provider — falling back to Light if no provider is available.
+/// </summary>
 public sealed class LlmCleanupService
 {
     private readonly CleanupService _cleanup;

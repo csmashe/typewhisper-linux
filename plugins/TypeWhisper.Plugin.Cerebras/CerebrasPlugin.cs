@@ -14,8 +14,6 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     private IPluginHostServices? _host;
     private string? _apiKey;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.cerebras";
     public string PluginName => "Cerebras";
     public string PluginVersion => "1.0.0";
@@ -33,8 +31,6 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         return Task.CompletedTask;
     }
 
-    // ILlmProviderPlugin
-
     public string ProviderName => "Cerebras";
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
 
@@ -51,8 +47,6 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -90,8 +84,6 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     {
         _httpClient.Dispose();
     }
-
-    // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
     [

@@ -7,10 +7,13 @@ namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
 /// Thread-safe publish/subscribe event bus for plugin communication.
-/// Handlers are invoked asynchronously (fire-and-forget) so publishers are not blocked.
+/// Handlers are invoked fire-and-forget on the thread pool so a slow or
+/// throwing plugin handler cannot block the publisher or starve other handlers.
 /// </summary>
 public sealed class PluginEventBus : IPluginEventBus
 {
+    // ConcurrentDictionary guards per-type slot creation; the inner List
+    // requires _lock for add/remove/snapshot because List<T> is not thread-safe.
     private readonly ConcurrentDictionary<Type, List<Func<object, Task>>> _handlers = new();
     private readonly object _lock = new();
 

@@ -284,6 +284,9 @@ public sealed class PluginManager : IDisposable
             _ttsProviders = activePlugins.OfType<ITtsProviderPlugin>().ToList();
         }
 
+        // PluginStateChanged is raised outside _lock to avoid a deadlock if
+        // a handler (e.g. a ViewModel) calls back into PluginManager methods
+        // that also acquire _lock.
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
     }
 

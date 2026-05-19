@@ -11,6 +11,8 @@ public partial class ProfilesSection : UserControl
 
     private void OnProcessNameKeyDown(object? sender, KeyEventArgs e)
     {
+        // Commit the typed process name as a chip when the user presses Enter,
+        // matching the UX convention of chip-style tag inputs.
         if (e.Key != Key.Enter || DataContext is not ProfilesSectionViewModel viewModel)
             return;
 

@@ -288,10 +288,11 @@ public sealed class ActiveWindowService : IActiveWindowService
         if (string.IsNullOrWhiteSpace(title))
             return null;
 
-        // Zen/Firefox windows do not always expose a process id through
-        // xdotool on Flatpak/X11. Gmail titles are still reliable enough to
-        // match URL-scoped email profiles without visibly focusing the address
-        // bar just to copy the real URL.
+        // Zen / Firefox Flatpak builds frequently report no process name via
+        // xdotool (the XWayland surface is sandboxed under a different PID).
+        // Matching the Gmail title suffix is reliable enough to activate
+        // email-scoped profiles without having to focus the address bar, which
+        // would be visible to the user and potentially disruptive.
         if (title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
             && title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase))
         {
@@ -355,6 +356,14 @@ public sealed class ActiveWindowService : IActiveWindowService
         return wordIndex < stateWords.Count && (stateWords[wordIndex] & (1u << bitOffset)) != 0;
     }
 
+    /// <summary>
+    /// Scores an AT-SPI accessible node as a candidate for the browser's
+    /// current URL. Higher is better; <see cref="int.MinValue"/> means the
+    /// node's text is not a URL and should be ignored entirely.
+    /// The heuristic weights: role (EditBar > Entry), focused state,
+    /// editable state, AT-SPI Text interface, HTTP scheme, path depth,
+    /// and "address" in the accessible name.
+    /// </summary>
     internal static int ScoreBrowserUrlCandidate(
         int role,
         IReadOnlyList<uint> states,
@@ -429,8 +438,10 @@ public sealed class ActiveWindowService : IActiveWindowService
             });
             if (p is null) return -1;
 
-            // Drain both pipes concurrently — reading only stdout deadlocks if
-            // stderr's pipe buffer fills while the child is still running.
+            // Drain stdout and stderr concurrently. Reading only stdout would
+            // deadlock if stderr's 4 kB kernel pipe buffer fills while the
+            // child is still running (the child blocks on write; we block on
+            // WaitForExit — classic deadlock).
             var stdoutTask = p.StandardOutput.ReadToEndAsync();
             var stderrTask = p.StandardError.ReadToEndAsync();
             if (!p.WaitForExit(1000))

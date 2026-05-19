@@ -32,8 +32,6 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private LLamaContext? _context;
     private string? _loadedModelId;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.gemma-local";
     public string PluginName => "Gemma 4 (Local)";
     public string PluginVersion => "1.0.0";
@@ -71,8 +69,6 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _host = null;
         return Task.CompletedTask;
     }
-
-    // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
     [
@@ -145,8 +141,6 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         await LoadModelAsync(modelId, ct);
     }
 
-    // ILlmProviderPlugin
-
     public string ProviderName => "Gemma 4 (Local)";
     public bool IsAvailable => _loadedModelId is not null;
 
@@ -166,7 +160,6 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             if (_context is null || _weights is null)
                 throw new InvalidOperationException("No model loaded. Download and load a model first.");
 
-            // Build Gemma chat prompt
             var prompt = FormatGemmaPrompt(systemPrompt, userText);
 
             var executor = new StatelessExecutor(_weights, _context.Params);
@@ -190,8 +183,6 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             _inferenceLock.Release();
         }
     }
-
-    // Model management (for settings view)
 
     internal string? SelectedModelId => _selectedModelId;
     internal string? LoadedModelId => _loadedModelId;

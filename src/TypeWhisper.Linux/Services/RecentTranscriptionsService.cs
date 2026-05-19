@@ -66,6 +66,8 @@ public sealed class RecentTranscriptionsService
             return;
         }
 
+        // Capture the focused window ID before the palette steals focus,
+        // so InsertEntryAsync can refocus the original app when inserting.
         var targetWindowId = _activeWindow.GetActiveWindowId();
         var viewModel = new RecentTranscriptionsPaletteViewModel(
             entries,

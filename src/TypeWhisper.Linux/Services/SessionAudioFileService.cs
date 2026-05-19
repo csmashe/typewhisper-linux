@@ -3,8 +3,10 @@ using TypeWhisper.Core;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Manages dictation capture WAV files that are only valid for the current app session.
-/// Files are deleted on startup and shutdown so persisted history retains text, not audio.
+/// Manages per-session dictation capture WAV files. Captures are
+/// scoped to one app session — they are deleted at startup (to clear
+/// any orphans from a previous crash) and at shutdown, so persisted
+/// history retains the transcribed text but not the raw audio.
 /// </summary>
 public sealed class SessionAudioFileService
 {

@@ -51,6 +51,8 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         _history = history;
         _settings = settings;
         _insights = insights;
+        // ReadSelectedRange guards against out-of-range ints stored by older
+        // versions of the app (DashboardSelectedPeriod is an unvalidated int).
         _selectedRange = ReadSelectedRange(settings.Current.DashboardSelectedPeriod);
         _history.RecordsChanged += OnRecordsChanged;
         _ = InitializeAsync();

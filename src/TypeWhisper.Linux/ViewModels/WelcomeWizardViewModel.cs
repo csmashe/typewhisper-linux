@@ -636,6 +636,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
     }
 
+    // Called by the view on Close — guards are needed because Avalonia can
+    // fire Closed more than once for modal dialogs on certain backends.
     public void Cleanup()
     {
         if (_cleanedUp)
@@ -664,6 +666,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         Dispatcher.UIThread.Post(() =>
         {
+            // The raw RMS level is typically well below 0.1 for normal speech;
+            // ×8 maps it to a 0–1 range that drives the meter visibly.
             MicLevel = Math.Clamp(level * 8, 0, 1);
             if (IsMicTestRunning && MicLevel > 0.05)
                 MicTestStatus = "Microphone input detected.";

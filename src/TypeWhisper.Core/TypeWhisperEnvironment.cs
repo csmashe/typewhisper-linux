@@ -2,7 +2,7 @@ namespace TypeWhisper.Core;
 
 public static class TypeWhisperEnvironment
 {
-    public const string GithubRepoUrl = "https://github.com/TypeWhisper/typewhisper-win";
+    public const string GithubRepoUrl = "https://github.com/TypeWhisper/typewhisper-win"; // TODO: update to the Linux repo URL
 
     private static readonly string _basePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

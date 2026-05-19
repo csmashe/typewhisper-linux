@@ -40,6 +40,8 @@ public static class OpenAiTranscriptionHelper
         content.Add(new StringContent(model), "model");
         content.Add(new StringContent(responseFormat), "response_format");
 
+        // "auto" is a TypeWhisper-internal sentinel meaning "let the API detect the language".
+        // Omitting the language field entirely is the correct way to request auto-detection.
         if (!string.IsNullOrEmpty(language) && language != "auto")
             content.Add(new StringContent(language), "language");
 

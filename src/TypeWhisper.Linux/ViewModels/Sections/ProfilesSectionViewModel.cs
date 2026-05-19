@@ -25,6 +25,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private readonly DispatcherTimer _windowTimer;
     private readonly string _hostProcessName = Process.GetCurrentProcess().ProcessName;
     private ProfilesContextWindow? _contextWindow;
+    // Cache the last non-host window so UpdateCurrentWindow can return stable
+    // values when TypeWhisper itself is focused — querying the active-window
+    // service in that state would return our own process and the live-context
+    // display would flip to "typewhisper" on every timer tick.
     private string _lastExternalProcessName = "-";
     private string _lastExternalWindowTitle = "-";
     private string _lastExternalUrl = "-";

@@ -4,6 +4,8 @@
              x:Class="TypeWhisper.Linux.Views.Sections.PluginsSection"
              x:DataType="vm:PluginsSectionViewModel">
     <UserControl.Resources>
+        <!-- Shared template used in two places: top-level plugin settings and
+             per-item fields inside a plugin collection. -->
         <DataTemplate x:Key="PluginSettingFieldTemplate"
                       x:DataType="vm:PluginSettingFieldRow">
             <StackPanel Spacing="6"

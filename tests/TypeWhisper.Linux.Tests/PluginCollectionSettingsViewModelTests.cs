@@ -306,7 +306,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         }
         catch
         {
-            // Best-effort cleanup in tests.
+            // Best-effort cleanup for temp test directories.
         }
     }
 

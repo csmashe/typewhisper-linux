@@ -117,6 +117,9 @@ public sealed class HistorySectionViewModelTests : IDisposable
             settings ?? CreateSettingsService(),
             new CorrectionSuggestionService(),
             new SessionAudioFileService(),
+            // AudioPlaybackService opens audio hardware in its constructor — not
+            // available in CI. GetUninitializedObject bypasses the constructor so
+            // tests that never trigger audio playback don't fail on device init.
 #pragma warning disable SYSLIB0050
             (AudioPlaybackService)FormatterServices.GetUninitializedObject(typeof(AudioPlaybackService)));
 #pragma warning restore SYSLIB0050

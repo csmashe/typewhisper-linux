@@ -158,7 +158,6 @@ public class WebhookCollectionSettingsTests : IDisposable
         var plugin = new WebhookPlugin();
         plugin.SetDataDirectory(_tempDir);
 
-        // Header line without a colon separator.
         var bad = await plugin.SetItemsAsync(CollectionKey,
             [Item("HeaderHook", headers: "ThisLineHasNoColon")]);
 

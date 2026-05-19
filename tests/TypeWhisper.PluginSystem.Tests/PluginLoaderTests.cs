@@ -48,7 +48,6 @@ public class PluginLoaderTests : IDisposable
         var pluginDir = Path.Combine(_tempDir, "com.test.nomanifest");
         Directory.CreateDirectory(pluginDir);
 
-        // No manifest.json created
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);
     }
@@ -97,7 +96,6 @@ public class PluginLoaderTests : IDisposable
     [Fact]
     public void DiscoverAndLoad_MixedValidAndInvalidDirs_SkipsBadOnes()
     {
-        // Create one dir with a bad manifest, one that doesn't exist
         var badPluginDir = Path.Combine(_tempDir, "com.test.bad");
         Directory.CreateDirectory(badPluginDir);
         File.WriteAllText(Path.Combine(badPluginDir, "manifest.json"), "null");

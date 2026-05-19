@@ -36,6 +36,9 @@ public sealed class AudioFileService
         if (!_commands.HasFfmpeg)
             throw new InvalidOperationException("ffmpeg is not installed on this system.");
 
+        // Transcode to mono 16 kHz PCM WAV on stdout: -vn drops any video
+        // stream, -ac 1 and -ar 16000 normalise to the format whisper.cpp /
+        // SherpaOnnx expects, and pipe:1 avoids a temp file on disk.
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo("ffmpeg",

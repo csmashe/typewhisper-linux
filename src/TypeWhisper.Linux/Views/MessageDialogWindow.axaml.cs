@@ -45,6 +45,9 @@ public partial class MessageDialogWindow : Window
             return result;
         }
 
+        // No owning window available (e.g. called during startup). Fall back to
+        // a non-modal Show(); the dialog will be independent and we return false
+        // since we can't await a result.
         Show();
         return false;
     }

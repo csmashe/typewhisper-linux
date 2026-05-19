@@ -101,8 +101,8 @@ public class PluginEventsTests
         var a = new RecordingStoppedEvent { DurationSeconds = 5.0 };
         var b = new RecordingStoppedEvent { DurationSeconds = 5.0 };
 
-        // Record equality compares values, but timestamps will differ slightly
-        // so we compare the specific field
+        // Timestamp is auto-set on construction, so two instances won't be equal;
+        // assert on the stable field instead.
         Assert.Equal(a.DurationSeconds, b.DurationSeconds);
     }
 

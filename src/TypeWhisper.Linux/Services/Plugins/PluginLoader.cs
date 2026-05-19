@@ -179,6 +179,9 @@ public sealed class PluginLoader
             return null;
         }
 
+        // Optional interface: plugins that need a stable writable directory
+        // (for model files, caches, etc.) declare IPluginDataLocationAware and
+        // receive the path before ActivateAsync is called by PluginManager.
         if (instance is IPluginDataLocationAware dataLocationAware)
         {
             dataLocationAware.SetDataDirectory(

@@ -15,8 +15,6 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
     private string? _apiKey;
     private string? _selectedModelId;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.google-cloud-stt";
     public string PluginName => "Google Cloud STT";
     public string PluginVersion => "1.0.0";
@@ -34,8 +32,6 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "google-cloud-stt";
     public string ProviderDisplayName => "Google Cloud";

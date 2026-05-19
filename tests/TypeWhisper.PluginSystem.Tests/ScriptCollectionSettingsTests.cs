@@ -82,7 +82,6 @@ public class ScriptCollectionSettingsTests : IDisposable
         var plugin = new ScriptPlugin();
         plugin.SetDataDirectory(_tempDir);
 
-        // No __id key at all.
         await plugin.SetItemsAsync(CollectionKey, [Item("Fresh", "echo x")]);
 
         var items = await plugin.GetItemsAsync(CollectionKey);
@@ -91,7 +90,6 @@ public class ScriptCollectionSettingsTests : IDisposable
         Assert.True(Guid.TryParse(rawId, out var parsed));
         Assert.NotEqual(Guid.Empty, parsed);
 
-        // Blank __id also gets a fresh GUID.
         await plugin.SetItemsAsync(CollectionKey, [Item("Blank", "echo x", id: "")]);
         var items2 = await plugin.GetItemsAsync(CollectionKey);
         Assert.True(Guid.TryParse(items2[0].Values["__id"], out var parsed2));
@@ -129,7 +127,6 @@ public class ScriptCollectionSettingsTests : IDisposable
         Assert.True(ok.IsSuccess);
         var before = await File.ReadAllBytesAsync(ConfigPath);
 
-        // Empty name -> validation failure.
         var bad = await plugin.SetItemsAsync(CollectionKey, [Item("", "echo bad")]);
         Assert.False(bad.IsSuccess);
 

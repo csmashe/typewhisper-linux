@@ -127,6 +127,9 @@ public sealed class CliInstallService
         Path.Combine(TypeWhisperEnvironment.BasePath, "Cli");
 
     private static string DefaultLauncherDirectory() =>
+        // ~/.local/bin is the XDG-recommended per-user bin dir. Most distros
+        // add it to PATH via /etc/profile.d or ~/.profile; if it's not there
+        // yet the status text tells the user to add it.
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".local",
@@ -158,6 +161,9 @@ public sealed class CliInstallService
         if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(fileName) || !Directory.Exists(directory))
             return false;
 
+        // Use EnumerateFiles + exact name comparison rather than File.Exists
+        // to guard against case-insensitive filesystems (FAT32, case-folded
+        // ext4 directories) that would treat "TypeWhisper" == "typewhisper".
         return Directory.EnumerateFiles(directory, fileName)
             .Any(candidate => string.Equals(Path.GetFileName(candidate), fileName, StringComparison.Ordinal));
     }

@@ -8,14 +8,13 @@ namespace TypeWhisper.Plugin.Gemini;
 
 public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
+    // Google's OpenAI-compatibility layer; endpoints are appended as /v1/...
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai";
     private const string DefaultModel = "gemini-2.5-flash";
 
     private readonly HttpClient _httpClient = new();
     private IPluginHostServices? _host;
     private string? _apiKey;
-
-    // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.gemini";
     public string PluginName => "Google Gemini";
@@ -33,8 +32,6 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ILlmProviderPlugin
 
     public string ProviderName => "Google Gemini";
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
@@ -57,8 +54,6 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -96,8 +91,6 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
     {
         _httpClient.Dispose();
     }
-
-    // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
     [

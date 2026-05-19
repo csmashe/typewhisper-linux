@@ -25,8 +25,6 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
         new("gpt-4o-mini-transcribe", "GPT-4o Mini Transcribe", "gpt-4o-mini-transcribe", "json", SupportsTranslation: false),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.openai";
     public string PluginName => "OpenAI";
     public string PluginVersion => "1.0.0";
@@ -43,8 +41,6 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "openai";
     public string ProviderDisplayName => "OpenAI";
@@ -86,8 +82,6 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
             wavAudio, language, translate, _selectedResponseFormat, ct, prompt);
     }
 
-    // ILlmProviderPlugin
-
     public string ProviderName => "OpenAI";
     public bool IsAvailable => IsConfigured;
 
@@ -102,8 +96,6 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -141,8 +133,6 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     {
         _httpClient.Dispose();
     }
-
-    // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
     [

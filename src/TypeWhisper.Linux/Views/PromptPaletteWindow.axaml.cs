@@ -49,12 +49,15 @@ public partial class PromptPaletteWindow : Window
 
     private void OnDeactivated(object? sender, EventArgs e)
     {
+        // Dismiss without a selection when the user clicks away.
         if (_resultSource?.Task.IsCompleted == false)
             Complete(null);
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        // Safety net: if the window is closed by the OS or shell before
+        // Complete() runs, unblock any awaiting caller with a null result.
         _resultSource?.TrySetResult(null);
     }
 
@@ -96,6 +99,8 @@ public partial class PromptPaletteWindow : Window
 
     private void ActionListBox_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
+        // Return focus to the search box so keyboard navigation continues
+        // working after the user clicks a list item.
         SearchBox.Focus();
     }
 
@@ -130,12 +135,18 @@ public partial class PromptPaletteWindow : Window
 
     private void Complete(PromptAction? action)
     {
+        // TrySetResult returns false if the result was already set (e.g. by
+        // OnClosed), so only close the window on the first successful call.
         if (_resultSource?.TrySetResult(action) != true)
             return;
 
         Close();
     }
 
+    /// <summary>
+    /// Displays a status message and locks the UI while an action runs.
+    /// Called by the host after picking an action if it needs to show progress.
+    /// </summary>
     public void ShowStatus(string text)
     {
         StatusText.Text = text;

@@ -51,6 +51,11 @@ public sealed class RecentTranscriptionStore
         }
     }
 
+    /// <summary>
+    /// Returns the most-recent transcriptions, merging in-memory session entries with
+    /// persisted history records. Session entries win on tie-breaks (same timestamp) so
+    /// the most up-to-date version of a record is always shown. Duplicate IDs are dropped.
+    /// </summary>
     public IReadOnlyList<RecentTranscriptionEntry> MergedEntries(
         IReadOnlyList<TranscriptionRecord> historyRecords,
         int limit = 12)
@@ -80,6 +85,8 @@ public sealed class RecentTranscriptionStore
             .ThenBy(entry => entry.Source == RecentTranscriptionSource.Session ? 0 : 1)
             .ToList();
 
+        // seen.Add returns false for subsequent encounters of the same ID, effectively keeping
+        // only the first (highest-priority) occurrence in the sorted list.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         return merged
             .Where(entry => seen.Add(entry.Id))

@@ -13,6 +13,8 @@ public partial class FileTranscriptionSection : UserControl
     public FileTranscriptionSection()
     {
         InitializeComponent();
+        // Avalonia requires drag-and-drop to be wired up in code-behind;
+        // there is no XAML attribute equivalent for DragDrop event handlers.
         DragDrop.SetAllowDrop(DropZone, true);
         DragDrop.AddDragEnterHandler(DropZone, OnDragEnter);
         DragDrop.AddDragLeaveHandler(DropZone, OnDragLeave);

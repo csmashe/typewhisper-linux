@@ -14,6 +14,9 @@ public partial class PromptsSectionViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
     private string? _editingActionId;
+    // Prevents SelectedEditProvider's setter from persisting the provider
+    // override while RefreshPluginOptions is rebuilding the provider list —
+    // the setter fires when the ComboBox re-selects the current value.
     private bool _isRefreshingProviders;
 
     public ObservableCollection<PromptAction> Actions { get; } = [];

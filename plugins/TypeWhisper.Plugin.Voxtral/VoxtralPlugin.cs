@@ -16,8 +16,6 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     private string? _apiKey;
     private string? _selectedModelId;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.voxtral";
     public string PluginName => "Voxtral";
     public string PluginVersion => "1.0.0";
@@ -35,8 +33,6 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "voxtral";
     public string ProviderDisplayName => "Voxtral";

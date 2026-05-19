@@ -25,8 +25,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     private string? _filePath;
     private List<VectorMemoryEntry>? _entries;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.openai-vector-memory";
     public string PluginName => "OpenAI Vector Memory";
     public string PluginVersion => "1.0.0";
@@ -45,8 +43,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         _entries = null;
         return Task.CompletedTask;
     }
-
-    // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
     [
@@ -82,8 +78,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
             string.IsNullOrWhiteSpace(_apiKey)
                 ? new PluginSettingsValidationResult(false, "Enter an API key first.")
                 : new PluginSettingsValidationResult(true, "API key configured."));
-
-    // IMemoryStoragePlugin
 
     public async Task StoreAsync(string content, CancellationToken ct)
     {
@@ -198,8 +192,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         }
     }
 
-    // Embedding API
-
     private async Task<float[]> GetEmbeddingAsync(string text, CancellationToken ct)
     {
         var requestBody = JsonSerializer.Serialize(new
@@ -253,8 +245,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         var denominator = Math.Sqrt(normA) * Math.Sqrt(normB);
         return denominator == 0 ? 0 : dot / denominator;
     }
-
-    // Persistence
 
     private async Task<List<VectorMemoryEntry>> LoadEntriesAsync(CancellationToken ct)
     {

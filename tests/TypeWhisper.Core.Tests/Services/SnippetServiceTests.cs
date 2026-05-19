@@ -25,7 +25,6 @@ public class SnippetServiceTests : IDisposable
             Tags = "E-Mail,Gruß"
         });
 
-        // Force reload from file
         var freshService = new SnippetService(_filePath);
         var snippet = Assert.Single(freshService.Snippets);
         Assert.Equal("E-Mail,Gruß", snippet.Tags);
@@ -84,7 +83,6 @@ public class SnippetServiceTests : IDisposable
         });
 
         var result = _sut.ApplySnippets("uhr");
-        // Allow 1 second tolerance
         var expected = DateTime.Now.ToString("HH:mm:ss");
         Assert.Equal(expected, result);
     }

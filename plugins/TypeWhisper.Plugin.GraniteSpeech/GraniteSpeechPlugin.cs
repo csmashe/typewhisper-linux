@@ -327,8 +327,6 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         _httpClient.Dispose();
     }
 
-    // --- Sidecar management ---
-
     private void StartSidecar()
     {
         var pythonExe = Path.Combine(GetDataDirectory(), "python", "python.exe");
@@ -387,7 +385,8 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
 
         var reqId = Interlocked.Increment(ref _requestId);
 
-        // Wrap command with request ID
+        // Attach a request ID so we can match the response even if earlier
+        // cancelled requests left orphaned replies in the sidecar's stdout.
         var wrapper = new Dictionary<string, object?>();
         foreach (var prop in JsonSerializer.SerializeToElement(command).EnumerateObject())
             wrapper[prop.Name] = prop.Value;
@@ -413,8 +412,6 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
             Debug.WriteLine($"[GraniteSpeech] Skipping stale response (req_id={id})");
         }
     }
-
-    // --- Setup helpers ---
 
     private async Task DownloadFileAsync(string url, string destPath, CancellationToken ct)
     {
@@ -455,8 +452,6 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
             return false;
         return true;
     }
-
-    // --- General helpers ---
 
     private void Log(PluginLogLevel level, string message)
     {

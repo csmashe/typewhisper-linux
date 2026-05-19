@@ -12,10 +12,26 @@ internal static class LinuxDictationShortSpeechPolicy
     private const int WavHeaderBytes = 44;
     private const int SampleRate = 16000;
     private const int BytesPerSample = 2;
+
+    // Clips shorter than this are almost certainly accidental hotkey taps
+    // with no speech — discard immediately without even checking peak level.
     private const double UltraShortTapSeconds = 0.04;
+
+    // Clips below ShortClipSeconds undergo a stricter quietness check because
+    // very short utterances can be hard to distinguish from ambient noise.
     private const double ShortClipSeconds = 1.0;
+
+    // Whisper.cpp / SherpaOnnx perform poorly on very short audio; padding
+    // to this length gives the decoder enough context to make a decision.
     private const double MinimumTranscriptionSeconds = 0.75;
+
+    // A small silence tail appended after longer clips improves end-of-speech
+    // detection for models that treat trailing audio as a continuation cue.
     private const double TailPaddingSeconds = 0.3;
+
+    // Peak thresholds empirically tuned against office/home background noise
+    // at roughly 50 dB ambient SPL. Short clips use a tighter gate because
+    // they're more likely to be noise bursts than speech.
     private const float ShortClipQuietPeakThreshold = 0.003f;
     private const float LongClipQuietPeakThreshold = 0.006f;
 
@@ -96,6 +112,9 @@ internal static class LinuxDictationShortSpeechPolicy
     }
 
     private static bool IsStandardPcm16MonoWav(byte[] wav) =>
+        // Validate WAV header: RIFF/WAVE magic, PCM format (1), 1 channel,
+        // expected sample rate (16 kHz), and 16-bit depth at the fixed
+        // offsets defined by the canonical 44-byte header layout.
         wav.Length >= WavHeaderBytes &&
         wav[0] == (byte)'R' &&
         wav[1] == (byte)'I' &&
@@ -105,10 +124,10 @@ internal static class LinuxDictationShortSpeechPolicy
         wav[9] == (byte)'A' &&
         wav[10] == (byte)'V' &&
         wav[11] == (byte)'E' &&
-        BitConverter.ToInt16(wav, 20) == 1 &&
-        BitConverter.ToInt16(wav, 22) == 1 &&
+        BitConverter.ToInt16(wav, 20) == 1 &&  // wFormatTag = PCM
+        BitConverter.ToInt16(wav, 22) == 1 &&  // nChannels = mono
         BitConverter.ToInt32(wav, 24) == SampleRate &&
-        BitConverter.ToInt16(wav, 34) == 16;
+        BitConverter.ToInt16(wav, 34) == 16;   // wBitsPerSample
 
     private static void WriteInt32LittleEndian(byte[] buffer, int offset, int value)
     {

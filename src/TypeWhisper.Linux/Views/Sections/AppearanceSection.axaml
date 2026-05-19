@@ -93,6 +93,8 @@
             <TextBlock Text="Preview"
                        Classes="section-title" />
 
+            <!-- Static mock-up of the overlay so users can see the layout
+                 without triggering a real recording session. -->
             <Border Classes="panel"
                     Padding="24"
                     Height="220">

@@ -49,7 +49,6 @@ public class PluginEventBusTests
         var received = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("hello", received.Text);
 
-        // Give a moment for the wrong handler to potentially fire
         await Task.Delay(100);
         Assert.False(wrongTypeCalled);
     }
@@ -170,7 +169,6 @@ public class PluginEventBusTests
         var received = 0;
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
-        // Start multiple subscribers concurrently
         var subscriptions = new List<IDisposable>();
         var subscribeTasks = Enumerable.Range(0, 10).Select(_ => Task.Run(() =>
         {
@@ -185,7 +183,6 @@ public class PluginEventBusTests
             }
         }));
 
-        // Start multiple publishes concurrently
         var publishTasks = Enumerable.Range(0, 10).Select(_ => Task.Run(() =>
         {
             _bus.Publish(new RecordingStartedEvent());
@@ -198,7 +195,6 @@ public class PluginEventBusTests
 
         Assert.Null(ex);
 
-        // Cleanup
         foreach (var sub in subscriptions)
         {
             sub.Dispose();

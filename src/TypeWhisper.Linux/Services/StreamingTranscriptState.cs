@@ -2,6 +2,13 @@ using System.Threading;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+/// Accumulates and stabilizes partial transcription results during a live
+/// dictation session. Each call to <see cref="StartSession"/> bumps a
+/// version counter so in-flight writers from the previous session can
+/// detect the staleness and discard their results without corrupting the
+/// next session's text.
+/// </summary>
 internal sealed class StreamingTranscriptState
 {
     private int _sessionVersion;
@@ -20,6 +27,9 @@ internal sealed class StreamingTranscriptState
 
     public string StopSession()
     {
+        // If the last displayed text diverged from confirmed (e.g. a partial
+        // that the corrector hasn't committed yet), discard both to avoid
+        // surfacing a half-baked result as the final transcript.
         var hasUncommittedPreview = _lastDisplayedText != _confirmedText;
         var finalText = hasUncommittedPreview ? "" : _confirmedText;
         InvalidateSession();
@@ -64,6 +74,21 @@ internal sealed class StreamingTranscriptState
         return true;
     }
 
+    /// <summary>
+    /// Merges a new partial transcript into the confirmed accumulator,
+    /// preventing regressions where the model re-emits an earlier shorter
+    /// hypothesis that would erase already-confirmed text.
+    ///
+    /// Strategy (in order of preference):
+    /// 1. If newText extends confirmed (starts with it), accept the extension.
+    /// 2. If the common prefix covers more than half of confirmed, splice
+    ///    the diverging tail onto the end of confirmed.
+    /// 3. Walk a sliding window backwards through confirmed looking for a
+    ///    suffix that newText starts with (model has backed up slightly
+    ///    but the new hypothesis still overlaps). Append the non-overlapping
+    ///    tail to confirmed.
+    /// 4. Fallback: trust newText entirely (major hypothesis revision).
+    /// </summary>
     internal static string StabilizeText(string confirmed, string newText)
     {
         newText = newText.Trim();

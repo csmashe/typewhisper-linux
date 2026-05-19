@@ -82,6 +82,9 @@
                     <Border Grid.Row="3"
                             Background="#18FFFFFF" />
 
+                    <!-- BoolBrushConverter accepts "True=<color>|False=<color>" as
+                         its ConverterParameter to pick one of two brushes based on
+                         a boolean binding. -->
                     <Border Grid.Row="4"
                             Classes="row"
                             Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1439B980|False=Transparent'}">

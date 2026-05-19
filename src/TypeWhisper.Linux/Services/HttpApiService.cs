@@ -636,6 +636,11 @@ public sealed class HttpApiService : IDisposable
         var decryptedToken = ReadBearerToken(current);
         if (!string.IsNullOrWhiteSpace(decryptedToken))
         {
+            // Decrypt succeeded, so a token already exists. storedToken
+            // equals decryptedToken only when it was stored as plaintext
+            // by an older build (ApiKeyProtection.Decrypt is a no-op on
+            // non-base64 blobs). Re-encrypt on the way through so the
+            // stored value is always at-rest protected going forward.
             if (!string.Equals(storedToken, decryptedToken, StringComparison.Ordinal))
                 return;
 
@@ -658,6 +663,9 @@ public sealed class HttpApiService : IDisposable
             return false;
 
         var providedToken = authorization["Bearer ".Length..].Trim();
+        // Short-circuit on length before FixedTimeEquals to avoid allocating
+        // byte arrays of wildly different sizes, while keeping the constant-time
+        // comparison for same-length inputs to prevent timing side-channels.
         if (providedToken.Length != expectedToken.Length)
             return false;
 
@@ -677,6 +685,9 @@ public sealed class HttpApiService : IDisposable
         if (string.IsNullOrWhiteSpace(origin))
             return null;
 
+        // Only echo back origins on the same loopback address and same port
+        // as the listener — prevents a cross-origin page from using the API
+        // by claiming a localhost origin.
         if (Uri.TryCreate(origin, UriKind.Absolute, out var originUri)
             && IsAllowedLoopbackHost(originUri.Host)
             && originUri.Port == _port)

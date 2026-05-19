@@ -25,6 +25,8 @@ public sealed class VoiceCommandParser
         var trailingOutput = new StringBuilder();
         var autoEnter = false;
 
+        // Repeatedly strip recognised trailing commands so stacked commands like
+        // "hello new line press enter" are handled correctly.
         while (true)
         {
             if (TryRemoveSuffix(current, CancelSuffix, out var withoutCancel))

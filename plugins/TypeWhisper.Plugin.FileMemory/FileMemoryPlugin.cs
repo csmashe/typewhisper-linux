@@ -17,8 +17,6 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
     private List<MemoryEntry>? _entries;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.file-memory";
     public string PluginName => "File Memory";
     public string PluginVersion => "1.0.0";
@@ -37,8 +35,6 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         _entries = null;
         return Task.CompletedTask;
     }
-
-    // IMemoryStoragePlugin
 
     public async Task StoreAsync(string content, CancellationToken ct)
     {
@@ -143,8 +139,6 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
             _lock.Release();
         }
     }
-
-    // Private helpers
 
     private async Task<List<MemoryEntry>> LoadEntriesAsync(CancellationToken ct)
     {

@@ -42,7 +42,8 @@
                        Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
         </StackPanel>
 
-        <!-- Content area: simple Carousel approach via SelectedIndex bound to StepIndex -->
+        <!-- Content area: TabControl used as a step carousel — the strip is hidden
+             below and the visible page is driven by StepIndex -->
         <TabControl Grid.Row="1" SelectedIndex="{Binding StepIndex}" Margin="32,0">
             <TabControl.Styles>
                 <!-- Hide the tab strip so only content shows -->

@@ -81,6 +81,10 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
         }
         catch
         {
+            // Includes OperationCanceledException: the extension call is
+            // expected to fail fast (UnknownMethod / ServiceUnknown < 30 ms)
+            // so treating cancellation as a miss lets the chain fall through
+            // to GnomeShellActiveWindowProvider without surfacing the token.
             return null;
         }
     }

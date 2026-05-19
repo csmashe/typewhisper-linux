@@ -120,6 +120,10 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
             _running = false;
         }
 
+        // libuiohook's Dispose blocks on the hook thread stopping; run it off
+        // the caller's thread so DisposeAsync doesn't deadlock on shutdown.
+        // The 1-second timeout is a safety net — we don't block the application
+        // exit indefinitely if the hook thread hangs.
         var disposeTask = Task.Run(() =>
         {
             try { _hook.Dispose(); }

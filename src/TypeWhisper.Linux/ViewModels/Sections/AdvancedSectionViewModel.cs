@@ -220,6 +220,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
         });
     }
 
+    // First try exact match; if the stored minutes value no longer matches any
+    // option (e.g. a custom value from a future version), fall back to the
+    // app default, then to the first option as a last resort.
     private HistoryRetentionOption MatchRetention(HistoryRetentionMode mode, int minutes) =>
         HistoryRetentionOptions.FirstOrDefault(option =>
             option.Mode == mode && (mode != HistoryRetentionMode.Duration || option.Minutes == minutes))

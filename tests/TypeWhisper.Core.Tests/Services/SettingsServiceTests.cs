@@ -89,7 +89,6 @@ public class SettingsServiceTests : IDisposable
     [Fact]
     public void Load_CorruptPrimary_FallsBackToBackup()
     {
-        // Write valid backup
         var backup = AppSettings.Default with { Language = "de", HasCompletedOnboarding = true };
         var json = JsonSerializer.Serialize(backup, new JsonSerializerOptions
         {
@@ -97,8 +96,6 @@ public class SettingsServiceTests : IDisposable
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         });
         File.WriteAllText(_filePath + ".bak", json);
-
-        // Write corrupt primary
         File.WriteAllText(_filePath, "{{not valid json!!");
 
         var sut = new SettingsService(_filePath);

@@ -74,7 +74,10 @@ public static class TextDiffService
                 if (IsPunctuationOnly(rWord) && IsPunctuationOnly(iWord))
                     continue;
 
-                // Skip if only case/punctuation differ at boundaries
+                // Skip if the words differ only in trailing punctuation.
+                // The second condition (rClean == iClean) checks for exact equality after trimming —
+                // when combined with OrdinalIgnoreCase equality it means the words were identical
+                // before trimming but differed only in punctuation; case-only diffs fall through.
                 var rClean = rWord.Trim('.', ',', '!', '?', ':', ';');
                 var iClean = iWord.Trim('.', ',', '!', '?', ':', ';');
                 if (string.Equals(rClean, iClean, StringComparison.OrdinalIgnoreCase) && rClean == iClean)

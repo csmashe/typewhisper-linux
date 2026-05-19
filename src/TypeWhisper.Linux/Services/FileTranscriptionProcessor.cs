@@ -68,8 +68,9 @@ public sealed class FileTranscriptionProcessor(
 
         var startedAt = DateTime.UtcNow;
 
-        // Hold the transcription lease only around plugin.TranscribeAsync so a
-        // concurrent caller cannot swap the shared plugin's model mid-run.
+        // Narrow the lease scope to TranscribeAsync only. Holding it through
+        // the post-processing pipeline would block a concurrent dictation or
+        // watch-folder transcription from loading a different model.
         PluginTranscriptionResult pluginResult;
         await using (var lease = await modelManager.AcquireTranscriptionAsync(modelId, cancellationToken))
         {

@@ -17,8 +17,6 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
     private string? _baseUrl;
     private string? _selectedModelId;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.qwen3-stt";
     public string PluginName => "Qwen3 STT";
     public string PluginVersion => "1.0.0";
@@ -39,8 +37,6 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "qwen3-stt";
     public string ProviderDisplayName => "Qwen3 STT";
@@ -92,6 +88,8 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
     internal void SetBaseUrl(string url)
     {
         var normalized = url.Trim().TrimEnd('/');
+        // Strip a trailing /v1 if the user pasted the full endpoint path;
+        // the /v1 prefix is added per-request by OpenAiTranscriptionHelper.
         if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
             normalized = normalized[..^3];
 

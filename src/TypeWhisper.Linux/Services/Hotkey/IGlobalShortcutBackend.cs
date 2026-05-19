@@ -1,9 +1,9 @@
 namespace TypeWhisper.Linux.Services.Hotkey;
 
 /// <summary>
-/// Pluggable global-shortcut delivery mechanism. Phase 1 ships only a
-/// SharpHook implementation; Phase 2 adds evdev for Wayland sessions and
-/// Phase 3 adds an XDG portal fallback.
+/// Pluggable global-shortcut delivery mechanism. Concrete backends are
+/// SharpHook (X11 and Wayland focused-only), evdev (Wayland, raw device
+/// access), and XDG portal (Wayland, session-bus protocol).
 /// </summary>
 public interface IGlobalShortcutBackend : IAsyncDisposable
 {

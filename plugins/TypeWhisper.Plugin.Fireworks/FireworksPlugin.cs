@@ -13,8 +13,6 @@ public sealed partial class FireworksPlugin : ILlmProviderPlugin, IDisposable, I
     private IPluginHostServices? _host;
     private string? _apiKey;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.fireworks";
     public string PluginName => "Fireworks";
     public string PluginVersion => "1.0.0";
@@ -31,8 +29,6 @@ public sealed partial class FireworksPlugin : ILlmProviderPlugin, IDisposable, I
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ILlmProviderPlugin
 
     public string ProviderName => "Fireworks";
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);

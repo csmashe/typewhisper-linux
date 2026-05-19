@@ -13,6 +13,9 @@ namespace TypeWhisper.Linux.Services.Plugins;
 /// </summary>
 public sealed class PluginRegistryService
 {
+    // The registry JSON is hosted under the Windows repo path but is shared
+    // with the Linux client. SupportedPluginIds below filters it down to the
+    // Linux-compatible subset.
     private const string RegistryUrl = "https://typewhisper.github.io/typewhisper-win/plugins.json";
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);

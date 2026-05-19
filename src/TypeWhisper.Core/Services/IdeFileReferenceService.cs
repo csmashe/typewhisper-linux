@@ -2,6 +2,10 @@ using System.Text.RegularExpressions;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+/// Converts spoken file references (e.g. "at auth service dot ts") into formatted
+/// file paths or @-references suitable for pasting into IDE chat or code editors.
+/// </summary>
 public sealed partial class IdeFileReferenceService
 {
     private static readonly string[] AtReferencePrefixes =

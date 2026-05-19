@@ -89,8 +89,8 @@ public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IP
                 text = textEl.GetString() ?? "";
         }
 
-        // Cloudflare Workers AI Whisper doesn't return duration or language detection
-        // in the standard response, so we use defaults
+        // Language and duration are nested under result.language / result.duration;
+        // both fields are optional and absent when Cloudflare can't determine them.
         string? detectedLanguage = null;
         if (root.TryGetProperty("result", out var res)
             && res.TryGetProperty("language", out var langEl))

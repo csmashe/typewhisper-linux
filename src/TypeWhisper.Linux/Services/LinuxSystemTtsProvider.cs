@@ -62,6 +62,8 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
             CreateNoWindow = true
         };
 
+        // spd-say (Speech Dispatcher) handles audio output itself; espeak/
+        // espeak-ng are used with --stdout and piped into paplay/aplay below.
         if (command == "spd-say")
         {
             startInfo.ArgumentList.Add(request.Text);
@@ -85,6 +87,12 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
     private static Process? StartEspeakPlayback(ProcessStartInfo espeakStartInfo)
     {
+        // espeak/espeak-ng write PCM audio to stdout with --stdout. If a player
+        // (paplay for PipeWire/PulseAudio, aplay for ALSA) is available, pipe
+        // into it so we don't rely on espeak's built-in audio output (which
+        // requires its own audio library to be present).
+        // We use `sh -c '...' sh "$text"` to avoid shell word-splitting on the
+        // TTS text while still letting the pipe operator work in the command.
         var player = ResolvePlayer();
         if (player is null)
             return Process.Start(espeakStartInfo);
@@ -183,6 +191,11 @@ internal sealed class ProcessTtsPlaybackSession : ITtsPlaybackSession, IDisposab
     public void Dispose() => Stop();
 }
 
+/// <summary>
+/// Sentinel returned when TTS is not available or the text is empty.
+/// Immediately fires <see cref="Completed"/> to any subscriber so callers
+/// don't have to special-case a null session.
+/// </summary>
 internal sealed class InactiveTtsPlaybackSession : ITtsPlaybackSession
 {
     public static InactiveTtsPlaybackSession Instance { get; } = new();

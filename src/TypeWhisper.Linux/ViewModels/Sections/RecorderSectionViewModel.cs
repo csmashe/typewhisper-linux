@@ -112,10 +112,10 @@ public partial class RecorderSectionViewModel : ObservableObject
             }
             finally
             {
-                // Native transcription is done — release _modelLock before the
-                // transcript-to-disk write so a concurrent dictation isn't
-                // blocked by it. The scope-end dispose is a harmless
-                // idempotent no-op.
+                // Release the model lock before writing to disk so a concurrent
+                // dictation isn't blocked by the file I/O that follows.
+                // The using-statement above will call DisposeAsync again on
+                // exit, but the lease is idempotent so the double-dispose is safe.
                 await lease.DisposeAsync();
             }
             if (!string.IsNullOrWhiteSpace(transcript))

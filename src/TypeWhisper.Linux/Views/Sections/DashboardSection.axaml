@@ -471,6 +471,9 @@
                 <StackPanel DockPanel.Dock="Right"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
+                    <!-- Walk up to the host Window to reach MainWindowViewModel,
+                         because DashboardSectionViewModel doesn't hold a reference
+                         to the shell VM. -->
                     <Button Content="Open Wizard"
                             Command="{Binding $parent[Window].((shellvm:MainWindowViewModel)DataContext).OpenWizardCommand}" />
                 </StackPanel>

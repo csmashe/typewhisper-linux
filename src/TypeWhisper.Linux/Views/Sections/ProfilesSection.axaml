@@ -463,6 +463,9 @@
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
+                                        <!-- Reuses WhisperModeOptions (NullableBooleanOption list)
+                                             because the three choices — inherit / on / off — are
+                                             identical in structure to the Whisper Mode override. -->
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding WhisperModeOptions}"
                                                   SelectedItem="{Binding SelectedDeveloperFormattingOverrideOption}">

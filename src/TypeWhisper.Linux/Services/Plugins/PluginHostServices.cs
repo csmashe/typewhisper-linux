@@ -151,6 +151,11 @@ public sealed class PluginHostServices : IPluginHostServices
 
     private Dictionary<string, JsonElement> LoadSettings()
     {
+        // Monitor (lock) is re-entrant for the same thread, so callers that
+        // already hold _settingsLock (GetSetting, SetSetting, StoreSecretAsync,
+        // etc.) can call here safely. The inner lock is kept so LoadSettings
+        // is also safe when called without a prior lock (currently unused but
+        // guarded for future callers).
         lock (_settingsLock)
         {
             if (_settingsCache is not null)
@@ -184,6 +189,10 @@ public sealed class PluginHostServices : IPluginHostServices
         {
             Directory.CreateDirectory(_pluginDataDirectory);
             var json = JsonSerializer.Serialize(settings, JsonOptions);
+            // Non-atomic write: a crash mid-write could corrupt the file.
+            // Plugin settings are small and infrequently written so the
+            // trade-off is acceptable; a future hardening pass could swap
+            // to temp-file + rename (like the main app config uses).
             File.WriteAllText(_settingsFilePath, json);
         }
         catch (Exception ex)

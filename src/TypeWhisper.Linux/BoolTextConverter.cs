@@ -3,6 +3,11 @@ using Avalonia.Data.Converters;
 
 namespace TypeWhisper.Linux;
 
+/// <summary>
+/// Maps a bool to one of two strings via a converter parameter in the form:
+/// <c>True=yes|False=no</c>. If the parameter is absent or a key is missing,
+/// the original value is returned unchanged.
+/// </summary>
 public sealed class BoolTextConverter : IValueConverter
 {
     public static readonly BoolTextConverter Instance = new();

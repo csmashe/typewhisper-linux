@@ -82,6 +82,8 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
         }
         catch (Win32Exception)
         {
+            // Thrown by Process.Start on .NET when the executable isn't found,
+            // even on Linux — the name is a historical artifact of the BCL.
             return null;
         }
         catch (JsonException ex)
@@ -116,6 +118,9 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
             }
         }
 
+        // Sway separates tiled and floating windows into two child arrays at each
+        // container level. A focused floating window only appears in floating_nodes,
+        // never in nodes, so both branches must be searched.
         if (node.TryGetProperty("floating_nodes", out var floating) && floating.ValueKind == JsonValueKind.Array)
         {
             foreach (var child in floating.EnumerateArray())

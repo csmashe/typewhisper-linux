@@ -274,13 +274,11 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         if (string.IsNullOrWhiteSpace(input))
             return "Untitled Issue";
 
-        // Use the first line as the title
         var firstLine = input.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
 
         if (string.IsNullOrWhiteSpace(firstLine))
             return "Untitled Issue";
 
-        // Truncate to 100 characters
         return firstLine.Length > 100 ? firstLine[..100] : firstLine;
     }
 

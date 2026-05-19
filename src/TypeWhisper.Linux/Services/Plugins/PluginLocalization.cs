@@ -74,6 +74,9 @@ public sealed class PluginLocalization : IPluginLocalization
             return fallbackValue;
         }
 
+        // Return the raw key rather than an empty string or throwing so
+        // missing translations degrade gracefully — the key is usually
+        // human-readable and visible in the UI as a hint for translators.
         return key;
     }
 

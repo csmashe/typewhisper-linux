@@ -10,13 +10,13 @@ namespace TypeWhisper.Plugin.Claude;
 public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.anthropic.com";
+    // Anthropic requires an anthropic-version header on every request; this is
+    // the stable version that covers the Messages API used here.
     private const string AnthropicVersion = "2023-06-01";
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(60) };
     private IPluginHostServices? _host;
     private string? _apiKey;
-
-    // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.claude";
     public string PluginName => "Claude";
@@ -34,8 +34,6 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ILlmProviderPlugin
 
     public string ProviderName => "Claude";
     public bool IsAvailable => IsConfigured;
@@ -91,8 +89,6 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
             ?? throw new InvalidOperationException("Anthropic API returned null text");
     }
 
-    // Internal helpers for settings view
-
     internal bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -120,8 +116,6 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
     {
         _httpClient.Dispose();
     }
-
-    // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
     [

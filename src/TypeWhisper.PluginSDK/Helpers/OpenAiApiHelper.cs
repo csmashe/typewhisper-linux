@@ -9,7 +9,9 @@ namespace TypeWhisper.PluginSDK.Helpers;
 public static class OpenAiApiHelper
 {
     /// <summary>
-    /// Sends an HTTP request and handles common API error responses.
+    /// Sends an HTTP request and throws <see cref="InvalidOperationException"/> for
+    /// network failures, timeouts, and non-success HTTP status codes, converting the
+    /// raw error body into a human-readable message where possible.
     /// </summary>
     public static async Task<HttpResponseMessage> SendWithErrorHandlingAsync(
         HttpClient httpClient, HttpRequestMessage request, CancellationToken ct)

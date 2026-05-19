@@ -21,8 +21,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         new("enhanced", "Speechmatics Enhanced"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.speechmatics";
     public string PluginName => "Speechmatics";
     public string PluginVersion => "1.0.0";
@@ -40,8 +38,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "speechmatics";
     public string ProviderDisplayName => "Speechmatics";
@@ -67,6 +63,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
 
+        // Speechmatics v2 requires an explicit language code; "auto" is not supported.
         var lang = string.IsNullOrEmpty(language) || language == "auto" ? "en" : language;
 
         // Step 1: Submit batch transcription job

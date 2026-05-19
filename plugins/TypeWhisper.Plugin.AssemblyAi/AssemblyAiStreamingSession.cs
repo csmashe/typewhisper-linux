@@ -24,6 +24,8 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
         var session = new AssemblyAiStreamingSession();
 
         var url = "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&format_turns=true";
+        // The default streaming model is English-only; opt into the multilingual
+        // variant only when a non-English language is requested.
         if (!string.IsNullOrEmpty(language) && language != "en")
             url += "&speech_model=universal-streaming-multilingual";
 

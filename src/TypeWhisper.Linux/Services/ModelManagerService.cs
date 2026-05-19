@@ -476,6 +476,12 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>
+    /// One-time migration from bare model IDs (stored by older builds before
+    /// the plugin model ID scheme was introduced) to the "plugin:pluginId:modelId"
+    /// format that all current code expects. Safe to call repeatedly — no-ops
+    /// when the stored ID is already in the new format.
+    /// </summary>
     public void MigrateSettings()
     {
         var current = _settings.Current;
@@ -514,10 +520,12 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             return;
         _disposed = true;
         CancelAutoUnload();
-        // _modelLock is intentionally NOT disposed: an outstanding TranscriptionLease
-        // or an in-flight fire-and-forget UnloadModelAsync() may still Release() it
-        // after teardown. SemaphoreSlim needs disposal only if AvailableWaitHandle
-        // was accessed (it never is here), so skipping it leaks nothing.
+        // _modelLock is intentionally NOT disposed here. An outstanding
+        // TranscriptionLease or a fire-and-forget UnloadModelAsync call
+        // may call Release() after Dispose returns. SemaphoreSlim only
+        // requires disposal when its AvailableWaitHandle has been
+        // accessed (it has not), so leaving it live avoids a
+        // double-release crash at zero cost.
     }
 }
 

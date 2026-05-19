@@ -44,6 +44,9 @@ public partial class PluginCollectionRow : ObservableObject
     [RelayCommand]
     private void AddItem()
     {
+        // Seed new items with sensible defaults so the UI shows valid controls
+        // before the user touches anything. Fields whose key starts with "__"
+        // are internal (e.g. "__id") and always get a fresh GUID.
         var seed = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var field in ItemFields)
         {

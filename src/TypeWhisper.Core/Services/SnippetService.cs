@@ -122,6 +122,8 @@ public sealed partial class SnippetService : ISnippetService
             var expanded = ExpandPlaceholders(snippet.Replacement, clipboardProvider);
             var pattern = BuildTriggerPattern(snippet);
             var options = snippet.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
+            // Regex.Replace interprets "$" in the replacement as a backreference; escape it so
+            // literal dollar signs in snippet text are preserved verbatim.
             var replaced = Regex.Replace(text, pattern, expanded.Replace("$", "$$"), options);
             if (string.Equals(replaced, text, StringComparison.Ordinal))
                 continue;
@@ -285,6 +287,9 @@ public sealed partial class SnippetService : ISnippetService
 
     private void EnsureCacheLoaded()
     {
+        // Volatile.Read for the fast-path check avoids acquiring the lock on every call after load.
+        // Volatile.Write inside the lock ensures the write is visible to all threads before they
+        // exit the lock (double-checked locking pattern).
         if (Volatile.Read(ref _cacheLoaded)) return;
 
         lock (_gate)

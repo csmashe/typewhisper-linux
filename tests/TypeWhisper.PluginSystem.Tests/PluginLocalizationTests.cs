@@ -89,7 +89,6 @@ public class PluginLocalizationTests : IDisposable
 
         var loc = new PluginLocalization(_pluginDir, "en");
 
-        // Calling with args on a string without placeholders should not throw
         Assert.Equal("No placeholders here", loc.GetString("broken", "extra"));
     }
 

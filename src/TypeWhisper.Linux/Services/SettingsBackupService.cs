@@ -235,11 +235,16 @@ public sealed class SettingsBackupService
     private static string GetSafeDestinationPath(string rootPath, string entryName)
     {
         var normalized = NormalizeEntryName(entryName);
+        // Reject absolute paths and traversal components before GetFullPath
+        // so that a crafted zip entry like "../../.bashrc" can never escape.
         if (Path.IsPathRooted(normalized) || normalized.Split('/').Any(part => part is "" or "." or ".."))
             throw new InvalidDataException($"Backup contains an unsafe path: {entryName}");
 
         var fullRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var destination = Path.GetFullPath(Path.Combine(fullRoot, normalized));
+        // Defense-in-depth: GetFullPath may canonicalize platform-specific
+        // tricks (null bytes, long-path prefixes, etc.) that the split-
+        // and-check above misses.
         if (!destination.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new InvalidDataException($"Backup contains an unsafe path: {entryName}");
 

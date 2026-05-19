@@ -72,7 +72,6 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
     {
         var steps = new List<(int, string, Func<string, CancellationToken, Task<string>>)>();
 
-        // App-aware formatting at priority 150 (before everything else)
         if (options.AppFormatter is not null)
         {
             var processName = options.TargetProcessName;
@@ -80,7 +79,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
                 (text, _) => Task.FromResult(options.AppFormatter(text, processName))));
         }
 
-        // Plugin post-processors at their own priority (context captured in closure)
+        // Plugin post-processors insert at their own Priority; context is captured in each closure
         if (options.PluginPostProcessors is { Count: > 0 } processors)
         {
             foreach (var processor in processors)
@@ -90,13 +89,12 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             }
         }
 
-        // Deterministic cleanup at priority 250, before prompt actions/snippets.
+        // Cleanup runs before LLM/snippets so the AI prompt receives already-cleaned text
         if (options.CleanupHandler is not null)
         {
             steps.Add((CleanupPriority, PostProcessingStepNames.Cleanup, options.CleanupHandler));
         }
 
-        // LLM prompt action at priority 300
         if (options.LlmHandler is not null)
         {
             steps.Add((LlmPriority, PostProcessingStepNames.Llm,
@@ -108,28 +106,25 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
                 }));
         }
 
-        // Snippet expansion at priority 500
         if (options.SnippetExpander is not null)
         {
             steps.Add((SnippetPriority, PostProcessingStepNames.Snippets,
                 (text, _) => Task.FromResult(options.SnippetExpander(text))));
         }
 
-        // Vocabulary boosting at priority 550
         if (options.VocabularyBooster is not null)
         {
             steps.Add((VocabularyBoostingPriority, PostProcessingStepNames.VocabularyBoosting,
                 (text, _) => Task.FromResult(options.VocabularyBooster(text))));
         }
 
-        // Dictionary corrections at priority 600
         if (options.DictionaryCorrector is not null)
         {
             steps.Add((DictionaryPriority, PostProcessingStepNames.Dictionary,
                 (text, _) => Task.FromResult(options.DictionaryCorrector(text))));
         }
 
-        // Translation at priority 900 (always last)
+        // Translation is always last (priority 900) so it operates on the fully post-processed text
         if (options.TranslationHandler is not null && !string.IsNullOrEmpty(options.TranslationTarget))
         {
             var detectedLang = options.DetectedLanguage;
@@ -149,7 +144,6 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
                 }));
         }
 
-        // Sort by priority ascending (lower = runs first)
         steps.Sort((a, b) => a.Item1.CompareTo(b.Item1));
         return steps;
     }

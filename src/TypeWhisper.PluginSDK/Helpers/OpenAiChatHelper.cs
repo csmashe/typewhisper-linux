@@ -34,7 +34,7 @@ public static class OpenAiChatHelper
                 new { role = "system", content = systemPrompt },
                 new { role = "user", content = userText }
             },
-            temperature = 0.1,
+            temperature = 0.1,  // near-deterministic; tasks like translation/correction don't benefit from creativity
             max_tokens = 2048
         });
 

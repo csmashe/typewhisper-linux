@@ -29,6 +29,8 @@ public partial class PluginsSectionViewModel : ObservableObject
 
     private void Refresh()
     {
+        // Preserve expanded state across rebuilds (e.g. when a plugin is
+        // enabled/disabled) so the user doesn't lose their open settings panel.
         var expandedPluginId = PluginGroups
             .SelectMany(group => group.Plugins)
             .FirstOrDefault(plugin => plugin.IsExpanded)?
@@ -235,6 +237,8 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
     }
 
+    // Third-party plugins don't set IsLocal; fall back to the known-ID lists
+    // then to keyword heuristics so the Local/Cloud badge is still meaningful.
     private static bool InferIsLocal(PluginManifest manifest)
     {
         if (manifest.IsLocal)
@@ -263,6 +267,8 @@ public partial class PluginsSectionViewModel : ObservableObject
         return false;
     }
 
+    // Category from the manifest takes precedence; fall back to known-ID lists
+    // then keyword heuristics for plugins that predate the Category field.
     private static string? InferCategory(PluginManifest manifest)
     {
         if (!string.IsNullOrWhiteSpace(manifest.Category))
@@ -486,6 +492,9 @@ public sealed record PluginFailureRow(
 
 public sealed partial class PluginSettingFieldRow : ObservableObject
 {
+    // Prevents the Value↔BoolValue two-way sync from cycling infinitely:
+    // changing Value sets BoolValue which would otherwise trigger another
+    // OnValueChanged, and vice versa.
     private bool _syncingBoolValue;
 
     public string Key { get; }

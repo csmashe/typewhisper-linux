@@ -3,6 +3,7 @@ using Avalonia.Data.Converters;
 
 namespace TypeWhisper.Linux;
 
+/// <summary>Negates a bool binding. Non-bool values pass through unchanged.</summary>
 public sealed class InverseBoolConverter : IValueConverter
 {
     public static readonly InverseBoolConverter Instance = new();

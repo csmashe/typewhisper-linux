@@ -170,7 +170,10 @@ public sealed class AudioPlaybackService : IDisposable
         IsPlaying = false;
     }
 
-    // Resolve audioFileName relative to the audio root, rejecting anything that escapes via "..".
+    // Resolve audioFileName relative to the audio root, rejecting anything
+    // that escapes via ".." — playback paths come from the history service
+    // and should never leave the audio directory, but we enforce that here
+    // as a defence-in-depth measure.
     private static string? ResolveAudioPath(string? audioFileName)
     {
         if (string.IsNullOrWhiteSpace(audioFileName))
@@ -203,6 +206,10 @@ public sealed class AudioPlaybackService : IDisposable
 
     private static (float[] Samples, int SampleRate) LoadWav(string path)
     {
+        // Minimal chunk-walking parser. Skips unknown chunks (e.g. LIST,
+        // JUNK) to be compatible with WAVs produced by different tools,
+        // then enforces PCM mono 16-bit at the end since that's all
+        // PortAudio playback here supports.
         using var stream = File.OpenRead(path);
         using var reader = new BinaryReader(stream);
 
@@ -245,6 +252,8 @@ public sealed class AudioPlaybackService : IDisposable
                 reader.BaseStream.Seek(chunkSize, SeekOrigin.Current);
             }
 
+                // The WAV spec requires every chunk to be padded to an even byte
+            // boundary; skip the pad byte when the chunk size is odd.
             if ((chunkSize & 1) == 1 && reader.BaseStream.Position < reader.BaseStream.Length)
                 reader.BaseStream.Seek(1, SeekOrigin.Current);
         }
@@ -269,6 +278,9 @@ public sealed class AudioPlaybackService : IDisposable
 
     private static void EnsurePortAudioInitialized()
     {
+        // Reference-counted to match AudioRecordingService's pattern: both
+        // services share the process-global PortAudio library and each
+        // Initialize() call must be balanced by a Terminate().
         lock (_paInitLock)
         {
             if (_paInitCount == 0)

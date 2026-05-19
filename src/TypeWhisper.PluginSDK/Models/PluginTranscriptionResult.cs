@@ -10,6 +10,7 @@ public sealed record PluginTranscriptionResult(
     string Text, string? DetectedLanguage, double DurationSeconds,
     float? NoSpeechProbability = null)
 {
+    /// <summary>Word/sentence segments from verbose_json responses, or empty for plain json.</summary>
     public IReadOnlyList<PluginTranscriptionSegment> Segments { get; init; } = [];
 
     /// <summary>
@@ -19,4 +20,8 @@ public sealed record PluginTranscriptionResult(
         : this(text, detectedLanguage, durationSeconds, null) { }
 }
 
+/// <summary>A timed text segment from a verbose transcription response.</summary>
+/// <param name="Text">Segment text.</param>
+/// <param name="Start">Start offset in seconds within the audio.</param>
+/// <param name="End">End offset in seconds within the audio.</param>
 public sealed record PluginTranscriptionSegment(string Text, double Start, double End);

@@ -35,11 +35,17 @@ public partial class WelcomeWizard : Window
 
         PasteSmokeBox.Text = "";
         PasteSmokeBox.Focus();
+
+        // Let the clear + focus changes settle on the UI thread before the test
+        // simulates a paste, otherwise the paste can race the empty assignment.
         await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
         var shouldCheckField = await vm.RunPasteSmokeTestAsync();
         if (!shouldCheckField)
             return;
 
+        // Give the simulated paste time to land in the text box, then verify the
+        // window/view model are still alive before reading the result back.
         await Task.Delay(350);
         if (_isClosed || !IsVisible || !ReferenceEquals(DataContext, vm))
             return;

@@ -95,6 +95,8 @@ public sealed class PromptProcessingService
 
     private (ILlmProviderPlugin? Provider, string ModelId) ResolvePluginModelId(string pluginModelId)
     {
+        // Encoded as "plugin:<pluginId>:<modelId>" — same scheme used by
+        // ModelManagerService so override IDs survive round-trips through settings.
         var parts = pluginModelId.Split(':', 3);
         if (parts.Length < 3 || !string.Equals(parts[0], "plugin", StringComparison.Ordinal))
             return (null, string.Empty);

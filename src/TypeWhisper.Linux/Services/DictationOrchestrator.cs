@@ -11,22 +11,11 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Glues hotkey, recorder, transcription engine, post-processing, and text
-/// injection into a single dictation loop:
-///   hotkey → start recording → hotkey → stop → save WAV → transcribe via
-///   the active transcription plugin → apply dictionary + snippets →
-///   the resolved input backend (wtype on Wayland, xdotool on X11/XWayland)
-///   types the result into the focused window → history record.
-///
-/// If no transcription plugin/model is loaded the WAV is still written so
-/// the user can inspect what was captured.
-/// </summary>
-/// <summary>
 /// Immutable snapshot of the per-recording context captured at stop time.
-/// Passed to the post-stop transcription / insertion pipeline so that pipeline
-/// reads a stable view of the recording's profile, app, and timing even if a
-/// brand-new dictation has already started recording and overwritten the
-/// instance-level <c>_recording*</c> fields.
+/// Passed to the post-stop transcription / insertion pipeline so that
+/// the pipeline reads a stable view of the recording's profile, app, and
+/// timing even if a brand-new dictation has already started and overwritten
+/// the instance-level <c>_recording*</c> fields.
 /// </summary>
 internal sealed record RecordingContext(
     int SessionId,

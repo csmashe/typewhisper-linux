@@ -9,9 +9,9 @@ public sealed record DictionaryEntry
     public bool CaseSensitive { get; init; }
     public bool IsEnabled { get; init; } = true;
     public bool IsStarred { get; init; }
-    /// <summary>Total number of times this entry has been referenced for display and usage stats.</summary>
+    /// <summary>Total UI/stats reference count (incremented on every interaction, including views).</summary>
     public int UsageCount { get; init; }
-    /// <summary>Number of times this entry has been applied by dictionary correction or term-ranking logic.</summary>
+    /// <summary>Number of times this entry was actually substituted during correction or vocabulary boosting.</summary>
     public int TimesApplied { get; init; }
     public int TimesCorrected { get; init; }
     public int Priority { get; init; }

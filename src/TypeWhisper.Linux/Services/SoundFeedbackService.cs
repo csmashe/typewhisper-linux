@@ -2,6 +2,12 @@ using System.Diagnostics;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+/// Plays XDG sound theme events to give audible start/stop feedback.
+/// Uses <c>canberra-gtk-play</c> with the standard microphone sensitivity
+/// event IDs. Silently no-ops when the tool is absent; the async wait is
+/// fire-and-forget so recording start/stop is never delayed by audio.
+/// </summary>
 public sealed class SoundFeedbackService
 {
     public void PlayRecordingStarted() => PlayCanberraEvent("microphone-sensitivity-high");

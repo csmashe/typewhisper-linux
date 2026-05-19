@@ -43,7 +43,6 @@ public class PluginManagerTests : IDisposable
     {
         var manager = CreateManager();
 
-        // InitializeAsync should honor the explicit empty search directory in tests.
         await manager.InitializeAsync();
 
         Assert.Empty(manager.AllPlugins);
@@ -112,7 +111,6 @@ public class PluginManagerTests : IDisposable
         var manager = CreateManager();
         await manager.InitializeAsync();
 
-        // Plugin doesn't actually exist, but the settings state is loaded without error
         Assert.Empty(manager.AllPlugins);
     }
 
@@ -177,10 +175,7 @@ public class PluginManagerTests : IDisposable
     }
 }
 
-/// <summary>
-/// Tests for PluginManager using a manually constructed LoadedPlugin with a fake plugin.
-/// This verifies enable/disable/capability-index logic without needing real assemblies.
-/// </summary>
+// Verifies enable/disable/capability-index logic without loading real plugin assemblies.
 public class PluginManagerWithFakePluginTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
@@ -208,8 +203,6 @@ public class PluginManagerWithFakePluginTests : IDisposable
         mockPlugin.Setup(p => p.IsAvailable).Returns(true);
         mockPlugin.Setup(p => p.SupportedModels).Returns(new List<PluginModelInfo>());
 
-        // We can't easily inject a LoadedPlugin into PluginManager since it uses PluginLoader.
-        // But we can verify that Enable/Disable of an unknown plugin is handled gracefully.
         _manager = new PluginManager(
             new PluginLoader(),
             _eventBus,
@@ -219,7 +212,6 @@ public class PluginManagerWithFakePluginTests : IDisposable
 
         Assert.False(_manager.IsEnabled("com.test.fake"));
 
-        // Enable unknown plugin - should be a no-op
         await _manager.EnablePluginAsync("com.test.fake");
         Assert.False(_manager.IsEnabled("com.test.fake"));
     }
@@ -238,10 +230,8 @@ public class PluginManagerWithFakePluginTests : IDisposable
             _profiles.Object,
             _settings.Object);
 
-        // DisablePluginAsync for unknown plugin - plugin is null, returns early
         await _manager.DisablePluginAsync("com.test.notfound");
 
-        // Save was not called because GetPlugin returns null
         Assert.Null(savedSettings);
     }
 

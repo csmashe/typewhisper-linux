@@ -18,6 +18,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
     private readonly PluginManager _pluginManager;
     private readonly SystemCommandAvailabilityService _commands;
+    // Tracks whether the Dictation page is visible so we restart the mic
+    // preview after recording ends — without this, the meter goes dark
+    // when recording completes even if the page is still open.
     private bool _previewAttached;
     private CancellationTokenSource? _modelSelectionCts;
 
@@ -525,6 +528,10 @@ public partial class DictationSectionViewModel : ObservableObject
             ? $"set -gx LD_LIBRARY_PATH {cudaLibraryPath} $LD_LIBRARY_PATH"
             : $"export LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}";
 
+    // ~/.config/environment.d/ is read by systemd-environment-d-generator and
+    // picked up by GUI sessions on Wayland — covers the case where the user
+    // launches TypeWhisper from an app menu rather than a terminal that
+    // already has the shell profile sourced.
     private static string WriteDesktopEnvironmentFile(string home, string cudaLibraryPath)
     {
         var environmentDir = Path.Combine(home, ".config", "environment.d");

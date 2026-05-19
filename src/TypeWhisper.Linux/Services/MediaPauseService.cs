@@ -3,6 +3,11 @@ using TypeWhisper.Core.Interfaces;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+/// Pauses MPRIS2-compatible media players during dictation via
+/// <c>playerctl</c> and resumes them afterward. Silently no-ops when
+/// playerctl is absent or no players are currently playing.
+/// </summary>
 public sealed class MediaPauseService : IMediaPauseService
 {
     private readonly HashSet<string> _pausedPlayers = new(StringComparer.OrdinalIgnoreCase);

@@ -139,11 +139,13 @@ public sealed class ProfileService : IProfileService
     {
         if (pattern.StartsWith("*."))
         {
-            var suffix = pattern[1..];
+            // *.example.com matches sub.example.com AND example.com (bare apex)
+            var suffix = pattern[1..]; // includes the leading dot, e.g. ".example.com"
             return host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
                    || host.Equals(pattern[2..], StringComparison.OrdinalIgnoreCase);
         }
 
+        // Plain pattern (e.g. "example.com") also matches any subdomain
         return host.Equals(pattern, StringComparison.OrdinalIgnoreCase)
                || host.EndsWith("." + pattern, StringComparison.OrdinalIgnoreCase);
     }

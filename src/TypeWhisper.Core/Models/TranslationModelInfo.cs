@@ -21,6 +21,7 @@ public sealed record TranslationModelInfo
     public required IReadOnlyList<TranslationFileInfo> Files { get; init; }
     public required string SubDirectory { get; init; }
 
+    // Base URL for Xenova ONNX exports on Hugging Face
     private const string HF = "https://huggingface.co/Xenova";
 
     // --- Supported target languages ---
@@ -81,7 +82,8 @@ public sealed record TranslationModelInfo
         return list;
     }
 
-    // --- Model definitions (all confirmed Xenova ONNX exports) ---
+    // --- Model definitions ---
+    // All entries are confirmed ONNX quantized exports from the Xenova organisation on HuggingFace.
 
     private static TranslationModelInfo Pair(string src, string tgt, string? repoOverride = null)
     {
@@ -140,7 +142,7 @@ public sealed record TranslationModelInfo
         Pair("en", "ru"),
         Pair("en", "zh"),
         Pair("en", "ar"),
-        Pair("en", "ja", "en-jap"),  // Xenova repo uses "jap" not "ja"
+        Pair("en", "ja", "en-jap"),  // Xenova repo slug uses "jap", not the BCP-47 "ja"
         Pair("en", "hi"),
         Pair("en", "vi"),
         Pair("en", "uk"),

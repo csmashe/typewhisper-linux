@@ -91,6 +91,8 @@ public partial class AboutSectionViewModel : ObservableObject
         try
         {
             var result = await Task.Run(() => _settingsBackup.RestoreBackup(path));
+            // Re-load and re-save each settings file so in-memory state
+            // reflects the just-restored files and SettingsChanged is fired.
             _settings.Save(_settings.Load());
             _linuxPreferences.Save(_linuxPreferences.Load());
             BackupStatusText = $"Backup restored from {result.FileCount} file(s). Some restored settings may require an app restart.";

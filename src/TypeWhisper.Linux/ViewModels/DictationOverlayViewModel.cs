@@ -42,6 +42,8 @@ public partial class DictationOverlayViewModel : ObservableObject
         };
         _recordingTimer.Tick += (_, _) => RefreshRecordingSeconds();
 
+        // Auto-hide feedback after 2 seconds; the double-assign to ShowFeedback
+        // (false then optionally re-true elsewhere) intentionally re-arms the timer.
         _feedbackTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(2)
@@ -72,6 +74,8 @@ public partial class DictationOverlayViewModel : ObservableObject
             {
                 FeedbackText = e.Reason;
                 FeedbackIsError = true;
+                // Force-false then true re-arms the auto-hide timer via
+                // OnShowFeedbackChanged even if it was already true.
                 ShowFeedback = false;
                 ShowFeedback = true;
             });
@@ -91,6 +95,7 @@ public partial class DictationOverlayViewModel : ObservableObject
         }
     }
 
+    // 18px minimum (static indicator pip) + up to 54px of live meter fill.
     public double AudioMeterWidth => 18 + Math.Clamp(AudioLevel, 0f, 1f) * 54;
     public string FeedbackForeground => FeedbackIsError ? "#FF8888" : "#66E3A2";
     public bool ShowLeftMeter => ResolveWidget(_settings.Current.OverlayLeftWidget) == OverlaySlotKind.Meter;

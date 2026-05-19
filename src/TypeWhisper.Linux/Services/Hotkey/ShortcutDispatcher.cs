@@ -14,6 +14,10 @@ namespace TypeWhisper.Linux.Services.Hotkey;
 /// </summary>
 internal sealed class ShortcutDispatcher
 {
+    // Hybrid mode: holds shorter than this are treated as Toggle; longer holds
+    // behave like Push-to-Talk (key release stops recording). 600 ms was chosen
+    // as a deliberate tap vs. press boundary — long enough not to misfire on a
+    // quick toggle tap, short enough to feel responsive when held.
     private const int PushToTalkThresholdMs = 600;
 
     private readonly object _lock = new();
@@ -124,6 +128,9 @@ internal sealed class ShortcutDispatcher
                         Raise(DictationStartRequested, nameof(DictationStartRequested));
                         break;
                     case RecordingMode.Hybrid:
+                        // Always fire Toggle on press. If the key is held past the
+                        // threshold, HandleRelease will additionally fire Stop
+                        // to end a push-to-talk segment; short taps just toggle.
                         Raise(DictationToggleRequested, nameof(DictationToggleRequested));
                         break;
                 }

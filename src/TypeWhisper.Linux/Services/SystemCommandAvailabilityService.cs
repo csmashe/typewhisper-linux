@@ -146,6 +146,9 @@ public sealed class SystemCommandAvailabilityService
             return false;
         }
 
+        // dlopen with RTLD_GLOBAL pins the CUDA libs into the process's
+        // global symbol table so the native whisper/sherpa libraries can
+        // find them even when they weren't in LD_LIBRARY_PATH at startup.
         lock (CudaPreloadLock)
         {
             if (CudaPreloadHandles.Count > 0)
@@ -440,8 +443,9 @@ public sealed class SystemCommandAvailabilityService
             if (process is null)
                 return false;
 
-            // Drain both pipes concurrently so a noisy stderr can't block ldconfig
-            // while it's still streaming the (large) library list to stdout.
+            // ldconfig -p prints the full linker cache — can be large.
+            // Drain stderr concurrently so its 4 kB kernel buffer can't
+            // fill and block ldconfig while we're still reading stdout.
             var outputTask = process.StandardOutput.ReadToEndAsync();
             var errorTask = process.StandardError.ReadToEndAsync();
 

@@ -35,6 +35,7 @@ public sealed class HistoryService : IHistoryService
 
     public event Action? RecordsChanged;
 
+    // Fast path when already loaded; the fallback triggers a synchronous load via Records.
     public int TotalRecords => _cacheLoaded ? _totalRecords : Records.Count;
     public int TotalWords => _cacheLoaded ? _totalWords : Records.Sum(r => r.WordCount);
     public double TotalDuration => _cacheLoaded ? _totalDuration : Records.Sum(r => r.DurationSeconds);
@@ -320,6 +321,8 @@ public sealed class HistoryService : IHistoryService
         return JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
     }
 
+    // Synchronous fallback for callers that cannot await EnsureLoadedAsync.
+    // Do not call this from a thread that may already hold _loadLock — it will deadlock.
     private void EnsureCacheLoaded()
     {
         if (_cacheLoaded) return;

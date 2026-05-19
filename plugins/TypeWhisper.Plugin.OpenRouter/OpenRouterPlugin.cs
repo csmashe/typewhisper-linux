@@ -14,8 +14,6 @@ public sealed partial class OpenRouterPlugin : ILlmProviderPlugin, IPluginSettin
     private IPluginHostServices? _host;
     private string? _apiKey;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.openrouter";
     public string PluginName => "OpenRouter";
     public string PluginVersion => "1.0.0";
@@ -32,8 +30,6 @@ public sealed partial class OpenRouterPlugin : ILlmProviderPlugin, IPluginSettin
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ILlmProviderPlugin
 
     public string ProviderName => "OpenRouter";
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
@@ -53,8 +49,6 @@ public sealed partial class OpenRouterPlugin : ILlmProviderPlugin, IPluginSettin
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -92,8 +86,6 @@ public sealed partial class OpenRouterPlugin : ILlmProviderPlugin, IPluginSettin
     {
         _httpClient.Dispose();
     }
-
-    // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
     [

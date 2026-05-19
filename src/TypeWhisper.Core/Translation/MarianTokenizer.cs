@@ -129,7 +129,7 @@ public sealed class MarianTokenizer
         for (var end = 1; end <= n; end++)
         {
             // Try all substrings ending at 'end'
-            var maxStart = Math.Max(0, end - 64); // practical limit on token length
+            var maxStart = Math.Max(0, end - 64); // real SentencePiece tokens are rarely longer than ~20 chars; 64 is a safe upper bound
             for (var start = maxStart; start < end; start++)
             {
                 var substr = word[start..end];
@@ -142,10 +142,11 @@ public sealed class MarianTokenizer
                 }
             }
 
-            // If no token found ending at this position, fall back to single character as UNK
+            // No vocab entry covers this position — fall back to the single character as UNK
+            // with a large negative score so the Viterbi path avoids it unless there is no alternative
             if (bestScore[end] == float.NegativeInfinity)
             {
-                bestScore[end] = bestScore[end - 1] + -100f; // large penalty
+                bestScore[end] = bestScore[end - 1] + -100f;
                 bestLen[end] = 1;
             }
         }

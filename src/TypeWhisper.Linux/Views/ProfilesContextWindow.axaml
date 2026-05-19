@@ -72,6 +72,8 @@
                         <TextBlock Text="Current Domain" FontWeight="SemiBold" />
                         <TextBlock Text="{Binding CurrentUrlPattern}"
                                    IsVisible="{Binding HasCurrentUrl}" />
+                        <!-- Window title is shown here too as context for which
+                             browser tab/page the URL was extracted from. -->
                         <TextBlock Text="{Binding CurrentWindowTitle}"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    TextWrapping="Wrap"

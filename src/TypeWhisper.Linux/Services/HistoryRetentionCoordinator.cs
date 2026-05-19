@@ -4,6 +4,14 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+/// Applies the configured history retention policy on startup, shutdown,
+/// and whenever settings or the history itself change. Coordinating here
+/// (rather than inside IHistoryService) keeps the policy logic out of
+/// the core data service and lets us handle the "clear on close" mode by
+/// running a full wipe at both startup (clear leftovers from last session)
+/// and shutdown (clear the current session before the process exits).
+/// </summary>
 public sealed class HistoryRetentionCoordinator : IDisposable
 {
     private readonly IHistoryService _history;
@@ -42,6 +50,9 @@ public sealed class HistoryRetentionCoordinator : IDisposable
 
     private void OnRecordsChanged()
     {
+        // Skip if a previous apply is still running — RecordsChanged fires
+        // from within history mutations, so recursion is possible and the
+        // in-progress check prevents redundant re-purges.
         if (!_initialized || Volatile.Read(ref _applyInProgress) != 0) return;
         ApplyRetention(_settings.Current, HistoryRetentionTrigger.HistoryChanged);
     }

@@ -36,6 +36,7 @@ public sealed class CorrectionSuggestionService
 
         var changedWordCount = Math.Max(originalChanged.Count, correctedChanged.Count);
         var totalWordCount = Math.Max(originalTokens.Count, correctedTokens.Count);
+        // Confidence is the fraction of unchanged words, clamped so it is never zero or perfect.
         var confidence = Math.Clamp(1.0 - changedWordCount / (double)totalWordCount, 0.1, 0.95);
 
         return
@@ -61,6 +62,7 @@ public sealed class CorrectionSuggestionService
         if (originalChanged.Count > MaxChangedWords || correctedChanged.Count > MaxChangedWords)
             return false;
 
+        // If more than half the words changed, treat the edit as a full rewrite rather than a correction
         var maxTotal = Math.Max(originalTokenCount, correctedTokenCount);
         var maxChanged = Math.Max(originalChanged.Count, correctedChanged.Count);
         if (maxTotal > 3 && maxChanged > maxTotal / 2)

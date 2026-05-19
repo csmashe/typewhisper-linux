@@ -48,7 +48,10 @@ public static class ApiKeyProtection
             if (TryDecryptAesGcm(combined, out var decryptedText))
                 return decryptedText;
 
-            if (combined.Length < LegacyIvSize) return encrypted; // plaintext from old version
+            // Fall back to legacy CBC layout: [16-byte IV][ciphertext].
+            // Blobs shorter than an IV are plaintext from builds that
+            // predated encryption entirely — return as-is.
+            if (combined.Length < LegacyIvSize) return encrypted;
             var key = DeriveKey();
             using var aes = Aes.Create();
             aes.Key = key;

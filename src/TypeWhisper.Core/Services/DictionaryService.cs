@@ -113,6 +113,8 @@ public sealed class DictionaryService : IDictionaryService
             {
                 var pattern = Regex.Escape(entry.Original);
                 var options = entry.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
+                // \b word-boundary anchors prevent partial-word replacement (e.g. "React" inside "Reactive").
+                // This may silently skip entries whose Original starts/ends with non-word characters.
                 var replaced = Regex.Replace(text, @"\b" + pattern + @"\b", entry.Replacement!, options);
                 if (string.Equals(replaced, text, StringComparison.Ordinal))
                     continue;
@@ -351,6 +353,8 @@ public sealed class DictionaryService : IDictionaryService
         var changed = false;
         lock (_gate)
         {
+            // Pack term entries use a deterministic ID "pack:<packId>:<term>" so we can
+            // detect duplicates without a full text scan and cleanly remove them in DeactivatePack.
             var existingPackIds = _cache
                 .Where(e => e.EntryType == DictionaryEntryType.Term)
                 .Select(e => e.Id)

@@ -63,6 +63,8 @@ public partial class HistorySection : UserControl
         var extension = Path.GetExtension(path);
         if (string.IsNullOrWhiteSpace(extension))
         {
+            // Some Linux file choosers omit the extension when the user types a
+            // bare filename; default to .txt so the export has the right format.
             extension = ".txt";
             path += extension;
         }

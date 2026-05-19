@@ -5,6 +5,8 @@ namespace TypeWhisper.Core.Services;
 
 public sealed class DetectionFailureTracker : IDetectionFailureTracker
 {
+    // Show the persistent "window detection unavailable" banner after this many consecutive failures.
+    // 10 gives a few seconds of grace on a slow compositor before alarming the user.
     private const int BannerThreshold = 10;
 
     private readonly IErrorLogService _errorLog;

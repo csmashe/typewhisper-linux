@@ -18,6 +18,9 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly CorrectionSuggestionService _correctionSuggestions;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly AudioPlaybackService _audioPlayback;
+    // Prevents a full UI rebuild while SaveEdit is mid-flight: the
+    // history service fires RecordsChanged synchronously, but we need to
+    // finish updating correction suggestions before the rows are torn down.
     private bool _suppressRefresh;
 
     public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];

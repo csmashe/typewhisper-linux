@@ -377,6 +377,8 @@ public partial class App : Application
         }
         catch (Exception ex) { Debug.WriteLine($"[App] HTTP API dispose failed: {ex.Message}"); }
 
+        // Placeholder: keeps the method async for future awaitable teardown
+        // steps without forcing callers to change the signature.
         await Task.CompletedTask;
     }
 

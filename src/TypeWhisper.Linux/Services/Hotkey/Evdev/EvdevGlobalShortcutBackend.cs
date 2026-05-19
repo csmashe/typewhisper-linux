@@ -18,6 +18,9 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 {
     public const string BackendId = "linux-evdev";
     private const string InputDir = "/dev/input";
+    // Belt-and-suspenders rescan: FileSystemWatcher can miss events under
+    // high I/O load. 30 s is short enough to catch a USB keyboard plugged in
+    // after a busy window without hammering the kernel with constant ioctls.
     private static readonly TimeSpan RescanInterval = TimeSpan.FromSeconds(30);
 
     private readonly ShortcutDispatcher _dispatcher = new();

@@ -7,7 +7,14 @@ namespace TypeWhisper.Linux.Views;
 public partial class RecentTranscriptionsPaletteWindow : Window
 {
     private readonly RecentTranscriptionsPaletteViewModel _viewModel;
+
+    // Set while a selection is being committed so the Deactivated handler
+    // (which fires as the window loses focus) does not treat it as the user
+    // dismissing the palette by clicking away.
     private bool _isSelecting;
+
+    // Guards Close() against re-entry: Deactivated can fire again while the
+    // window is already tearing down.
     private bool _isClosing;
 
     public RecentTranscriptionsPaletteWindow()

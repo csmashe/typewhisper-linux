@@ -5,6 +5,12 @@ using TypeWhisper.Core.Interfaces;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+/// Lowers the volume of all active PulseAudio/PipeWire sink inputs during
+/// dictation so that playback doesn't bleed into the microphone capture.
+/// Uses <c>pactl</c> — available on PipeWire via pipewire-pulse as well as
+/// on native PulseAudio. Silently no-ops when pactl is absent.
+/// </summary>
 public sealed class AudioDuckingService : IAudioDuckingService
 {
     private static readonly Regex VolumePercentRegex = new(@"(\d+)%", RegexOptions.Compiled);

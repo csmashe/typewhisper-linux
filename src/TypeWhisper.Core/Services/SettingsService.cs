@@ -98,6 +98,12 @@ public sealed class SettingsService : ISettingsService
         }
     }
 
+    /// <summary>
+    /// Migrates settings written by older builds that stored retention as
+    /// <c>historyRetentionDays</c> (int) rather than the current
+    /// <c>historyRetentionMode</c> / <c>historyRetentionMinutes</c> pair.
+    /// The magic value 9999 was the sentinel for "keep forever".
+    /// </summary>
     private static AppSettings ApplyHistoryRetentionMigration(AppSettings settings, string json)
     {
         JsonNode? root;
