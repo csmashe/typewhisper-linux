@@ -9,9 +9,11 @@ namespace TypeWhisper.Linux.Services;
 /// equivalent to DPAPI's CurrentUser scope (not strong cryptography — an
 /// attacker with file access can decrypt, same as DPAPI).
 ///
-/// TODO: swap to Tmds.LibSecret against the Secret Service (GNOME Keyring /
-/// KWallet) once the UI surfaces a "store keys in keyring" preference.
-/// Falling back to file-at-rest when no keyring daemon is running.
+/// File-at-rest is used unconditionally rather than a keyring because no
+/// Secret Service provider is guaranteed to exist on a Linux session
+/// (minimal/tiling-WM setups often have none). A keyring-backed mode via
+/// the Secret Service API (libsecret) could be layered on later as an
+/// optional store, with this implementation remaining the fallback.
 /// </summary>
 public static class ApiKeyProtection
 {

@@ -11,7 +11,9 @@ namespace TypeWhisper.Linux.Services.Hotkey.Portal;
 /// the real D-Bus implementation can be slotted in without further
 /// architecture changes.
 ///
-/// TODO — real impl outline:
+/// Implementation outline (retained for reference — only worth building
+/// if a sandboxed/Flatpak distribution ever makes the portal the sole
+/// option for Wayland global hotkeys):
 ///   1. Add a D-Bus client dependency (e.g. Tmds.DBus.Protocol).
 ///   2. Probe <c>org.freedesktop.portal.Desktop</c> exists on the session
 ///      bus + exposes the <c>GlobalShortcuts</c> interface.

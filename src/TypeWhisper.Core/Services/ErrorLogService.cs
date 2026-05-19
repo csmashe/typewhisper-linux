@@ -59,7 +59,7 @@ public sealed class ErrorLogService : IErrorLogService
             app = new
             {
                 version = GetAppVersion(),
-                platform = "Windows", // TODO: replace with RuntimeInformation.OSDescription or similar
+                platform = "Linux",
                 os_version = Environment.OSVersion.VersionString,
                 dotnet_version = Environment.Version.ToString(),
                 locale = System.Globalization.CultureInfo.CurrentCulture.Name,
