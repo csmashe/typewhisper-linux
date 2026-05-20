@@ -80,7 +80,7 @@ Some Linux dictation features depend on external desktop tools:
 - Sound feedback uses `canberra-gtk-play`
 - Audio ducking uses `pactl`
 - Media pause uses `playerctl`
-- Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session — `wtype` is preferred on Wayland with a fallback to `xdotool` (X11 and XWayland apps)
+- Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session — `wtype` is preferred on Wayland with a fallback to `xdotool` (X11 and XWayland apps). **Wayland support is a work in progress and is not currently working.**
 
 When one of those tools is missing, the Linux UI disables that control and shows the reason, including session-aware install hints (for example, suggesting `wtype` on a Wayland session).
 
@@ -232,6 +232,10 @@ This Linux branch has been tested on the maintainer's current setups:
 - Pop!_OS 22.04 LTS / GNOME 42.9 / X11 session
 - Fedora 44 / GNOME 46+ / Wayland session (with the Window Calls
   extension installed for active-window detection)
+
+Other Wayland setups (Hyprland, Sway, KDE Plasma, and other GNOME
+versions) should work via their respective compositor-native window
+providers, but have not been tested at this time.
 
 Linux desktop behavior can vary by distribution, compositor, desktop
 environment, and especially Wayland implementation. Compositor-native
