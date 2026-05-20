@@ -556,19 +556,11 @@ public partial class DictationSectionViewModel : ObservableObject
         if (!IsCudaMissingLibraryError(message))
             return string.IsNullOrWhiteSpace(message) ? "Error" : message;
 
-        var library = message!.Contains("libcublas.so.12", StringComparison.Ordinal)
-            ? "libcublas.so.12"
-            : "libcudart.so.12";
         var cudaLibraryPath = FindCuda12LibraryPath();
         return cudaLibraryPath is null
             ? "CUDA 12 is not installed yet. Install the CUDA 12 toolkit/runtime, then restart TypeWhisper."
             : "CUDA 12 is installed, but TypeWhisper cannot see it yet. Click Fix CUDA path, then restart TypeWhisper.";
     }
-
-    private static bool IsCudaPathSetupMessage(string? message) =>
-        !string.IsNullOrWhiteSpace(message)
-        && message.Contains("CUDA 12", StringComparison.Ordinal)
-        && message.Contains("cannot see", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsCudaMissingLibraryError(string? message) =>
         !string.IsNullOrWhiteSpace(message)

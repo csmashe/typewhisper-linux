@@ -52,7 +52,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         }
 
         return new DeShortcutWriteResult(true,
-            "KDE shortcut file written. Log out and back in (or run `kquitapp5 kglobalaccel5 && kglobalaccel5 &`) for Plasma to register it.",
+            "KDE shortcut file written. Log out and back in (or restart the KGlobalAccel daemon) for Plasma to register it.",
             new[] { target });
     }
 
@@ -66,7 +66,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         {
             File.Delete(target);
             return Task.FromResult(new DeShortcutWriteResult(true,
-                "KDE shortcut file removed. Restart kglobalaccel5 or log out and back in to drop the registration.",
+                "KDE shortcut file removed. Restart the KGlobalAccel daemon or log out and back in to drop the registration.",
                 new[] { target }));
         }
         catch (Exception ex)

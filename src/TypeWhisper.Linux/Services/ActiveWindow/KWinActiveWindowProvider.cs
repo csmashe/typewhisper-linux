@@ -37,11 +37,11 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider
                 return null;
 
             var (classExit, classOutput) = await ProviderProcessRunner
-                .RunAsync("kdotool", $"getwindowclassname {windowId}", ct).ConfigureAwait(false);
+                .RunAsync("kdotool", new[] { "getwindowclassname", windowId }, ct).ConfigureAwait(false);
             var klass = classExit == 0 ? classOutput?.Trim() : null;
 
             var (nameExit, nameOutput) = await ProviderProcessRunner
-                .RunAsync("kdotool", $"getwindowname {windowId}", ct).ConfigureAwait(false);
+                .RunAsync("kdotool", new[] { "getwindowname", windowId }, ct).ConfigureAwait(false);
             var title = nameExit == 0 ? nameOutput?.Trim() : null;
 
             var processName = !string.IsNullOrWhiteSpace(klass)

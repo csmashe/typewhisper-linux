@@ -80,6 +80,16 @@ internal static class SocketPathResolver
         var privatePath = Path.Combine(Path.GetTempPath(), $"typewhisper-{uid}-{Environment.ProcessId}");
         Directory.CreateDirectory(privatePath);
         TryChmod(privatePath, 0b111_000_000); // 0700
+        // If chmod didn't take (read-only FS, unusual mount), don't return a
+        // path that might still be group/other-readable — refuse rather than
+        // expose the socket. This is the last-resort fallback; the caller
+        // surfaces the exception to the user instead of silently degrading.
+        if (!IsDirectoryPrivateAndOwned(privatePath, uid))
+        {
+            try { Directory.Delete(privatePath, recursive: true); } catch { /* best effort */ }
+            throw new IOException(
+                $"Could not secure private socket directory {privatePath} with mode 0700.");
+        }
         Trace.WriteLine($"[SocketPathResolver] Using private socket directory {privatePath}.");
         return Path.Combine(privatePath, SocketFileName);
     }

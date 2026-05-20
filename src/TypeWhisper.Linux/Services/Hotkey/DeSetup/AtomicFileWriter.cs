@@ -12,7 +12,9 @@ internal static class AtomicFileWriter
 {
     public static async Task WriteAsync(string target, string contents, CancellationToken ct)
     {
-        var dir = Path.GetDirectoryName(target)!;
+        var dir = Path.GetDirectoryName(target);
+        if (string.IsNullOrEmpty(dir))
+            throw new ArgumentException("Target path must include a directory.", nameof(target));
         var tmp = Path.Combine(dir, $".{Path.GetFileName(target)}.{Path.GetRandomFileName()}.tmp");
         try
         {

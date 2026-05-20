@@ -551,7 +551,10 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         try
         {
-            await _hotkey.SwitchBackendAsync().ConfigureAwait(false);
+            // Keep the captured UI sync context — the OnPropertyChanged calls
+            // below fire PropertyChanged on whatever thread we resume on, and
+            // Avalonia bindings require those events on the UI thread.
+            await _hotkey.SwitchBackendAsync();
         }
         catch (Exception ex)
         {

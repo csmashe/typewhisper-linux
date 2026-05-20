@@ -42,8 +42,9 @@ public partial class DictationOverlayViewModel : ObservableObject
         };
         _recordingTimer.Tick += (_, _) => RefreshRecordingSeconds();
 
-        // Auto-hide feedback after 2 seconds; the double-assign to ShowFeedback
-        // (false then optionally re-true elsewhere) intentionally re-arms the timer.
+        // Auto-hide feedback after 2 seconds. New events call
+        // RestartFeedbackTimer() to re-arm even when ShowFeedback is already true
+        // (a plain re-assignment skips OnShowFeedbackChanged due to value equality).
         _feedbackTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(2)
@@ -74,10 +75,8 @@ public partial class DictationOverlayViewModel : ObservableObject
             {
                 FeedbackText = e.Reason;
                 FeedbackIsError = true;
-                // Force-false then true re-arms the auto-hide timer via
-                // OnShowFeedbackChanged even if it was already true.
-                ShowFeedback = false;
                 ShowFeedback = true;
+                RestartFeedbackTimer();
             });
         };
     }
@@ -114,6 +113,12 @@ public partial class DictationOverlayViewModel : ObservableObject
         _feedbackTimer.Stop();
         if (value)
             _feedbackTimer.Start();
+    }
+
+    private void RestartFeedbackTimer()
+    {
+        _feedbackTimer.Stop();
+        _feedbackTimer.Start();
     }
 
     partial void OnRecordingSecondsChanged(double value) => OnPropertyChanged(nameof(RecordingTimerText));
