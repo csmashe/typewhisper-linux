@@ -93,9 +93,22 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
         if (string.IsNullOrWhiteSpace(value))
         {
-            _selectedModelId = null;
-            _host?.SetSetting("selectedModel", string.Empty);
-            UnloadModel();
+            // Hold _inferenceLock while disposing so an in-flight ProcessAsync
+            // can't be using _context/_weights when we tear them down. The
+            // load path below skips the lock here because EnsureModelReadyAsync
+            // may run a multi-gigabyte download — we acquire the lock inside
+            // LoadModelAsync instead, only around the actual state swap.
+            await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                _selectedModelId = null;
+                _host?.SetSetting("selectedModel", string.Empty);
+                UnloadModel();
+            }
+            finally
+            {
+                _inferenceLock.Release();
+            }
             _host?.NotifyCapabilitiesChanged();
             return;
         }
@@ -261,24 +274,36 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"Model file not found: {filePath}");
 
-        return Task.Run(() =>
+        return Task.Run(async () =>
         {
-            UnloadModel();
-
-            var modelParams = new ModelParams(filePath)
+            // Serialize with ProcessAsync: unloading + swapping in new weights
+            // must not happen while an inference is reading _context/_weights.
+            // The lock covers the full unload-then-load window so callers can't
+            // observe a torn state (e.g. _weights set but _context still old).
+            await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
+            try
             {
-                ContextSize = 4096,
-                GpuLayerCount = 0,  // CPU only (Backend.Cpu)
-                Threads = (int)Math.Max(1, Environment.ProcessorCount / 2),
-            };
+                UnloadModel();
 
-            _weights = LLamaWeights.LoadFromFile(modelParams);
-            _context = _weights.CreateContext(modelParams);
-            _loadedModelId = modelId;
-            _selectedModelId = modelId;
-            _host?.SetSetting("selectedModel", modelId);
+                var modelParams = new ModelParams(filePath)
+                {
+                    ContextSize = 4096,
+                    GpuLayerCount = 0,  // CPU only (Backend.Cpu)
+                    Threads = (int)Math.Max(1, Environment.ProcessorCount / 2),
+                };
+
+                _weights = LLamaWeights.LoadFromFile(modelParams);
+                _context = _weights.CreateContext(modelParams);
+                _loadedModelId = modelId;
+                _selectedModelId = modelId;
+                _host?.SetSetting("selectedModel", modelId);
+            }
+            finally
+            {
+                _inferenceLock.Release();
+            }
+
             _host?.NotifyCapabilitiesChanged();
-
             Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
         }, ct);
     }

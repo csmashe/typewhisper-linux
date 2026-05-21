@@ -22,8 +22,7 @@ public sealed class EnumBoolConverter : IValueConverter
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        if (value is true && parameter is not null)
-            return parameter;
-        return BindingOperations.DoNothing;
+        return value is true && parameter is not null ? 
+            parameter : BindingOperations.DoNothing;
     }
 }

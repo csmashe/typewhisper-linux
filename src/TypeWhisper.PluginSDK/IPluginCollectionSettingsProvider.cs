@@ -14,8 +14,10 @@ public interface IPluginCollectionSettingsProvider
     Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(string collectionKey, CancellationToken ct = default);
 
     /// <summary>
-    /// Replaces the items for the given collection key.
-    /// Returns a validation result if the new items are invalid.
+    /// Replaces the items for the given collection key. Always returns a
+    /// <see cref="PluginSettingsValidationResult"/>: on success <c>IsSuccess</c>
+    /// is true; on failure <c>IsSuccess</c> is false and <c>Message</c>
+    /// explains why the new items were rejected.
     /// </summary>
     Task<PluginSettingsValidationResult> SetItemsAsync(string collectionKey,
         IReadOnlyList<PluginCollectionItem> items, CancellationToken ct = default);

@@ -29,5 +29,17 @@ public interface IActiveWindowProvider
     /// </summary>
     bool IsApplicable();
 
+    /// <summary>
+    /// Returns a snapshot of the currently focused window, or <c>null</c>
+    /// when this provider cannot determine one (compositor helper missing,
+    /// no focused client, transient probe failure). The orchestrator treats
+    /// <c>null</c> as "skip and try the next provider" — implementations
+    /// should not throw for the normal "I don't know" case.
+    ///
+    /// Honours <paramref name="ct"/>: a cancelled token aborts any
+    /// subprocess probe and may surface as <see cref="OperationCanceledException"/>.
+    /// All other failures (missing binary, malformed output) are swallowed
+    /// and reported as <c>null</c> so the chain stays responsive.
+    /// </summary>
     Task<ActiveWindowSnapshot?> TryGetActiveWindowAsync(CancellationToken ct);
 }

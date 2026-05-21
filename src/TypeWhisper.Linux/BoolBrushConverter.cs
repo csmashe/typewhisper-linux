@@ -15,16 +15,20 @@ public sealed class BoolBrushConverter : IValueConverter
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         var boolValue = value is true;
-        if (parameter is string raw)
+        if (parameter is not string raw)
         {
-            var parts = raw.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var map = parts
-                .Select(part => part.Split('=', 2))
-                .Where(part => part.Length == 2)
-                .ToDictionary(part => part[0], part => part[1], StringComparer.OrdinalIgnoreCase);
+            return boolValue ? Brushes.White : Brushes.Transparent;
+        }
 
-            if (map.TryGetValue(boolValue ? "True" : "False", out var brushValue))
-                return Brush.Parse(brushValue);
+        var parts = raw.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var map = parts
+            .Select(part => part.Split('=', 2))
+            .Where(part => part.Length == 2)
+            .ToDictionary(part => part[0], part => part[1], StringComparer.OrdinalIgnoreCase);
+
+        if (map.TryGetValue(boolValue ? "True" : "False", out var brushValue))
+        {
+            return Brush.Parse(brushValue);
         }
 
         return boolValue ? Brushes.White : Brushes.Transparent;
