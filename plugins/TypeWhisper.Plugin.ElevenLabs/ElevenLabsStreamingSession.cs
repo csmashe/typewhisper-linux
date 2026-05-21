@@ -23,7 +23,8 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         string apiKey,
         string realtimeModelId,
         string? language,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         var session = new ElevenLabsStreamingSession();
         session._ws.Options.SetRequestHeader("xi-api-key", apiKey);
@@ -60,7 +61,10 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         }
         finally
         {
-            try { _sendLock.Release(); }
+            try
+            {
+                _sendLock.Release();
+            }
             catch (ObjectDisposedException) { }
         }
     }
@@ -92,7 +96,10 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         }
         finally
         {
-            try { _sendLock.Release(); }
+            try
+            {
+                _sendLock.Release();
+            }
             catch (ObjectDisposedException) { }
         }
     }
@@ -111,22 +118,27 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         if (!string.IsNullOrWhiteSpace(language))
             query.Add($"language_code={Uri.EscapeDataString(language)}");
 
-        return new Uri("wss://api.elevenlabs.io/v1/speech-to-text/realtime?" + string.Join("&", query));
+        return new Uri(
+            "wss://api.elevenlabs.io/v1/speech-to-text/realtime?" + string.Join("&", query)
+        );
     }
 
     internal static string BuildAudioChunkPayload(byte[] pcm16Audio, bool commit) =>
-        JsonSerializer.Serialize(new Dictionary<string, object>
-        {
-            ["message_type"] = "input_audio_chunk",
-            ["audio_base_64"] = Convert.ToBase64String(pcm16Audio),
-            ["sample_rate"] = 16000,
-            ["commit"] = commit,
-        });
+        JsonSerializer.Serialize(
+            new Dictionary<string, object>
+            {
+                ["message_type"] = "input_audio_chunk",
+                ["audio_base_64"] = Convert.ToBase64String(pcm16Audio),
+                ["sample_rate"] = 16000,
+                ["commit"] = commit,
+            }
+        );
 
     internal static bool TryParseTranscriptEvent(
         string json,
         out StreamingTranscriptEvent? transcriptEvent,
-        out string? error)
+        out string? error
+    )
     {
         transcriptEvent = null;
         error = null;
@@ -205,12 +217,19 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                 if (result.MessageType != WebSocketMessageType.Text)
                     continue;
 
-                var json = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
+                var json = Encoding.UTF8.GetString(
+                    messageBuffer.GetBuffer(),
+                    0,
+                    (int)messageBuffer.Length
+                );
                 if (TryParseTranscriptEvent(json, out var transcriptEvent, out var error))
                 {
                     // Isolate subscriber failures so a buggy handler can't
                     // tear down the WebSocket receive loop.
-                    try { TranscriptReceived?.Invoke(transcriptEvent!); }
+                    try
+                    {
+                        TranscriptReceived?.Invoke(transcriptEvent!);
+                    }
                     catch (Exception ex)
                     {
                         Debug.WriteLine($"ElevenLabs realtime subscriber failed: {ex.Message}");
@@ -237,9 +256,11 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
     {
         foreach (var propertyName in new[] { "error", "message", "details" })
         {
-            if (root.TryGetProperty(propertyName, out var property)
+            if (
+                root.TryGetProperty(propertyName, out var property)
                 && property.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(property.GetString()))
+                && !string.IsNullOrWhiteSpace(property.GetString())
+            )
             {
                 return property.GetString();
             }
@@ -262,14 +283,28 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
 
             if (_ws.State == WebSocketState.Open)
             {
-                try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
-                catch { /* best effort */ }
+                try
+                {
+                    await _ws.CloseAsync(
+                        WebSocketCloseStatus.NormalClosure,
+                        null,
+                        CancellationToken.None
+                    );
+                }
+                catch
+                { /* best effort */
+                }
             }
 
             if (_receiveTask is not null)
             {
-                try { await _receiveTask; }
-                catch { /* expected */ }
+                try
+                {
+                    await _receiveTask;
+                }
+                catch
+                { /* expected */
+                }
             }
 
             _audioBuffer.Dispose();

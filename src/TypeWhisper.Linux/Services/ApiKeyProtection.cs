@@ -4,28 +4,31 @@ using System.Text;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Linux at-rest protection for plugin secrets. v1 uses a per-user key
-/// derived from the user's UID and $XDG_DATA_HOME to provide obfuscation
-/// equivalent to DPAPI's CurrentUser scope (not strong cryptography — an
-/// attacker with file access can decrypt, same as DPAPI).
-///
-/// File-at-rest is used unconditionally rather than a keyring because no
-/// Secret Service provider is guaranteed to exist on a Linux session
-/// (minimal/tiling-WM setups often have none). A keyring-backed mode via
-/// the Secret Service API (libsecret) could be layered on later as an
-/// optional store, with this implementation remaining the fallback.
+///     Linux at-rest protection for plugin secrets. v1 uses a per-user key
+///     derived from the user's UID and $XDG_DATA_HOME to provide obfuscation
+///     equivalent to DPAPI's CurrentUser scope (not strong cryptography — an
+///     attacker with file access can decrypt, same as DPAPI).
+///     File-at-rest is used unconditionally rather than a keyring because no
+///     Secret Service provider is guaranteed to exist on a Linux session
+///     (minimal/tiling-WM setups often have none). A keyring-backed mode via
+///     the Secret Service API (libsecret) could be layered on later as an
+///     optional store, with this implementation remaining the fallback.
 /// </summary>
 public static class ApiKeyProtection
 {
-    private static readonly byte[] Entropy = "TypeWhisper.ApiKey.v1.linux"u8.ToArray();
     private const byte AesGcmVersion = 1;
     private const int NonceSize = 12;
     private const int TagSize = 16;
     private const int LegacyIvSize = 16;
+    private static readonly byte[] Entropy = "TypeWhisper.ApiKey.v1.linux"u8.ToArray();
 
     public static string Encrypt(string plainText)
     {
-        if (string.IsNullOrEmpty(plainText)) return "";
+        if (string.IsNullOrEmpty(plainText))
+        {
+            return "";
+        }
+
         var key = DeriveKey();
         var bytes = Encoding.UTF8.GetBytes(plainText);
         var nonce = RandomNumberGenerator.GetBytes(NonceSize);
@@ -43,17 +46,27 @@ public static class ApiKeyProtection
 
     public static string Decrypt(string encrypted)
     {
-        if (string.IsNullOrEmpty(encrypted)) return "";
+        if (string.IsNullOrEmpty(encrypted))
+        {
+            return "";
+        }
+
         try
         {
             var combined = Convert.FromBase64String(encrypted);
             if (TryDecryptAesGcm(combined, out var decryptedText))
+            {
                 return decryptedText;
+            }
 
             // Fall back to legacy CBC layout: [16-byte IV][ciphertext].
             // Blobs shorter than an IV are plaintext from builds that
             // predated encryption entirely — return as-is.
-            if (combined.Length < LegacyIvSize) return encrypted;
+            if (combined.Length < LegacyIvSize)
+            {
+                return encrypted;
+            }
+
             var key = DeriveKey();
             using var aes = Aes.Create();
             aes.Key = key;
@@ -88,7 +101,9 @@ public static class ApiKeyProtection
     {
         decryptedText = "";
         if (combined.Length < 1 + NonceSize + TagSize || combined[0] != AesGcmVersion)
+        {
             return false;
+        }
 
         var nonce = combined.AsSpan(1, NonceSize);
         var tag = combined.AsSpan(1 + NonceSize, TagSize);

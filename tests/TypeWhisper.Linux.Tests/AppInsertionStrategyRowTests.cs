@@ -22,9 +22,12 @@ public sealed class AppInsertionStrategyRowTests
             "kitty",
             TextInsertionStrategy.Auto,
             Options,
-            () => changeCount++);
+            () => changeCount++
+        );
 
-        sut.SelectedStrategyOption = Options.First(option => option.Value == TextInsertionStrategy.DirectTyping);
+        sut.SelectedStrategyOption = Options.First(option =>
+            option.Value == TextInsertionStrategy.DirectTyping
+        );
 
         Assert.Equal(TextInsertionStrategy.DirectTyping, sut.Strategy);
         Assert.Equal(1, changeCount);
@@ -38,7 +41,8 @@ public sealed class AppInsertionStrategyRowTests
             "kitty",
             TextInsertionStrategy.Auto,
             Options,
-            () => changeCount++);
+            () => changeCount++
+        );
 
         sut.ProcessName = "firefox";
 

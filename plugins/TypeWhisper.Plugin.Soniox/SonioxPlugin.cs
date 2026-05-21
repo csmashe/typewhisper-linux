@@ -61,7 +61,12 @@ public sealed partial class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSe
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
@@ -88,14 +93,18 @@ public sealed partial class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSe
         var root = doc.RootElement;
 
         var transcript = "";
-        if (root.TryGetProperty("results", out var results)
+        if (
+            root.TryGetProperty("results", out var results)
             && results.ValueKind == JsonValueKind.Array
-            && results.GetArrayLength() > 0)
+            && results.GetArrayLength() > 0
+        )
         {
             var firstResult = results[0];
-            if (firstResult.TryGetProperty("alternatives", out var alts)
+            if (
+                firstResult.TryGetProperty("alternatives", out var alts)
                 && alts.ValueKind == JsonValueKind.Array
-                && alts.GetArrayLength() > 0)
+                && alts.GetArrayLength() > 0
+            )
             {
                 transcript = alts[0].GetProperty("transcript").GetString() ?? "";
             }
@@ -109,7 +118,12 @@ public sealed partial class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSe
         if (root.TryGetProperty("language", out var langEl))
             detectedLanguage = langEl.GetString();
 
-        return new PluginTranscriptionResult(transcript.Trim(), detectedLanguage, duration, NoSpeechProbability: null);
+        return new PluginTranscriptionResult(
+            transcript.Trim(),
+            detectedLanguage,
+            duration,
+            NoSpeechProbability: null
+        );
     }
 
     public void Dispose()
@@ -132,24 +146,31 @@ public sealed partial class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSe
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, null, "Required for Soniox transcription."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Soniox model.",
-            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new("api-key", "API key", true, null, "Required for Soniox transcription."),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Soniox model.",
+                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {

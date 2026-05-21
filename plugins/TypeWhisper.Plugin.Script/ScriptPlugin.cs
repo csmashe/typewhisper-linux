@@ -33,7 +33,7 @@ internal sealed class ScriptStore
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     private readonly string _dataDir;
@@ -47,7 +47,8 @@ internal sealed class ScriptStore
 
     public List<ScriptEntry> Load()
     {
-        if (!File.Exists(_configPath)) return [];
+        if (!File.Exists(_configPath))
+            return [];
 
         try
         {
@@ -61,7 +62,9 @@ internal sealed class ScriptStore
             // scripts" — a silent empty list would let the next Save()
             // overwrite a config file that is merely corrupt or locked.
             throw new InvalidOperationException(
-                $"Failed to read script configuration from {_configPath}: {ex.Message}", ex);
+                $"Failed to read script configuration from {_configPath}: {ex.Message}",
+                ex
+            );
         }
     }
 
@@ -136,13 +139,18 @@ public sealed class ScriptService
         }
     }
 
-    public async Task<string> RunScriptsAsync(string text, PostProcessingContext context, CancellationToken ct)
+    public async Task<string> RunScriptsAsync(
+        string text,
+        PostProcessingContext context,
+        CancellationToken ct
+    )
     {
         var current = text;
 
         foreach (var script in Scripts.ToList())
         {
-            if (!script.IsEnabled) continue;
+            if (!script.IsEnabled)
+                continue;
 
             try
             {
@@ -177,7 +185,12 @@ public sealed class ScriptService
         };
     }
 
-    private async Task<string> RunSingleAsync(ScriptEntry script, string text, PostProcessingContext context, CancellationToken ct)
+    private async Task<string> RunSingleAsync(
+        ScriptEntry script,
+        string text,
+        PostProcessingContext context,
+        CancellationToken ct
+    )
     {
         var (fileName, arguments) = ResolveShell(script);
 
@@ -220,7 +233,13 @@ public sealed class ScriptService
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Timeout — kill the process and return original text
-            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            { /* best effort */
+            }
             _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
             return text;
         }
@@ -230,15 +249,16 @@ public sealed class ScriptService
 
         if (process.ExitCode != 0)
         {
-            _host.Log(PluginLogLevel.Warning,
-                $"Script '{script.Name}' exited with code {process.ExitCode}: {stderr}");
+            _host.Log(
+                PluginLogLevel.Warning,
+                $"Script '{script.Name}' exited with code {process.ExitCode}: {stderr}"
+            );
             return text;
         }
 
         if (!string.IsNullOrEmpty(stderr))
         {
-            _host.Log(PluginLogLevel.Info,
-                $"Script '{script.Name}' stderr: {stderr}");
+            _host.Log(PluginLogLevel.Info, $"Script '{script.Name}' stderr: {stderr}");
         }
 
         return stdout;
@@ -247,7 +267,8 @@ public sealed class ScriptService
     private int IndexOf(Guid id)
     {
         for (var i = 0; i < Scripts.Count; i++)
-            if (Scripts[i].Id == id) return i;
+            if (Scripts[i].Id == id)
+                return i;
         return -1;
     }
 
@@ -288,7 +309,10 @@ public sealed class ScriptService
     }
 }
 
-public sealed class ScriptPlugin : IPostProcessorPlugin, IPluginCollectionSettingsProvider, IPluginDataLocationAware
+public sealed class ScriptPlugin
+    : IPostProcessorPlugin,
+        IPluginCollectionSettingsProvider,
+        IPluginDataLocationAware
 {
     private const string ScriptsCollectionKey = "scripts";
 
@@ -318,9 +342,14 @@ public sealed class ScriptPlugin : IPostProcessorPlugin, IPluginCollectionSettin
         return Task.CompletedTask;
     }
 
-    public async Task<string> ProcessAsync(string text, PostProcessingContext context, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string text,
+        PostProcessingContext context,
+        CancellationToken ct
+    )
     {
-        if (Service is null) return text;
+        if (Service is null)
+            return text;
         return await Service.RunScriptsAsync(text, context, ct);
     }
 
@@ -335,13 +364,18 @@ public sealed class ScriptPlugin : IPostProcessorPlugin, IPluginCollectionSettin
         {
             new("name", "Name", Kind: PluginSettingKind.Text),
             new("command", "Command", Kind: PluginSettingKind.Multiline),
-            new("shell", "Shell", Kind: PluginSettingKind.Dropdown, Options:
-            [
-                new PluginSettingOption("", "OS default"),
-                new PluginSettingOption("bash", "bash"),
-                new PluginSettingOption("sh", "sh"),
-                new PluginSettingOption("pwsh", "PowerShell"),
-            ]),
+            new(
+                "shell",
+                "Shell",
+                Kind: PluginSettingKind.Dropdown,
+                Options:
+                [
+                    new PluginSettingOption("", "OS default"),
+                    new PluginSettingOption("bash", "bash"),
+                    new PluginSettingOption("sh", "sh"),
+                    new PluginSettingOption("pwsh", "PowerShell"),
+                ]
+            ),
             new("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
             new("__id", "__id", Kind: PluginSettingKind.Text),
         };
@@ -354,11 +388,15 @@ public sealed class ScriptPlugin : IPostProcessorPlugin, IPluginCollectionSettin
                 "Shell scripts run on the transcript, in order.",
                 itemFields,
                 ItemLabelFieldKey: "name",
-                AddButtonLabel: "Add script"),
+                AddButtonLabel: "Add script"
+            ),
         ];
     }
 
-    public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(string collectionKey, CancellationToken ct = default)
+    public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
+        string collectionKey,
+        CancellationToken ct = default
+    )
     {
         if (!string.Equals(collectionKey, ScriptsCollectionKey, StringComparison.Ordinal))
             return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
@@ -368,24 +406,31 @@ public sealed class ScriptPlugin : IPostProcessorPlugin, IPluginCollectionSettin
             : new ScriptStore(ResolveDataDir()).Load();
 
         var items = source
-            .Select(s => new PluginCollectionItem(new Dictionary<string, string?>
-            {
-                ["name"] = s.Name,
-                ["command"] = s.Command,
-                ["shell"] = s.Shell,
-                ["enabled"] = s.IsEnabled ? "true" : "false",
-                ["__id"] = s.Id.ToString("D"),
-            }))
+            .Select(s => new PluginCollectionItem(
+                new Dictionary<string, string?>
+                {
+                    ["name"] = s.Name,
+                    ["command"] = s.Command,
+                    ["shell"] = s.Shell,
+                    ["enabled"] = s.IsEnabled ? "true" : "false",
+                    ["__id"] = s.Id.ToString("D"),
+                }
+            ))
             .ToList();
 
         return Task.FromResult<IReadOnlyList<PluginCollectionItem>>(items);
     }
 
     public Task<PluginSettingsValidationResult> SetItemsAsync(
-        string collectionKey, IReadOnlyList<PluginCollectionItem> items, CancellationToken ct = default)
+        string collectionKey,
+        IReadOnlyList<PluginCollectionItem> items,
+        CancellationToken ct = default
+    )
     {
         if (!string.Equals(collectionKey, ScriptsCollectionKey, StringComparison.Ordinal))
-            return Task.FromResult(new PluginSettingsValidationResult(false, "Unknown collection."));
+            return Task.FromResult(
+                new PluginSettingsValidationResult(false, "Unknown collection.")
+            );
 
         var entries = new List<ScriptEntry>(items.Count);
 
@@ -400,35 +445,52 @@ public sealed class ScriptPlugin : IPostProcessorPlugin, IPluginCollectionSettin
             var displayName = name.Length == 0 ? "(unnamed)" : name;
 
             if (name.Length == 0)
-                return Task.FromResult(new PluginSettingsValidationResult(
-                    false, $"Script '{displayName}': name is required."));
+                return Task.FromResult(
+                    new PluginSettingsValidationResult(
+                        false,
+                        $"Script '{displayName}': name is required."
+                    )
+                );
 
             if (command.Length == 0)
-                return Task.FromResult(new PluginSettingsValidationResult(
-                    false, $"Script '{displayName}': command is required."));
+                return Task.FromResult(
+                    new PluginSettingsValidationResult(
+                        false,
+                        $"Script '{displayName}': command is required."
+                    )
+                );
 
             var shell = (rawShell ?? "").Trim().ToLowerInvariant();
             if (Array.IndexOf(s_allowedShells, shell) < 0)
-                return Task.FromResult(new PluginSettingsValidationResult(
-                    false, $"Script '{displayName}': unknown shell '{rawShell}'."));
+                return Task.FromResult(
+                    new PluginSettingsValidationResult(
+                        false,
+                        $"Script '{displayName}': unknown shell '{rawShell}'."
+                    )
+                );
 
-            var id = item.Values.TryGetValue("__id", out var rawId) && Guid.TryParse(rawId, out var parsedId)
-                ? parsedId
-                : Guid.NewGuid();
+            var id =
+                item.Values.TryGetValue("__id", out var rawId)
+                && Guid.TryParse(rawId, out var parsedId)
+                    ? parsedId
+                    : Guid.NewGuid();
 
-            var isEnabled = !item.Values.TryGetValue("enabled", out var rawEnabled)
+            var isEnabled =
+                !item.Values.TryGetValue("enabled", out var rawEnabled)
                 || rawEnabled is null
                 || !bool.TryParse(rawEnabled, out var parsedEnabled)
                 || parsedEnabled;
 
-            entries.Add(new ScriptEntry
-            {
-                Id = id,
-                Name = name,
-                Command = command,
-                Shell = shell,
-                IsEnabled = isEnabled,
-            });
+            entries.Add(
+                new ScriptEntry
+                {
+                    Id = id,
+                    Name = name,
+                    Command = command,
+                    Shell = shell,
+                    IsEnabled = isEnabled,
+                }
+            );
         }
 
         if (Service is not null)
@@ -439,9 +501,9 @@ public sealed class ScriptPlugin : IPostProcessorPlugin, IPluginCollectionSettin
         return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
     }
 
-    private string ResolveDataDir()
-        => _dataDirectory
-           ?? throw new InvalidOperationException("Plugin data directory has not been set.");
+    private string ResolveDataDir() =>
+        _dataDirectory
+        ?? throw new InvalidOperationException("Plugin data directory has not been set.");
 
     public void Dispose()
     {

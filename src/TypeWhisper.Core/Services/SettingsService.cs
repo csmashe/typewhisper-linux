@@ -15,19 +15,19 @@ public sealed class SettingsService : ISettingsService
     };
 
     private readonly string _filePath;
-    private string BackupPath => _filePath + ".bak";
-    private string TempPath => _filePath + ".tmp";
-
-    private AppSettings _current;
-
-    public AppSettings Current => _current;
-    public event Action<AppSettings>? SettingsChanged;
 
     public SettingsService(string filePath)
     {
         _filePath = filePath;
-        _current = Load();
+        Current = Load();
     }
+
+    private string BackupPath => _filePath + ".bak";
+    private string TempPath => _filePath + ".tmp";
+
+    public AppSettings Current { get; private set; }
+
+    public event Action<AppSettings>? SettingsChanged;
 
     public AppSettings Load()
     {
@@ -35,8 +35,8 @@ public sealed class SettingsService : ISettingsService
         var result = TryLoadFrom(_filePath);
         if (result is not null)
         {
-            _current = result;
-            return _current;
+            Current = result;
+            return Current;
         }
 
         // Primary failed — try backup
@@ -46,38 +46,53 @@ public sealed class SettingsService : ISettingsService
             result = TryLoadFrom(BackupPath);
             if (result is not null)
             {
-                _current = result;
+                Current = result;
                 // Restore backup as primary
-                try { File.Copy(BackupPath, _filePath, overwrite: true); }
-                catch { /* best effort */ }
-                return _current;
+                try
+                {
+                    File.Copy(BackupPath, _filePath, true);
+                }
+                catch
+                {
+                    /* best effort */
+                }
+
+                return Current;
             }
         }
 
         LogWarning("No valid settings found, using defaults.");
-        _current = AppSettings.Default;
-        return _current;
+        Current = AppSettings.Default;
+        return Current;
     }
 
     public void Save(AppSettings settings)
     {
-        _current = settings;
+        Current = settings;
 
         var directory = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(directory))
+        {
             Directory.CreateDirectory(directory);
+        }
 
         // Backup current settings before overwriting
         if (File.Exists(_filePath))
         {
-            try { File.Copy(_filePath, BackupPath, overwrite: true); }
-            catch { /* best effort */ }
+            try
+            {
+                File.Copy(_filePath, BackupPath, true);
+            }
+            catch
+            {
+                /* best effort */
+            }
         }
 
         // Atomic write: serialize to .tmp, then move over primary
         var json = JsonSerializer.Serialize(settings, JsonOptions);
         File.WriteAllText(TempPath, json);
-        File.Move(TempPath, _filePath, overwrite: true);
+        File.Move(TempPath, _filePath, true);
 
         SettingsChanged?.Invoke(settings);
     }
@@ -86,7 +101,11 @@ public sealed class SettingsService : ISettingsService
     {
         try
         {
-            if (!File.Exists(path)) return null;
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
             var json = File.ReadAllText(path);
             var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
             return settings is null ? null : ApplyHistoryRetentionMigration(settings, json);
@@ -99,10 +118,10 @@ public sealed class SettingsService : ISettingsService
     }
 
     /// <summary>
-    /// Migrates settings written by older builds that stored retention as
-    /// <c>historyRetentionDays</c> (int) rather than the current
-    /// <c>historyRetentionMode</c> / <c>historyRetentionMinutes</c> pair.
-    /// The magic value 9999 was the sentinel for "keep forever".
+    ///     Migrates settings written by older builds that stored retention as
+    ///     <c>historyRetentionDays</c> (int) rather than the current
+    ///     <c>historyRetentionMode</c> / <c>historyRetentionMinutes</c> pair.
+    ///     The magic value 9999 was the sentinel for "keep forever".
     /// </summary>
     private static AppSettings ApplyHistoryRetentionMigration(AppSettings settings, string json)
     {
@@ -117,17 +136,19 @@ public sealed class SettingsService : ISettingsService
         }
 
         if (root is not JsonObject obj)
+        {
             return settings;
+        }
 
-        if (!obj.ContainsKey("historyRetentionMode") && obj.TryGetPropertyValue("historyRetentionDays", out var legacyNode))
+        if (
+            !obj.ContainsKey("historyRetentionMode")
+            && obj.TryGetPropertyValue("historyRetentionDays", out var legacyNode)
+        )
         {
             var legacyDays = legacyNode?.GetValue<int?>();
             return legacyDays switch
             {
-                9999 => settings with
-                {
-                    HistoryRetentionMode = HistoryRetentionMode.Forever
-                },
+                9999 => settings with { HistoryRetentionMode = HistoryRetentionMode.Forever },
                 > 0 => settings with
                 {
                     HistoryRetentionMode = HistoryRetentionMode.Duration,
@@ -141,9 +162,15 @@ public sealed class SettingsService : ISettingsService
             };
         }
 
-        if (settings.HistoryRetentionMode == HistoryRetentionMode.Duration && settings.HistoryRetentionMinutes <= 0)
+        if (
+            settings.HistoryRetentionMode == HistoryRetentionMode.Duration
+            && settings.HistoryRetentionMinutes <= 0
+        )
         {
-            return settings with { HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes };
+            return settings with
+            {
+                HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes
+            };
         }
 
         return settings;
@@ -158,10 +185,15 @@ public sealed class SettingsService : ISettingsService
         {
             var logDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "TypeWhisper", "Logs");
+                "TypeWhisper",
+                "Logs"
+            );
             Directory.CreateDirectory(logDir);
             File.AppendAllText(Path.Combine(logDir, "settings.log"), line + Environment.NewLine);
         }
-        catch { /* logging must never throw */ }
+        catch
+        {
+            /* logging must never throw */
+        }
     }
 }

@@ -14,16 +14,26 @@ public class SnippetServiceTests : IDisposable
         _sut = new SnippetService(_filePath);
     }
 
+    public void Dispose()
+    {
+        if (File.Exists(_filePath))
+        {
+            File.Delete(_filePath);
+        }
+    }
+
     [Fact]
     public void AddSnippet_WithTags_PersistsAndLoads()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "mfg",
-            Replacement = "Mit freundlichen Grüßen",
-            Tags = "E-Mail,Gruß"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "mfg",
+                Replacement = "Mit freundlichen Grüßen",
+                Tags = "E-Mail,Gruß"
+            }
+        );
 
         var freshService = new SnippetService(_filePath);
         var snippet = Assert.Single(freshService.Snippets);
@@ -33,12 +43,14 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_ClipboardPlaceholder_ExpandsFromProvider()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "link",
-            Replacement = "Siehe: {clipboard}"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "link",
+                Replacement = "Siehe: {clipboard}"
+            }
+        );
 
         var result = _sut.ApplySnippets("link", () => "https://example.com");
         Assert.Equal("Siehe: https://example.com", result);
@@ -47,12 +59,14 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_ClipboardPlaceholder_EmptyWhenNoProvider()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "link",
-            Replacement = "Siehe: {clipboard}"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "link",
+                Replacement = "Siehe: {clipboard}"
+            }
+        );
 
         var result = _sut.ApplySnippets("link");
         Assert.Equal("Siehe: ", result);
@@ -61,12 +75,14 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_CustomDateFormat_ExpandsCorrectly()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "heute",
-            Replacement = "{date:dd.MM.yyyy}"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "heute",
+                Replacement = "{date:dd.MM.yyyy}"
+            }
+        );
 
         var result = _sut.ApplySnippets("heute");
         Assert.Equal(DateTime.Now.ToString("dd.MM.yyyy"), result);
@@ -75,12 +91,14 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_CustomTimeFormat_ExpandsCorrectly()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "uhr",
-            Replacement = "{time:HH:mm:ss}"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "uhr",
+                Replacement = "{time:HH:mm:ss}"
+            }
+        );
 
         var result = _sut.ApplySnippets("uhr");
         var expected = DateTime.Now.ToString("HH:mm:ss");
@@ -90,30 +108,38 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_StandardPlaceholders_StillWork()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "datum",
-            Replacement = "{date}"
-        });
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "2",
-            Trigger = "zeit",
-            Replacement = "{time}"
-        });
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "3",
-            Trigger = "tag",
-            Replacement = "{day}"
-        });
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "4",
-            Trigger = "jahr",
-            Replacement = "{year}"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "datum",
+                Replacement = "{date}"
+            }
+        );
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "2",
+                Trigger = "zeit",
+                Replacement = "{time}"
+            }
+        );
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "3",
+                Trigger = "tag",
+                Replacement = "{day}"
+            }
+        );
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "4",
+                Trigger = "jahr",
+                Replacement = "{year}"
+            }
+        );
 
         var now = DateTime.Now;
         Assert.Equal(now.ToString("yyyy-MM-dd"), _sut.ApplySnippets("datum"));
@@ -127,7 +153,10 @@ public class SnippetServiceTests : IDisposable
     {
         var now = DateTime.Now;
 
-        var result = _sut.PreviewReplacement("Today is {date:yyyy-MM-dd}; clipboard={clipboard}", () => "copied");
+        var result = _sut.PreviewReplacement(
+            "Today is {date:yyyy-MM-dd}; clipboard={clipboard}",
+            () => "copied"
+        );
 
         Assert.Equal($"Today is {now:yyyy-MM-dd}; clipboard=copied", result);
     }
@@ -135,9 +164,33 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void AllTags_ReturnsDistinctSortedTags()
     {
-        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "a", Replacement = "A", Tags = "Code,E-Mail" });
-        _sut.AddSnippet(new Snippet { Id = "2", Trigger = "b", Replacement = "B", Tags = "E-Mail,Datum" });
-        _sut.AddSnippet(new Snippet { Id = "3", Trigger = "c", Replacement = "C", Tags = "" });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "a",
+                Replacement = "A",
+                Tags = "Code,E-Mail"
+            }
+        );
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "2",
+                Trigger = "b",
+                Replacement = "B",
+                Tags = "E-Mail,Datum"
+            }
+        );
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "3",
+                Trigger = "c",
+                Replacement = "C",
+                Tags = ""
+            }
+        );
 
         var tags = _sut.AllTags;
         Assert.Equal(3, tags.Count);
@@ -149,8 +202,23 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ExportToJson_ReturnsValidJson()
     {
-        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "mfg", Replacement = "Grüße", Tags = "E-Mail" });
-        _sut.AddSnippet(new Snippet { Id = "2", Trigger = "sig", Replacement = "Signatur\nZeile 2" });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "mfg",
+                Replacement = "Grüße",
+                Tags = "E-Mail"
+            }
+        );
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "2",
+                Trigger = "sig",
+                Replacement = "Signatur\nZeile 2"
+            }
+        );
 
         var json = _sut.ExportToJson();
 
@@ -162,13 +230,20 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ImportFromJson_AddsSnippets()
     {
-        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "existing", Replacement = "Existing" });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "existing",
+                Replacement = "Existing"
+            }
+        );
 
         var json = """
-        [
-            {"Id":"x","Trigger":"neu","Replacement":"Neuer Snippet","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"Import","CreatedAt":"2026-01-01T00:00:00"}
-        ]
-        """;
+                   [
+                       {"Id":"x","Trigger":"neu","Replacement":"Neuer Snippet","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"Import","CreatedAt":"2026-01-01T00:00:00"}
+                   ]
+                   """;
 
         var count = _sut.ImportFromJson(json);
         Assert.Equal(1, count);
@@ -179,14 +254,21 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ImportFromJson_SkipsDuplicateTriggers()
     {
-        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "mfg", Replacement = "Grüße" });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "mfg",
+                Replacement = "Grüße"
+            }
+        );
 
         var json = """
-        [
-            {"Id":"x","Trigger":"mfg","Replacement":"Anderer Text","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"","CreatedAt":"2026-01-01T00:00:00"},
-            {"Id":"y","Trigger":"neu","Replacement":"Neuer Text","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"","CreatedAt":"2026-01-01T00:00:00"}
-        ]
-        """;
+                   [
+                       {"Id":"x","Trigger":"mfg","Replacement":"Anderer Text","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"","CreatedAt":"2026-01-01T00:00:00"},
+                       {"Id":"y","Trigger":"neu","Replacement":"Neuer Text","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"","CreatedAt":"2026-01-01T00:00:00"}
+                   ]
+                   """;
 
         var count = _sut.ImportFromJson(json);
         Assert.Equal(1, count); // only "neu" imported, "mfg" skipped
@@ -196,12 +278,14 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_MultilineReplacement_Works()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "sig",
-            Replacement = "Mit freundlichen Grüßen\nMarco Mustermann\nTypeWhisper GmbH"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "sig",
+                Replacement = "Mit freundlichen Grüßen\nMarco Mustermann\nTypeWhisper GmbH"
+            }
+        );
 
         var result = _sut.ApplySnippets("sig");
         Assert.Equal("Mit freundlichen Grüßen\nMarco Mustermann\nTypeWhisper GmbH", result);
@@ -215,12 +299,14 @@ public class SnippetServiceTests : IDisposable
     [InlineData("Sage mfg. bitte", "Sage Mit freundlichen Grüßen bitte")]
     public void ApplySnippets_ConsumesTrailingPunctuation(string input, string expected)
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "mfg",
-            Replacement = "Mit freundlichen Grüßen"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "mfg",
+                Replacement = "Mit freundlichen Grüßen"
+            }
+        );
 
         var result = _sut.ApplySnippets(input);
         Assert.Equal(expected, result);
@@ -229,13 +315,15 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_ExactPhraseTrigger_ReplacesWholeUtteranceOnly()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "sig",
-            Replacement = "Signature",
-            TriggerMode = SnippetTriggerMode.ExactPhrase
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "sig",
+                Replacement = "Signature",
+                TriggerMode = SnippetTriggerMode.ExactPhrase
+            }
+        );
 
         Assert.Equal("Signature", _sut.ApplySnippets("sig."));
         Assert.Equal("please use sig", _sut.ApplySnippets("please use sig"));
@@ -244,13 +332,15 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_ProfileScopedSnippet_OnlyAppliesToMatchingProfile()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "sig",
-            Replacement = "Profile signature",
-            ProfileIds = ["profile-1"]
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "sig",
+                Replacement = "Profile signature",
+                ProfileIds = ["profile-1"]
+            }
+        );
 
         Assert.Equal("sig", _sut.ApplySnippets("sig"));
         Assert.Equal("sig", _sut.ApplySnippets("sig", profileId: "profile-2"));
@@ -260,12 +350,14 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_GlobalSnippet_AppliesWhenProfileIsActive()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "sig",
-            Replacement = "Global signature"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "sig",
+                Replacement = "Global signature"
+            }
+        );
 
         Assert.Equal("Global signature", _sut.ApplySnippets("sig", profileId: "profile-1"));
     }
@@ -273,12 +365,14 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void ApplySnippets_UpdatesLastUsedAt()
     {
-        _sut.AddSnippet(new Snippet
-        {
-            Id = "1",
-            Trigger = "sig",
-            Replacement = "Signature"
-        });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "sig",
+                Replacement = "Signature"
+            }
+        );
 
         _sut.ApplySnippets("sig");
 
@@ -289,7 +383,9 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void Snippets_LoadLegacyJsonWithTriggerModeDefaults()
     {
-        File.WriteAllText(_filePath, """
+        File.WriteAllText(
+            _filePath,
+            """
             [
               {
                 "Id": "legacy",
@@ -298,7 +394,8 @@ public class SnippetServiceTests : IDisposable
                 "IsEnabled": true
               }
             ]
-            """);
+            """
+        );
 
         var sut = new SnippetService(_filePath);
 
@@ -310,15 +407,26 @@ public class SnippetServiceTests : IDisposable
     [Fact]
     public void UpdateSnippet_WithTags_PersistsChanges()
     {
-        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "mfg", Replacement = "Grüße", Tags = "Alt" });
-        _sut.UpdateSnippet(new Snippet { Id = "1", Trigger = "mfg", Replacement = "Grüße", Tags = "Neu" });
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "mfg",
+                Replacement = "Grüße",
+                Tags = "Alt"
+            }
+        );
+        _sut.UpdateSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "mfg",
+                Replacement = "Grüße",
+                Tags = "Neu"
+            }
+        );
 
         var freshService = new SnippetService(_filePath);
         Assert.Equal("Neu", freshService.Snippets[0].Tags);
-    }
-
-    public void Dispose()
-    {
-        if (File.Exists(_filePath)) File.Delete(_filePath);
     }
 }

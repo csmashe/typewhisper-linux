@@ -13,15 +13,33 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 {
     private static readonly IReadOnlyList<GemmaModelDefinition> Models =
     [
-        new("gemma4-4b-q4", "Gemma 4 4B (Q4_K_M)", "~3 GB", 3000, true,
+        new(
+            "gemma4-4b-q4",
+            "Gemma 4 4B (Q4_K_M)",
+            "~3 GB",
+            3000,
+            true,
             "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
-            "gemma-3-4b-it-Q4_K_M.gguf"),
-        new("gemma4-12b-q4", "Gemma 4 12B (Q4_K_M)", "~8 GB", 8000, false,
+            "gemma-3-4b-it-Q4_K_M.gguf"
+        ),
+        new(
+            "gemma4-12b-q4",
+            "Gemma 4 12B (Q4_K_M)",
+            "~8 GB",
+            8000,
+            false,
             "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
-            "gemma-3-12b-it-Q4_K_M.gguf"),
-        new("gemma4-27b-q4", "Gemma 4 27B (Q4_K_M)", "~17 GB", 17000, false,
+            "gemma-3-12b-it-Q4_K_M.gguf"
+        ),
+        new(
+            "gemma4-27b-q4",
+            "Gemma 4 27B (Q4_K_M)",
+            "~17 GB",
+            17000,
+            false,
             "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/main/gemma-3-27b-it-Q4_K_M.gguf",
-            "gemma-3-27b-it-Q4_K_M.gguf"),
+            "gemma-3-27b-it-Q4_K_M.gguf"
+        ),
     ];
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
@@ -71,22 +89,30 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "selectedModel",
-            Label: "Model",
-            Description: "Local Gemma model used for LLM processing. "
-                + "Selecting a model downloads it (if needed) and loads it; "
-                + "downloads can be several gigabytes and progress is reported to the plugin log.",
-            Options: Models
-                .Select(m => new PluginSettingOption(m.Id, $"{m.DisplayName} ({m.SizeDescription})"))
-                .ToList())
-    ];
+        [
+            new(
+                Key: "selectedModel",
+                Label: "Model",
+                Description: "Local Gemma model used for LLM processing. "
+                    + "Selecting a model downloads it (if needed) and loads it; "
+                    + "downloads can be several gigabytes and progress is reported to the plugin log.",
+                Options: Models
+                    .Select(m => new PluginSettingOption(
+                        m.Id,
+                        $"{m.DisplayName} ({m.SizeDescription})"
+                    ))
+                    .ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "selectedModel" ? _selectedModelId : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "selectedModel")
             return;
@@ -121,12 +147,14 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     {
         if (string.IsNullOrWhiteSpace(_selectedModelId))
             return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(false, "Select a model first."));
+                new PluginSettingsValidationResult(false, "Select a model first.")
+            );
 
         return Task.FromResult<PluginSettingsValidationResult?>(
             _loadedModelId == _selectedModelId
                 ? new PluginSettingsValidationResult(true, "Model loaded and ready.")
-                : new PluginSettingsValidationResult(false, "Model selected but not loaded yet."));
+                : new PluginSettingsValidationResult(false, "Model selected but not loaded yet.")
+        );
     }
 
     /// <summary>
@@ -157,21 +185,30 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     public string ProviderName => "Gemma 4 (Local)";
     public bool IsAvailable => _loadedModelId is not null;
 
-    public IReadOnlyList<PluginModelInfo> SupportedModels { get; } = Models.Select(m =>
-        new PluginModelInfo(m.Id, m.DisplayName)
-        {
-            SizeDescription = m.SizeDescription,
-            EstimatedSizeMB = m.EstimatedSizeMB,
-            IsRecommended = m.IsRecommended,
-        }).ToList();
+    public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
+        Models
+            .Select(m => new PluginModelInfo(m.Id, m.DisplayName)
+            {
+                SizeDescription = m.SizeDescription,
+                EstimatedSizeMB = m.EstimatedSizeMB,
+                IsRecommended = m.IsRecommended,
+            })
+            .ToList();
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         await _inferenceLock.WaitAsync(ct);
         try
         {
             if (_context is null || _weights is null)
-                throw new InvalidOperationException("No model loaded. Download and load a model first.");
+                throw new InvalidOperationException(
+                    "No model loaded. Download and load a model first."
+                );
 
             var prompt = FormatGemmaPrompt(systemPrompt, userText);
 
@@ -217,7 +254,11 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         return File.Exists(path);
     }
 
-    internal async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    internal async Task DownloadModelAsync(
+        string modelId,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
     {
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
@@ -233,18 +274,30 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         Log(PluginLogLevel.Info, $"Downloading {model.DisplayName} from Hugging Face...");
 
         using var request = new HttpRequestMessage(HttpMethod.Get, model.DownloadUrl);
-        using var response = await _httpClient.SendAsync(request,
-            HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            ct
+        );
         response.EnsureSuccessStatusCode();
 
-        var totalBytes = response.Content.Headers.ContentLength ?? model.EstimatedSizeMB * 1024L * 1024;
+        var totalBytes =
+            response.Content.Headers.ContentLength ?? model.EstimatedSizeMB * 1024L * 1024;
         long bytesRead = 0;
         var lastReport = DateTime.UtcNow;
 
         var buffer = new byte[81920];
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        await using (var fileStream = new FileStream(filePath + ".tmp", FileMode.Create,
-            FileAccess.Write, FileShare.None, 81920, true))
+        await using (
+            var fileStream = new FileStream(
+                filePath + ".tmp",
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                true
+            )
+        )
         {
             int read;
             while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
@@ -274,38 +327,41 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"Model file not found: {filePath}");
 
-        return Task.Run(async () =>
-        {
-            // Serialize with ProcessAsync: unloading + swapping in new weights
-            // must not happen while an inference is reading _context/_weights.
-            // The lock covers the full unload-then-load window so callers can't
-            // observe a torn state (e.g. _weights set but _context still old).
-            await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
-            try
+        return Task.Run(
+            async () =>
             {
-                UnloadModel();
-
-                var modelParams = new ModelParams(filePath)
+                // Serialize with ProcessAsync: unloading + swapping in new weights
+                // must not happen while an inference is reading _context/_weights.
+                // The lock covers the full unload-then-load window so callers can't
+                // observe a torn state (e.g. _weights set but _context still old).
+                await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
+                try
                 {
-                    ContextSize = 4096,
-                    GpuLayerCount = 0,  // CPU only (Backend.Cpu)
-                    Threads = (int)Math.Max(1, Environment.ProcessorCount / 2),
-                };
+                    UnloadModel();
 
-                _weights = LLamaWeights.LoadFromFile(modelParams);
-                _context = _weights.CreateContext(modelParams);
-                _loadedModelId = modelId;
-                _selectedModelId = modelId;
-                _host?.SetSetting("selectedModel", modelId);
-            }
-            finally
-            {
-                _inferenceLock.Release();
-            }
+                    var modelParams = new ModelParams(filePath)
+                    {
+                        ContextSize = 4096,
+                        GpuLayerCount = 0, // CPU only (Backend.Cpu)
+                        Threads = (int)Math.Max(1, Environment.ProcessorCount / 2),
+                    };
 
-            _host?.NotifyCapabilitiesChanged();
-            Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
-        }, ct);
+                    _weights = LLamaWeights.LoadFromFile(modelParams);
+                    _context = _weights.CreateContext(modelParams);
+                    _loadedModelId = modelId;
+                    _selectedModelId = modelId;
+                    _host?.SetSetting("selectedModel", modelId);
+                }
+                finally
+                {
+                    _inferenceLock.Release();
+                }
+
+                _host?.NotifyCapabilitiesChanged();
+                Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
+            },
+            ct
+        );
     }
 
     internal void UnloadModel()
@@ -328,7 +384,9 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         {
             sb.Append("<start_of_turn>system\n");
             sb.Append(systemPrompt).Append('\n');
-            sb.Append("IMPORTANT: Respond ONLY in the same language as the user's input. Output ONLY the requested result, nothing else. No explanations, no extra text.");
+            sb.Append(
+                "IMPORTANT: Respond ONLY in the same language as the user's input. Output ONLY the requested result, nothing else. No explanations, no extra text."
+            );
             sb.Append("<end_of_turn>\n");
         }
 
@@ -370,4 +428,5 @@ internal sealed record GemmaModelDefinition(
     int EstimatedSizeMB,
     bool IsRecommended,
     string DownloadUrl,
-    string FileName);
+    string FileName
+);

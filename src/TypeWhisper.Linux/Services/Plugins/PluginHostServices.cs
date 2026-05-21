@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using System.IO;
 using System.Text.Json;
+using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -8,28 +8,28 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
-/// Per-plugin host services for the Linux shell. Each plugin gets its own
-/// instance with isolated settings storage and secret management scoped to
-/// its plugin ID.
+///     Per-plugin host services for the Linux shell. Each plugin gets its own
+///     instance with isolated settings storage and secret management scoped to
+///     its plugin ID.
 /// </summary>
 public sealed class PluginHostServices : IPluginHostServices
 {
+    private const string SecretPrefix = "secret:";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true
     };
 
-    private const string SecretPrefix = "secret:";
+    private readonly IActiveWindowService _activeWindow;
+    private readonly PluginLocalization _localization;
+    private readonly Action? _onCapabilitiesChanged;
+    private readonly string _pluginDataDirectory;
 
     private readonly string _pluginId;
-    private readonly IActiveWindowService _activeWindow;
-    private readonly IPluginEventBus _eventBus;
     private readonly IProfileService _profiles;
-    private readonly Action? _onCapabilitiesChanged;
-    private readonly PluginLocalization _localization;
     private readonly string _settingsFilePath;
-    private readonly string _pluginDataDirectory;
     private readonly object _settingsLock = new();
 
     private Dictionary<string, JsonElement>? _settingsCache;
@@ -40,15 +40,16 @@ public sealed class PluginHostServices : IPluginHostServices
         IActiveWindowService activeWindow,
         IPluginEventBus eventBus,
         IProfileService profiles,
-        Action? onCapabilitiesChanged = null)
+        Action? onCapabilitiesChanged = null
+    )
     {
         _pluginId = pluginId;
         _activeWindow = activeWindow;
-        _eventBus = eventBus;
+        EventBus = eventBus;
         _profiles = profiles;
         _onCapabilitiesChanged = onCapabilitiesChanged;
         _localization = new PluginLocalization(pluginDirectory);
-        _pluginDataDirectory = Path.Combine(Core.TypeWhisperEnvironment.PluginDataPath, pluginId);
+        _pluginDataDirectory = Path.Combine(TypeWhisperEnvironment.PluginDataPath, pluginId);
         _settingsFilePath = Path.Combine(_pluginDataDirectory, "settings.json");
     }
 
@@ -64,7 +65,7 @@ public sealed class PluginHostServices : IPluginHostServices
     public string? ActiveAppProcessName => _activeWindow.GetActiveWindowProcessName();
     public string? ActiveAppName => _activeWindow.GetActiveWindowTitle();
 
-    public IPluginEventBus EventBus => _eventBus;
+    public IPluginEventBus EventBus { get; }
 
     public IPluginLocalization Localization => _localization;
 
@@ -91,6 +92,7 @@ public sealed class PluginHostServices : IPluginHostServices
             settings[$"{SecretPrefix}{key}"] = JsonSerializer.SerializeToElement(encrypted);
             SaveSettings(settings);
         }
+
         return Task.CompletedTask;
     }
 
@@ -116,6 +118,7 @@ public sealed class PluginHostServices : IPluginHostServices
             settings.Remove($"{SecretPrefix}{key}");
             SaveSettings(settings);
         }
+
         return Task.CompletedTask;
     }
 
@@ -125,7 +128,9 @@ public sealed class PluginHostServices : IPluginHostServices
         {
             var settings = LoadSettings();
             if (!settings.TryGetValue(key, out var element))
+            {
                 return default;
+            }
 
             try
             {
@@ -133,7 +138,9 @@ public sealed class PluginHostServices : IPluginHostServices
             }
             catch (JsonException ex)
             {
-                Trace.WriteLine($"[Plugin:{_pluginId}] Failed to deserialize setting '{key}': {ex.Message}");
+                Trace.WriteLine(
+                    $"[Plugin:{_pluginId}] Failed to deserialize setting '{key}': {ex.Message}"
+                );
                 return default;
             }
         }
@@ -159,14 +166,20 @@ public sealed class PluginHostServices : IPluginHostServices
         lock (_settingsLock)
         {
             if (_settingsCache is not null)
+            {
                 return _settingsCache;
+            }
 
             if (File.Exists(_settingsFilePath))
             {
                 try
                 {
                     var json = File.ReadAllText(_settingsFilePath);
-                    _settingsCache = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions) ?? [];
+                    _settingsCache =
+                        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                            json,
+                            JsonOptions
+                        ) ?? [];
                 }
                 catch (Exception ex)
                 {

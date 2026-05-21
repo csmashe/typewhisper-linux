@@ -1,45 +1,68 @@
-using System.Diagnostics;
 using SharpHook;
-using SharpHook.Native;
+using System.Diagnostics;
 
 namespace TypeWhisper.Linux.Services.Hotkey;
 
 /// <summary>
-/// SharpHook-backed implementation. Works reliably on X11; on Wayland the
-/// hook only receives events while the application owns focus — that's the
-/// gap Phase 2's evdev backend closes.
-///
-/// Hands off the configured-chord state machine to a shared
-/// <see cref="ShortcutDispatcher"/> so user-visible press/release/mode
-/// behavior stays identical across SharpHook and evdev.
+///     SharpHook-backed implementation. Works reliably on X11; on Wayland the
+///     hook only receives events while the application owns focus — that's the
+///     gap Phase 2's evdev backend closes.
+///     Hands off the configured-chord state machine to a shared
+///     <see cref="ShortcutDispatcher" /> so user-visible press/release/mode
+///     behavior stays identical across SharpHook and evdev.
 /// </summary>
 public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
 {
     public const string BackendId = "linux-sharphook";
+    private readonly ShortcutDispatcher _dispatcher = new();
 
     private readonly TaskPoolGlobalHook _hook = new();
-    private readonly ShortcutDispatcher _dispatcher = new();
     private readonly object _lock = new();
-
-    private bool _running;
     private int _disposed;
     private Task? _hookTask;
+
+    private bool _running;
+
+    public SharpHookGlobalShortcutBackend()
+    {
+        _dispatcher.DictationToggleRequested += () =>
+            DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.DictationStartRequested += () =>
+            DictationStartRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.DictationStopRequested += () =>
+            DictationStopRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.PromptPaletteRequested += () =>
+            PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.TransformSelectionRequested += () =>
+            TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.RecentTranscriptionsRequested += () =>
+            RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.CopyLastTranscriptionRequested += () =>
+            CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.CancelRequested += () => CancelRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     public string Id => BackendId;
     public string DisplayName => "SharpHook (libuiohook)";
     public bool SupportsPressRelease => true;
 
     /// <summary>
-    /// SharpHook hooks the X11 server (global) on X11 sessions but only
-    /// receives events while TypeWhisper owns the keyboard focus under
-    /// Wayland. Report scope honestly so the status panel doesn't mislead
-    /// Wayland users into thinking their hotkey works in any window.
+    ///     SharpHook hooks the X11 server (global) on X11 sessions but only
+    ///     receives events while TypeWhisper owns the keyboard focus under
+    ///     Wayland. Report scope honestly so the status panel doesn't mislead
+    ///     Wayland users into thinking their hotkey works in any window.
     /// </summary>
     public bool IsGlobalScope =>
-        !string.Equals(Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"),
-            "wayland", StringComparison.OrdinalIgnoreCase);
+        !string.Equals(
+            Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"),
+            "wayland",
+            StringComparison.OrdinalIgnoreCase
+        );
 
-    public bool IsAvailable() => true;
+    public bool IsAvailable()
+    {
+        return true;
+    }
 
     public event EventHandler? DictationToggleRequested;
     public event EventHandler? DictationStartRequested;
@@ -51,19 +74,10 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? CancelRequested;
     public event EventHandler<string>? Failed;
 
-    public SharpHookGlobalShortcutBackend()
-    {
-        _dispatcher.DictationToggleRequested += () => DictationToggleRequested?.Invoke(this, EventArgs.Empty);
-        _dispatcher.DictationStartRequested += () => DictationStartRequested?.Invoke(this, EventArgs.Empty);
-        _dispatcher.DictationStopRequested += () => DictationStopRequested?.Invoke(this, EventArgs.Empty);
-        _dispatcher.PromptPaletteRequested += () => PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
-        _dispatcher.TransformSelectionRequested += () => TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
-        _dispatcher.RecentTranscriptionsRequested += () => RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
-        _dispatcher.CopyLastTranscriptionRequested += () => CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
-        _dispatcher.CancelRequested += () => CancelRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    public Task<GlobalShortcutRegistrationResult> RegisterAsync(GlobalShortcutSet shortcuts, CancellationToken ct)
+    public Task<GlobalShortcutRegistrationResult> RegisterAsync(
+        GlobalShortcutSet shortcuts,
+        CancellationToken ct
+    )
     {
         _dispatcher.UpdateShortcuts(shortcuts);
 
@@ -74,28 +88,40 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
                 _hook.KeyPressed += OnKeyPressed;
                 _hook.KeyReleased += OnKeyReleased;
                 _hookTask = _hook.RunAsync();
-                _hookTask.ContinueWith(task =>
-                {
-                    if (Volatile.Read(ref _disposed) == 1 || task.IsCanceled)
-                        return;
+                _hookTask.ContinueWith(
+                    task =>
+                    {
+                        if (Volatile.Read(ref _disposed) == 1 || task.IsCanceled)
+                        {
+                            return;
+                        }
 
-                    lock (_lock) { _running = false; }
+                        lock (_lock)
+                        {
+                            _running = false;
+                        }
 
-                    var error = task.Exception?.GetBaseException().Message
-                        ?? "Global hotkey hook stopped unexpectedly.";
-                    Trace.WriteLine($"[SharpHookBackend] Hook failed: {error}");
-                    Failed?.Invoke(this, error);
-                }, TaskContinuationOptions.NotOnRanToCompletion);
+                        var error =
+                            task.Exception?.GetBaseException().Message
+                            ?? "Global hotkey hook stopped unexpectedly.";
+                        Trace.WriteLine($"[SharpHookBackend] Hook failed: {error}");
+                        Failed?.Invoke(this, error);
+                    },
+                    TaskContinuationOptions.NotOnRanToCompletion
+                );
                 _running = true;
             }
         }
 
-        return Task.FromResult(new GlobalShortcutRegistrationResult(
-            Success: true,
-            BackendId: BackendId,
-            UserMessage: null,
-            RequiresToggleMode: false,
-            TroubleshootingCommand: null));
+        return Task.FromResult(
+            new GlobalShortcutRegistrationResult(
+                true,
+                BackendId,
+                null,
+                false,
+                null
+            )
+        );
     }
 
     public Task UnregisterAsync(CancellationToken ct)
@@ -104,15 +130,13 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
         return Task.CompletedTask;
     }
 
-    private void OnKeyPressed(object? sender, KeyboardHookEventArgs e) =>
-        _dispatcher.Handle(e.Data.KeyCode, e.RawEvent.Mask, pressed: true);
-
-    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e) =>
-        _dispatcher.Handle(e.Data.KeyCode, e.RawEvent.Mask, pressed: false);
-
     public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1) return ValueTask.CompletedTask;
+        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        {
+            return ValueTask.CompletedTask;
+        }
+
         lock (_lock)
         {
             _hook.KeyPressed -= OnKeyPressed;
@@ -126,10 +150,26 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
         // exit indefinitely if the hook thread hangs.
         var disposeTask = Task.Run(() =>
         {
-            try { _hook.Dispose(); }
-            catch (Exception ex) { Trace.WriteLine($"[SharpHookBackend] Dispose threw: {ex.Message}"); }
+            try
+            {
+                _hook.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[SharpHookBackend] Dispose threw: {ex.Message}");
+            }
         });
         disposeTask.Wait(TimeSpan.FromSeconds(1));
         return ValueTask.CompletedTask;
+    }
+
+    private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
+    {
+        _dispatcher.Handle(e.Data.KeyCode, e.RawEvent.Mask, true);
+    }
+
+    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
+    {
+        _dispatcher.Handle(e.Data.KeyCode, e.RawEvent.Mask, false);
     }
 }

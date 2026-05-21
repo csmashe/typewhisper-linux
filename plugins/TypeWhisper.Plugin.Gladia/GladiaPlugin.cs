@@ -57,7 +57,12 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
@@ -83,27 +88,39 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var transcript = root
-            .GetProperty("result")
-            .GetProperty("transcription")
-            .GetProperty("full_transcript")
-            .GetString() ?? "";
+        var transcript =
+            root.GetProperty("result")
+                .GetProperty("transcription")
+                .GetProperty("full_transcript")
+                .GetString()
+            ?? "";
 
         double duration = 0;
-        if (root.GetProperty("result").GetProperty("transcription")
-            .TryGetProperty("duration", out var durEl))
+        if (
+            root.GetProperty("result")
+                .GetProperty("transcription")
+                .TryGetProperty("duration", out var durEl)
+        )
             duration = durEl.GetDouble();
 
         string? detectedLanguage = null;
-        if (root.GetProperty("result").GetProperty("transcription")
-            .TryGetProperty("languages", out var langsEl)
+        if (
+            root.GetProperty("result")
+                .GetProperty("transcription")
+                .TryGetProperty("languages", out var langsEl)
             && langsEl.ValueKind == JsonValueKind.Array
-            && langsEl.GetArrayLength() > 0)
+            && langsEl.GetArrayLength() > 0
+        )
         {
             detectedLanguage = langsEl[0].GetString();
         }
 
-        return new PluginTranscriptionResult(transcript, detectedLanguage, duration, NoSpeechProbability: null);
+        return new PluginTranscriptionResult(
+            transcript,
+            detectedLanguage,
+            duration,
+            NoSpeechProbability: null
+        );
     }
 
     public void Dispose()
@@ -126,24 +143,31 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, null, "Required for Gladia transcription."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Gladia model.",
-            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new("api-key", "API key", true, null, "Required for Gladia transcription."),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Gladia model.",
+                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {

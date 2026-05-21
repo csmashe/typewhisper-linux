@@ -1,13 +1,13 @@
 using System.Diagnostics;
-using System.IO;
+using System.Globalization;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
-/// Loads localized strings from JSON files in a plugin's Localization/ subdirectory.
-/// current language defaults to CultureInfo.CurrentUICulture or an explicit override.
+///     Loads localized strings from JSON files in a plugin's Localization/ subdirectory.
+///     current language defaults to CultureInfo.CurrentUICulture or an explicit override.
 /// </summary>
 public sealed class PluginLocalization : IPluginLocalization
 {
@@ -21,14 +21,12 @@ public sealed class PluginLocalization : IPluginLocalization
 
     private readonly Dictionary<string, Dictionary<string, string>> _strings = [];
 
-    public string CurrentLanguage { get; }
-    public IReadOnlyList<string> AvailableLanguages { get; }
-
     public PluginLocalization(string pluginDirectory, string? languageOverride = null)
     {
         var localizationDir = Path.Combine(pluginDirectory, LocalizationFolder);
-        CurrentLanguage = languageOverride
-            ?? System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        CurrentLanguage =
+            languageOverride
+            ?? CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
 
         var available = new List<string>();
 
@@ -37,12 +35,18 @@ public sealed class PluginLocalization : IPluginLocalization
             foreach (var file in Directory.EnumerateFiles(localizationDir, "*.json"))
             {
                 var lang = Path.GetFileNameWithoutExtension(file);
-                if (string.IsNullOrEmpty(lang)) continue;
+                if (string.IsNullOrEmpty(lang))
+                {
+                    continue;
+                }
 
                 try
                 {
                     var json = File.ReadAllText(file);
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json, JsonOptions);
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(
+                        json,
+                        JsonOptions
+                    );
                     if (dict is not null)
                     {
                         _strings[lang] = dict;
@@ -59,17 +63,24 @@ public sealed class PluginLocalization : IPluginLocalization
         AvailableLanguages = available;
     }
 
+    public string CurrentLanguage { get; }
+    public IReadOnlyList<string> AvailableLanguages { get; }
+
     public string GetString(string key)
     {
-        if (_strings.TryGetValue(CurrentLanguage, out var currentDict) &&
-            currentDict.TryGetValue(key, out var value))
+        if (
+            _strings.TryGetValue(CurrentLanguage, out var currentDict)
+            && currentDict.TryGetValue(key, out var value)
+        )
         {
             return value;
         }
 
-        if (CurrentLanguage != FallbackLanguage &&
-            _strings.TryGetValue(FallbackLanguage, out var fallbackDict) &&
-            fallbackDict.TryGetValue(key, out var fallbackValue))
+        if (
+            CurrentLanguage != FallbackLanguage
+            && _strings.TryGetValue(FallbackLanguage, out var fallbackDict)
+            && fallbackDict.TryGetValue(key, out var fallbackValue)
+        )
         {
             return fallbackValue;
         }

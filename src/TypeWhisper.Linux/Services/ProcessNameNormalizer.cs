@@ -5,11 +5,15 @@ internal static class ProcessNameNormalizer
     public static string Normalize(string? processName)
     {
         if (string.IsNullOrWhiteSpace(processName))
+        {
             return "";
+        }
 
         var baseName = Path.GetFileName(processName.Trim());
         if (baseName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
             return Path.GetFileNameWithoutExtension(baseName);
+        }
 
         // Wayland wm_class / app_id values are commonly reverse-DNS app IDs:
         //   com.mitchellh.ghostty, org.mozilla.firefox, org.gnome.Nautilus
@@ -22,7 +26,9 @@ internal static class ProcessNameNormalizer
         {
             var lastSegment = baseName[(baseName.LastIndexOf('.') + 1)..];
             if (!string.IsNullOrEmpty(lastSegment))
+            {
                 return lastSegment;
+            }
         }
 
         return baseName;

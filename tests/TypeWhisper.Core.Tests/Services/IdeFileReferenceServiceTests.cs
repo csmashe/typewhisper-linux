@@ -32,7 +32,10 @@ public sealed class IdeFileReferenceServiceTests
     [InlineData("tag program dot c sharp", "@program.cs")]
     [InlineData("file tag dot env", "@.env")]
     [InlineData("file app settings dot json", "app_settings.json")]
-    public void TryFormatReferenceCommand_ConvertsClearReferenceCommands(string input, string expected)
+    public void TryFormatReferenceCommand_ConvertsClearReferenceCommands(
+        string input,
+        string expected
+    )
     {
         var result = _sut.TryFormatReferenceCommand(input);
 

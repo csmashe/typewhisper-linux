@@ -4,12 +4,12 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Covers <see cref="TrayIconService.ProbeTrayAvailable"/> — the D-Bus probe
-/// that decides whether close-to-tray is safe (backlog #18). The probe reads
-/// the StatusNotifierWatcher's <c>IsStatusNotifierHostRegistered</c> property
-/// (true only when a watcher exists *and* a host registered with it). Probe
-/// logic is testable through the <see cref="IProcessRunner"/> seam; the
-/// Avalonia <c>TrayIcon</c> wiring in <c>Initialize()</c> is verified manually.
+///     Covers <see cref="TrayIconService.ProbeTrayAvailable" /> — the D-Bus probe
+///     that decides whether close-to-tray is safe (backlog #18). The probe reads
+///     the StatusNotifierWatcher's <c>IsStatusNotifierHostRegistered</c> property
+///     (true only when a watcher exists *and* a host registered with it). Probe
+///     logic is testable through the <see cref="IProcessRunner" /> seam; the
+///     Avalonia <c>TrayIcon</c> wiring in <c>Initialize()</c> is verified manually.
 /// </summary>
 public sealed class TrayIconServiceTests
 {

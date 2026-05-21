@@ -318,9 +318,10 @@
                             <StackPanel Spacing="4">
                                 <TextBlock Text="Auto-learn approved history corrections"
                                            Classes="row-label" />
-                                <TextBlock Text="When you edit a history item, clear phrase-level suggestions can be learned immediately."
-                                           FontSize="11"
-                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                <TextBlock
+                                    Text="When you edit a history item, clear phrase-level suggestions can be learned immediately."
+                                    FontSize="11"
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding AutoAddDictionaryCorrections}"

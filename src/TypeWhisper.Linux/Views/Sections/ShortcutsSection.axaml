@@ -51,13 +51,15 @@
             <StackPanel Margin="0,0,0,18">
                 <TextBlock Text="Shortcuts"
                            Classes="page-title" />
-                <TextBlock Text="Keep capture keyboard-first. Start with one main hotkey, then adjust activation behavior or add the prompt palette shortcut as needed."
-                           Classes="page-subtitle" />
-                <TextBlock Text="Single modifier keys like Win are not allowed. Use a combination like Ctrl+Shift, Alt+F9, or Ctrl+Shift+Space."
-                           FontSize="11"
-                           Foreground="#AFC0D3"
-                           TextWrapping="Wrap"
-                           Margin="0,8,0,0" />
+                <TextBlock
+                    Text="Keep capture keyboard-first. Start with one main hotkey, then adjust activation behavior or add the prompt palette shortcut as needed."
+                    Classes="page-subtitle" />
+                <TextBlock
+                    Text="Single modifier keys like Win are not allowed. Use a combination like Ctrl+Shift, Alt+F9, or Ctrl+Shift+Space."
+                    FontSize="11"
+                    Foreground="#AFC0D3"
+                    TextWrapping="Wrap"
+                    Margin="0,8,0,0" />
             </StackPanel>
 
             <TextBlock Text="Status"
@@ -147,8 +149,9 @@
                         <StackPanel Margin="0,0,16,0">
                             <TextBlock Text="Main dictation hotkey"
                                        Classes="row-title" />
-                            <TextBlock Text="Global shortcut that starts dictation. Its behavior depends on the activation mode below."
-                                       Classes="row-hint" />
+                            <TextBlock
+                                Text="Global shortcut that starts dictation. Its behavior depends on the activation mode below."
+                                Classes="row-hint" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="1"
@@ -175,8 +178,9 @@
                             <StackPanel Margin="0,0,16,0">
                                 <TextBlock Text="Activation mode"
                                            Classes="row-title" />
-                                <TextBlock Text="Toggle starts and stops on repeated presses. Push to talk records while held. Hybrid starts immediately, keeps recording after a short press, and stops on release after a long hold."
-                                           Classes="row-hint" />
+                                <TextBlock
+                                    Text="Toggle starts and stops on repeated presses. Push to talk records while held. Hybrid starts immediately, keeps recording after a short press, and stops on release after a long hold."
+                                    Classes="row-hint" />
                             </StackPanel>
 
                             <StackPanel Grid.Column="1"
@@ -212,8 +216,9 @@
                             <StackPanel Margin="0,0,16,0">
                                 <TextBlock Text="Prompt Palette"
                                            Classes="row-title" />
-                                <TextBlock Text="Optional global shortcut that opens the prompt palette for the current selection without starting dictation. Leave blank to disable it."
-                                           Classes="row-hint" />
+                                <TextBlock
+                                    Text="Optional global shortcut that opens the prompt palette for the current selection without starting dictation. Leave blank to disable it."
+                                    Classes="row-hint" />
                             </StackPanel>
 
                             <StackPanel Grid.Column="1"
@@ -239,8 +244,9 @@
                             <StackPanel Margin="0,0,16,0">
                                 <TextBlock Text="Transform selection"
                                            Classes="row-title" />
-                                <TextBlock Text="Optional global shortcut for editing selected text by voice. Leave blank to disable it."
-                                           Classes="row-hint" />
+                                <TextBlock
+                                    Text="Optional global shortcut for editing selected text by voice. Leave blank to disable it."
+                                    Classes="row-hint" />
                             </StackPanel>
 
                             <StackPanel Grid.Column="1"
@@ -266,8 +272,9 @@
                             <StackPanel Margin="0,0,16,0">
                                 <TextBlock Text="Recent transcriptions"
                                            Classes="row-title" />
-                                <TextBlock Text="Optional global shortcut that opens a searchable palette of recent transcriptions."
-                                           Classes="row-hint" />
+                                <TextBlock
+                                    Text="Optional global shortcut that opens a searchable palette of recent transcriptions."
+                                    Classes="row-hint" />
                             </StackPanel>
 
                             <StackPanel Grid.Column="1"
@@ -293,8 +300,9 @@
                             <StackPanel Margin="0,0,16,0">
                                 <TextBlock Text="Copy last transcription"
                                            Classes="row-title" />
-                                <TextBlock Text="Optional global shortcut that copies the latest transcription to the clipboard."
-                                           Classes="row-hint" />
+                                <TextBlock
+                                    Text="Optional global shortcut that copies the latest transcription to the clipboard."
+                                    Classes="row-hint" />
                             </StackPanel>
 
                             <StackPanel Grid.Column="1"

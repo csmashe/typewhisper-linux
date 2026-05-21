@@ -7,32 +7,37 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class ShortcutDispatcherTests
 {
-    private static GlobalShortcutSet Set(RecordingMode mode, bool cancelEnabled = false) => new(
-        DictationKey: KeyCode.VcSpace,
-        DictationModifiers: ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-        PromptPaletteKey: KeyCode.VcP,
-        PromptPaletteModifiers: ModifierMask.LeftCtrl,
-        RecentTranscriptionsKey: null,
-        RecentTranscriptionsModifiers: ModifierMask.None,
-        CopyLastTranscriptionKey: null,
-        CopyLastTranscriptionModifiers: ModifierMask.None,
-        TransformSelectionKey: null,
-        TransformSelectionModifiers: ModifierMask.None,
-        CancelKey: KeyCode.VcEscape,
-        CancelModifiers: ModifierMask.None,
-        Mode: mode,
-        IsCancelEnabled: cancelEnabled);
+    private static GlobalShortcutSet Set(RecordingMode mode, bool cancelEnabled = false)
+    {
+        return new GlobalShortcutSet(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            KeyCode.VcP,
+            ModifierMask.LeftCtrl,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            mode,
+            cancelEnabled
+        );
+    }
 
     [Fact]
     public void TogglePress_FiresToggle_NotStart()
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(Set(RecordingMode.Toggle));
-        int toggle = 0, start = 0;
+        int toggle = 0,
+            start = 0;
         d.DictationToggleRequested += () => toggle++;
         d.DictationStartRequested += () => start++;
 
-        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, pressed: true);
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
 
         Assert.Equal(1, toggle);
         Assert.Equal(0, start);
@@ -43,12 +48,13 @@ public sealed class ShortcutDispatcherTests
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(Set(RecordingMode.PushToTalk));
-        int start = 0, stop = 0;
+        int start = 0,
+            stop = 0;
         d.DictationStartRequested += () => start++;
         d.DictationStopRequested += () => stop++;
 
-        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, pressed: true);
-        d.Handle(KeyCode.VcSpace, ModifierMask.None, pressed: false);
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcSpace, ModifierMask.None, false);
 
         Assert.Equal(1, start);
         Assert.Equal(1, stop);
@@ -59,12 +65,13 @@ public sealed class ShortcutDispatcherTests
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(Set(RecordingMode.Hybrid));
-        int toggle = 0, stop = 0;
+        int toggle = 0,
+            stop = 0;
         d.DictationToggleRequested += () => toggle++;
         d.DictationStopRequested += () => stop++;
 
-        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, pressed: true);
-        d.Handle(KeyCode.VcSpace, ModifierMask.None, pressed: false);
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcSpace, ModifierMask.None, false);
 
         Assert.Equal(1, toggle);
         Assert.Equal(0, stop);
@@ -75,11 +82,11 @@ public sealed class ShortcutDispatcherTests
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(Set(RecordingMode.Toggle));
-        int toggle = 0;
+        var toggle = 0;
         d.DictationToggleRequested += () => toggle++;
 
-        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, pressed: true);
-        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, pressed: true);
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
 
         Assert.Equal(1, toggle);
     }
@@ -88,16 +95,16 @@ public sealed class ShortcutDispatcherTests
     public void Escape_FiresCancelOnlyWhenEnabled()
     {
         var d = new ShortcutDispatcher();
-        d.UpdateShortcuts(Set(RecordingMode.Toggle, cancelEnabled: false));
-        int cancel = 0;
+        d.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var cancel = 0;
         d.CancelRequested += () => cancel++;
 
-        d.Handle(KeyCode.VcEscape, ModifierMask.None, pressed: true);
+        d.Handle(KeyCode.VcEscape, ModifierMask.None, true);
         Assert.Equal(0, cancel);
 
-        d.Handle(KeyCode.VcEscape, ModifierMask.None, pressed: false);
-        d.UpdateShortcuts(Set(RecordingMode.Toggle, cancelEnabled: true));
-        d.Handle(KeyCode.VcEscape, ModifierMask.None, pressed: true);
+        d.Handle(KeyCode.VcEscape, ModifierMask.None, false);
+        d.UpdateShortcuts(Set(RecordingMode.Toggle, true));
+        d.Handle(KeyCode.VcEscape, ModifierMask.None, true);
         Assert.Equal(1, cancel);
     }
 
@@ -106,10 +113,10 @@ public sealed class ShortcutDispatcherTests
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(Set(RecordingMode.Toggle));
-        int palette = 0;
+        var palette = 0;
         d.PromptPaletteRequested += () => palette++;
 
-        d.Handle(KeyCode.VcP, ModifierMask.LeftCtrl, pressed: true);
+        d.Handle(KeyCode.VcP, ModifierMask.LeftCtrl, true);
 
         Assert.Equal(1, palette);
     }

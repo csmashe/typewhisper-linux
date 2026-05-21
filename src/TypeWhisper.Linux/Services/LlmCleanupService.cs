@@ -5,10 +5,10 @@ using TypeWhisper.Core.Services;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Applies rule-based and optional LLM cleanup to transcribed text.
-/// Light cleanup is always local (no LLM). Medium / High first run the
-/// local pass, then send the lightened text to the configured LLM
-/// provider — falling back to Light if no provider is available.
+///     Applies rule-based and optional LLM cleanup to transcribed text.
+///     Light cleanup is always local (no LLM). Medium / High first run the
+///     local pass, then send the lightened text to the configured LLM
+///     provider — falling back to Light if no provider is available.
 /// </summary>
 public sealed class LlmCleanupService
 {
@@ -25,26 +25,33 @@ public sealed class LlmCleanupService
         string text,
         CleanupLevel level,
         Func<string, Task>? statusCallback = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default
+    )
     {
         if (level == CleanupLevel.None)
+        {
             return text;
+        }
 
         if (level == CleanupLevel.Light)
+        {
             return _cleanup.Clean(text, CleanupLevel.Light);
+        }
 
         var lightText = _cleanup.Clean(text, CleanupLevel.Light);
         if (!_promptProcessing.IsAnyProviderAvailable)
         {
-            await NotifyStatusAsync(statusCallback, "Cleanup provider unavailable. Using Light cleanup.");
+            await NotifyStatusAsync(
+                statusCallback,
+                "Cleanup provider unavailable. Using Light cleanup."
+            );
             return lightText;
         }
 
         await NotifyStatusAsync(
             statusCallback,
-            level == CleanupLevel.Medium
-                ? "Applying Medium cleanup..."
-                : "Applying High cleanup...");
+            level == CleanupLevel.Medium ? "Applying Medium cleanup..." : "Applying High cleanup..."
+        );
 
         try
         {
@@ -67,7 +74,9 @@ public sealed class LlmCleanupService
     private static async Task NotifyStatusAsync(Func<string, Task>? statusCallback, string message)
     {
         if (statusCallback is null)
+        {
             return;
+        }
 
         try
         {

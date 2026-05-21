@@ -18,6 +18,7 @@ public static class SubtitleExporter
             sb.AppendLine(seg.Text);
             sb.AppendLine();
         }
+
         return sb.ToString();
     }
 
@@ -36,6 +37,7 @@ public static class SubtitleExporter
             sb.AppendLine(seg.Text);
             sb.AppendLine();
         }
+
         return sb.ToString();
     }
 

@@ -7,7 +7,10 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAiCompatible;
 
-public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, IPluginSettingsProvider
+public sealed partial class OpenAiCompatiblePlugin
+    : ITranscriptionEnginePlugin,
+        ILlmProviderPlugin,
+        IPluginSettingsProvider
 {
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
     private IPluginHostServices? _host;
@@ -33,8 +36,14 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
         var modelsJson = host.GetSetting<string>("fetchedModels");
         if (!string.IsNullOrEmpty(modelsJson))
         {
-            try { _fetchedModels = JsonSerializer.Deserialize<List<FetchedModel>>(modelsJson) ?? []; }
-            catch { _fetchedModels = []; }
+            try
+            {
+                _fetchedModels = JsonSerializer.Deserialize<List<FetchedModel>>(modelsJson) ?? [];
+            }
+            catch
+            {
+                _fetchedModels = [];
+            }
         }
 
         host.Log(PluginLogLevel.Info, $"Activated (baseUrl={_baseUrl}, configured={IsConfigured})");
@@ -56,9 +65,7 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
     {
         get
         {
-            var models = _fetchedModels
-                .Select(m => new PluginModelInfo(m.Id, m.Id))
-                .ToList();
+            var models = _fetchedModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList();
 
             if (models.Count == 0 && !string.IsNullOrEmpty(_selectedModelId))
                 return [new PluginModelInfo(_selectedModelId, _selectedModelId)];
@@ -78,8 +85,12 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
     public bool SupportsTranslation => true;
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt,
-        CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (string.IsNullOrEmpty(_baseUrl))
             throw new InvalidOperationException("Server-URL nicht konfiguriert");
@@ -87,8 +98,17 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
             throw new InvalidOperationException("Kein Transkriptions-Modell ausgewählt");
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient, _baseUrl!, _apiKey ?? "", _selectedModelId!,
-            wavAudio, language, translate, "verbose_json", ct, prompt);
+            _httpClient,
+            _baseUrl!,
+            _apiKey ?? "",
+            _selectedModelId!,
+            wavAudio,
+            language,
+            translate,
+            "verbose_json",
+            ct,
+            prompt
+        );
     }
 
     // ILlmProviderPlugin
@@ -100,9 +120,7 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
     {
         get
         {
-            var models = _fetchedModels
-                .Select(m => new PluginModelInfo(m.Id, m.Id))
-                .ToList();
+            var models = _fetchedModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList();
 
             if (models.Count == 0 && !string.IsNullOrEmpty(_selectedLlmModelId))
                 return [new PluginModelInfo(_selectedLlmModelId, _selectedLlmModelId)];
@@ -112,7 +130,11 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
     }
 
     public async Task<string> ProcessAsync(
-        string systemPrompt, string userText, string model, CancellationToken ct)
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (string.IsNullOrEmpty(_baseUrl))
             throw new InvalidOperationException("Server-URL nicht konfiguriert");
@@ -122,8 +144,14 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
             throw new InvalidOperationException("Kein LLM-Modell ausgewählt");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, _baseUrl!, _apiKey ?? "", modelId,
-            systemPrompt, userText, ct);
+            _httpClient,
+            _baseUrl!,
+            _apiKey ?? "",
+            modelId,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
 
     // Internal methods for settings view
@@ -172,7 +200,9 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
             var json = JsonSerializer.Serialize(models);
             _host?.SetSetting("fetchedModels", json);
         }
-        catch { /* best effort */ }
+        catch
+        { /* best effort */
+        }
         if (notifyCapabilitiesChanged)
             _host?.NotifyCapabilitiesChanged();
     }
@@ -201,12 +231,16 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
             return data.EnumerateArray()
                 .Select(e => new FetchedModel(
                     e.GetProperty("id").GetString() ?? "",
-                    e.TryGetProperty("owned_by", out var ob) ? ob.GetString() : null))
+                    e.TryGetProperty("owned_by", out var ob) ? ob.GetString() : null
+                ))
                 .Where(m => !string.IsNullOrEmpty(m.Id))
                 .OrderBy(m => m.Id)
                 .ToList();
         }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch
         {
             return [];
@@ -227,7 +261,10 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
             using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch
         {
             return false;
@@ -237,36 +274,56 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
     public void Dispose() => _httpClient.Dispose();
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("baseUrl", "Base URL", false, "http://localhost:8000", "OpenAI-compatible server base URL."),
-        new("api-key", "API key", true, null, "Optional bearer token used when calling the server."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: _fetchedModels.Count > 0
-                ? $"Showing {_fetchedModels.Count} fetched model(s)."
-                : "Click Validate after saving the server settings to fetch available models.",
-            Options: BuildModelOptions()),
-        new(
-            "selectedLlmModel",
-            "LLM model",
-            Description: _fetchedModels.Count > 0
-                ? $"Showing {_fetchedModels.Count} fetched model(s)."
-                : "Click Validate after saving the server settings to fetch available models.",
-            Options: BuildModelOptions())
-    ];
+        [
+            new(
+                "baseUrl",
+                "Base URL",
+                false,
+                "http://localhost:8000",
+                "OpenAI-compatible server base URL."
+            ),
+            new(
+                "api-key",
+                "API key",
+                true,
+                null,
+                "Optional bearer token used when calling the server."
+            ),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: _fetchedModels.Count > 0
+                    ? $"Showing {_fetchedModels.Count} fetched model(s)."
+                    : "Click Validate after saving the server settings to fetch available models.",
+                Options: BuildModelOptions()
+            ),
+            new(
+                "selectedLlmModel",
+                "LLM model",
+                Description: _fetchedModels.Count > 0
+                    ? $"Showing {_fetchedModels.Count} fetched model(s)."
+                    : "Click Validate after saving the server settings to fetch available models.",
+                Options: BuildModelOptions()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "baseUrl" => _baseUrl,
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            "selectedLlmModel" => _selectedLlmModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "baseUrl" => _baseUrl,
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                "selectedLlmModel" => _selectedLlmModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {
@@ -306,20 +363,24 @@ public sealed partial class OpenAiCompatiblePlugin : ITranscriptionEnginePlugin,
 
         _host?.NotifyCapabilitiesChanged();
 
-        return new PluginSettingsValidationResult(true, $"Connection OK. Fetched {models.Count} model(s).");
+        return new PluginSettingsValidationResult(
+            true,
+            $"Connection OK. Fetched {models.Count} model(s)."
+        );
     }
 
     private IReadOnlyList<PluginSettingOption>? BuildModelOptions()
     {
-        var models = _fetchedModels
-            .Select(m => new PluginSettingOption(m.Id, m.Id))
-            .ToList();
+        var models = _fetchedModels.Select(m => new PluginSettingOption(m.Id, m.Id)).ToList();
 
         if (models.Count == 0)
         {
             if (!string.IsNullOrWhiteSpace(_selectedModelId))
                 models.Add(new PluginSettingOption(_selectedModelId, _selectedModelId));
-            if (!string.IsNullOrWhiteSpace(_selectedLlmModelId) && models.All(m => m.Value != _selectedLlmModelId))
+            if (
+                !string.IsNullOrWhiteSpace(_selectedLlmModelId)
+                && models.All(m => m.Value != _selectedLlmModelId)
+            )
                 models.Add(new PluginSettingOption(_selectedLlmModelId, _selectedLlmModelId));
         }
 

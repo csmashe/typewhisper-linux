@@ -11,7 +11,8 @@ public partial class MainWindow : Window
         InitializeComponent();
     }
 
-    public MainWindow(MainWindowViewModel viewModel) : this()
+    public MainWindow(MainWindowViewModel viewModel)
+        : this()
     {
         DataContext = viewModel;
     }

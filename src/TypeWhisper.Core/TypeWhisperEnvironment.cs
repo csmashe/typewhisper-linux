@@ -4,18 +4,18 @@ public static class TypeWhisperEnvironment
 {
     public const string GithubRepoUrl = "https://github.com/csmashe/typewhisper-linux";
 
-    private static readonly string _basePath = Path.Combine(
+    public static string BasePath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "TypeWhisper");
+        "TypeWhisper"
+    );
 
-    public static string BasePath => _basePath;
-    public static string ModelsPath => Path.Combine(_basePath, "Models");
-    public static string DataPath => Path.Combine(_basePath, "Data");
-    public static string LogsPath => Path.Combine(_basePath, "Logs");
-    public static string PluginsPath => Path.Combine(_basePath, "Plugins");
-    public static string AudioPath => Path.Combine(_basePath, "Audio");
-    public static string PluginDataPath => Path.Combine(_basePath, "PluginData");
-    public static string SettingsFilePath => Path.Combine(_basePath, "settings.json");
+    public static string ModelsPath => Path.Combine(BasePath, "Models");
+    public static string DataPath => Path.Combine(BasePath, "Data");
+    public static string LogsPath => Path.Combine(BasePath, "Logs");
+    public static string PluginsPath => Path.Combine(BasePath, "Plugins");
+    public static string AudioPath => Path.Combine(BasePath, "Audio");
+    public static string PluginDataPath => Path.Combine(BasePath, "PluginData");
+    public static string SettingsFilePath => Path.Combine(BasePath, "settings.json");
     public static string DatabasePath => Path.Combine(DataPath, "typewhisper.db");
 
     public static void EnsureDirectories()

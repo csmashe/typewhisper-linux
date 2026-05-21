@@ -1,7 +1,7 @@
+using Avalonia.Threading;
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
-using Avalonia.Threading;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.Views;
 
@@ -10,17 +10,15 @@ namespace TypeWhisper.Linux.Services;
 public sealed class RecentTranscriptionsService
 {
     private const int PaletteLimit = 12;
-
-    private readonly IHistoryService _history;
-    private readonly RecentTranscriptionStore _store;
-    private readonly TextInsertionService _textInsertion;
-    private readonly ISettingsService _settings;
     private readonly ActiveWindowService _activeWindow;
     private readonly SystemCommandAvailabilityService _commands;
 
-    private RecentTranscriptionsPaletteWindow? _paletteWindow;
+    private readonly IHistoryService _history;
+    private readonly ISettingsService _settings;
+    private readonly RecentTranscriptionStore _store;
+    private readonly TextInsertionService _textInsertion;
 
-    public event Action<string, bool>? FeedbackRequested;
+    private RecentTranscriptionsPaletteWindow? _paletteWindow;
 
     public RecentTranscriptionsService(
         IHistoryService history,
@@ -28,7 +26,8 @@ public sealed class RecentTranscriptionsService
         TextInsertionService textInsertion,
         ISettingsService settings,
         ActiveWindowService activeWindow,
-        SystemCommandAvailabilityService commands)
+        SystemCommandAvailabilityService commands
+    )
     {
         _history = history;
         _store = store;
@@ -38,13 +37,18 @@ public sealed class RecentTranscriptionsService
         _commands = commands;
     }
 
+    public event Action<string, bool>? FeedbackRequested;
+
     public void RecordTranscription(
         string id,
         string finalText,
         DateTime timestamp,
         string? appName,
-        string? appProcessName) =>
+        string? appProcessName
+    )
+    {
         _store.RecordTranscription(id, finalText, timestamp, appName, appProcessName);
+    }
 
     public void TogglePalette()
     {
@@ -59,7 +63,7 @@ public sealed class RecentTranscriptionsService
             return;
         }
 
-        var entries = _store.MergedEntries(_history.Records, PaletteLimit);
+        var entries = _store.MergedEntries(_history.Records);
         if (entries.Count == 0)
         {
             FeedbackRequested?.Invoke("No recent transcriptions.", false);
@@ -71,13 +75,16 @@ public sealed class RecentTranscriptionsService
         var targetWindowId = _activeWindow.GetActiveWindowId();
         var viewModel = new RecentTranscriptionsPaletteViewModel(
             entries,
-            item => InsertEntryFireAndForget(item.Entry, targetWindowId));
+            item => InsertEntryFireAndForget(item.Entry, targetWindowId)
+        );
         var window = new RecentTranscriptionsPaletteWindow(viewModel);
         _paletteWindow = window;
         window.Closed += (_, _) =>
         {
             if (ReferenceEquals(_paletteWindow, window))
+            {
                 _paletteWindow = null;
+            }
         };
 
         window.Show();
@@ -93,17 +100,23 @@ public sealed class RecentTranscriptionsService
             return;
         }
 
-        var result = await _textInsertion.InsertTextAsync(entry.FinalText, autoPaste: false);
+        var result = await _textInsertion.InsertTextAsync(entry.FinalText, false);
         FeedbackRequested?.Invoke(StatusTextFor(result), IsError(result));
     }
 
     private void InsertEntryFireAndForget(RecentTranscriptionEntry entry, string? targetWindowId)
     {
-        InsertEntryAsync(entry, targetWindowId).ContinueWith(
-            t => Trace.WriteLine($"[RecentTranscriptionsService] InsertEntryAsync faulted: {t.Exception?.GetBaseException().Message}"),
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        InsertEntryAsync(entry, targetWindowId)
+            .ContinueWith(
+                t =>
+                    Trace.WriteLine(
+                        $"[RecentTranscriptionsService] InsertEntryAsync faulted: {t.Exception?.GetBaseException().Message}"
+                    ),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted
+                | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default
+            );
     }
 
     private async Task InsertEntryAsync(RecentTranscriptionEntry entry, string? targetWindowId)
@@ -111,17 +124,22 @@ public sealed class RecentTranscriptionsService
         var result = await _textInsertion.InsertTextAsync(
             entry.FinalText,
             _settings.Current.AutoPaste,
-            targetWindowId);
+            targetWindowId
+        );
         FeedbackRequested?.Invoke(StatusTextFor(result), IsError(result));
     }
 
-    private static bool IsError(InsertionResult result) =>
-        result is InsertionResult.Failed
+    private static bool IsError(InsertionResult result)
+    {
+        return result
+            is InsertionResult.Failed
             or InsertionResult.MissingClipboardTool
             or InsertionResult.MissingPasteTool;
+    }
 
-    private string StatusTextFor(InsertionResult result) =>
-        result switch
+    private string StatusTextFor(InsertionResult result)
+    {
+        return result switch
         {
             InsertionResult.Typed => "Typed recent transcription.",
             InsertionResult.Pasted => "Pasted recent transcription.",
@@ -132,9 +150,12 @@ public sealed class RecentTranscriptionsService
             InsertionResult.Failed => "Text insertion failed.",
             _ => "Done."
         };
+    }
 
-    private static string ClipboardToolMissingMessage() =>
-        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+    private static string ClipboardToolMissingMessage()
+    {
+        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
             ? "Install wl-clipboard to copy recent transcriptions."
             : "Install xclip to copy recent transcriptions.";
+    }
 }

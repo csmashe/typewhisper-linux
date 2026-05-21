@@ -12,20 +12,160 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 {
     private static readonly IReadOnlyList<ModelDefinition> Models =
     [
-        new("tiny", "Tiny", GgmlType.Tiny, QuantizationType.NoQuantization, "ggml-tiny.bin", "~75 MB", 75, 99, false),
-        new("tiny.en", "Tiny (English)", GgmlType.TinyEn, QuantizationType.NoQuantization, "ggml-tiny.en.bin", "~75 MB", 75, 1, false),
-        new("tiny-q5_0", "Tiny (Q5_0)", GgmlType.Tiny, QuantizationType.Q5_0, "ggml-tiny-q5_0.bin", "~31 MB", 31, 99, false),
-        new("base", "Base", GgmlType.Base, QuantizationType.NoQuantization, "ggml-base.bin", "~142 MB", 142, 99, true),
-        new("base.en", "Base (English)", GgmlType.BaseEn, QuantizationType.NoQuantization, "ggml-base.en.bin", "~142 MB", 142, 1, false),
-        new("base-q5_0", "Base (Q5_0)", GgmlType.Base, QuantizationType.Q5_0, "ggml-base-q5_0.bin", "~57 MB", 57, 99, true),
-        new("small", "Small", GgmlType.Small, QuantizationType.NoQuantization, "ggml-small.bin", "~466 MB", 466, 99, false),
-        new("small.en", "Small (English)", GgmlType.SmallEn, QuantizationType.NoQuantization, "ggml-small.en.bin", "~466 MB", 466, 1, false),
-        new("small-q5_0", "Small (Q5_0)", GgmlType.Small, QuantizationType.Q5_0, "ggml-small-q5_0.bin", "~182 MB", 182, 99, false),
-        new("medium", "Medium", GgmlType.Medium, QuantizationType.NoQuantization, "ggml-medium.bin", "~1.5 GB", 1530, 99, false),
-        new("medium.en", "Medium (English)", GgmlType.MediumEn, QuantizationType.NoQuantization, "ggml-medium.en.bin", "~1.5 GB", 1530, 1, false),
-        new("medium-q5_0", "Medium (Q5_0)", GgmlType.Medium, QuantizationType.Q5_0, "ggml-medium-q5_0.bin", "~601 MB", 601, 99, false),
-        new("large-v3-turbo", "Large V3 Turbo", GgmlType.LargeV3Turbo, QuantizationType.NoQuantization, "ggml-large-v3-turbo.bin", "~1.6 GB", 1620, 99, false),
-        new("large-v3-turbo-q5_0", "Large V3 Turbo (Q5_0)", GgmlType.LargeV3Turbo, QuantizationType.Q5_0, "ggml-large-v3-turbo-q5_0.bin", "~684 MB", 684, 99, false),
+        new(
+            "tiny",
+            "Tiny",
+            GgmlType.Tiny,
+            QuantizationType.NoQuantization,
+            "ggml-tiny.bin",
+            "~75 MB",
+            75,
+            99,
+            false
+        ),
+        new(
+            "tiny.en",
+            "Tiny (English)",
+            GgmlType.TinyEn,
+            QuantizationType.NoQuantization,
+            "ggml-tiny.en.bin",
+            "~75 MB",
+            75,
+            1,
+            false
+        ),
+        new(
+            "tiny-q5_0",
+            "Tiny (Q5_0)",
+            GgmlType.Tiny,
+            QuantizationType.Q5_0,
+            "ggml-tiny-q5_0.bin",
+            "~31 MB",
+            31,
+            99,
+            false
+        ),
+        new(
+            "base",
+            "Base",
+            GgmlType.Base,
+            QuantizationType.NoQuantization,
+            "ggml-base.bin",
+            "~142 MB",
+            142,
+            99,
+            true
+        ),
+        new(
+            "base.en",
+            "Base (English)",
+            GgmlType.BaseEn,
+            QuantizationType.NoQuantization,
+            "ggml-base.en.bin",
+            "~142 MB",
+            142,
+            1,
+            false
+        ),
+        new(
+            "base-q5_0",
+            "Base (Q5_0)",
+            GgmlType.Base,
+            QuantizationType.Q5_0,
+            "ggml-base-q5_0.bin",
+            "~57 MB",
+            57,
+            99,
+            true
+        ),
+        new(
+            "small",
+            "Small",
+            GgmlType.Small,
+            QuantizationType.NoQuantization,
+            "ggml-small.bin",
+            "~466 MB",
+            466,
+            99,
+            false
+        ),
+        new(
+            "small.en",
+            "Small (English)",
+            GgmlType.SmallEn,
+            QuantizationType.NoQuantization,
+            "ggml-small.en.bin",
+            "~466 MB",
+            466,
+            1,
+            false
+        ),
+        new(
+            "small-q5_0",
+            "Small (Q5_0)",
+            GgmlType.Small,
+            QuantizationType.Q5_0,
+            "ggml-small-q5_0.bin",
+            "~182 MB",
+            182,
+            99,
+            false
+        ),
+        new(
+            "medium",
+            "Medium",
+            GgmlType.Medium,
+            QuantizationType.NoQuantization,
+            "ggml-medium.bin",
+            "~1.5 GB",
+            1530,
+            99,
+            false
+        ),
+        new(
+            "medium.en",
+            "Medium (English)",
+            GgmlType.MediumEn,
+            QuantizationType.NoQuantization,
+            "ggml-medium.en.bin",
+            "~1.5 GB",
+            1530,
+            1,
+            false
+        ),
+        new(
+            "medium-q5_0",
+            "Medium (Q5_0)",
+            GgmlType.Medium,
+            QuantizationType.Q5_0,
+            "ggml-medium-q5_0.bin",
+            "~601 MB",
+            601,
+            99,
+            false
+        ),
+        new(
+            "large-v3-turbo",
+            "Large V3 Turbo",
+            GgmlType.LargeV3Turbo,
+            QuantizationType.NoQuantization,
+            "ggml-large-v3-turbo.bin",
+            "~1.6 GB",
+            1620,
+            99,
+            false
+        ),
+        new(
+            "large-v3-turbo-q5_0",
+            "Large V3 Turbo (Q5_0)",
+            GgmlType.LargeV3Turbo,
+            QuantizationType.Q5_0,
+            "ggml-large-v3-turbo-q5_0.bin",
+            "~684 MB",
+            684,
+            99,
+            false
+        ),
     ];
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -48,14 +188,16 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public bool SupportsModelDownload => true;
     public IReadOnlyList<string> SupportedLanguages => [];
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } = Models.Select(model =>
-        new PluginModelInfo(model.Id, model.DisplayName)
-        {
-            SizeDescription = model.SizeDescription,
-            EstimatedSizeMB = model.EstimatedSizeMB,
-            IsRecommended = model.IsRecommended,
-            LanguageCount = model.LanguageCount,
-        }).ToList();
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+        Models
+            .Select(model => new PluginModelInfo(model.Id, model.DisplayName)
+            {
+                SizeDescription = model.SizeDescription,
+                EstimatedSizeMB = model.EstimatedSizeMB,
+                IsRecommended = model.IsRecommended,
+                LanguageCount = model.LanguageCount,
+            })
+            .ToList();
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -80,7 +222,9 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     public void ConfigureComputeBackend(string backend)
     {
-        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cuda"
+            : "cpu";
         if (_computeBackend == normalized)
             return;
 
@@ -94,7 +238,11 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     public bool IsModelDownloaded(string modelId) => File.Exists(GetModelPath(modelId));
 
-    public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    public async Task DownloadModelAsync(
+        string modelId,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
     {
         await _gate.WaitAsync(ct);
         try
@@ -110,18 +258,33 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 return;
             }
 
-            var tempPath = Path.Combine(modelDirectory, $"{Path.GetFileName(modelPath)}.{Guid.NewGuid():N}.tmp");
+            var tempPath = Path.Combine(
+                modelDirectory,
+                $"{Path.GetFileName(modelPath)}.{Guid.NewGuid():N}.tmp"
+            );
 
             try
             {
-                await using var modelStream = await WhisperGgmlDownloader.Default
-                    .GetGgmlModelAsync(model.Type, model.Quantization, ct);
+                await using var modelStream = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(
+                    model.Type,
+                    model.Quantization,
+                    ct
+                );
 
                 var buffer = new byte[81920];
                 long bytesCopied = 0;
                 var totalBytes = modelStream.CanSeek ? modelStream.Length : 0;
 
-                await using (var fileStream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+                await using (
+                    var fileStream = new FileStream(
+                        tempPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        81920,
+                        true
+                    )
+                )
                 {
                     while (true)
                     {
@@ -172,7 +335,10 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             _loadedModelId = modelId;
             _selectedModelId = modelId;
             _host?.SetSetting("selectedModel", modelId);
-            _host?.Log(PluginLogLevel.Info, $"Loaded model {modelId} using {_computeBackend.ToUpperInvariant()}");
+            _host?.Log(
+                PluginLogLevel.Info,
+                $"Loaded model {modelId} using {_computeBackend.ToUpperInvariant()}"
+            );
         }
         finally
         {
@@ -185,7 +351,8 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         string? language,
         bool translate,
         string? prompt,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         await _gate.WaitAsync(ct);
         try
@@ -193,7 +360,8 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (_factory is null || _loadedModelId is null)
                 throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
 
-            var builder = _factory.CreateBuilder()
+            var builder = _factory
+                .CreateBuilder()
                 .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language);
 
             if (!string.IsNullOrWhiteSpace(prompt))
@@ -221,7 +389,10 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                     text.Append(segmentText);
                 }
 
-                if (string.IsNullOrWhiteSpace(detectedLanguage) && !string.IsNullOrWhiteSpace(segment.Language))
+                if (
+                    string.IsNullOrWhiteSpace(detectedLanguage)
+                    && !string.IsNullOrWhiteSpace(segment.Language)
+                )
                     detectedLanguage = segment.Language;
 
                 durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
@@ -232,7 +403,8 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 text.ToString().Trim(),
                 detectedLanguage,
                 durationSeconds,
-                noSpeechProbability);
+                noSpeechProbability
+            );
         }
         finally
         {
@@ -287,7 +459,8 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _gate.Dispose();
     }
 
-    private ModelDefinition GetModel(string modelId) => Models.FirstOrDefault(model => model.Id == modelId)
+    private ModelDefinition GetModel(string modelId) =>
+        Models.FirstOrDefault(model => model.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private string GetModelPath(string modelId)
@@ -303,10 +476,11 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _factory = null;
     }
 
-    private WhisperFactoryOptions CreateFactoryOptions() => new()
-    {
-        UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
-    };
+    private WhisperFactoryOptions CreateFactoryOptions() =>
+        new()
+        {
+            UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase),
+        };
 
     // RuntimeOptions.RuntimeLibraryOrder is consulted once when the native library first loads.
     // Later changes are ignored for the process lifetime, so set it once before the first factory.
@@ -315,7 +489,11 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         if (_runtimeLibraryOrderInitialized)
             return;
 
-        RuntimeOptions.RuntimeLibraryOrder = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+        RuntimeOptions.RuntimeLibraryOrder = string.Equals(
+            _computeBackend,
+            "cuda",
+            StringComparison.OrdinalIgnoreCase
+        )
             ? [RuntimeLibrary.Cuda]
             : [RuntimeLibrary.Cpu];
         _runtimeLibraryOrderInitialized = true;
@@ -328,9 +506,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (File.Exists(path))
                 File.Delete(path);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private sealed record ModelDefinition(
@@ -342,5 +518,6 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         string SizeDescription,
         long EstimatedSizeMB,
         int LanguageCount,
-        bool IsRecommended);
+        bool IsRecommended
+    );
 }

@@ -13,8 +13,26 @@ public sealed class HistorySectionViewModelTests : IDisposable
 
     public HistorySectionViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.History.Tests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.History.Tests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     [Fact]
@@ -80,7 +98,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
     {
         var history = CreateHistoryService();
         var dictionary = CreateDictionaryService();
-        var settings = CreateSettingsService(autoAddCorrections: true);
+        var settings = CreateSettingsService(true);
         var record = CreateRecord("I use Kubernets daily.");
         history.AddRecord(record);
         var sut = CreateViewModel(history, dictionary, settings);
@@ -94,23 +112,35 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.Equal("Kubernetes", entry.Replacement);
     }
 
-    private HistoryService CreateHistoryService() =>
-        new(Path.Combine(_tempDir, "history.json"), Path.Combine(_tempDir, "audio"));
+    private HistoryService CreateHistoryService()
+    {
+        return new HistoryService(Path.Combine(_tempDir, "history.json"), Path.Combine(_tempDir, "audio"));
+    }
 
-    private DictionaryService CreateDictionaryService() =>
-        new(Path.Combine(_tempDir, "dictionary.json"));
+    private DictionaryService CreateDictionaryService()
+    {
+        return new DictionaryService(Path.Combine(_tempDir, "dictionary.json"));
+    }
 
     private SettingsService CreateSettingsService(bool autoAddCorrections = false)
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, $"settings-{Guid.NewGuid():N}.json"));
-        settings.Save(AppSettings.Default with { AutoAddDictionaryCorrections = autoAddCorrections });
+        var settings = new SettingsService(
+            Path.Combine(_tempDir, $"settings-{Guid.NewGuid():N}.json")
+        );
+        settings.Save(
+            AppSettings.Default with
+            {
+                AutoAddDictionaryCorrections = autoAddCorrections
+            }
+        );
         return settings;
     }
 
     private HistorySectionViewModel CreateViewModel(
         HistoryService history,
         DictionaryService dictionary,
-        SettingsService? settings = null) =>
+        SettingsService? settings = null
+    ) =>
         new(
             history,
             dictionary,
@@ -121,11 +151,14 @@ public sealed class HistorySectionViewModelTests : IDisposable
             // available in CI. GetUninitializedObject bypasses the constructor so
             // tests that never trigger audio playback don't fail on device init.
 #pragma warning disable SYSLIB0050
-            (AudioPlaybackService)FormatterServices.GetUninitializedObject(typeof(AudioPlaybackService)));
+            (AudioPlaybackService)
+            FormatterServices.GetUninitializedObject(typeof(AudioPlaybackService))
+        );
 #pragma warning restore SYSLIB0050
 
-    private static TranscriptionRecord CreateRecord(string finalText) =>
-        new()
+    private static TranscriptionRecord CreateRecord(string finalText)
+    {
+        return new TranscriptionRecord
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = DateTime.UtcNow,
@@ -134,17 +167,5 @@ public sealed class HistorySectionViewModelTests : IDisposable
             DurationSeconds = 2.4,
             AppProcessName = "test"
         };
-
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
     }
 }

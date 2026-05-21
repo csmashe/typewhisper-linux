@@ -126,10 +126,11 @@
                                 <TextBlock Text="Recording"
                                            HorizontalAlignment="Center"
                                            FontWeight="SemiBold" />
-                                <TextBlock Text="Graphite body, brighter azure focus, and&#x0a;denser runtime metadata."
-                                           TextAlignment="Center"
-                                           Foreground="#8A9AAE"
-                                           FontSize="11" />
+                                <TextBlock
+                                    Text="Graphite body, brighter azure focus, and&#x0a;denser runtime metadata."
+                                    TextAlignment="Center"
+                                    Foreground="#8A9AAE"
+                                    FontSize="11" />
                             </StackPanel>
                             <TextBlock Grid.Column="2"
                                        Text="0:00"

@@ -1,7 +1,7 @@
 using Moq;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
-using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -34,7 +34,13 @@ public class StreamingTranscriptionTests
             .ReturnsAsync(expectedResult);
 
         // Moq doesn't call DIMs — verify the underlying TranscribeAsync, which the DIM delegates to.
-        var result = await mock.Object.TranscribeAsync(audio, "en", false, null, CancellationToken.None);
+        var result = await mock.Object.TranscribeAsync(
+            audio,
+            "en",
+            false,
+            null,
+            CancellationToken.None
+        );
 
         Assert.Equal("Hello world", result.Text);
         Assert.Equal("en", result.DetectedLanguage);
@@ -83,16 +89,30 @@ public class StreamingTranscriptionTests
         var progressCalls = new List<string>();
 
         var mock = new Mock<ITranscriptionEnginePlugin>();
-        mock.Setup(e => e.TranscribeStreamingAsync(
-            audio, "de", false, null,
-            It.IsAny<Func<string, bool>>(),
-            It.IsAny<CancellationToken>()))
+        mock.Setup(e =>
+                e.TranscribeStreamingAsync(
+                    audio,
+                    "de",
+                    false,
+                    null,
+                    It.IsAny<Func<string, bool>>(),
+                    It.IsAny<CancellationToken>()
+                )
+            )
             .ReturnsAsync(expectedResult);
 
         var result = await mock.Object.TranscribeStreamingAsync(
-            audio, "de", false, null,
-            partial => { progressCalls.Add(partial); return true; },
-            CancellationToken.None);
+            audio,
+            "de",
+            false,
+            null,
+            partial =>
+            {
+                progressCalls.Add(partial);
+                return true;
+            },
+            CancellationToken.None
+        );
 
         Assert.Equal("Streamed text", result.Text);
         Assert.Equal("de", result.DetectedLanguage);
@@ -133,7 +153,10 @@ public class StabilizeTextTests
     public void PartialPrefixMatch_KeepsConfirmedAndAppends()
     {
         // "Hello worl" matches >50% of "Hello world", so confirmed + new tail
-        var result = StreamingTranscriptState.StabilizeText("Hello world", "Hello world, how are you?");
+        var result = StreamingTranscriptState.StabilizeText(
+            "Hello world",
+            "Hello world, how are you?"
+        );
         Assert.Equal("Hello world, how are you?", result);
     }
 
@@ -183,7 +206,8 @@ public class StreamingTranscriptStateTests
             sessionVersion,
             "Hello world",
             text => text,
-            out var displayBeforeStop);
+            out var displayBeforeStop
+        );
 
         Assert.True(appliedBeforeStop);
         Assert.Equal("Hello world", displayBeforeStop);
@@ -196,7 +220,8 @@ public class StreamingTranscriptStateTests
             sessionVersion,
             "Should be ignored",
             text => text,
-            out var displayAfterStop);
+            out var displayAfterStop
+        );
 
         Assert.False(appliedAfterStop);
         Assert.Equal("", displayAfterStop);
@@ -212,12 +237,14 @@ public class StreamingTranscriptStateTests
             firstSession,
             "Hello world",
             text => text,
-            out var firstDisplay);
+            out var firstDisplay
+        );
         var secondApplied = sut.TryApplyPolling(
             firstSession,
             "Hello world, how are you?",
             text => text,
-            out var secondDisplay);
+            out var secondDisplay
+        );
 
         Assert.True(firstApplied);
         Assert.Equal("Hello world", firstDisplay);
@@ -229,12 +256,14 @@ public class StreamingTranscriptStateTests
             firstSession,
             "Old session text",
             text => text,
-            out _);
+            out _
+        );
         var currentApplied = sut.TryApplyPolling(
             secondSession,
             "Fresh session text",
             text => text,
-            out var currentDisplay);
+            out var currentDisplay
+        );
 
         Assert.False(staleApplied);
         Assert.True(currentApplied);

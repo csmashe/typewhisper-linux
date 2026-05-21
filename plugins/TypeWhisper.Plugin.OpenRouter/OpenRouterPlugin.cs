@@ -36,18 +36,33 @@ public sealed partial class OpenRouterPlugin : ILlmProviderPlugin, IPluginSettin
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
     [
-        new PluginModelInfo("anthropic/claude-sonnet-4", "Claude Sonnet 4") { IsRecommended = true },
+        new PluginModelInfo("anthropic/claude-sonnet-4", "Claude Sonnet 4")
+        {
+            IsRecommended = true,
+        },
         new PluginModelInfo("google/gemini-2.5-flash", "Gemini 2.5 Flash"),
         new PluginModelInfo("meta-llama/llama-4-scout", "Llama 4 Scout"),
     ];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsAvailable)
             throw new InvalidOperationException("API key not configured");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
 
     internal string? ApiKey => _apiKey;
@@ -88,19 +103,24 @@ public sealed partial class OpenRouterPlugin : ILlmProviderPlugin, IPluginSettin
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "sk-or-...",
-            Description: "Required for OpenRouter LLM requests.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "sk-or-...",
+                Description: "Required for OpenRouter LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;

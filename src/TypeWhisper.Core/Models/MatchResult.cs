@@ -5,7 +5,8 @@ public sealed record MatchResult(
     MatchKind Kind,
     string? MatchedDomain,
     int CompetingProfileCount,
-    bool WonByPriority)
+    bool WonByPriority
+)
 {
     public static readonly MatchResult NoMatch = new(null, MatchKind.NoMatch, null, 0, false);
 }

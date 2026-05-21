@@ -14,12 +14,36 @@ public class MatchProfileCascadeTests : IDisposable
         _sut = new ProfileService(_filePath);
     }
 
+    public void Dispose()
+    {
+        if (File.Exists(_filePath))
+        {
+            File.Delete(_filePath);
+        }
+    }
+
     [Fact]
     public void AppAndWebsiteBeatsWebsiteOnlyAndAppOnly()
     {
-        _sut.AddProfile(NewProfile("appAndSite", processNames: ["chrome"], urlPatterns: ["docs.google.com"], priority: 1));
-        _sut.AddProfile(NewProfile("siteOnly", processNames: [], urlPatterns: ["docs.google.com"], priority: 100));
-        _sut.AddProfile(NewProfile("appOnly", processNames: ["chrome"], urlPatterns: [], priority: 100));
+        _sut.AddProfile(
+            NewProfile(
+                "appAndSite",
+                ["chrome"],
+                ["docs.google.com"],
+                1
+            )
+        );
+        _sut.AddProfile(
+            NewProfile(
+                "siteOnly",
+                [],
+                ["docs.google.com"],
+                100
+            )
+        );
+        _sut.AddProfile(
+            NewProfile("appOnly", ["chrome"], [], 100)
+        );
 
         var result = _sut.MatchProfile("chrome", "https://docs.google.com/document/d/abc");
 
@@ -31,8 +55,12 @@ public class MatchProfileCascadeTests : IDisposable
     [Fact]
     public void WebsiteBeatsAppWhenAppAndWebsiteAbsent()
     {
-        _sut.AddProfile(NewProfile("siteOnly", processNames: [], urlPatterns: ["docs.google.com"], priority: 1));
-        _sut.AddProfile(NewProfile("appOnly", processNames: ["chrome"], urlPatterns: [], priority: 100));
+        _sut.AddProfile(
+            NewProfile("siteOnly", [], ["docs.google.com"], 1)
+        );
+        _sut.AddProfile(
+            NewProfile("appOnly", ["chrome"], [], 100)
+        );
 
         var result = _sut.MatchProfile("chrome", "https://docs.google.com/document/d/abc");
 
@@ -43,10 +71,12 @@ public class MatchProfileCascadeTests : IDisposable
     [Fact]
     public void AppBeatsGlobalWhenWebsiteTiersEmpty()
     {
-        _sut.AddProfile(NewProfile("global", processNames: [], urlPatterns: [], priority: 100));
-        _sut.AddProfile(NewProfile("appOnly", processNames: ["chrome"], urlPatterns: [], priority: 1));
+        _sut.AddProfile(NewProfile("global", [], [], 100));
+        _sut.AddProfile(
+            NewProfile("appOnly", ["chrome"], [], 1)
+        );
 
-        var result = _sut.MatchProfile("chrome", url: null);
+        var result = _sut.MatchProfile("chrome", null);
 
         Assert.Equal(MatchKind.App, result.Kind);
         Assert.Equal("appOnly", result.Profile?.Name);
@@ -55,9 +85,9 @@ public class MatchProfileCascadeTests : IDisposable
     [Fact]
     public void GlobalUsedWhenNothingElseMatches()
     {
-        _sut.AddProfile(NewProfile("global", processNames: [], urlPatterns: [], priority: 0));
+        _sut.AddProfile(NewProfile("global", [], [], 0));
 
-        var result = _sut.MatchProfile("notepad", url: null);
+        var result = _sut.MatchProfile("notepad", null);
 
         Assert.Equal(MatchKind.Global, result.Kind);
         Assert.Equal("global", result.Profile?.Name);
@@ -66,10 +96,12 @@ public class MatchProfileCascadeTests : IDisposable
     [Fact]
     public void WonByPriorityFlagsUniqueWinnerOverLowerPriorityPeer()
     {
-        _sut.AddProfile(NewProfile("low", processNames: ["chrome"], urlPatterns: [], priority: 1));
-        _sut.AddProfile(NewProfile("high", processNames: ["chrome"], urlPatterns: [], priority: 50));
+        _sut.AddProfile(NewProfile("low", ["chrome"], [], 1));
+        _sut.AddProfile(
+            NewProfile("high", ["chrome"], [], 50)
+        );
 
-        var result = _sut.MatchProfile("chrome", url: null);
+        var result = _sut.MatchProfile("chrome", null);
 
         Assert.Equal("high", result.Profile?.Name);
         Assert.Equal(1, result.CompetingProfileCount);
@@ -79,10 +111,10 @@ public class MatchProfileCascadeTests : IDisposable
     [Fact]
     public void CompetingProfileCountReflectsPriorityTie()
     {
-        _sut.AddProfile(NewProfile("a", processNames: ["chrome"], urlPatterns: [], priority: 50));
-        _sut.AddProfile(NewProfile("b", processNames: ["chrome"], urlPatterns: [], priority: 50));
+        _sut.AddProfile(NewProfile("a", ["chrome"], [], 50));
+        _sut.AddProfile(NewProfile("b", ["chrome"], [], 50));
 
-        var result = _sut.MatchProfile("chrome", url: null);
+        var result = _sut.MatchProfile("chrome", null);
 
         Assert.Equal(MatchKind.App, result.Kind);
         Assert.Equal(2, result.CompetingProfileCount);
@@ -92,9 +124,11 @@ public class MatchProfileCascadeTests : IDisposable
     [Fact]
     public void NoMatchReturnedWhenNothingApplies()
     {
-        _sut.AddProfile(NewProfile("appOnly", processNames: ["chrome"], urlPatterns: [], priority: 0));
+        _sut.AddProfile(
+            NewProfile("appOnly", ["chrome"], [], 0)
+        );
 
-        var result = _sut.MatchProfile("notepad", url: null);
+        var result = _sut.MatchProfile("notepad", null);
 
         Assert.Equal(MatchKind.NoMatch, result.Kind);
         Assert.Null(result.Profile);
@@ -103,10 +137,10 @@ public class MatchProfileCascadeTests : IDisposable
     [Fact]
     public void ForcedProfileIdReturnsManualOverride()
     {
-        var forced = NewProfile("forced", processNames: [], urlPatterns: [], priority: 0);
+        var forced = NewProfile("forced", [], [], 0);
         _sut.AddProfile(forced);
 
-        var result = _sut.MatchProfile("chrome", url: null, forcedProfileId: forced.Id);
+        var result = _sut.MatchProfile("chrome", null, forced.Id);
 
         Assert.Equal(MatchKind.ManualOverride, result.Kind);
         Assert.Equal(forced.Id, result.Profile?.Id);
@@ -116,7 +150,10 @@ public class MatchProfileCascadeTests : IDisposable
         string name,
         IReadOnlyList<string> processNames,
         IReadOnlyList<string> urlPatterns,
-        int priority) => new()
+        int priority
+    )
+    {
+        return new Profile
         {
             Id = Guid.NewGuid().ToString(),
             Name = name,
@@ -125,9 +162,5 @@ public class MatchProfileCascadeTests : IDisposable
             ProcessNames = processNames,
             UrlPatterns = urlPatterns
         };
-
-    public void Dispose()
-    {
-        if (File.Exists(_filePath)) File.Delete(_filePath);
     }
 }

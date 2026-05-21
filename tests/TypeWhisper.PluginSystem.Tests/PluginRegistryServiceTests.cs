@@ -1,8 +1,7 @@
-using System.Net;
-using System.Net.Http;
-using System.Text.Json;
 using Moq;
 using Moq.Protected;
+using System.Net;
+using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
@@ -12,10 +11,10 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class PluginRegistryServiceTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
-    private readonly Mock<IProfileService> _profiles = new();
-    private readonly Mock<ISettingsService> _settings = new();
     private readonly PluginEventBus _eventBus = new();
     private readonly PluginLoader _loader = new();
+    private readonly Mock<IProfileService> _profiles = new();
+    private readonly Mock<ISettingsService> _settings = new();
     private PluginManager? _manager;
 
     public PluginRegistryServiceTests()
@@ -24,23 +23,39 @@ public class PluginRegistryServiceTests : IDisposable
         _settings.Setup(s => s.Current).Returns(new AppSettings());
     }
 
+    public void Dispose()
+    {
+        _manager?.Dispose();
+    }
+
     private PluginManager CreateManager()
     {
-        _manager = new PluginManager(_loader, _eventBus, _activeWindow.Object, _profiles.Object, _settings.Object);
+        _manager = new PluginManager(
+            _loader,
+            _eventBus,
+            _activeWindow.Object,
+            _profiles.Object,
+            _settings.Object
+        );
         return _manager;
     }
 
-    private static HttpClient CreateMockHttpClient(string responseJson, HttpStatusCode statusCode = HttpStatusCode.OK)
+    private static HttpClient CreateMockHttpClient(
+        string responseJson,
+        HttpStatusCode statusCode = HttpStatusCode.OK
+    )
     {
         var handler = new Mock<HttpMessageHandler>();
-        handler.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
+        handler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
                 ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .ReturnsAsync(new HttpResponseMessage(statusCode)
-            {
-                Content = new StringContent(responseJson)
-            });
+                ItExpr.IsAny<CancellationToken>()
+            )
+            .ReturnsAsync(
+                new HttpResponseMessage(statusCode) { Content = new StringContent(responseJson) }
+            );
 
         return new HttpClient(handler.Object);
     }
@@ -79,19 +94,38 @@ public class PluginRegistryServiceTests : IDisposable
     [Fact]
     public async Task FetchRegistryAsync_CachesResults()
     {
-        var plugins = new[] { new { Id = "p1", Name = "P", Version = "1.0", Author = "A", Description = "D", Size = 100L, DownloadUrl = "u", RequiresApiKey = false } };
+        var plugins = new[]
+        {
+            new
+            {
+                Id = "p1",
+                Name = "P",
+                Version = "1.0",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                RequiresApiKey = false
+            }
+        };
         var json = JsonSerializer.Serialize(plugins);
 
         var callCount = 0;
         var handler = new Mock<HttpMessageHandler>();
-        handler.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
+        handler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
                 ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
+                ItExpr.IsAny<CancellationToken>()
+            )
             .ReturnsAsync(() =>
             {
                 callCount++;
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json)
+                };
             });
 
         var httpClient = new HttpClient(handler.Object);
@@ -109,8 +143,30 @@ public class PluginRegistryServiceTests : IDisposable
     {
         var plugins = new[]
         {
-            new { Id = "com.typewhisper.groq", Name = "OK", Version = "1.0", MinHostVersion = "0.1.0", Author = "A", Description = "D", Size = 100L, DownloadUrl = "u", RequiresApiKey = false },
-            new { Id = "com.typewhisper.openai", Name = "Nope", Version = "1.0", MinHostVersion = "999.0.0", Author = "A", Description = "D", Size = 100L, DownloadUrl = "u", RequiresApiKey = false }
+            new
+            {
+                Id = "com.typewhisper.groq",
+                Name = "OK",
+                Version = "1.0",
+                MinHostVersion = "0.1.0",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                RequiresApiKey = false
+            },
+            new
+            {
+                Id = "com.typewhisper.openai",
+                Name = "Nope",
+                Version = "1.0",
+                MinHostVersion = "999.0.0",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                RequiresApiKey = false
+            }
         };
 
         var json = JsonSerializer.Serialize(plugins);
@@ -144,8 +200,13 @@ public class PluginRegistryServiceTests : IDisposable
 
         var registryPlugin = new RegistryPlugin
         {
-            Id = "com.unknown", Name = "Unknown", Version = "1.0.0",
-            Author = "A", Description = "D", Size = 100, DownloadUrl = "u"
+            Id = "com.unknown",
+            Name = "Unknown",
+            Version = "1.0.0",
+            Author = "A",
+            Description = "D",
+            Size = 100,
+            DownloadUrl = "u"
         };
 
         Assert.Equal(PluginInstallState.NotInstalled, service.GetInstallState(registryPlugin));
@@ -155,9 +216,12 @@ public class PluginRegistryServiceTests : IDisposable
     public async Task FirstRunAutoInstallAsync_SetsFlag()
     {
         AppSettings? savedSettings = null;
-        _settings.Setup(s => s.Save(It.IsAny<AppSettings>()))
+        _settings
+            .Setup(s => s.Save(It.IsAny<AppSettings>()))
             .Callback<AppSettings>(s => savedSettings = s);
-        _settings.Setup(s => s.Current).Returns(new AppSettings { PluginFirstRunCompleted = false });
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings { PluginFirstRunCompleted = false });
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
@@ -181,10 +245,5 @@ public class PluginRegistryServiceTests : IDisposable
         await service.FirstRunAutoInstallAsync();
 
         _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
-    }
-
-    public void Dispose()
-    {
-        _manager?.Dispose();
     }
 }

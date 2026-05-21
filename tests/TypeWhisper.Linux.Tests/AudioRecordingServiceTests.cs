@@ -10,10 +10,16 @@ public sealed class AudioRecordingServiceTests
     {
         var samples = new[] { 0.01f, -0.01f, 0.01f, -0.01f };
 
-        var processed = AudioRecordingService.ApplyWhisperModeGain(samples, whisperModeEnabled: true);
+        var processed = AudioRecordingService.ApplyWhisperModeGain(
+            samples,
+            true
+        );
 
         Assert.NotSame(samples, processed);
-        Assert.True(AudioRecordingService.ComputeRmsLevel(processed) > AudioRecordingService.ComputeRmsLevel(samples));
+        Assert.True(
+            AudioRecordingService.ComputeRmsLevel(processed)
+            > AudioRecordingService.ComputeRmsLevel(samples)
+        );
     }
 
     [Fact]
@@ -21,7 +27,10 @@ public sealed class AudioRecordingServiceTests
     {
         var samples = new[] { 0.01f, -0.01f, 0.01f, -0.01f };
 
-        var processed = AudioRecordingService.ApplyWhisperModeGain(samples, whisperModeEnabled: false);
+        var processed = AudioRecordingService.ApplyWhisperModeGain(
+            samples,
+            false
+        );
 
         Assert.Same(samples, processed);
     }

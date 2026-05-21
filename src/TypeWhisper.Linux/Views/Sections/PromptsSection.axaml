@@ -119,9 +119,10 @@
                                                         Background="#1A3453"
                                                         BorderBrush="#2E5B89"
                                                         BorderThickness="1">
-                                                    <TextBlock Text="{Binding IsEnabled, Converter={x:Static local:BoolTextConverter.Instance}, ConverterParameter='True=Enabled|False=Disabled'}"
-                                                               FontSize="10.5"
-                                                               Foreground="#D6E7FF" />
+                                                    <TextBlock
+                                                        Text="{Binding IsEnabled, Converter={x:Static local:BoolTextConverter.Instance}, ConverterParameter='True=Enabled|False=Disabled'}"
+                                                        FontSize="10.5"
+                                                        Foreground="#D6E7FF" />
                                                 </Border>
                                             </StackPanel>
                                             <TextBlock Text="{Binding SystemPrompt}"

@@ -1,53 +1,77 @@
-using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Linux.Services;
+using Timer = System.Timers.Timer;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
-public sealed record RecordingItem(string FileName, string FilePath, DateTime CreatedAt, TimeSpan Duration, string? Transcript);
+public sealed record RecordingItem(
+    string FileName,
+    string FilePath,
+    DateTime CreatedAt,
+    TimeSpan Duration,
+    string? Transcript
+);
 
 public partial class RecorderSectionViewModel : ObservableObject
 {
     private readonly AudioRecordingService _audio;
     private readonly ModelManagerService _models;
     private readonly ISettingsService _settings;
-    private System.Timers.Timer? _timer;
+
+    [ObservableProperty]
+    private double _audioLevel;
+
+    [ObservableProperty]
+    private string _durationText = "0:00";
+
+    [ObservableProperty]
+    private bool _isRecording;
+
+    [ObservableProperty]
+    private bool _isTranscribing;
+
     private DateTime _recordingStart;
 
-    [ObservableProperty] private bool _isRecording;
-    [ObservableProperty] private string _durationText = "0:00";
-    [ObservableProperty] private double _audioLevel;
-    [ObservableProperty] private string _statusText = "Ready.";
-    [ObservableProperty] private bool _isTranscribing;
+    [ObservableProperty]
+    private string _statusText = "Ready.";
+
+    private Timer? _timer;
+
+    public RecorderSectionViewModel(
+        AudioRecordingService audio,
+        ModelManagerService models,
+        ISettingsService settings
+    )
+    {
+        _audio = audio;
+        _models = models;
+        _settings = settings;
+        _audio.LevelChanged += (_, level) =>
+            Dispatcher.UIThread.Post(() => AudioLevel = Math.Clamp(level * 8, 0, 1));
+        LoadExistingRecordings();
+    }
 
     public string RecordButtonText => IsRecording ? "Stop" : "Record";
 
     public ObservableCollection<RecordingItem> Recordings { get; } = [];
     public bool HasRecordings => Recordings.Count > 0;
 
-    public RecorderSectionViewModel(
-        AudioRecordingService audio,
-        ModelManagerService models,
-        ISettingsService settings)
-    {
-        _audio = audio;
-        _models = models;
-        _settings = settings;
-        _audio.LevelChanged += (_, level) => Dispatcher.UIThread.Post(() => AudioLevel = Math.Clamp(level * 8, 0, 1));
-        LoadExistingRecordings();
-    }
-
     [RelayCommand]
     private void ToggleRecording()
     {
         if (IsRecording)
+        {
             _ = StopRecordingAsync();
+        }
         else
+        {
             StartRecording();
+        }
     }
 
     private void StartRecording()
@@ -64,12 +88,13 @@ public partial class RecorderSectionViewModel : ObservableObject
         _recordingStart = DateTime.UtcNow;
         StatusText = "Recording...";
 
-        _timer = new System.Timers.Timer(100);
+        _timer = new Timer(100);
         _timer.Elapsed += (_, _) =>
         {
             var elapsed = DateTime.UtcNow - _recordingStart;
             Dispatcher.UIThread.Post(() =>
-                DurationText = $"{(int)elapsed.TotalMinutes}:{elapsed.Seconds:D2}");
+                DurationText = $"{(int)elapsed.TotalMinutes}:{elapsed.Seconds:D2}"
+            );
         };
         _timer.Start();
     }
@@ -107,7 +132,13 @@ public partial class RecorderSectionViewModel : ObservableObject
             await using var lease = await _models.AcquireTranscriptionAsync(effectiveModelId);
             try
             {
-                var result = await lease.Plugin.TranscribeAsync(wav, null, false, null, CancellationToken.None);
+                var result = await lease.Plugin.TranscribeAsync(
+                    wav,
+                    null,
+                    false,
+                    null,
+                    CancellationToken.None
+                );
                 transcript = result.Text;
             }
             finally
@@ -118,8 +149,11 @@ public partial class RecorderSectionViewModel : ObservableObject
                 // exit, but the lease is idempotent so the double-dispose is safe.
                 await lease.DisposeAsync();
             }
+
             if (!string.IsNullOrWhiteSpace(transcript))
+            {
                 await File.WriteAllTextAsync(Path.ChangeExtension(filePath, ".txt"), transcript);
+            }
         }
         catch
         {
@@ -127,7 +161,10 @@ public partial class RecorderSectionViewModel : ObservableObject
         }
 
         IsTranscribing = false;
-        Recordings.Insert(0, new RecordingItem(fileName, filePath, DateTime.Now, duration, transcript));
+        Recordings.Insert(
+            0,
+            new RecordingItem(fileName, filePath, DateTime.Now, duration, transcript)
+        );
         OnPropertyChanged(nameof(HasRecordings));
         StatusText = transcript is not null ? "Done." : "Saved (no model loaded)";
         DurationText = "0:00";
@@ -137,16 +174,22 @@ public partial class RecorderSectionViewModel : ObservableObject
     private void DeleteRecording(RecordingItem? item)
     {
         if (item is null)
+        {
             return;
+        }
 
         try
         {
             if (File.Exists(item.FilePath))
+            {
                 File.Delete(item.FilePath);
+            }
 
             var txtPath = Path.ChangeExtension(item.FilePath, ".txt");
             if (File.Exists(txtPath))
+            {
                 File.Delete(txtPath);
+            }
         }
         catch
         {
@@ -162,14 +205,22 @@ public partial class RecorderSectionViewModel : ObservableObject
         try
         {
             if (!Directory.Exists(TypeWhisperEnvironment.AudioPath))
+            {
                 return;
+            }
 
-            foreach (var file in Directory.GetFiles(TypeWhisperEnvironment.AudioPath, "recording-*.wav").OrderByDescending(path => path))
+            foreach (
+                var file in Directory
+                    .GetFiles(TypeWhisperEnvironment.AudioPath, "recording-*.wav")
+                    .OrderByDescending(path => path)
+            )
             {
                 var info = new FileInfo(file);
                 var txtFile = Path.ChangeExtension(file, ".txt");
                 var transcript = File.Exists(txtFile) ? File.ReadAllText(txtFile) : null;
-                Recordings.Add(new RecordingItem(info.Name, file, info.CreationTime, TimeSpan.Zero, transcript));
+                Recordings.Add(
+                    new RecordingItem(info.Name, file, info.CreationTime, TimeSpan.Zero, transcript)
+                );
             }
 
             OnPropertyChanged(nameof(HasRecordings));

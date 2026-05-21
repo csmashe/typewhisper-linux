@@ -1,28 +1,26 @@
 <Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+    </PropertyGroup>
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <LangVersion>latest</LangVersion>
-    <IsPackable>false</IsPackable>
-    <IsTestProject>true</IsTestProject>
-  </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*"/>
+        <PackageReference Include="xunit" Version="2.*"/>
+        <PackageReference Include="xunit.runner.visualstudio" Version="2.*"/>
+        <PackageReference Include="Moq" Version="4.*"/>
+    </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
-    <PackageReference Include="xunit" Version="2.*" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.*" />
-    <PackageReference Include="Moq" Version="4.*" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ElevenLabs\TypeWhisper.Plugin.ElevenLabs.csproj" />
-    <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Groq\TypeWhisper.Plugin.Groq.csproj" />
-    <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Script\TypeWhisper.Plugin.Script.csproj" />
-    <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Webhook\TypeWhisper.Plugin.Webhook.csproj" />
-    <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
-    <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj" />
-  </ItemGroup>
-
+    <ItemGroup>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ElevenLabs\TypeWhisper.Plugin.ElevenLabs.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Groq\TypeWhisper.Plugin.Groq.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Script\TypeWhisper.Plugin.Script.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Webhook\TypeWhisper.Plugin.Webhook.csproj"/>
+        <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj"/>
+        <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
+    </ItemGroup>
 </Project>

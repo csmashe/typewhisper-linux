@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using Avalonia.Threading;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Linux.Views;
 
@@ -8,20 +8,18 @@ namespace TypeWhisper.Linux.Services;
 public sealed class TransformSelectionService
 {
     private static readonly TimeSpan ProcessingTimeout = TimeSpan.FromSeconds(90);
-
-    private readonly TextInsertionService _textInsertion;
+    private readonly ActiveWindowService _activeWindow;
     private readonly AudioRecordingService _audio;
+    private readonly SystemCommandAvailabilityService _commands;
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ModelManagerService _models;
     private readonly PromptProcessingService _promptProcessing;
     private readonly ISettingsService _settings;
-    private readonly ActiveWindowService _activeWindow;
-    private readonly SystemCommandAvailabilityService _commands;
-    private readonly SemaphoreSlim _gate = new(1, 1);
 
-    private TransformSelectionSession? _session;
+    private readonly TextInsertionService _textInsertion;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
 
-    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
+    private TransformSelectionSession? _session;
 
     public TransformSelectionService(
         TextInsertionService textInsertion,
@@ -30,7 +28,8 @@ public sealed class TransformSelectionService
         PromptProcessingService promptProcessing,
         ISettingsService settings,
         ActiveWindowService activeWindow,
-        SystemCommandAvailabilityService commands)
+        SystemCommandAvailabilityService commands
+    )
     {
         _textInsertion = textInsertion;
         _audio = audio;
@@ -41,17 +40,25 @@ public sealed class TransformSelectionService
         _commands = commands;
     }
 
+    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
+
     public async Task ToggleAsync()
     {
         if (!await _gate.WaitAsync(0))
+        {
             return;
+        }
 
         try
         {
             if (_session is null)
+            {
                 await StartAsync();
+            }
             else
+            {
                 await StopAndTransformAsync();
+            }
         }
         finally
         {
@@ -59,18 +66,20 @@ public sealed class TransformSelectionService
         }
     }
 
-    internal static string BuildTransformPrompt(string selectedText, string command) =>
-        $"""
-        You transform selected text based on a spoken command.
-        Return only the transformed text.
-        Preserve meaning unless the command asks otherwise.
+    internal static string BuildTransformPrompt(string selectedText, string command)
+    {
+        return $"""
+                You transform selected text based on a spoken command.
+                Return only the transformed text.
+                Preserve meaning unless the command asks otherwise.
 
-        Selected text:
-        {selectedText}
+                Selected text:
+                {selectedText}
 
-        Command:
-        {command}
-        """;
+                Command:
+                {command}
+                """;
+    }
 
     internal static bool IsCancelCommand(string command)
     {
@@ -86,7 +95,9 @@ public sealed class TransformSelectionService
     {
         if (!_promptProcessing.IsAnyProviderAvailable)
         {
-            await ShowWarningAsync("No LLM provider available. Please configure an API key in Plugins.");
+            await ShowWarningAsync(
+                "No LLM provider available. Please configure an API key in Plugins."
+            );
             return;
         }
 
@@ -119,18 +130,20 @@ public sealed class TransformSelectionService
         }
 
         _session = new TransformSelectionSession(selectedText, windowId, processName, windowTitle);
-        PublishOverlay(state => state with
-        {
-            IsOverlayVisible = true,
-            ShowFeedback = false,
-            FeedbackText = null,
-            FeedbackIsError = false,
-            IsRecording = true,
-            StatusText = "Transform command: speak the edit, then press the hotkey again.",
-            PartialText = selectedText,
-            ActiveAppName = string.IsNullOrWhiteSpace(processName) ? windowTitle : processName,
-            SessionStartedAtUtc = DateTime.UtcNow
-        });
+        PublishOverlay(state =>
+            state with
+            {
+                IsOverlayVisible = true,
+                ShowFeedback = false,
+                FeedbackText = null,
+                FeedbackIsError = false,
+                IsRecording = true,
+                StatusText = "Transform command: speak the edit, then press the hotkey again.",
+                PartialText = selectedText,
+                ActiveAppName = string.IsNullOrWhiteSpace(processName) ? windowTitle : processName,
+                SessionStartedAtUtc = DateTime.UtcNow
+            }
+        );
     }
 
     private async Task StopAndTransformAsync()
@@ -138,19 +151,25 @@ public sealed class TransformSelectionService
         var session = _session;
         _session = null;
         if (session is null)
-            return;
-
-        PublishOverlay(state => state with
         {
-            IsOverlayVisible = true,
-            ShowFeedback = false,
-            FeedbackText = null,
-            IsRecording = false,
-            StatusText = "Processing transform command...",
-            PartialText = session.SelectedText,
-            ActiveAppName = string.IsNullOrWhiteSpace(session.ProcessName) ? session.WindowTitle : session.ProcessName,
-            SessionStartedAtUtc = null
-        });
+            return;
+        }
+
+        PublishOverlay(state =>
+            state with
+            {
+                IsOverlayVisible = true,
+                ShowFeedback = false,
+                FeedbackText = null,
+                IsRecording = false,
+                StatusText = "Processing transform command...",
+                PartialText = session.SelectedText,
+                ActiveAppName = string.IsNullOrWhiteSpace(session.ProcessName)
+                    ? session.WindowTitle
+                    : session.ProcessName,
+                SessionStartedAtUtc = null
+            }
+        );
 
         byte[] wav;
         try
@@ -188,11 +207,18 @@ public sealed class TransformSelectionService
             var plugin = lease.Plugin;
 
             PublishStatus("Transcribing transform command...");
-            var language = _settings.Current.Language is { Length: > 0 } lang && lang != "auto" ? lang : null;
+            var language =
+                _settings.Current.Language is { Length: > 0 } lang && lang != "auto" ? lang : null;
             string? command;
             try
             {
-                var transcription = await plugin.TranscribeAsync(wav, language, translate: false, prompt: null, ct: cts.Token);
+                var transcription = await plugin.TranscribeAsync(
+                    wav,
+                    language,
+                    false,
+                    null,
+                    cts.Token
+                );
                 command = transcription.Text?.Trim();
             }
             finally
@@ -203,6 +229,7 @@ public sealed class TransformSelectionService
                 // harmless idempotent no-op.
                 await leaseScope.DisposeAsync();
             }
+
             if (string.IsNullOrWhiteSpace(command))
             {
                 await ShowWarningAsync("The transform command returned no text.");
@@ -211,13 +238,17 @@ public sealed class TransformSelectionService
 
             if (IsCancelCommand(command))
             {
-                ShowFeedback("Transform canceled.", isError: false);
+                ShowFeedback("Transform canceled.", false);
                 return;
             }
 
             PublishStatus($"Applying: {command}");
             var prompt = BuildTransformPrompt(session.SelectedText, command);
-            var transformed = await _promptProcessing.ProcessSystemPromptAsync(prompt, session.SelectedText, cts.Token);
+            var transformed = await _promptProcessing.ProcessSystemPromptAsync(
+                prompt,
+                session.SelectedText,
+                cts.Token
+            );
             if (string.IsNullOrWhiteSpace(transformed))
             {
                 await ShowWarningAsync("The transform result was empty.");
@@ -227,21 +258,34 @@ public sealed class TransformSelectionService
             PublishStatus("Replacing selected text...");
             var insertion = await _textInsertion.InsertTextAsync(
                 transformed,
-                autoPaste: true,
-                targetWindowId: session.WindowId,
-                targetProcessName: session.ProcessName,
-                targetWindowTitle: session.WindowTitle);
+                true,
+                session.WindowId,
+                session.ProcessName,
+                session.WindowTitle
+            );
 
             if (insertion is InsertionResult.CopiedToClipboard)
-                await ShowWarningAsync("Transformed text copied. Paste manually to replace the selection.");
+            {
+                await ShowWarningAsync(
+                    "Transformed text copied. Paste manually to replace the selection."
+                );
+            }
             else if (insertion is InsertionResult.MissingClipboardTool)
+            {
                 await ShowWarningAsync(ClipboardToolMissingMessage());
+            }
             else if (insertion is InsertionResult.MissingPasteTool)
+            {
                 await ShowWarningAsync(_commands.GetSnapshot().PasteToolInstallHint);
+            }
             else if (insertion is not InsertionResult.Pasted and not InsertionResult.Typed)
+            {
                 await ShowWarningAsync("Could not insert transformed text.");
+            }
             else
-                ShowFeedback("Selection transformed.", isError: false);
+            {
+                ShowFeedback("Selection transformed.", false);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -256,7 +300,7 @@ public sealed class TransformSelectionService
 
     private async Task ShowWarningAsync(string message)
     {
-        ShowFeedback(message, isError: true);
+        ShowFeedback(message, true);
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var dialog = new MessageDialogWindow();
@@ -264,29 +308,39 @@ public sealed class TransformSelectionService
         });
     }
 
-    private void PublishStatus(string message) => PublishOverlay(state => state with
+    private void PublishStatus(string message)
     {
-        IsOverlayVisible = true,
-        StatusText = message,
-        ShowFeedback = false,
-        FeedbackText = null,
-        IsRecording = false,
-        SessionStartedAtUtc = null
-    });
+        PublishOverlay(state =>
+            state with
+            {
+                IsOverlayVisible = true,
+                StatusText = message,
+                ShowFeedback = false,
+                FeedbackText = null,
+                IsRecording = false,
+                SessionStartedAtUtc = null
+            }
+        );
+    }
 
-    private void ShowFeedback(string message, bool isError) => PublishOverlay(_ => new DictationOverlayState
+    private void ShowFeedback(string message, bool isError)
     {
-        IsOverlayVisible = false,
-        ShowFeedback = true,
-        FeedbackIsError = isError,
-        FeedbackText = message,
-        StatusText = message
-    });
+        PublishOverlay(_ => new DictationOverlayState
+        {
+            IsOverlayVisible = false,
+            ShowFeedback = true,
+            FeedbackIsError = isError,
+            FeedbackText = message,
+            StatusText = message
+        });
+    }
 
-    private static string ClipboardToolMissingMessage() =>
-        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+    private static string ClipboardToolMissingMessage()
+    {
+        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
             ? "Install wl-clipboard to copy transformed text."
             : "Install xclip to copy transformed text.";
+    }
 
     private void PublishOverlay(Func<DictationOverlayState, DictationOverlayState> updater)
     {
@@ -298,5 +352,6 @@ public sealed class TransformSelectionService
         string SelectedText,
         string? WindowId,
         string? ProcessName,
-        string? WindowTitle);
+        string? WindowTitle
+    );
 }

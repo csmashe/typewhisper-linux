@@ -7,10 +7,7 @@ namespace TypeWhisper.Plugin.FileMemory;
 
 public sealed class FileMemoryPlugin : IMemoryStoragePlugin
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private IPluginHostServices? _host;
     private string? _filePath;
@@ -59,7 +56,11 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         }
     }
 
-    public async Task<IReadOnlyList<string>> SearchAsync(string query, int maxResults = 5, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> SearchAsync(
+        string query,
+        int maxResults = 5,
+        CancellationToken ct = default
+    )
     {
         await _lock.WaitAsync(ct);
         try

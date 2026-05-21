@@ -1,5 +1,5 @@
-using System.Reflection;
 using Moq;
+using System.Reflection;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -16,8 +16,26 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
     public PromptProcessingServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.Linux.PromptTests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.Linux.PromptTests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     [Fact]
@@ -25,57 +43,82 @@ public sealed class PromptProcessingServiceTests : IDisposable
     {
         var provider = new FakeLlmProviderPlugin("com.test.default", "Default Provider", "model-a");
         using var pluginManager = CreatePluginManager(
-            llmProviders: [provider],
-            loadedPlugins: [CreateLoadedPlugin(provider.PluginId, provider)]);
-        var settings = CreateSettings(new AppSettings
-        {
-            DefaultLlmProvider = "plugin:com.test.default:model-a"
-        });
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.default:model-a" }
+        );
 
-        var sut = new PromptProcessingService(pluginManager, settings.Object, new MemoryService(pluginManager));
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
 
-        var result = await sut.ProcessAsync(new PromptAction
-        {
-            Id = "prompt",
-            Name = "Rewrite",
-            SystemPrompt = "Rewrite this"
-        }, "hello", CancellationToken.None);
+        var result = await sut.ProcessAsync(
+            new PromptAction
+            {
+                Id = "prompt",
+                Name = "Rewrite",
+                SystemPrompt = "Rewrite this"
+            },
+            "hello",
+            CancellationToken.None
+        );
 
         Assert.Equal(
             $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
-            result);
+            result
+        );
     }
 
     [Fact]
     public async Task ProcessAsync_UsesPromptOverride_WhenProvided()
     {
-        var defaultProvider = new FakeLlmProviderPlugin("com.test.default", "Default Provider", "model-a");
-        var overrideProvider = new FakeLlmProviderPlugin("com.test.override", "Override Provider", "model-b");
+        var defaultProvider = new FakeLlmProviderPlugin(
+            "com.test.default",
+            "Default Provider",
+            "model-a"
+        );
+        var overrideProvider = new FakeLlmProviderPlugin(
+            "com.test.override",
+            "Override Provider",
+            "model-b"
+        );
         using var pluginManager = CreatePluginManager(
-            llmProviders: [defaultProvider, overrideProvider],
-            loadedPlugins:
+            [defaultProvider, overrideProvider],
             [
                 CreateLoadedPlugin(defaultProvider.PluginId, defaultProvider),
                 CreateLoadedPlugin(overrideProvider.PluginId, overrideProvider)
-            ]);
-        var settings = CreateSettings(new AppSettings
-        {
-            DefaultLlmProvider = "plugin:com.test.default:model-a"
-        });
+            ]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.default:model-a" }
+        );
 
-        var sut = new PromptProcessingService(pluginManager, settings.Object, new MemoryService(pluginManager));
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
 
-        var result = await sut.ProcessAsync(new PromptAction
-        {
-            Id = "prompt",
-            Name = "Rewrite",
-            SystemPrompt = "Rewrite this",
-            ProviderOverride = "plugin:com.test.override:model-b"
-        }, "hello", CancellationToken.None);
+        var result = await sut.ProcessAsync(
+            new PromptAction
+            {
+                Id = "prompt",
+                Name = "Rewrite",
+                SystemPrompt = "Rewrite this",
+                ProviderOverride = "plugin:com.test.override:model-b"
+            },
+            "hello",
+            CancellationToken.None
+        );
 
         Assert.Equal(
             $"processed:Override Provider:model-b:{PromptProcessingService.FormatPromptActionInput("hello")}",
-            result);
+            result
+        );
     }
 
     [Fact]
@@ -83,22 +126,32 @@ public sealed class PromptProcessingServiceTests : IDisposable
     {
         var provider = new FakeLlmProviderPlugin("com.test.first", "First Provider", "model-z");
         using var pluginManager = CreatePluginManager(
-            llmProviders: [provider],
-            loadedPlugins: [CreateLoadedPlugin(provider.PluginId, provider)]);
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
         var settings = CreateSettings(new AppSettings());
 
-        var sut = new PromptProcessingService(pluginManager, settings.Object, new MemoryService(pluginManager));
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
 
-        var result = await sut.ProcessAsync(new PromptAction
-        {
-            Id = "prompt",
-            Name = "Rewrite",
-            SystemPrompt = "Rewrite this"
-        }, "hello", CancellationToken.None);
+        var result = await sut.ProcessAsync(
+            new PromptAction
+            {
+                Id = "prompt",
+                Name = "Rewrite",
+                SystemPrompt = "Rewrite this"
+            },
+            "hello",
+            CancellationToken.None
+        );
 
         Assert.Equal(
             $"processed:First Provider:model-z:{PromptProcessingService.FormatPromptActionInput("hello")}",
-            result);
+            result
+        );
     }
 
     [Fact]
@@ -119,7 +172,8 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
     private static PluginManager CreatePluginManager(
         IReadOnlyList<ILlmProviderPlugin> llmProviders,
-        IReadOnlyList<LoadedPlugin> loadedPlugins)
+        IReadOnlyList<LoadedPlugin> loadedPlugins
+    )
     {
         var activeWindow = new Mock<IActiveWindowService>();
         var profiles = new Mock<IProfileService>();
@@ -132,7 +186,8 @@ public sealed class PromptProcessingServiceTests : IDisposable
             new PluginEventBus(),
             activeWindow.Object,
             profiles.Object,
-            settings.Object);
+            settings.Object
+        );
 
         SetPrivateField(pluginManager, "_llmProviders", llmProviders.ToList());
         SetPrivateField(pluginManager, "_allPlugins", loadedPlugins.ToList());
@@ -156,29 +211,18 @@ public sealed class PromptProcessingServiceTests : IDisposable
             },
             plugin,
             new PluginAssemblyLoadContext(pluginDir),
-            pluginDir);
+            pluginDir
+        );
     }
 
     // PluginManager exposes no public seam for injecting pre-loaded plugins;
     // reflection is the only way to seed test doubles into the private lists.
     private static void SetPrivateField(object target, string fieldName, object value)
     {
-        var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+        var field =
+            target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingFieldException(target.GetType().FullName, fieldName);
         field.SetValue(target, value);
-    }
-
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
     }
 
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin
@@ -200,11 +244,25 @@ public sealed class PromptProcessingServiceTests : IDisposable
         public bool IsAvailable => true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
 
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
-        public Task DeactivateAsync() => Task.CompletedTask;
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct) =>
-            Task.FromResult($"processed:{ProviderName}:{model}:{userText}");
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<string> ProcessAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult($"processed:{ProviderName}:{model}:{userText}");
+        }
 
         public void Dispose() { }
     }

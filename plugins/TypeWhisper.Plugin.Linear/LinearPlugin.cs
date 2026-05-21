@@ -13,7 +13,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     private readonly HttpClient _httpClient = new();
@@ -45,12 +45,22 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         var cachedTeamsJson = host.GetSetting<string>("cached-teams");
         if (!string.IsNullOrWhiteSpace(cachedTeamsJson))
         {
-            try { _cachedTeams = JsonSerializer.Deserialize<List<LinearTeam>>(cachedTeamsJson, s_jsonOptions) ?? []; }
-            catch { _cachedTeams = []; }
+            try
+            {
+                _cachedTeams =
+                    JsonSerializer.Deserialize<List<LinearTeam>>(cachedTeamsJson, s_jsonOptions)
+                    ?? [];
+            }
+            catch
+            {
+                _cachedTeams = [];
+            }
         }
 
         _httpClient.DefaultRequestHeaders.Accept.Clear();
-        _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        _httpClient.DefaultRequestHeaders.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json")
+        );
 
         host.Log(PluginLogLevel.Info, "Linear plugin activated");
     }
@@ -61,13 +71,23 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         return Task.CompletedTask;
     }
 
-    public async Task<ActionResult> ExecuteAsync(string input, ActionContext context, CancellationToken ct)
+    public async Task<ActionResult> ExecuteAsync(
+        string input,
+        ActionContext context,
+        CancellationToken ct
+    )
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new ActionResult(false, "Linear API key not configured. Please set it in plugin settings.");
+            return new ActionResult(
+                false,
+                "Linear API key not configured. Please set it in plugin settings."
+            );
 
         if (string.IsNullOrWhiteSpace(_defaultTeamId))
-            return new ActionResult(false, "Default team ID not configured. Please set it in plugin settings.");
+            return new ActionResult(
+                false,
+                "Default team ID not configured. Please set it in plugin settings."
+            );
 
         var title = ExtractTitle(input);
         var description = input;
@@ -77,9 +97,17 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             var issueUrl = await CreateIssueAsync(title, description, ct);
 
             if (issueUrl is not null)
-                return new ActionResult(true, $"Linear issue created: {title}", Url: issueUrl, DisplayDuration: 5.0);
+                return new ActionResult(
+                    true,
+                    $"Linear issue created: {title}",
+                    Url: issueUrl,
+                    DisplayDuration: 5.0
+                );
 
-            return new ActionResult(false, "Failed to create Linear issue. Check logs for details.");
+            return new ActionResult(
+                false,
+                "Failed to create Linear issue. Check logs for details."
+            );
         }
         catch (OperationCanceledException)
         {
@@ -137,7 +165,8 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             """;
 
         var response = await SendGraphQlAsync(query, ct);
-        if (response is null) return [];
+        if (response is null)
+            return [];
 
         try
         {
@@ -146,12 +175,14 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
             foreach (var node in data.EnumerateArray())
             {
-                teams.Add(new LinearTeam
-                {
-                    Id = node.GetProperty("id").GetString() ?? "",
-                    Name = node.GetProperty("name").GetString() ?? "",
-                    Key = node.GetProperty("key").GetString() ?? ""
-                });
+                teams.Add(
+                    new LinearTeam
+                    {
+                        Id = node.GetProperty("id").GetString() ?? "",
+                        Name = node.GetProperty("name").GetString() ?? "",
+                        Key = node.GetProperty("key").GetString() ?? "",
+                    }
+                );
             }
 
             _cachedTeams = teams;
@@ -173,13 +204,17 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         }
     }
 
-    private async Task<string?> CreateIssueAsync(string title, string description, CancellationToken ct)
+    private async Task<string?> CreateIssueAsync(
+        string title,
+        string description,
+        CancellationToken ct
+    )
     {
         var variables = new Dictionary<string, object?>
         {
             ["title"] = title,
             ["description"] = description,
-            ["teamId"] = _defaultTeamId
+            ["teamId"] = _defaultTeamId,
         };
 
         if (!string.IsNullOrWhiteSpace(_defaultProjectId))
@@ -204,7 +239,8 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             """;
 
         var response = await SendGraphQlAsync(mutation, ct, variables);
-        if (response is null) return null;
+        if (response is null)
+            return null;
 
         try
         {
@@ -213,7 +249,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
             if (!success)
             {
-                _host?.Log(PluginLogLevel.Warning, "Linear API returned success=false for issueCreate");
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    "Linear API returned success=false for issueCreate"
+                );
                 return null;
             }
 
@@ -226,7 +265,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         }
         catch (Exception ex)
         {
-            _host?.Log(PluginLogLevel.Warning, $"Failed to parse issue creation response: {ex.Message}");
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Failed to parse issue creation response: {ex.Message}"
+            );
             return null;
         }
     }
@@ -234,7 +276,8 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     private async Task<JsonElement?> SendGraphQlAsync(
         string query,
         CancellationToken ct,
-        Dictionary<string, object?>? variables = null)
+        Dictionary<string, object?>? variables = null
+    )
     {
         var payload = new Dictionary<string, object?> { ["query"] = query };
 
@@ -243,7 +286,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
         var json = JsonSerializer.Serialize(payload, s_jsonOptions);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.linear.app/graphql");
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "https://api.linear.app/graphql"
+        );
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
@@ -252,7 +298,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);
-            _host?.Log(PluginLogLevel.Error, $"Linear API error {(int)response.StatusCode}: {errorBody}");
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API error {(int)response.StatusCode}: {errorBody}"
+            );
             return null;
         }
 
@@ -261,7 +310,11 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
         if (doc.RootElement.TryGetProperty("errors", out var errors))
         {
-            var errorMsg = errors.EnumerateArray().FirstOrDefault().GetProperty("message").GetString();
+            var errorMsg = errors
+                .EnumerateArray()
+                .FirstOrDefault()
+                .GetProperty("message")
+                .GetString();
             _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
             return null;
         }
@@ -274,7 +327,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         if (string.IsNullOrWhiteSpace(input))
             return "Untitled Issue";
 
-        var firstLine = input.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
+        var firstLine = input
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault()
+            ?.Trim();
 
         if (string.IsNullOrWhiteSpace(firstLine))
             return "Untitled Issue";
@@ -283,30 +339,51 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, null, "Generate a personal API key in Linear Settings > API > Personal API keys."),
-        new(
-            "default-team-id",
-            "Default team ID",
-            Description: _cachedTeams.Count > 0
-                ? $"Showing {_cachedTeams.Count} cached Linear team(s). Click Validate to refresh."
-                : "Required. Team UUID where issues will be created. Click Validate after saving the API key to fetch teams.",
-            Options: _cachedTeams.Count > 0
-                ? _cachedTeams.Select(t => new PluginSettingOption(t.Id, $"{t.Key} - {t.Name}")).ToList()
-                : null),
-        new("default-project-id", "Default project ID", false, null, "Optional. Issues will be added to this project when set.")
-    ];
+        [
+            new(
+                "api-key",
+                "API key",
+                true,
+                null,
+                "Generate a personal API key in Linear Settings > API > Personal API keys."
+            ),
+            new(
+                "default-team-id",
+                "Default team ID",
+                Description: _cachedTeams.Count > 0
+                    ? $"Showing {_cachedTeams.Count} cached Linear team(s). Click Validate to refresh."
+                    : "Required. Team UUID where issues will be created. Click Validate after saving the API key to fetch teams.",
+                Options: _cachedTeams.Count > 0
+                    ? _cachedTeams
+                        .Select(t => new PluginSettingOption(t.Id, $"{t.Key} - {t.Name}"))
+                        .ToList()
+                    : null
+            ),
+            new(
+                "default-project-id",
+                "Default project ID",
+                false,
+                null,
+                "Optional. Issues will be added to this project when set."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "default-team-id" => _defaultTeamId,
-            "default-project-id" => _defaultProjectId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "default-team-id" => _defaultTeamId,
+                "default-project-id" => _defaultProjectId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {
@@ -331,7 +408,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         if (teams.Count == 0)
             return new PluginSettingsValidationResult(false, "No teams found. Check your API key.");
 
-        return new PluginSettingsValidationResult(true, $"Found {teams.Count} team(s). Team options refreshed.");
+        return new PluginSettingsValidationResult(
+            true,
+            $"Found {teams.Count} team(s). Team options refreshed."
+        );
     }
 
     public void Dispose()

@@ -1,8 +1,8 @@
-using System.Diagnostics;
-using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
@@ -12,28 +12,29 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class HistorySectionViewModel : ObservableObject
 {
-    private readonly IHistoryService _history;
-    private readonly IDictionaryService _dictionary;
-    private readonly ISettingsService _settings;
-    private readonly CorrectionSuggestionService _correctionSuggestions;
-    private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly AudioPlaybackService _audioPlayback;
+    private readonly CorrectionSuggestionService _correctionSuggestions;
+    private readonly IDictionaryService _dictionary;
+    private readonly IHistoryService _history;
+    private readonly SessionAudioFileService _sessionAudioFiles;
+    private readonly ISettingsService _settings;
+
+    [ObservableProperty]
+    private bool _isLoading;
+
+    [ObservableProperty]
+    private string _searchQuery = "";
+
+    [ObservableProperty]
+    private string _selectedAppFilter = "All apps";
+
+    [ObservableProperty]
+    private string _summary = "0 entries · 0 words";
+
     // Prevents a full UI rebuild while SaveEdit is mid-flight: the
     // history service fires RecordsChanged synchronously, but we need to
     // finish updating correction suggestions before the rows are torn down.
     private bool _suppressRefresh;
-
-    public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];
-    public ObservableCollection<string> AvailableApps { get; } = ["All apps"];
-
-    [ObservableProperty] private string _searchQuery = "";
-    [ObservableProperty] private string _selectedAppFilter = "All apps";
-    [ObservableProperty] private string _summary = "0 entries · 0 words";
-    [ObservableProperty] private bool _isLoading;
-
-    public bool ShowTimeline => !IsLoading && HasVisibleRecords;
-    public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
-    public bool HasVisibleRecords => Groups.Any(group => group.Entries.Count > 0);
 
     public HistorySectionViewModel(
         IHistoryService history,
@@ -41,7 +42,8 @@ public partial class HistorySectionViewModel : ObservableObject
         ISettingsService settings,
         CorrectionSuggestionService correctionSuggestions,
         SessionAudioFileService sessionAudioFiles,
-        AudioPlaybackService audioPlayback)
+        AudioPlaybackService audioPlayback
+    )
     {
         _history = history;
         _dictionary = dictionary;
@@ -53,11 +55,20 @@ public partial class HistorySectionViewModel : ObservableObject
         _history.RecordsChanged += () =>
         {
             if (!_suppressRefresh)
+            {
                 Dispatcher.UIThread.Post(Refresh);
+            }
         };
         _audioPlayback.PlaybackStateChanged += () => Dispatcher.UIThread.Post(RefreshPlaybackState);
         _ = LoadAsync();
     }
+
+    public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];
+    public ObservableCollection<string> AvailableApps { get; } = ["All apps"];
+
+    public bool ShowTimeline => !IsLoading && HasVisibleRecords;
+    public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
+    public bool HasVisibleRecords => Groups.Any(group => group.Entries.Count > 0);
 
     private async Task LoadAsync()
     {
@@ -75,24 +86,43 @@ public partial class HistorySectionViewModel : ObservableObject
         }
     }
 
-    partial void OnSearchQueryChanged(string value) => Refresh();
-    partial void OnSelectedAppFilterChanged(string value) => Refresh();
+    partial void OnSearchQueryChanged(string value)
+    {
+        Refresh();
+    }
 
-    public void ClearAll() => _history.ClearAll();
+    partial void OnSelectedAppFilterChanged(string value)
+    {
+        Refresh();
+    }
+
+    public void ClearAll()
+    {
+        _history.ClearAll();
+    }
 
     [RelayCommand]
-    private void DeleteRecord(HistoryRecordRow record) => _history.DeleteRecord(record.Record.Id);
+    private void DeleteRecord(HistoryRecordRow record)
+    {
+        _history.DeleteRecord(record.Record.Id);
+    }
 
     [RelayCommand]
     private void TogglePlayback(HistoryRecordRow record)
     {
         if (!record.HasSessionAudio || string.IsNullOrWhiteSpace(record.Record.AudioFileName))
+        {
             return;
+        }
 
         if (record.IsPlaying)
+        {
             _audioPlayback.Stop();
+        }
         else
+        {
             _audioPlayback.Play(record.Record.AudioFileName);
+        }
     }
 
     internal void SaveEdit(HistoryRecordRow record, string newText)
@@ -107,14 +137,20 @@ public partial class HistorySectionViewModel : ObservableObject
             var suggestions = _correctionSuggestions.GenerateSuggestions(originalText, newText);
             if (_settings.Current.AutoAddDictionaryCorrections)
             {
-                LearnCorrections(suggestions.Select(suggestion => new CorrectionSuggestionRow(suggestion)));
+                LearnCorrections(
+                    suggestions.Select(suggestion => new CorrectionSuggestionRow(suggestion))
+                );
                 if (SetPendingCorrectionSuggestions(record, []))
+                {
                     record.SetCorrectionSuggestions([]);
+                }
             }
             else
             {
                 if (SetPendingCorrectionSuggestions(record, suggestions))
+                {
                     record.SetCorrectionSuggestions(suggestions);
+                }
             }
 
             Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
@@ -131,9 +167,13 @@ public partial class HistorySectionViewModel : ObservableObject
     {
         foreach (var suggestion in suggestions.Where(suggestion => suggestion.IsApproved))
         {
-            if (string.IsNullOrWhiteSpace(suggestion.Original)
-                || string.IsNullOrWhiteSpace(suggestion.Replacement))
+            if (
+                string.IsNullOrWhiteSpace(suggestion.Original)
+                || string.IsNullOrWhiteSpace(suggestion.Replacement)
+            )
+            {
                 continue;
+            }
 
             _dictionary.LearnCorrection(suggestion.Original.Trim(), suggestion.Replacement.Trim());
         }
@@ -143,26 +183,34 @@ public partial class HistorySectionViewModel : ObservableObject
     {
         var term = record.Record.FinalText.Trim();
         if (string.IsNullOrWhiteSpace(term))
+        {
             return;
+        }
 
         var exists = _dictionary.Entries.Any(entry =>
             entry.EntryType == DictionaryEntryType.Term
-            && string.Equals(entry.Original.Trim(), term, StringComparison.OrdinalIgnoreCase));
+            && string.Equals(entry.Original.Trim(), term, StringComparison.OrdinalIgnoreCase)
+        );
         if (exists)
-            return;
-
-        _dictionary.AddEntry(new DictionaryEntry
         {
-            Id = Guid.NewGuid().ToString(),
-            EntryType = DictionaryEntryType.Term,
-            Original = term,
-            Source = DictionaryEntrySource.Manual
-        });
+            return;
+        }
+
+        _dictionary.AddEntry(
+            new DictionaryEntry
+            {
+                Id = Guid.NewGuid().ToString(),
+                EntryType = DictionaryEntryType.Term,
+                Original = term,
+                Source = DictionaryEntrySource.Manual
+            }
+        );
     }
 
     internal bool SetPendingCorrectionSuggestions(
         HistoryRecordRow record,
-        IReadOnlyList<CorrectionSuggestion> suggestions)
+        IReadOnlyList<CorrectionSuggestion> suggestions
+    )
     {
         try
         {
@@ -172,7 +220,9 @@ public partial class HistorySectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[HistorySectionViewModel] Failed to persist correction suggestions: {ex}");
+            Trace.WriteLine(
+                $"[HistorySectionViewModel] Failed to persist correction suggestions: {ex}"
+            );
             return false;
         }
     }
@@ -183,7 +233,9 @@ public partial class HistorySectionViewModel : ObservableObject
         foreach (var entry in group.Entries)
         {
             if (entry == keep)
+            {
                 continue;
+            }
 
             if (entry.IsExpanded)
             {
@@ -193,12 +245,21 @@ public partial class HistorySectionViewModel : ObservableObject
         }
     }
 
-    internal bool HasSessionAudio(TranscriptionRecord record) => _sessionAudioFiles.HasAudio(record.AudioFileName);
+    internal bool HasSessionAudio(TranscriptionRecord record)
+    {
+        return _sessionAudioFiles.HasAudio(record.AudioFileName);
+    }
 
-    internal bool IsPlaying(TranscriptionRecord record) =>
-        _audioPlayback.IsPlaying
-        && !string.IsNullOrWhiteSpace(_audioPlayback.CurrentFile)
-        && string.Equals(_audioPlayback.CurrentFile, record.AudioFileName, StringComparison.OrdinalIgnoreCase);
+    internal bool IsPlaying(TranscriptionRecord record)
+    {
+        return _audioPlayback.IsPlaying
+               && !string.IsNullOrWhiteSpace(_audioPlayback.CurrentFile)
+               && string.Equals(
+                   _audioPlayback.CurrentFile,
+                   record.AudioFileName,
+                   StringComparison.OrdinalIgnoreCase
+               );
+    }
 
     public string BuildExportContent(string extension)
     {
@@ -216,10 +277,18 @@ public partial class HistorySectionViewModel : ObservableObject
     {
         IEnumerable<TranscriptionRecord> records = _history.Records;
 
-        if (!string.IsNullOrWhiteSpace(SelectedAppFilter) && !string.Equals(SelectedAppFilter, "All apps", StringComparison.Ordinal))
+        if (
+            !string.IsNullOrWhiteSpace(SelectedAppFilter)
+            && !string.Equals(SelectedAppFilter, "All apps", StringComparison.Ordinal)
+        )
         {
             records = records.Where(record =>
-                string.Equals(record.AppProcessName, SelectedAppFilter, StringComparison.OrdinalIgnoreCase));
+                string.Equals(
+                    record.AppProcessName,
+                    SelectedAppFilter,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            );
         }
 
         if (!string.IsNullOrWhiteSpace(SearchQuery))
@@ -228,7 +297,8 @@ public partial class HistorySectionViewModel : ObservableObject
             records = records.Where(record =>
                 record.FinalText.Contains(query, StringComparison.OrdinalIgnoreCase)
                 || record.RawText.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || (record.AppName?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false));
+                || (record.AppName?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+            );
         }
 
         return records.OrderByDescending(record => record.Timestamp);
@@ -239,11 +309,15 @@ public partial class HistorySectionViewModel : ObservableObject
         RebuildAppFilter();
 
         Groups.Clear();
-        foreach (var group in GetVisibleRecords().GroupBy(record => ComputeDateGroup(record.Timestamp)))
+        foreach (
+            var group in GetVisibleRecords().GroupBy(record => ComputeDateGroup(record.Timestamp))
+        )
         {
             var groupViewModel = new HistoryGroupViewModel(group.Key);
             foreach (var record in group)
+            {
                 groupViewModel.Entries.Add(new HistoryRecordRow(record, this));
+            }
 
             Groups.Add(groupViewModel);
         }
@@ -258,7 +332,9 @@ public partial class HistorySectionViewModel : ObservableObject
     {
         foreach (var group in Groups)
         foreach (var record in group.Entries)
+        {
             record.NotifyPlaybackStateChanged();
+        }
     }
 
     private void RebuildAppFilter()
@@ -267,7 +343,9 @@ public partial class HistorySectionViewModel : ObservableObject
         AvailableApps.Clear();
         AvailableApps.Add("All apps");
         foreach (var app in _history.GetDistinctApps())
+        {
             AvailableApps.Add(app);
+        }
 
         SelectedAppFilter = AvailableApps.Contains(current) ? current : "All apps";
     }
@@ -278,19 +356,27 @@ public partial class HistorySectionViewModel : ObservableObject
         var date = timestamp.Date;
 
         if (date == today)
+        {
             return "Today";
+        }
 
         if (date == today.AddDays(-1))
+        {
             return "Yesterday";
+        }
 
         var daysSinceMonday = ((int)today.DayOfWeek + 6) % 7;
         var thisMonday = today.AddDays(-daysSinceMonday);
         if (date >= thisMonday)
+        {
             return "This Week";
+        }
 
         var lastMonday = thisMonday.AddDays(-7);
         if (date >= lastMonday)
+        {
             return "Last Week";
+        }
 
         return timestamp.ToString("MMMM yyyy");
     }
@@ -298,23 +384,37 @@ public partial class HistorySectionViewModel : ObservableObject
 
 public sealed class HistoryGroupViewModel
 {
-    public string Name { get; }
-    public ObservableCollection<HistoryRecordRow> Entries { get; } = [];
-
     public HistoryGroupViewModel(string name)
     {
         Name = name;
     }
+
+    public string Name { get; }
+    public ObservableCollection<HistoryRecordRow> Entries { get; } = [];
 }
 
 public partial class HistoryRecordRow : ObservableObject
 {
     private readonly HistorySectionViewModel _owner;
 
-    [ObservableProperty] private TranscriptionRecord _record;
-    [ObservableProperty] private bool _isExpanded;
-    [ObservableProperty] private bool _isEditing;
-    [ObservableProperty] private string _editText = "";
+    [ObservableProperty]
+    private string _editText = "";
+
+    [ObservableProperty]
+    private bool _isEditing;
+
+    [ObservableProperty]
+    private bool _isExpanded;
+
+    [ObservableProperty]
+    private TranscriptionRecord _record;
+
+    public HistoryRecordRow(TranscriptionRecord record, HistorySectionViewModel owner)
+    {
+        _record = record;
+        _owner = owner;
+        SetCorrectionSuggestions(record.PendingCorrectionSuggestions);
+    }
 
     public ObservableCollection<CorrectionSuggestionRow> CorrectionSuggestions { get; } = [];
 
@@ -330,14 +430,9 @@ public partial class HistoryRecordRow : ObservableObject
     public bool ShowEditPanel => IsExpanded && IsEditing;
     public bool ShowExpandedMeta => IsExpanded && !IsEditing;
     public bool ShowExpandedActions => IsExpanded && !IsEditing;
-    public bool HasCorrectionSuggestions => IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
 
-    public HistoryRecordRow(TranscriptionRecord record, HistorySectionViewModel owner)
-    {
-        _record = record;
-        _owner = owner;
-        SetCorrectionSuggestions(record.PendingCorrectionSuggestions);
-    }
+    public bool HasCorrectionSuggestions =>
+        IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
 
     partial void OnIsExpandedChanged(bool value)
     {
@@ -355,10 +450,16 @@ public partial class HistoryRecordRow : ObservableObject
         NotifyExpansionStateChanged();
     }
 
-    partial void OnIsEditingChanged(bool value) => NotifyExpansionStateChanged();
+    partial void OnIsEditingChanged(bool value)
+    {
+        NotifyExpansionStateChanged();
+    }
 
     [RelayCommand]
-    private void ToggleExpand() => IsExpanded = !IsExpanded;
+    private void ToggleExpand()
+    {
+        IsExpanded = !IsExpanded;
+    }
 
     [RelayCommand]
     private void StartEdit()
@@ -380,13 +481,22 @@ public partial class HistoryRecordRow : ObservableObject
     }
 
     [RelayCommand]
-    private void CancelEdit() => IsEditing = false;
+    private void CancelEdit()
+    {
+        IsEditing = false;
+    }
 
     [RelayCommand]
-    private void Delete() => _owner.DeleteRecordCommand.Execute(this);
+    private void Delete()
+    {
+        _owner.DeleteRecordCommand.Execute(this);
+    }
 
     [RelayCommand]
-    private void TogglePlayback() => _owner.TogglePlaybackCommand.Execute(this);
+    private void TogglePlayback()
+    {
+        _owner.TogglePlaybackCommand.Execute(this);
+    }
 
     [RelayCommand]
     private void SaveApprovedCorrections()
@@ -410,13 +520,18 @@ public partial class HistoryRecordRow : ObservableObject
     }
 
     [RelayCommand]
-    private void AddToDictionary() => _owner.AddTermFromHistory(this);
+    private void AddToDictionary()
+    {
+        _owner.AddTermFromHistory(this);
+    }
 
     internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
     {
         CorrectionSuggestions.Clear();
         foreach (var suggestion in suggestions)
+        {
             CorrectionSuggestions.Add(new CorrectionSuggestionRow(suggestion));
+        }
 
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
     }
@@ -440,12 +555,14 @@ public partial class HistoryRecordRow : ObservableObject
 
 public partial class CorrectionSuggestionRow : ObservableObject
 {
-    [ObservableProperty] private bool _isApproved = true;
-    [ObservableProperty] private string _original;
-    [ObservableProperty] private string _replacement;
+    [ObservableProperty]
+    private bool _isApproved = true;
 
-    public double Confidence { get; }
-    public string ConfidenceLabel => Confidence > 0 ? $"{Confidence:P0}" : "";
+    [ObservableProperty]
+    private string _original;
+
+    [ObservableProperty]
+    private string _replacement;
 
     public CorrectionSuggestionRow(CorrectionSuggestion suggestion)
     {
@@ -453,4 +570,7 @@ public partial class CorrectionSuggestionRow : ObservableObject
         _replacement = suggestion.Replacement;
         Confidence = suggestion.Confidence;
     }
+
+    public double Confidence { get; }
+    public string ConfidenceLabel => Confidence > 0 ? $"{Confidence:P0}" : "";
 }

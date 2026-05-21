@@ -3,7 +3,7 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Plugin that provides text-to-speech playback for spoken feedback and readback.
+///     Plugin that provides text-to-speech playback for spoken feedback and readback.
 /// </summary>
 public interface ITtsProviderPlugin : ITypeWhisperPlugin
 {

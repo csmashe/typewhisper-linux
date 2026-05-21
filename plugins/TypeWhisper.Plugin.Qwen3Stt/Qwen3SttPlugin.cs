@@ -43,7 +43,7 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
     public bool IsConfigured => !string.IsNullOrEmpty(_baseUrl);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        [new PluginModelInfo("Qwen/Qwen3-ASR", "Qwen3 ASR")];
+    [new PluginModelInfo("Qwen/Qwen3-ASR", "Qwen3 ASR")];
 
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
@@ -57,7 +57,12 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. Base URL required.");
@@ -67,8 +72,17 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
         var model = _selectedModelId ?? DefaultModel;
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient, baseUrl, apiKey, model,
-            wavAudio, language, translate: false, "verbose_json", ct, prompt);
+            _httpClient,
+            baseUrl,
+            apiKey,
+            model,
+            wavAudio,
+            language,
+            translate: false,
+            "verbose_json",
+            ct,
+            prompt
+        );
     }
 
     internal async Task SetApiKeyAsync(string apiKey)
@@ -99,26 +113,35 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("baseUrl", "Base URL", false, DefaultBaseUrl, "OpenAI-compatible server base URL."),
-        new("api-key", "API key", true, null, "Optional bearer token for the server."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Qwen3 STT model.",
-            Options: TranscriptionModels.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new("baseUrl", "Base URL", false, DefaultBaseUrl, "OpenAI-compatible server base URL."),
+            new("api-key", "API key", true, null, "Optional bearer token for the server."),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Qwen3 STT model.",
+                Options: TranscriptionModels
+                    .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
+                    .ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "baseUrl" => _baseUrl,
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "baseUrl" => _baseUrl,
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {

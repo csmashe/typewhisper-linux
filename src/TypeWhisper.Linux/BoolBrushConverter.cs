@@ -1,12 +1,12 @@
-using System.Globalization;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
+using System.Globalization;
 
 namespace TypeWhisper.Linux;
 
 /// <summary>
-/// Maps a bool to one of two brushes via a parameter in the form:
-/// True=#RRGGBB|False=#RRGGBB or True=Transparent|False=#RRGGBB
+///     Maps a bool to one of two brushes via a parameter in the form:
+///     True=#RRGGBB|False=#RRGGBB or True=Transparent|False=#RRGGBB
 /// </summary>
 public sealed class BoolBrushConverter : IValueConverter
 {
@@ -20,7 +20,10 @@ public sealed class BoolBrushConverter : IValueConverter
             return boolValue ? Brushes.White : Brushes.Transparent;
         }
 
-        var parts = raw.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = raw.Split(
+            '|',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+        );
         var map = parts
             .Select(part => part.Split('=', 2))
             .Where(part => part.Length == 2)
@@ -34,6 +37,13 @@ public sealed class BoolBrushConverter : IValueConverter
         return boolValue ? Brushes.White : Brushes.Transparent;
     }
 
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => throw new NotSupportedException();
+    public object? ConvertBack(
+        object? value,
+        Type targetType,
+        object? parameter,
+        CultureInfo culture
+    )
+    {
+        throw new NotSupportedException();
+    }
 }

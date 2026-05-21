@@ -87,10 +87,11 @@
                     <TextBlock Text="Extensions"
                                FontSize="16"
                                FontWeight="SemiBold" />
-                    <TextBlock Text="Plugins extend TypeWhisper with additional transcription engines, LLM providers, and post-processing."
-                               FontSize="12.5"
-                               TextWrapping="Wrap"
-                               Foreground="#8A9AAE" />
+                    <TextBlock
+                        Text="Plugins extend TypeWhisper with additional transcription engines, LLM providers, and post-processing."
+                        FontSize="12.5"
+                        TextWrapping="Wrap"
+                        Foreground="#8A9AAE" />
                 </StackPanel>
             </Border>
 
@@ -188,10 +189,11 @@
                                                                     <TextBlock Text="{Binding Name}"
                                                                                FontSize="13.5"
                                                                                FontWeight="SemiBold" />
-                                                                    <TextBlock Text="{Binding Version, StringFormat='v{0}'}"
-                                                                               FontSize="11.5"
-                                                                               Foreground="#8A9AAE"
-                                                                               VerticalAlignment="Center" />
+                                                                    <TextBlock
+                                                                        Text="{Binding Version, StringFormat='v{0}'}"
+                                                                        FontSize="11.5"
+                                                                        Foreground="#8A9AAE"
+                                                                        VerticalAlignment="Center" />
                                                                 </StackPanel>
 
                                                                 <TextBlock Text="{Binding Description}"
@@ -206,24 +208,24 @@
                                                                             BorderBrush="#2E5B89"
                                                                             BorderThickness="1">
                                                                         <TextBlock Text="{Binding CategoryLabel}"
-                                                                                   FontSize="11"
-                                                                                   Foreground="#D6E7FF" />
+                                                                                FontSize="11"
+                                                                                Foreground="#D6E7FF" />
                                                                     </Border>
                                                                     <Border Classes="badge"
                                                                             Background="{Binding LocationBadgeBackground}"
                                                                             BorderBrush="{Binding LocationBadgeBorder}"
                                                                             BorderThickness="1">
                                                                         <TextBlock Text="{Binding LocationBadge}"
-                                                                                   FontSize="11"
-                                                                                   Foreground="{Binding LocationBadgeForeground}" />
+                                                                                FontSize="11"
+                                                                                Foreground="{Binding LocationBadgeForeground}" />
                                                                     </Border>
                                                                     <Border Classes="badge"
                                                                             Background="{Binding StatusBadgeBackground}"
                                                                             BorderBrush="{Binding StatusBadgeBorder}"
                                                                             BorderThickness="1">
                                                                         <TextBlock Text="{Binding StatusBadge}"
-                                                                                   FontSize="11"
-                                                                                   Foreground="{Binding StatusBadgeForeground}" />
+                                                                                FontSize="11"
+                                                                                Foreground="{Binding StatusBadgeForeground}" />
                                                                     </Border>
                                                                 </StackPanel>
                                                             </StackPanel>
@@ -270,58 +272,69 @@
 
                                                                 <ItemsControl ItemsSource="{Binding Collections}">
                                                                     <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:PluginCollectionRow">
+                                                                        <DataTemplate
+                                                                            x:DataType="vm:PluginCollectionRow">
                                                                             <StackPanel Spacing="10"
-                                                                                        Margin="0,0,0,14">
+                                                                                    Margin="0,0,0,14">
                                                                                 <TextBlock Text="{Binding Label}"
-                                                                                           FontWeight="SemiBold" />
+                                                                                    FontWeight="SemiBold" />
                                                                                 <TextBlock Text="{Binding Description}"
-                                                                                           FontSize="11"
-                                                                                           TextWrapping="Wrap"
-                                                                                           Foreground="#8A9AAE"
-                                                                                           IsVisible="{Binding HasDescription}" />
+                                                                                    FontSize="11"
+                                                                                    TextWrapping="Wrap"
+                                                                                    Foreground="#8A9AAE"
+                                                                                    IsVisible="{Binding HasDescription}" />
 
-                                                                                <ItemsControl ItemsSource="{Binding Items}">
+                                                                                <ItemsControl
+                                                                                    ItemsSource="{Binding Items}">
                                                                                     <ItemsControl.ItemTemplate>
-                                                                                        <DataTemplate x:DataType="vm:PluginCollectionItemRow">
-                                                                                            <Border Background="#17212B"
-                                                                                                    BorderBrush="#1AFFFFFF"
-                                                                                                    BorderThickness="1"
-                                                                                                    CornerRadius="10"
-                                                                                                    Padding="12"
-                                                                                                    Margin="0,0,0,8">
+                                                                                        <DataTemplate
+                                                                                            x:DataType="vm:PluginCollectionItemRow">
+                                                                                            <Border
+                                                                                                Background="#17212B"
+                                                                                                BorderBrush="#1AFFFFFF"
+                                                                                                BorderThickness="1"
+                                                                                                CornerRadius="10"
+                                                                                                Padding="12"
+                                                                                                Margin="0,0,0,8">
                                                                                                 <StackPanel Spacing="8">
-                                                                                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto"
-                                                                                                          ColumnSpacing="6">
-                                                                                                        <TextBlock Grid.Column="0"
-                                                                                                                   Text="{Binding HeaderText}"
-                                                                                                                   FontWeight="SemiBold"
-                                                                                                                   VerticalAlignment="Center" />
-                                                                                                        <Button Grid.Column="1"
-                                                                                                                Content="Up"
-                                                                                                                Command="{Binding OwnerCollection.MoveUpCommand}"
-                                                                                                                CommandParameter="{Binding}" />
-                                                                                                        <Button Grid.Column="2"
-                                                                                                                Content="Down"
-                                                                                                                Command="{Binding OwnerCollection.MoveDownCommand}"
-                                                                                                                CommandParameter="{Binding}" />
-                                                                                                        <Button Grid.Column="3"
-                                                                                                                Content="Remove"
-                                                                                                                Command="{Binding OwnerCollection.RemoveItemCommand}"
-                                                                                                                CommandParameter="{Binding}" />
+                                                                                                    <Grid
+                                                                                                        ColumnDefinitions="*,Auto,Auto,Auto"
+                                                                                                        ColumnSpacing="6">
+                                                                                                        <TextBlock
+                                                                                                            Grid.Column="0"
+                                                                                                            Text="{Binding HeaderText}"
+                                                                                                            FontWeight="SemiBold"
+                                                                                                            VerticalAlignment="Center" />
+                                                                                                        <Button
+                                                                                                            Grid.Column="1"
+                                                                                                            Content="Up"
+                                                                                                            Command="{Binding OwnerCollection.MoveUpCommand}"
+                                                                                                            CommandParameter="{Binding}" />
+                                                                                                        <Button
+                                                                                                            Grid.Column="2"
+                                                                                                            Content="Down"
+                                                                                                            Command="{Binding OwnerCollection.MoveDownCommand}"
+                                                                                                            CommandParameter="{Binding}" />
+                                                                                                        <Button
+                                                                                                            Grid.Column="3"
+                                                                                                            Content="Remove"
+                                                                                                            Command="{Binding OwnerCollection.RemoveItemCommand}"
+                                                                                                            CommandParameter="{Binding}" />
                                                                                                     </Grid>
 
-                                                                                                    <ItemsControl ItemsSource="{Binding Fields}"
-                                                                                                                  ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
+                                                                                                    <ItemsControl
+                                                                                                        ItemsSource="{Binding Fields}"
+                                                                                                        ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
                                                                                                 </StackPanel>
                                                                                             </Border>
                                                                                         </DataTemplate>
                                                                                     </ItemsControl.ItemTemplate>
                                                                                 </ItemsControl>
 
-                                                                                <Button Content="{Binding AddButtonLabel}"
-                                                                                        HorizontalAlignment="Left"
-                                                                                        Command="{Binding AddItemCommand}" />
+                                                                                <Button
+                                                                                    Content="{Binding AddButtonLabel}"
+                                                                                    HorizontalAlignment="Left"
+                                                                                    Command="{Binding AddItemCommand}" />
                                                                             </StackPanel>
                                                                         </DataTemplate>
                                                                     </ItemsControl.ItemTemplate>

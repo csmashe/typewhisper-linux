@@ -6,9 +6,9 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
-/// Thread-safe publish/subscribe event bus for plugin communication.
-/// Handlers are invoked fire-and-forget on the thread pool so a slow or
-/// throwing plugin handler cannot block the publisher or starve other handlers.
+///     Thread-safe publish/subscribe event bus for plugin communication.
+///     Handlers are invoked fire-and-forget on the thread pool so a slow or
+///     throwing plugin handler cannot block the publisher or starve other handlers.
 /// </summary>
 public sealed class PluginEventBus : IPluginEventBus
 {
@@ -17,11 +17,14 @@ public sealed class PluginEventBus : IPluginEventBus
     private readonly ConcurrentDictionary<Type, List<Func<object, Task>>> _handlers = new();
     private readonly object _lock = new();
 
-    public void Publish<T>(T pluginEvent) where T : PluginEvent
+    public void Publish<T>(T pluginEvent)
+        where T : PluginEvent
     {
         var eventType = typeof(T);
         if (!_handlers.TryGetValue(eventType, out var handlers))
+        {
             return;
+        }
 
         List<Func<object, Task>> snapshot;
         lock (_lock)
@@ -39,13 +42,16 @@ public sealed class PluginEventBus : IPluginEventBus
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[PluginEventBus] Handler for {eventType.Name} threw: {ex.Message}");
+                    Trace.WriteLine(
+                        $"[PluginEventBus] Handler for {eventType.Name} threw: {ex.Message}"
+                    );
                 }
             });
         }
     }
 
-    public IDisposable Subscribe<T>(Func<T, Task> handler) where T : PluginEvent
+    public IDisposable Subscribe<T>(Func<T, Task> handler)
+        where T : PluginEvent
     {
         var eventType = typeof(T);
         Func<object, Task> wrappedHandler = obj => handler((T)obj);

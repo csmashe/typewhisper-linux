@@ -9,13 +9,18 @@ public partial class WelcomeWizard : Window
 {
     private bool _isClosed;
 
-    public WelcomeWizard() => InitializeComponent();
+    public WelcomeWizard()
+    {
+        InitializeComponent();
+    }
 
     protected override void OnDataContextChanged(EventArgs e)
     {
         base.OnDataContextChanged(e);
         if (DataContext is WelcomeWizardViewModel vm)
+        {
             vm.RequestClose += (_, _) => Close();
+        }
     }
 
     protected override void OnClosed(EventArgs e)
@@ -23,7 +28,9 @@ public partial class WelcomeWizard : Window
         _isClosed = true;
 
         if (DataContext is WelcomeWizardViewModel vm)
+        {
             vm.Cleanup();
+        }
 
         base.OnClosed(e);
     }
@@ -31,7 +38,9 @@ public partial class WelcomeWizard : Window
     private async void RunPasteSmokeButton_OnClick(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not WelcomeWizardViewModel vm)
+        {
             return;
+        }
 
         PasteSmokeBox.Text = "";
         PasteSmokeBox.Focus();
@@ -42,13 +51,17 @@ public partial class WelcomeWizard : Window
 
         var shouldCheckField = await vm.RunPasteSmokeTestAsync();
         if (!shouldCheckField)
+        {
             return;
+        }
 
         // Give the simulated paste time to land in the text box, then verify the
         // window/view model are still alive before reading the result back.
         await Task.Delay(350);
         if (_isClosed || !IsVisible || !ReferenceEquals(DataContext, vm))
+        {
             return;
+        }
 
         vm.CompletePasteSmokeTest(PasteSmokeBox.Text);
     }

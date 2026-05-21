@@ -6,7 +6,18 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class SettingsBackupServiceTests : IDisposable
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"tw-backup-test-{Guid.NewGuid():N}");
+    private readonly string _tempDir = Path.Combine(
+        Path.GetTempPath(),
+        $"tw-backup-test-{Guid.NewGuid():N}"
+    );
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+        {
+            Directory.Delete(_tempDir, true);
+        }
+    }
 
     [Fact]
     public void CreateBackup_includes_settings_and_user_data_but_skips_generated_content()
@@ -17,8 +28,27 @@ public sealed class SettingsBackupServiceTests : IDisposable
         Write(Path.Combine(appData, "linux-preferences.json"), "{}");
         Write(Path.Combine(appData, "Data", "profiles.json"), "profiles");
         Write(Path.Combine(appData, "PluginData", "FileMemory", "memories.json"), "memories");
-        Write(Path.Combine(appData, "PluginData", "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin"), "model");
-        Write(Path.Combine(appData, "PluginData", "com.typewhisper.sherpa-onnx", "Models", "parakeet", "encoder.onnx"), "model");
+        Write(
+            Path.Combine(
+                appData,
+                "PluginData",
+                "com.typewhisper.whisper-cpp",
+                "Models",
+                "ggml-base.bin"
+            ),
+            "model"
+        );
+        Write(
+            Path.Combine(
+                appData,
+                "PluginData",
+                "com.typewhisper.sherpa-onnx",
+                "Models",
+                "parakeet",
+                "encoder.onnx"
+            ),
+            "model"
+        );
         Write(Path.Combine(appData, "Plugins", "Sample", "manifest.json"), "plugin");
         Write(Path.Combine(appData, "Models", "large.bin"), "model");
         Write(Path.Combine(appData, "Audio", "capture.wav"), "audio");
@@ -36,8 +66,14 @@ public sealed class SettingsBackupServiceTests : IDisposable
         Assert.Contains("linux-preferences.json", entries);
         Assert.Contains("Data/profiles.json", entries);
         Assert.Contains("PluginData/FileMemory/memories.json", entries);
-        Assert.DoesNotContain("PluginData/com.typewhisper.whisper-cpp/Models/ggml-base.bin", entries);
-        Assert.DoesNotContain("PluginData/com.typewhisper.sherpa-onnx/Models/parakeet/encoder.onnx", entries);
+        Assert.DoesNotContain(
+            "PluginData/com.typewhisper.whisper-cpp/Models/ggml-base.bin",
+            entries
+        );
+        Assert.DoesNotContain(
+            "PluginData/com.typewhisper.sherpa-onnx/Models/parakeet/encoder.onnx",
+            entries
+        );
         Assert.DoesNotContain("Plugins/Sample/manifest.json", entries);
         Assert.DoesNotContain("Models/large.bin", entries);
         Assert.DoesNotContain("Audio/capture.wav", entries);
@@ -53,7 +89,16 @@ public sealed class SettingsBackupServiceTests : IDisposable
         Write(Path.Combine(sourceData, "settings.json"), "{\"language\":\"de\"}");
         Write(Path.Combine(sourceData, "Data", "snippets.json"), "[\"restored\"]");
         Write(Path.Combine(sourceData, "PluginData", "FileMemory", "memories.json"), "restored");
-        Write(Path.Combine(sourceData, "PluginData", "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin"), "model");
+        Write(
+            Path.Combine(
+                sourceData,
+                "PluginData",
+                "com.typewhisper.whisper-cpp",
+                "Models",
+                "ggml-base.bin"
+            ),
+            "model"
+        );
         Write(Path.Combine(targetData, "settings.json"), "{\"language\":\"en\"}");
         Write(Path.Combine(targetData, "Data", "snippets.json"), "[\"old\"]");
 
@@ -64,9 +109,25 @@ public sealed class SettingsBackupServiceTests : IDisposable
 
         Assert.Equal(3, result.FileCount);
         Assert.Contains("de", File.ReadAllText(Path.Combine(targetData, "settings.json")));
-        Assert.Equal("[\"restored\"]", File.ReadAllText(Path.Combine(targetData, "Data", "snippets.json")));
-        Assert.Equal("restored", File.ReadAllText(Path.Combine(targetData, "PluginData", "FileMemory", "memories.json")));
-        Assert.False(File.Exists(Path.Combine(targetData, "PluginData", "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin")));
+        Assert.Equal(
+            "[\"restored\"]",
+            File.ReadAllText(Path.Combine(targetData, "Data", "snippets.json"))
+        );
+        Assert.Equal(
+            "restored",
+            File.ReadAllText(Path.Combine(targetData, "PluginData", "FileMemory", "memories.json"))
+        );
+        Assert.False(
+            File.Exists(
+                Path.Combine(
+                    targetData,
+                    "PluginData",
+                    "com.typewhisper.whisper-cpp",
+                    "Models",
+                    "ggml-base.bin"
+                )
+            )
+        );
     }
 
     [Fact]
@@ -80,7 +141,11 @@ public sealed class SettingsBackupServiceTests : IDisposable
             archive.CreateEntry("typewhisper-backup.json");
             WriteEntry(archive, "settings.json", "{}");
             WriteEntry(archive, "PluginData/com.typewhisper.whisper-cpp/settings.json", "{}");
-            WriteEntry(archive, "PluginData/com.typewhisper.whisper-cpp/Models/ggml-base.bin", "model");
+            WriteEntry(
+                archive,
+                "PluginData/com.typewhisper.whisper-cpp/Models/ggml-base.bin",
+                "model"
+            );
         }
 
         var service = new SettingsBackupService(targetData);
@@ -89,8 +154,27 @@ public sealed class SettingsBackupServiceTests : IDisposable
 
         Assert.Equal(2, result.FileCount);
         Assert.True(File.Exists(Path.Combine(targetData, "settings.json")));
-        Assert.True(File.Exists(Path.Combine(targetData, "PluginData", "com.typewhisper.whisper-cpp", "settings.json")));
-        Assert.False(File.Exists(Path.Combine(targetData, "PluginData", "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin")));
+        Assert.True(
+            File.Exists(
+                Path.Combine(
+                    targetData,
+                    "PluginData",
+                    "com.typewhisper.whisper-cpp",
+                    "settings.json"
+                )
+            )
+        );
+        Assert.False(
+            File.Exists(
+                Path.Combine(
+                    targetData,
+                    "PluginData",
+                    "com.typewhisper.whisper-cpp",
+                    "Models",
+                    "ggml-base.bin"
+                )
+            )
+        );
     }
 
     [Fact]
@@ -109,12 +193,6 @@ public sealed class SettingsBackupServiceTests : IDisposable
         var service = new SettingsBackupService(Path.Combine(_tempDir, "target"));
 
         Assert.Throws<InvalidDataException>(() => service.RestoreBackup(backupPath));
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
     }
 
     private static void Write(string path, string content)

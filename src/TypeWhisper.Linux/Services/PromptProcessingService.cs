@@ -7,11 +7,15 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class PromptProcessingService
 {
+    private readonly MemoryService _memory;
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
-    private readonly MemoryService _memory;
 
-    public PromptProcessingService(PluginManager pluginManager, ISettingsService settings, MemoryService memory)
+    public PromptProcessingService(
+        PluginManager pluginManager,
+        ISettingsService settings,
+        MemoryService memory
+    )
     {
         _pluginManager = pluginManager;
         _settings = settings;
@@ -21,11 +25,17 @@ public sealed class PromptProcessingService
     public bool IsAnyProviderAvailable =>
         _pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
 
-    public async Task<string> ProcessAsync(PromptAction action, string inputText, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        PromptAction action,
+        string inputText,
+        CancellationToken ct
+    )
     {
         var (provider, modelId) = ResolveProvider(action);
         if (provider is null)
+        {
             throw new InvalidOperationException("No enabled LLM provider is available.");
+        }
 
         var systemPrompt = action.SystemPrompt;
         if (_settings.Current.MemoryEnabled)
@@ -34,35 +44,50 @@ public sealed class PromptProcessingService
             if (!string.IsNullOrWhiteSpace(context))
             {
                 systemPrompt = $"""
-                    {systemPrompt}
+                                {systemPrompt}
 
-                    Relevant remembered context:
-                    {context}
-                    """;
+                                Relevant remembered context:
+                                {context}
+                                """;
             }
         }
 
-        return await provider.ProcessAsync(systemPrompt, FormatPromptActionInput(inputText), modelId, ct);
+        return await provider.ProcessAsync(
+            systemPrompt,
+            FormatPromptActionInput(inputText),
+            modelId,
+            ct
+        );
     }
 
-    public async Task<string> ProcessSystemPromptAsync(string systemPrompt, string inputText, CancellationToken ct)
+    public async Task<string> ProcessSystemPromptAsync(
+        string systemPrompt,
+        string inputText,
+        CancellationToken ct
+    )
     {
         var (provider, modelId) = ResolveProvider(providerOverride: null);
         if (provider is null)
+        {
             throw new InvalidOperationException("No enabled LLM provider is available.");
+        }
 
         return await provider.ProcessAsync(systemPrompt, inputText, modelId, ct);
     }
 
     private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
-        => ResolveProvider(action.ProviderOverride);
+    {
+        return ResolveProvider(action.ProviderOverride);
+    }
 
-    internal static string FormatPromptActionInput(string inputText) =>
-        $"""
-        Text to process:
+    internal static string FormatPromptActionInput(string inputText)
+    {
+        return $"""
+                Text to process:
 
-        {inputText}
-        """;
+                {inputText}
+                """;
+    }
 
     private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(string? providerOverride)
     {
@@ -70,42 +95,55 @@ public sealed class PromptProcessingService
         {
             var overrideResult = ResolvePluginModelId(providerOverride);
             if (overrideResult.Provider is not null)
+            {
                 return overrideResult;
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(_settings.Current.DefaultLlmProvider))
         {
             var defaultResult = ResolvePluginModelId(_settings.Current.DefaultLlmProvider);
             if (defaultResult.Provider is not null)
+            {
                 return defaultResult;
+            }
         }
 
         foreach (var provider in _pluginManager.LlmProviders)
         {
             if (!provider.IsAvailable)
+            {
                 continue;
+            }
 
             var firstModel = provider.SupportedModels.FirstOrDefault();
             if (firstModel is not null)
+            {
                 return (provider, firstModel.Id);
+            }
         }
 
         return (null, string.Empty);
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolvePluginModelId(string pluginModelId)
+    private (ILlmProviderPlugin? Provider, string ModelId) ResolvePluginModelId(
+        string pluginModelId
+    )
     {
         // Encoded as "plugin:<pluginId>:<modelId>" — same scheme used by
         // ModelManagerService so override IDs survive round-trips through settings.
         var parts = pluginModelId.Split(':', 3);
         if (parts.Length < 3 || !string.Equals(parts[0], "plugin", StringComparison.Ordinal))
+        {
             return (null, string.Empty);
+        }
 
         var pluginId = parts[1];
         var modelId = parts[2];
         var plugin = _pluginManager.GetPlugin(pluginId)?.Instance;
         var provider = _pluginManager.LlmProviders.FirstOrDefault(candidate =>
-            ReferenceEquals(candidate, plugin) && candidate.IsAvailable);
+            ReferenceEquals(candidate, plugin) && candidate.IsAvailable
+        );
 
         return provider is null ? (null, string.Empty) : (provider, modelId);
     }

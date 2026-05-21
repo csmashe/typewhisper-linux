@@ -4,12 +4,12 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Pins the normalization rules that downstream terminal/browser
-/// detection and profile-process matching depend on. The reverse-DNS
-/// cases are the load-bearing ones: Wayland providers (Window Calls,
-/// Sway, Hyprland, KWin) typically emit wm_class / app_id in the
-/// <c>tld.vendor.app</c> form, and every consumer expects the short
-/// canonical name.
+///     Pins the normalization rules that downstream terminal/browser
+///     detection and profile-process matching depend on. The reverse-DNS
+///     cases are the load-bearing ones: Wayland providers (Window Calls,
+///     Sway, Hyprland, KWin) typically emit wm_class / app_id in the
+///     <c>tld.vendor.app</c> form, and every consumer expects the short
+///     canonical name.
 /// </summary>
 public sealed class ProcessNameNormalizerTests
 {

@@ -18,7 +18,14 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     private const string GetPipUrl = "https://bootstrap.pypa.io/get-pip.py";
 
     private static readonly IReadOnlyList<string> GraniteSupportedLanguages =
-        ["en", "fr", "de", "es", "pt", "ja"];
+    [
+        "en",
+        "fr",
+        "de",
+        "es",
+        "pt",
+        "ja",
+    ];
 
     private readonly SemaphoreSlim _sidecarLock = new(1, 1);
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(30) };
@@ -53,7 +60,7 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
             EstimatedSizeMB = 5000,
             IsRecommended = false,
             LanguageCount = 6,
-        }
+        },
     ];
 
     public Task ActivateAsync(IPluginHostServices host)
@@ -77,7 +84,9 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
 
     public void ConfigureComputeBackend(string backend)
     {
-        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cuda"
+            : "cpu";
         if (_computeBackend == normalized)
             return;
 
@@ -105,7 +114,11 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         return Task.CompletedTask;
     }
 
-    public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    public async Task DownloadModelAsync(
+        string modelId,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
     {
         var dataDir = GetDataDirectory();
         Directory.CreateDirectory(dataDir);
@@ -121,27 +134,38 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
 
             if (Directory.Exists(pythonDir))
             {
-                Log(PluginLogLevel.Warning, "Incomplete Python installation detected, cleaning up...");
+                Log(
+                    PluginLogLevel.Warning,
+                    "Incomplete Python installation detected, cleaning up..."
+                );
                 Directory.Delete(pythonDir, recursive: true);
             }
 
-            await RetryAsync(async () =>
-            {
-                if (Directory.Exists(pythonDir))
-                    Directory.Delete(pythonDir, recursive: true);
+            await RetryAsync(
+                async () =>
+                {
+                    if (Directory.Exists(pythonDir))
+                        Directory.Delete(pythonDir, recursive: true);
 
-                var zipPath = Path.Combine(dataDir, "python-embed.zip");
-                await DownloadFileAsync(PythonEmbedUrl, zipPath, ct);
-                Directory.CreateDirectory(pythonDir);
-                ZipFile.ExtractToDirectory(zipPath, pythonDir, overwriteFiles: true);
-                File.Delete(zipPath);
-                PatchPthFile(pythonDir);
+                    var zipPath = Path.Combine(dataDir, "python-embed.zip");
+                    await DownloadFileAsync(PythonEmbedUrl, zipPath, ct);
+                    Directory.CreateDirectory(pythonDir);
+                    ZipFile.ExtractToDirectory(zipPath, pythonDir, overwriteFiles: true);
+                    File.Delete(zipPath);
+                    PatchPthFile(pythonDir);
 
-                if (!File.Exists(pythonExe))
-                    throw new InvalidOperationException("python.exe not found after extraction");
-                if (!ValidatePythonInstallation(pythonDir))
-                    throw new InvalidOperationException("Python installation validation failed after extraction");
-            }, maxRetries: 2, ct);
+                    if (!File.Exists(pythonExe))
+                        throw new InvalidOperationException(
+                            "python.exe not found after extraction"
+                        );
+                    if (!ValidatePythonInstallation(pythonDir))
+                        throw new InvalidOperationException(
+                            "Python installation validation failed after extraction"
+                        );
+                },
+                maxRetries: 2,
+                ct
+            );
 
             Log(PluginLogLevel.Info, "Step 1 complete: Python installed");
         }
@@ -152,16 +176,20 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         {
             Log(PluginLogLevel.Info, "Step 2: Bootstrapping pip...");
 
-            await RetryAsync(async () =>
-            {
-                var getPipPath = Path.Combine(pythonDir, "get-pip.py");
-                await DownloadFileAsync(GetPipUrl, getPipPath, ct);
-                await RunProcessAsync(pythonExe, $"\"{getPipPath}\"", ct, timeoutMs: 300_000);
-                File.Delete(getPipPath);
+            await RetryAsync(
+                async () =>
+                {
+                    var getPipPath = Path.Combine(pythonDir, "get-pip.py");
+                    await DownloadFileAsync(GetPipUrl, getPipPath, ct);
+                    await RunProcessAsync(pythonExe, $"\"{getPipPath}\"", ct, timeoutMs: 300_000);
+                    File.Delete(getPipPath);
 
-                if (!File.Exists(Path.Combine(pythonDir, "Scripts", "pip.exe")))
-                    throw new InvalidOperationException("pip.exe not found after bootstrap");
-            }, maxRetries: 2, ct);
+                    if (!File.Exists(Path.Combine(pythonDir, "Scripts", "pip.exe")))
+                        throw new InvalidOperationException("pip.exe not found after bootstrap");
+                },
+                maxRetries: 2,
+                ct
+            );
 
             Log(PluginLogLevel.Info, "Step 2 complete: pip installed");
         }
@@ -171,18 +199,28 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         Log(PluginLogLevel.Info, "Step 3: Installing Python packages (this may take a while)...");
 
         var reqPath = GetScriptPath("requirements.txt");
-        await RetryAsync(async () =>
-        {
-            await RunProcessAsync(pythonExe,
-                $"-m pip install -q --no-cache-dir -r \"{reqPath}\" " +
-                "--index-url https://download.pytorch.org/whl/cpu " +
-                "--extra-index-url https://pypi.org/simple/",
-                ct, timeoutMs: 1_800_000);
+        await RetryAsync(
+            async () =>
+            {
+                await RunProcessAsync(
+                    pythonExe,
+                    $"-m pip install -q --no-cache-dir -r \"{reqPath}\" "
+                        + "--index-url https://download.pytorch.org/whl/cpu "
+                        + "--extra-index-url https://pypi.org/simple/",
+                    ct,
+                    timeoutMs: 1_800_000
+                );
 
-            await RunProcessAsync(pythonExe,
-                "-c \"import torch; import transformers; import soundfile; import huggingface_hub\"",
-                ct, timeoutMs: 30_000);
-        }, maxRetries: 2, ct);
+                await RunProcessAsync(
+                    pythonExe,
+                    "-c \"import torch; import transformers; import soundfile; import huggingface_hub\"",
+                    ct,
+                    timeoutMs: 30_000
+                );
+            },
+            maxRetries: 2,
+            ct
+        );
 
         Log(PluginLogLevel.Info, "Step 3 complete: packages installed");
 
@@ -201,7 +239,8 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
             CreateNoWindow = true,
         };
 
-        using var proc = Process.Start(psi)
+        using var proc =
+            Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start model download");
 
         string? line;
@@ -223,7 +262,9 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
                     Log(PluginLogLevel.Warning, $"Model download: {warn.GetString()}");
 
                 if (root.TryGetProperty("error", out var err))
-                    throw new InvalidOperationException($"Model download failed: {err.GetString()}");
+                    throw new InvalidOperationException(
+                        $"Model download failed: {err.GetString()}"
+                    );
             }
             catch (JsonException)
             {
@@ -236,12 +277,15 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         {
             var stderr = await proc.StandardError.ReadToEndAsync(ct);
             throw new InvalidOperationException(
-                $"Model download failed (exit {proc.ExitCode}): {stderr[Math.Max(0, stderr.Length - 1000)..]}");
+                $"Model download failed (exit {proc.ExitCode}): {stderr[Math.Max(0, stderr.Length - 1000)..]}"
+            );
         }
 
         await File.WriteAllTextAsync(
             Path.Combine(dataDir, ".setup-complete"),
-            DateTime.UtcNow.ToString("O"), ct);
+            DateTime.UtcNow.ToString("O"),
+            ct
+        );
 
         Log(PluginLogLevel.Info, "Setup complete");
         progress?.Report(1.0);
@@ -250,7 +294,9 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     public async Task LoadModelAsync(string modelId, CancellationToken ct)
     {
         if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException("CUDA is not available for the bundled Granite Speech sidecar. Select a whisper.cpp model for CUDA.");
+            throw new NotSupportedException(
+                "CUDA is not available for the bundled Granite Speech sidecar. Select a whisper.cpp model for CUDA."
+            );
 
         if (!IsModelDownloaded(modelId))
             throw new FileNotFoundException("Model not set up. Run DownloadModelAsync first.");
@@ -276,7 +322,12 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         await _sidecarLock.WaitAsync(ct);
         try
@@ -284,13 +335,16 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
             if (_sidecar is null || _sidecar.HasExited)
                 throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
 
-            var response = await SendCommandAsync(new
-            {
-                cmd = "transcribe",
-                audio_base64 = Convert.ToBase64String(wavAudio),
-                language,
-                translate,
-            }, ct);
+            var response = await SendCommandAsync(
+                new
+                {
+                    cmd = "transcribe",
+                    audio_base64 = Convert.ToBase64String(wavAudio),
+                    language,
+                    translate,
+                },
+                ct
+            );
 
             if (response.TryGetProperty("error", out var err))
                 throw new InvalidOperationException($"Transcription failed: {err.GetString()}");
@@ -298,7 +352,12 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
             var text = response.GetProperty("text").GetString() ?? "";
             var duration = response.GetProperty("duration").GetDouble();
 
-            return new PluginTranscriptionResult(text, language, duration, NoSpeechProbability: null);
+            return new PluginTranscriptionResult(
+                text,
+                language,
+                duration,
+                NoSpeechProbability: null
+            );
         }
         finally
         {
@@ -344,7 +403,8 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         };
         psi.Environment["PYTHONUNBUFFERED"] = "1";
 
-        _sidecar = Process.Start(psi)
+        _sidecar =
+            Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start Python sidecar");
         _sidecarIn = _sidecar.StandardInput;
         _sidecarOut = _sidecar.StandardOutput;
@@ -352,7 +412,8 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
 
     private void StopSidecar()
     {
-        if (_sidecar is null) return;
+        if (_sidecar is null)
+            return;
 
         try
         {
@@ -363,12 +424,19 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
                 _sidecar.WaitForExit(3000);
             }
         }
-        catch { /* ignore */ }
+        catch
+        { /* ignore */
+        }
 
         if (!_sidecar.HasExited)
         {
-            try { _sidecar.Kill(); }
-            catch { /* ignore */ }
+            try
+            {
+                _sidecar.Kill();
+            }
+            catch
+            { /* ignore */
+            }
         }
 
         _sidecar.Dispose();
@@ -400,7 +468,8 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         // (drains any orphaned responses from cancelled requests)
         while (true)
         {
-            var response = await _sidecarOut.ReadLineAsync(ct)
+            var response =
+                await _sidecarOut.ReadLineAsync(ct)
                 ?? throw new InvalidOperationException("Sidecar process closed unexpectedly");
 
             using var doc = JsonDocument.Parse(response);
@@ -416,13 +485,22 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     private async Task DownloadFileAsync(string url, string destPath, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        using var response = await _httpClient.SendAsync(request,
-            HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            ct
+        );
         response.EnsureSuccessStatusCode();
 
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        await using var fileStream = new FileStream(destPath + ".tmp", FileMode.Create,
-            FileAccess.Write, FileShare.None, 81920, true);
+        await using var fileStream = new FileStream(
+            destPath + ".tmp",
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            81920,
+            true
+        );
         await contentStream.CopyToAsync(fileStream, ct);
         fileStream.Close();
 
@@ -468,8 +546,12 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         return Path.Combine(pluginDir, "Scripts", fileName);
     }
 
-    private static async Task RunProcessAsync(string exe, string args, CancellationToken ct,
-        int timeoutMs = 120_000)
+    private static async Task RunProcessAsync(
+        string exe,
+        string args,
+        CancellationToken ct,
+        int timeoutMs = 120_000
+    )
     {
         var psi = new ProcessStartInfo(exe, args)
         {
@@ -479,8 +561,8 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
             CreateNoWindow = true,
         };
 
-        using var proc = Process.Start(psi)
-            ?? throw new InvalidOperationException($"Failed to start {exe}");
+        using var proc =
+            Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start {exe}");
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeoutMs);
@@ -499,12 +581,17 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         {
             var stderr = await proc.StandardError.ReadToEndAsync(ct);
             throw new InvalidOperationException(
-                $"{exe} failed (exit {proc.ExitCode}): {stderr[Math.Max(0, stderr.Length - 500)..]}");
+                $"{exe} failed (exit {proc.ExitCode}): {stderr[Math.Max(0, stderr.Length - 500)..]}"
+            );
         }
     }
 
-    private async Task RetryAsync(Func<Task> action, int maxRetries, CancellationToken ct,
-        Action<int, Exception>? onRetry = null)
+    private async Task RetryAsync(
+        Func<Task> action,
+        int maxRetries,
+        CancellationToken ct,
+        Action<int, Exception>? onRetry = null
+    )
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -513,18 +600,21 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
                 await action();
                 return;
             }
-            catch (Exception ex) when (attempt < maxRetries && IsTransient(ex) && !ct.IsCancellationRequested)
+            catch (Exception ex)
+                when (attempt < maxRetries && IsTransient(ex) && !ct.IsCancellationRequested)
             {
                 var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt));
-                Log(PluginLogLevel.Warning, $"Attempt {attempt + 1} failed ({ex.Message}), retrying in {delay.TotalSeconds}s...");
+                Log(
+                    PluginLogLevel.Warning,
+                    $"Attempt {attempt + 1} failed ({ex.Message}), retrying in {delay.TotalSeconds}s..."
+                );
                 onRetry?.Invoke(attempt + 1, ex);
                 await Task.Delay(delay, ct);
             }
         }
     }
 
-    private static bool IsTransient(Exception ex) => ex is HttpRequestException
-        or TimeoutException
-        or IOException
+    private static bool IsTransient(Exception ex) =>
+        ex is HttpRequestException or TimeoutException or IOException
         || (ex is InvalidOperationException ioe && ioe.Message.Contains("failed (exit"));
 }

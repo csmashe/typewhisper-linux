@@ -1,6 +1,5 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
-using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.PluginSystem.Tests;
@@ -11,11 +10,13 @@ public class HistoryRetentionCoordinatorTests
     public void Initialize_DurationModePurgesOnStartup()
     {
         var history = new FakeHistoryService();
-        var settings = new FakeSettingsService(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.Duration,
-            HistoryRetentionMinutes = 60
-        });
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.Duration,
+                HistoryRetentionMinutes = 60
+            }
+        );
 
         using var sut = new HistoryRetentionCoordinator(history, settings);
         sut.Initialize();
@@ -28,11 +29,13 @@ public class HistoryRetentionCoordinatorTests
     public void SettingsChange_DurationModePurgesImmediately()
     {
         var history = new FakeHistoryService();
-        var settings = new FakeSettingsService(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.Duration,
-            HistoryRetentionMinutes = 60
-        });
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.Duration,
+                HistoryRetentionMinutes = 60
+            }
+        );
 
         using var sut = new HistoryRetentionCoordinator(history, settings);
         sut.Initialize();
@@ -48,11 +51,13 @@ public class HistoryRetentionCoordinatorTests
     public void RecordsChanged_DurationModePurgesAfterHistoryWrite()
     {
         var history = new FakeHistoryService();
-        var settings = new FakeSettingsService(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.Duration,
-            HistoryRetentionMinutes = 60
-        });
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.Duration,
+                HistoryRetentionMinutes = 60
+            }
+        );
 
         using var sut = new HistoryRetentionCoordinator(history, settings);
         sut.Initialize();
@@ -67,10 +72,12 @@ public class HistoryRetentionCoordinatorTests
     public void ForeverMode_DoesNotPurgeOnStartupOrEvents()
     {
         var history = new FakeHistoryService();
-        var settings = new FakeSettingsService(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.Forever
-        });
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.Forever
+            }
+        );
 
         using var sut = new HistoryRetentionCoordinator(history, settings);
         sut.Initialize();
@@ -84,17 +91,24 @@ public class HistoryRetentionCoordinatorTests
     public void UntilAppCloses_DoesNotClearImmediatelyWhenSelected()
     {
         var history = new FakeHistoryService();
-        var settings = new FakeSettingsService(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.Duration,
-            HistoryRetentionMinutes = 60
-        });
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.Duration,
+                HistoryRetentionMinutes = 60
+            }
+        );
 
         using var sut = new HistoryRetentionCoordinator(history, settings);
         sut.Initialize();
         history.ResetCounters();
 
-        settings.Save(settings.Current with { HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses });
+        settings.Save(
+            settings.Current with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+            }
+        );
 
         Assert.Equal(0, history.ClearAllCallCount);
         Assert.Equal(0, history.PurgeCallCount);
@@ -104,10 +118,12 @@ public class HistoryRetentionCoordinatorTests
     public void HandleShutdown_UntilAppCloses_ClearsHistory()
     {
         var history = new FakeHistoryService();
-        var settings = new FakeSettingsService(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
-        });
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+            }
+        );
 
         using var sut = new HistoryRetentionCoordinator(history, settings);
         sut.Initialize();
@@ -122,10 +138,12 @@ public class HistoryRetentionCoordinatorTests
     public void Initialize_UntilAppCloses_ClearsHistoryForCrashRecovery()
     {
         var history = new FakeHistoryService();
-        var settings = new FakeSettingsService(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
-        });
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+            }
+        );
 
         using var sut = new HistoryRetentionCoordinator(history, settings);
         sut.Initialize();
@@ -137,11 +155,13 @@ public class HistoryRetentionCoordinatorTests
     public void SelfTriggeredRecordsChanged_DoesNotReenterPurge()
     {
         var history = new FakeHistoryService { RaiseRecordsChangedOnPurge = true };
-        var settings = new FakeSettingsService(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.Duration,
-            HistoryRetentionMinutes = 60
-        });
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.Duration,
+                HistoryRetentionMinutes = 60
+            }
+        );
 
         using var sut = new HistoryRetentionCoordinator(history, settings);
         sut.Initialize();
@@ -154,7 +174,10 @@ public class HistoryRetentionCoordinatorTests
         public AppSettings Current { get; private set; } = initialSettings;
         public event Action<AppSettings>? SettingsChanged;
 
-        public AppSettings Load() => Current;
+        public AppSettings Load()
+        {
+            return Current;
+        }
 
         public void Save(AppSettings settings)
         {
@@ -165,21 +188,34 @@ public class HistoryRetentionCoordinatorTests
 
     private sealed class FakeHistoryService : IHistoryService
     {
+        public int PurgeCallCount { get; private set; }
+        public int ClearAllCallCount { get; private set; }
+        public TimeSpan? LastPurgeRetention { get; private set; }
+        public bool RaiseRecordsChangedOnPurge { get; init; }
         public IReadOnlyList<TranscriptionRecord> Records => [];
         public event Action? RecordsChanged;
         public int TotalRecords => 0;
         public int TotalWords => 0;
         public double TotalDuration => 0;
 
-        public int PurgeCallCount { get; private set; }
-        public int ClearAllCallCount { get; private set; }
-        public TimeSpan? LastPurgeRetention { get; private set; }
-        public bool RaiseRecordsChangedOnPurge { get; init; }
+        public void AddRecord(TranscriptionRecord record)
+        {
+            RecordsChanged?.Invoke();
+        }
 
-        public void AddRecord(TranscriptionRecord record) => RecordsChanged?.Invoke();
         public void UpdateRecord(string id, string finalText) { }
-        public void SetPendingCorrectionSuggestions(string id, IReadOnlyList<CorrectionSuggestion> suggestions) { }
-        public void DeleteRecord(string id) => RecordsChanged?.Invoke();
+
+        public void SetPendingCorrectionSuggestions(
+            string id,
+            IReadOnlyList<CorrectionSuggestion> suggestions
+        )
+        {
+        }
+
+        public void DeleteRecord(string id)
+        {
+            RecordsChanged?.Invoke();
+        }
 
         public void ClearAll()
         {
@@ -187,24 +223,64 @@ public class HistoryRetentionCoordinatorTests
             RecordsChanged?.Invoke();
         }
 
-        public IReadOnlyList<TranscriptionRecord> Search(string query) => [];
+        public IReadOnlyList<TranscriptionRecord> Search(string query)
+        {
+            return [];
+        }
 
         public void PurgeOldRecords(TimeSpan? retention)
         {
             PurgeCallCount++;
             LastPurgeRetention = retention;
             if (RaiseRecordsChangedOnPurge)
+            {
                 RecordsChanged?.Invoke();
+            }
         }
 
-        public Task EnsureLoadedAsync() => Task.CompletedTask;
-        public IReadOnlyList<string> GetDistinctApps() => [];
-        public string ExportToText(IReadOnlyList<TranscriptionRecord> records, ExportLabels? labels = null) => string.Empty;
-        public string ExportToCsv(IReadOnlyList<TranscriptionRecord> records, ExportLabels? labels = null) => string.Empty;
-        public string ExportToMarkdown(IReadOnlyList<TranscriptionRecord> records, ExportLabels? labels = null) => string.Empty;
-        public string ExportToJson(IReadOnlyList<TranscriptionRecord> records) => "[]";
+        public Task EnsureLoadedAsync()
+        {
+            return Task.CompletedTask;
+        }
 
-        public void RaiseRecordsChanged() => RecordsChanged?.Invoke();
+        public IReadOnlyList<string> GetDistinctApps()
+        {
+            return [];
+        }
+
+        public string ExportToText(
+            IReadOnlyList<TranscriptionRecord> records,
+            ExportLabels? labels = null
+        )
+        {
+            return string.Empty;
+        }
+
+        public string ExportToCsv(
+            IReadOnlyList<TranscriptionRecord> records,
+            ExportLabels? labels = null
+        )
+        {
+            return string.Empty;
+        }
+
+        public string ExportToMarkdown(
+            IReadOnlyList<TranscriptionRecord> records,
+            ExportLabels? labels = null
+        )
+        {
+            return string.Empty;
+        }
+
+        public string ExportToJson(IReadOnlyList<TranscriptionRecord> records)
+        {
+            return "[]";
+        }
+
+        public void RaiseRecordsChanged()
+        {
+            RecordsChanged?.Invoke();
+        }
 
         public void ResetCounters()
         {

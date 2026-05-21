@@ -35,9 +35,15 @@ public partial class ShortcutsSection : UserControl
 
     private async void OnCopyCustomShortcutRequested(object? sender, string text)
     {
-        if (string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
         var topLevel = TopLevel.GetTopLevel(this);
         if (topLevel?.Clipboard is not null)
+        {
             await topLevel.Clipboard.SetTextAsync(text);
+        }
     }
 }

@@ -10,17 +10,18 @@ internal sealed record HttpApiRequest(
     string Path,
     NameValueCollection QueryString,
     IReadOnlyDictionary<string, string> Headers,
-    byte[] Body);
+    byte[] Body
+);
 
 internal sealed class HttpApiRequestException : Exception
 {
-    public int StatusCode { get; }
-
     public HttpApiRequestException(int statusCode, string message)
         : base(message)
     {
         StatusCode = statusCode;
     }
+
+    public int StatusCode { get; }
 }
 
 internal sealed record TranscribeApiRequest(
@@ -34,20 +35,23 @@ internal sealed record TranscribeApiRequest(
     string? Prompt,
     string? Engine,
     string? Model,
-    bool AwaitDownload);
+    bool AwaitDownload
+);
 
 internal sealed record MultipartPart(
     string Name,
     string? FileName,
     string? ContentType,
-    byte[] Data);
+    byte[] Data
+);
 
 internal static class HttpApiRequestParser
 {
     public static async Task<HttpApiRequest> FromListenerRequestAsync(
         HttpListenerRequest request,
         long maxBytes,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         byte[] body;
         try
@@ -66,7 +70,9 @@ internal static class HttpApiRequestParser
         foreach (var key in request.Headers.AllKeys)
         {
             if (key is not null && request.Headers[key] is { } value)
+            {
                 headers[key] = value;
+            }
         }
 
         return new HttpApiRequest(
@@ -74,7 +80,8 @@ internal static class HttpApiRequestParser
             request.Url?.AbsolutePath ?? "",
             request.QueryString,
             headers,
-            body);
+            body
+        );
     }
 
     public static TranscribeApiRequest ParseTranscribe(HttpApiRequest request)
@@ -93,14 +100,20 @@ internal static class HttpApiRequestParser
 
         if (contentType.Contains("multipart/form-data", StringComparison.OrdinalIgnoreCase))
         {
-            var boundary = ExtractBoundary(contentType)
+            var boundary =
+                ExtractBoundary(contentType)
                 ?? throw new HttpApiRequestException(400, "Missing multipart boundary");
             var parts = ParseMultipart(request.Body, boundary);
-            var filePart = parts.FirstOrDefault(p => p.Name == "file")
-                ?? throw new HttpApiRequestException(400, "Missing 'file' part in multipart form data");
+            var filePart =
+                parts.FirstOrDefault(p => p.Name == "file")
+                ?? throw new HttpApiRequestException(
+                    400,
+                    "Missing 'file' part in multipart form data"
+                );
 
             audioData = filePart.Data;
-            fileExtension = ExtensionFromFileName(filePart.FileName)
+            fileExtension =
+                ExtensionFromFileName(filePart.FileName)
                 ?? ExtensionFromMime(filePart.ContentType)
                 ?? "wav";
 
@@ -120,8 +133,12 @@ internal static class HttpApiRequestParser
             language = Clean(Header(request.Headers, "x-language"));
             languageHints.AddRange(
                 (Header(request.Headers, "x-language-hints") ?? "")
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(v => !string.IsNullOrWhiteSpace(v)));
+                .Split(
+                    ',',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                )
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+            );
             task = ParseTask(Header(request.Headers, "x-task"));
             targetLanguage = Clean(Header(request.Headers, "x-target-language"));
             responseFormat = Clean(Header(request.Headers, "x-response-format")) ?? "json";
@@ -135,13 +152,25 @@ internal static class HttpApiRequestParser
         }
 
         if (audioData.Length == 0)
+        {
             throw new HttpApiRequestException(400, "Empty audio data");
+        }
 
         if (!string.IsNullOrWhiteSpace(language) && languageHints.Count > 0)
-            throw new HttpApiRequestException(400, "Use either 'language' or 'language_hint', not both");
+        {
+            throw new HttpApiRequestException(
+                400,
+                "Use either 'language' or 'language_hint', not both"
+            );
+        }
 
-        var awaitDownload = string.Equals(request.QueryString["await_download"], "1", StringComparison.Ordinal)
-            || string.Equals(request.QueryString["await_download"], "true", StringComparison.OrdinalIgnoreCase);
+        var awaitDownload =
+            string.Equals(request.QueryString["await_download"], "1", StringComparison.Ordinal)
+            || string.Equals(
+                request.QueryString["await_download"],
+                "true",
+                StringComparison.OrdinalIgnoreCase
+            );
 
         return new TranscribeApiRequest(
             audioData,
@@ -154,7 +183,8 @@ internal static class HttpApiRequestParser
             prompt,
             engine,
             model,
-            awaitDownload);
+            awaitDownload
+        );
     }
 
     public static IReadOnlyList<MultipartPart> ParseMultipart(byte[] body, string boundary)
@@ -168,28 +198,52 @@ internal static class HttpApiRequestParser
         {
             var boundaryStart = IndexOf(body, boundaryBytes, searchStart);
             if (boundaryStart < 0)
+            {
                 break;
+            }
 
             var afterBoundary = boundaryStart + boundaryBytes.Length;
-            if (afterBoundary + 1 < body.Length && body[afterBoundary] == (byte)'-' && body[afterBoundary + 1] == (byte)'-')
+            if (
+                afterBoundary + 1 < body.Length
+                && body[afterBoundary] == (byte)'-'
+                && body[afterBoundary + 1] == (byte)'-'
+            )
+            {
                 break;
+            }
 
             var partHeaderStart = afterBoundary;
-            if (partHeaderStart + 1 < body.Length && body[partHeaderStart] == (byte)'\r' && body[partHeaderStart + 1] == (byte)'\n')
+            if (
+                partHeaderStart + 1 < body.Length
+                && body[partHeaderStart] == (byte)'\r'
+                && body[partHeaderStart + 1] == (byte)'\n'
+            )
+            {
                 partHeaderStart += 2;
+            }
 
             var headerEnd = IndexOf(body, doubleCrlf, partHeaderStart);
             if (headerEnd < 0)
+            {
                 break;
+            }
 
             var partBodyStart = headerEnd + doubleCrlf.Length;
             var nextBoundary = IndexOf(body, boundaryBytes, partBodyStart);
             if (nextBoundary < 0)
+            {
                 break;
+            }
 
             var partBodyEnd = nextBoundary;
-            if (partBodyEnd >= 2 && body[partBodyEnd - 2] == (byte)'\r' && body[partBodyEnd - 1] == (byte)'\n')
+            if (
+                partBodyEnd >= 2
+                && body[partBodyEnd - 2] == (byte)'\r'
+                && body[partBodyEnd - 1] == (byte)'\n'
+            )
+            {
                 partBodyEnd -= 2;
+            }
 
             if (partBodyEnd < partBodyStart)
             {
@@ -197,17 +251,24 @@ internal static class HttpApiRequestParser
                 continue;
             }
 
-            var headers = Encoding.UTF8.GetString(body, partHeaderStart, headerEnd - partHeaderStart);
+            var headers = Encoding.UTF8.GetString(
+                body,
+                partHeaderStart,
+                headerEnd - partHeaderStart
+            );
             var parsedHeaders = ParsePartHeaders(headers);
             if (!string.IsNullOrEmpty(parsedHeaders.Name))
             {
                 var data = new byte[partBodyEnd - partBodyStart];
                 Buffer.BlockCopy(body, partBodyStart, data, 0, data.Length);
-                parts.Add(new MultipartPart(
-                    parsedHeaders.Name,
-                    parsedHeaders.FileName,
-                    parsedHeaders.ContentType,
-                    data));
+                parts.Add(
+                    new MultipartPart(
+                        parsedHeaders.Name,
+                        parsedHeaders.FileName,
+                        parsedHeaders.ContentType,
+                        data
+                    )
+                );
             }
 
             searchStart = nextBoundary;
@@ -221,18 +282,25 @@ internal static class HttpApiRequestParser
         foreach (var part in contentType.Split(';', StringSplitOptions.TrimEntries))
         {
             if (!part.StartsWith("boundary=", StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
 
             var boundary = part["boundary=".Length..].Trim();
             if (boundary.Length >= 2 && boundary[0] == '"' && boundary[^1] == '"')
+            {
                 boundary = boundary[1..^1];
+            }
+
             return string.IsNullOrWhiteSpace(boundary) ? null : boundary;
         }
 
         return null;
     }
 
-    private static (string Name, string? FileName, string? ContentType) ParsePartHeaders(string headers)
+    private static (string Name, string? FileName, string? ContentType) ParsePartHeaders(
+        string headers
+    )
     {
         string? name = null;
         string? fileName = null;
@@ -242,7 +310,9 @@ internal static class HttpApiRequestParser
         {
             var colon = line.IndexOf(':');
             if (colon < 0)
+            {
                 continue;
+            }
 
             var headerName = line[..colon].Trim();
             var value = line[(colon + 1)..].Trim();
@@ -250,7 +320,8 @@ internal static class HttpApiRequestParser
             if (headerName.Equals("Content-Disposition", StringComparison.OrdinalIgnoreCase))
             {
                 name = ExtractDispositionParameter(value, "name");
-                fileName = ExtractDispositionParameter(value, "filename")
+                fileName =
+                    ExtractDispositionParameter(value, "filename")
                     ?? ExtractDispositionParameter(value, "filename*");
             }
             else if (headerName.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
@@ -268,18 +339,28 @@ internal static class HttpApiRequestParser
         {
             var equals = part.IndexOf('=');
             if (equals < 0)
+            {
                 continue;
+            }
 
             var partKey = part[..equals].Trim();
             if (!partKey.Equals(key, StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
 
             var parameterValue = part[(equals + 1)..].Trim();
             if (parameterValue.Length >= 2 && parameterValue[0] == '"' && parameterValue[^1] == '"')
+            {
                 parameterValue = parameterValue[1..^1];
+            }
 
             if (key.EndsWith('*') && parameterValue.Contains("''", StringComparison.Ordinal))
-                parameterValue = parameterValue[(parameterValue.IndexOf("''", StringComparison.Ordinal) + 2)..];
+            {
+                parameterValue = parameterValue[
+                    (parameterValue.IndexOf("''", StringComparison.Ordinal) + 2)..
+                ];
+            }
 
             return string.IsNullOrWhiteSpace(parameterValue)
                 ? null
@@ -289,18 +370,26 @@ internal static class HttpApiRequestParser
         return null;
     }
 
-    private static string? Header(IReadOnlyDictionary<string, string> headers, string name) =>
-        headers.TryGetValue(name, out var value) ? value : null;
+    private static string? Header(IReadOnlyDictionary<string, string> headers, string name)
+    {
+        return headers.TryGetValue(name, out var value) ? value : null;
+    }
 
-    private static string? Field(IEnumerable<MultipartPart> parts, string name) =>
-        parts.Where(p => p.Name == name)
+    private static string? Field(IEnumerable<MultipartPart> parts, string name)
+    {
+        return parts
+            .Where(p => p.Name == name)
             .Select(p => Clean(Encoding.UTF8.GetString(p.Data)))
             .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+    }
 
-    private static IEnumerable<string> Fields(IEnumerable<MultipartPart> parts, string name) =>
-        parts.Where(p => p.Name == name)
+    private static IEnumerable<string> Fields(IEnumerable<MultipartPart> parts, string name)
+    {
+        return parts
+            .Where(p => p.Name == name)
             .Select(p => Clean(Encoding.UTF8.GetString(p.Data)))
             .Where(v => !string.IsNullOrWhiteSpace(v))!;
+    }
 
     private static string? Clean(string? value)
     {
@@ -308,15 +397,19 @@ internal static class HttpApiRequestParser
         return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
     }
 
-    private static TranscriptionTask ParseTask(string? value) =>
-        string.Equals(value?.Trim(), "translate", StringComparison.OrdinalIgnoreCase)
+    private static TranscriptionTask ParseTask(string? value)
+    {
+        return string.Equals(value?.Trim(), "translate", StringComparison.OrdinalIgnoreCase)
             ? TranscriptionTask.Translate
             : TranscriptionTask.Transcribe;
+    }
 
     private static string? ExtensionFromFileName(string? fileName)
     {
         if (string.IsNullOrWhiteSpace(fileName))
+        {
             return null;
+        }
 
         var extension = Path.GetExtension(fileName).TrimStart('.').Trim();
         return string.IsNullOrWhiteSpace(extension) ? null : extension.ToLowerInvariant();
@@ -325,23 +418,55 @@ internal static class HttpApiRequestParser
     private static string? ExtensionFromMime(string? mime)
     {
         if (string.IsNullOrWhiteSpace(mime))
+        {
             return null;
+        }
 
         var lower = mime.ToLowerInvariant();
-        if (lower.Contains("wav") || lower.Contains("wave")) return "wav";
-        if (lower.Contains("mp3") || lower.Contains("mpeg")) return "mp3";
-        if (lower.Contains("m4a") || lower.Contains("mp4")) return "m4a";
-        if (lower.Contains("flac")) return "flac";
-        if (lower.Contains("ogg")) return "ogg";
-        if (lower.Contains("aac")) return "aac";
-        if (lower.Contains("webm")) return "webm";
+        if (lower.Contains("wav") || lower.Contains("wave"))
+        {
+            return "wav";
+        }
+
+        if (lower.Contains("mp3") || lower.Contains("mpeg"))
+        {
+            return "mp3";
+        }
+
+        if (lower.Contains("m4a") || lower.Contains("mp4"))
+        {
+            return "m4a";
+        }
+
+        if (lower.Contains("flac"))
+        {
+            return "flac";
+        }
+
+        if (lower.Contains("ogg"))
+        {
+            return "ogg";
+        }
+
+        if (lower.Contains("aac"))
+        {
+            return "aac";
+        }
+
+        if (lower.Contains("webm"))
+        {
+            return "webm";
+        }
+
         return null;
     }
 
     private static int IndexOf(byte[] haystack, byte[] needle, int startIndex)
     {
         if (needle.Length == 0)
+        {
             return startIndex;
+        }
 
         for (var i = startIndex; i <= haystack.Length - needle.Length; i++)
         {
@@ -349,14 +474,18 @@ internal static class HttpApiRequestParser
             for (var j = 0; j < needle.Length; j++)
             {
                 if (haystack[i + j] == needle[j])
+                {
                     continue;
+                }
 
                 found = false;
                 break;
             }
 
             if (found)
+            {
                 return i;
+            }
         }
 
         return -1;
@@ -372,13 +501,17 @@ internal static class HttpApiRequestParser
         public override bool CanSeek => false;
         public override bool CanWrite => false;
         public override long Length => _inner.Length;
+
         public override long Position
         {
             get => _bytesRead;
             set => throw new NotSupportedException();
         }
 
-        public override void Flush() => _inner.Flush();
+        public override void Flush()
+        {
+            _inner.Flush();
+        }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
@@ -394,7 +527,10 @@ internal static class HttpApiRequestParser
             return read;
         }
 
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default
+        )
         {
             var read = await _inner.ReadAsync(buffer, cancellationToken);
             TrackBytes(read);
@@ -405,19 +541,35 @@ internal static class HttpApiRequestParser
         {
             var value = _inner.ReadByte();
             if (value >= 0)
+            {
                 TrackBytes(1);
+            }
+
             return value;
         }
 
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void SetLength(long value)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
 
         private void TrackBytes(int read)
         {
             _bytesRead += read;
             if (_bytesRead > _maxBytes)
+            {
                 throw new InvalidOperationException("Request body exceeded the configured limit.");
+            }
         }
     }
 }

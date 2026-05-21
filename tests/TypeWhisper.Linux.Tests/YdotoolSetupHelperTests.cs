@@ -5,11 +5,11 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Covers the pure / <c>internal static</c> surface of
-/// <see cref="YdotoolSetupHelper"/>. The process- and syscall-coupled
-/// paths (pkexec, systemctl, libc <c>access</c>) can't be meaningfully
-/// mocked — the helper calls <c>Process.Start</c> and P/Invoke directly —
-/// so they're verified manually instead.
+///     Covers the pure / <c>internal static</c> surface of
+///     <see cref="YdotoolSetupHelper" />. The process- and syscall-coupled
+///     paths (pkexec, systemctl, libc <c>access</c>) can't be meaningfully
+///     mocked — the helper calls <c>Process.Start</c> and P/Invoke directly —
+///     so they're verified manually instead.
 /// </summary>
 public sealed class YdotoolSetupHelperTests
 {
@@ -24,9 +24,7 @@ public sealed class YdotoolSetupHelperTests
 
             var path = YdotoolSetupHelper.UserUnitFilePath();
 
-            Assert.Equal(
-                Path.Combine(custom, "systemd", "user", "ydotoold.service"),
-                path);
+            Assert.Equal(Path.Combine(custom, "systemd", "user", "ydotoold.service"), path);
         }
         finally
         {
@@ -47,7 +45,8 @@ public sealed class YdotoolSetupHelperTests
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             Assert.Equal(
                 Path.Combine(home, ".config", "systemd", "user", "ydotoold.service"),
-                path);
+                path
+            );
         }
         finally
         {
@@ -95,7 +94,11 @@ public sealed class YdotoolSetupHelperTests
         finally
         {
             Environment.SetEnvironmentVariable("PATH", original);
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            try
+            {
+                Directory.Delete(dir, true);
+            }
+            catch { }
         }
     }
 
@@ -111,13 +114,25 @@ public sealed class YdotoolSetupHelperTests
 
             Assert.True(YdotoolSetupHelper.IsFileOwnedByTypeWhisper(withMarker));
             Assert.False(YdotoolSetupHelper.IsFileOwnedByTypeWhisper(withoutMarker));
-            Assert.False(YdotoolSetupHelper.IsFileOwnedByTypeWhisper(
-                Path.Combine(Path.GetTempPath(), $"tw-missing-{Guid.NewGuid():N}")));
+            Assert.False(
+                YdotoolSetupHelper.IsFileOwnedByTypeWhisper(
+                    Path.Combine(Path.GetTempPath(), $"tw-missing-{Guid.NewGuid():N}")
+                )
+            );
         }
         finally
         {
-            try { File.Delete(withMarker); } catch { }
-            try { File.Delete(withoutMarker); } catch { }
+            try
+            {
+                File.Delete(withMarker);
+            }
+            catch { }
+
+            try
+            {
+                File.Delete(withoutMarker);
+            }
+            catch { }
         }
     }
 
@@ -133,7 +148,11 @@ public sealed class YdotoolSetupHelperTests
         }
         finally
         {
-            try { File.Delete(path); } catch { }
+            try
+            {
+                File.Delete(path);
+            }
+            catch { }
         }
     }
 
@@ -150,7 +169,9 @@ public sealed class YdotoolSetupHelperTests
         using var env = new TempEnvironment();
         // A ydotoold user unit the user (or a distro/AUR package) wrote —
         // no TypeWhisper ownership marker.
-        env.WriteUserUnit("# Some other tool's ydotoold unit\n[Service]\nExecStart=/usr/bin/ydotoold\n");
+        env.WriteUserUnit(
+            "# Some other tool's ydotoold unit\n[Service]\nExecStart=/usr/bin/ydotoold\n"
+        );
         // systemctl on PATH so the disable isn't skipped for the *wrong*
         // reason — this proves the ownership gate, not a missing binary.
         env.PutFakeBinaryOnPath("systemctl");
@@ -161,8 +182,10 @@ public sealed class YdotoolSetupHelperTests
         var result = await helper.RemoveAsync(CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.DoesNotContain(runner.Invocations, i =>
-            i.FileName == "systemctl" && i.Args.Contains("disable"));
+        Assert.DoesNotContain(
+            runner.Invocations,
+            i => i.FileName == "systemctl" && i.Args.Contains("disable")
+        );
         // The foreign unit file is left in place, untouched.
         Assert.True(File.Exists(YdotoolSetupHelper.UserUnitFilePath()));
     }
@@ -180,10 +203,13 @@ public sealed class YdotoolSetupHelperTests
         var result = await helper.RemoveAsync(CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Contains(runner.Invocations, i =>
-            i.FileName == "systemctl"
-            && i.Args.Contains("disable")
-            && i.Args.Contains("ydotoold.service"));
+        Assert.Contains(
+            runner.Invocations,
+            i =>
+                i.FileName == "systemctl"
+                && i.Args.Contains("disable")
+                && i.Args.Contains("ydotoold.service")
+        );
         Assert.False(File.Exists(YdotoolSetupHelper.UserUnitFilePath()));
     }
 
@@ -197,7 +223,8 @@ public sealed class YdotoolSetupHelperTests
         var runner = new FakeProcessRunner();
         runner.FailWhen(
             (file, args) => file == "systemctl" && args.Contains("disable"),
-            stderr: "Failed to disable unit: Connection refused");
+            "Failed to disable unit: Connection refused"
+        );
         var helper = new YdotoolSetupHelper(new SystemCommandAvailabilityService(), runner);
 
         var result = await helper.RemoveAsync(CancellationToken.None);
@@ -210,25 +237,59 @@ public sealed class YdotoolSetupHelperTests
     }
 
     /// <summary>
-    /// Points XDG_CONFIG_HOME and PATH at throwaway temp dirs for one test,
-    /// then restores them. PATH is deliberately restricted to the temp dir so
-    /// the test can never reach the real systemctl/pkexec — process execution
-    /// goes through the injected <see cref="RecordingProcessRunner"/>, while
-    /// <c>DesktopDetector.BinaryExists</c> still resolves whatever fake
-    /// binaries the test places there.
+    ///     Points XDG_CONFIG_HOME and PATH at throwaway temp dirs for one test,
+    ///     then restores them. PATH is deliberately restricted to the temp dir so
+    ///     the test can never reach the real systemctl/pkexec — process execution
+    ///     goes through the injected <see cref="RecordingProcessRunner" />, while
+    ///     <c>DesktopDetector.BinaryExists</c> still resolves whatever fake
+    ///     binaries the test places there.
     /// </summary>
     private sealed class TempEnvironment : IDisposable
     {
-        private readonly string? _originalXdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        private readonly string _configHome = Path.Combine(
+            Path.GetTempPath(),
+            $"tw-cfg-{Guid.NewGuid():N}"
+        );
+
         private readonly string? _originalPath = Environment.GetEnvironmentVariable("PATH");
-        private readonly string _configHome = Path.Combine(Path.GetTempPath(), $"tw-cfg-{Guid.NewGuid():N}");
-        private readonly string _pathDir = Path.Combine(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
+
+        private readonly string? _originalXdg = Environment.GetEnvironmentVariable(
+            "XDG_CONFIG_HOME"
+        );
+
+        private readonly string _pathDir = Path.Combine(
+            Path.GetTempPath(),
+            $"tw-path-{Guid.NewGuid():N}"
+        );
 
         public TempEnvironment()
         {
             Directory.CreateDirectory(_pathDir);
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _configHome);
             Environment.SetEnvironmentVariable("PATH", _pathDir);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _originalXdg);
+            Environment.SetEnvironmentVariable("PATH", _originalPath);
+            try
+            {
+                Directory.Delete(_configHome, true);
+            }
+            catch
+            {
+                /* best effort */
+            }
+
+            try
+            {
+                Directory.Delete(_pathDir, true);
+            }
+            catch
+            {
+                /* best effort */
+            }
         }
 
         public void WriteUserUnit(string content)
@@ -239,14 +300,8 @@ public sealed class YdotoolSetupHelperTests
         }
 
         public void PutFakeBinaryOnPath(string name)
-            => File.WriteAllText(Path.Combine(_pathDir, name), "#!/bin/sh\n");
-
-        public void Dispose()
         {
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _originalXdg);
-            Environment.SetEnvironmentVariable("PATH", _originalPath);
-            try { Directory.Delete(_configHome, recursive: true); } catch { /* best effort */ }
-            try { Directory.Delete(_pathDir, recursive: true); } catch { /* best effort */ }
+            File.WriteAllText(Path.Combine(_pathDir, name), "#!/bin/sh\n");
         }
     }
 }

@@ -1,7 +1,8 @@
-using System.Collections.ObjectModel;
-using System.Reflection;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -11,39 +12,22 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
-    private readonly ISettingsService _settings;
     private readonly LinuxPreferencesService _linuxPreferences;
+    private readonly ISettingsService _settings;
     private readonly SettingsBackupService _settingsBackup;
 
-    public string Version { get; } =
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev";
+    [ObservableProperty]
+    private string _backupStatusText = "Back up settings, profiles, snippets, and plugin data.";
 
-    public string RuntimeVersion { get; } = Environment.Version.ToString();
-
-    public string OsDescription { get; } = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
-
-    public string Architecture { get; } =
-        System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString();
-
-    public string ProjectUrl { get; } = "https://github.com/csmashe/typewhisper-linux";
-
-    public string UpstreamUrl { get; } = "https://github.com/TypeWhisper/typewhisper-win";
-
-    public bool CanCheckForUpdates => false;
-
-    public string UpdateStatusText => "Automatic updates are not configured in this Linux build yet.";
-
-    public ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
-    public bool HasErrors => ErrorEntries.Count > 0;
-
-    [ObservableProperty] private bool _isBackupBusy;
-    [ObservableProperty] private string _backupStatusText = "Back up settings, profiles, snippets, and plugin data.";
+    [ObservableProperty]
+    private bool _isBackupBusy;
 
     public AboutSectionViewModel(
         IErrorLogService errorLog,
         ISettingsService settings,
         LinuxPreferencesService linuxPreferences,
-        SettingsBackupService settingsBackup)
+        SettingsBackupService settingsBackup
+    )
     {
         _errorLog = errorLog;
         _settings = settings;
@@ -53,6 +37,29 @@ public partial class AboutSectionViewModel : ObservableObject
         _errorLog.EntriesChanged += RefreshErrors;
     }
 
+    public string Version { get; } =
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev";
+
+    public string RuntimeVersion { get; } = Environment.Version.ToString();
+
+    public string OsDescription { get; } =
+        RuntimeInformation.OSDescription;
+
+    public string Architecture { get; } =
+        RuntimeInformation.OSArchitecture.ToString();
+
+    public string ProjectUrl { get; } = "https://github.com/csmashe/typewhisper-linux";
+
+    public string UpstreamUrl { get; } = "https://github.com/TypeWhisper/typewhisper-win";
+
+    public bool CanCheckForUpdates => false;
+
+    public string UpdateStatusText =>
+        "Automatic updates are not configured in this Linux build yet.";
+
+    public ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
+    public bool HasErrors => ErrorEntries.Count > 0;
+
     [RelayCommand]
     private void ClearErrors()
     {
@@ -60,19 +67,25 @@ public partial class AboutSectionViewModel : ObservableObject
         RefreshErrors();
     }
 
-    public string ExportDiagnostics() => _errorLog.ExportDiagnostics();
+    public string ExportDiagnostics()
+    {
+        return _errorLog.ExportDiagnostics();
+    }
 
     public async Task<SettingsBackupResult> CreateSettingsBackupAsync(string path)
     {
         if (IsBackupBusy)
+        {
             throw new InvalidOperationException("A settings backup or restore is already running.");
+        }
 
         IsBackupBusy = true;
         BackupStatusText = "Creating settings backup...";
         try
         {
             var result = await Task.Run(() => _settingsBackup.CreateBackup(path));
-            BackupStatusText = $"Backup created with {result.FileCount} file(s). Models, audio, logs, and plugin binaries were skipped.";
+            BackupStatusText =
+                $"Backup created with {result.FileCount} file(s). Models, audio, logs, and plugin binaries were skipped.";
             return result;
         }
         finally
@@ -84,7 +97,9 @@ public partial class AboutSectionViewModel : ObservableObject
     public async Task<SettingsBackupResult> RestoreSettingsBackupAsync(string path)
     {
         if (IsBackupBusy)
+        {
             throw new InvalidOperationException("A settings backup or restore is already running.");
+        }
 
         IsBackupBusy = true;
         BackupStatusText = "Restoring settings backup...";
@@ -95,7 +110,8 @@ public partial class AboutSectionViewModel : ObservableObject
             // reflects the just-restored files and SettingsChanged is fired.
             _settings.Save(_settings.Load());
             _linuxPreferences.Save(_linuxPreferences.Load());
-            BackupStatusText = $"Backup restored from {result.FileCount} file(s). Some restored settings may require an app restart.";
+            BackupStatusText =
+                $"Backup restored from {result.FileCount} file(s). Some restored settings may require an app restart.";
             return result;
         }
         finally
@@ -108,7 +124,9 @@ public partial class AboutSectionViewModel : ObservableObject
     {
         ErrorEntries.Clear();
         foreach (var entry in _errorLog.Entries)
+        {
             ErrorEntries.Add(entry);
+        }
 
         OnPropertyChanged(nameof(HasErrors));
     }

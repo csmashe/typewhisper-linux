@@ -15,14 +15,19 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
     public event Action<StreamingTranscriptEvent>? TranscriptReceived;
 
     public static async Task<DeepgramStreamingSession> ConnectAsync(
-        string apiKey, string model, string? language, CancellationToken ct)
+        string apiKey,
+        string model,
+        string? language,
+        CancellationToken ct
+    )
     {
         var session = new DeepgramStreamingSession();
 
         var langParam = string.IsNullOrEmpty(language)
             ? "&detect_language=true"
             : $"&language={language}";
-        var url = $"wss://api.deepgram.com/v1/listen?model={model}&encoding=linear16&sample_rate=16000&interim_results=true&punctuate=true&smart_format=true{langParam}";
+        var url =
+            $"wss://api.deepgram.com/v1/listen?model={model}&encoding=linear16&sample_rate=16000&interim_results=true&punctuate=true&smart_format=true{langParam}";
 
         session._ws.Options.SetRequestHeader("Authorization", $"Token {apiKey}");
         await session._ws.ConnectAsync(new Uri(url), ct);
@@ -32,13 +37,15 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
 
     public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
     {
-        if (_ws.State != WebSocketState.Open) return;
+        if (_ws.State != WebSocketState.Open)
+            return;
         await _ws.SendAsync(pcm16Audio, WebSocketMessageType.Binary, true, ct);
     }
 
     public async Task FinalizeAsync(CancellationToken ct)
     {
-        if (_ws.State != WebSocketState.Open) return;
+        if (_ws.State != WebSocketState.Open)
+            return;
         var msg = Encoding.UTF8.GetBytes("""{"type":"CloseStream"}""");
         await _ws.SendAsync(msg, WebSocketMessageType.Text, true, ct);
     }
@@ -57,13 +64,19 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
                 do
                 {
                     result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close) return;
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        return;
                     messageBuffer.Write(buffer, 0, result.Count);
                 } while (!result.EndOfMessage);
 
-                if (result.MessageType != WebSocketMessageType.Text) continue;
+                if (result.MessageType != WebSocketMessageType.Text)
+                    continue;
 
-                var json = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
+                var json = Encoding.UTF8.GetString(
+                    messageBuffer.GetBuffer(),
+                    0,
+                    (int)messageBuffer.Length
+                );
                 ParseAndEmit(json);
             }
         }
@@ -81,19 +94,23 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
             if (!root.TryGetProperty("type", out var typeEl) || typeEl.GetString() != "Results")
                 return;
 
-            var transcript = root
-                .GetProperty("channel")
-                .GetProperty("alternatives")[0]
-                .GetProperty("transcript")
-                .GetString() ?? "";
+            var transcript =
+                root.GetProperty("channel")
+                    .GetProperty("alternatives")[0]
+                    .GetProperty("transcript")
+                    .GetString()
+                ?? "";
 
-            if (string.IsNullOrWhiteSpace(transcript)) return;
+            if (string.IsNullOrWhiteSpace(transcript))
+                return;
 
             var isFinal = root.TryGetProperty("is_final", out var finalEl) && finalEl.GetBoolean();
 
             TranscriptReceived?.Invoke(new StreamingTranscriptEvent(transcript, isFinal));
         }
-        catch { /* malformed message, skip */ }
+        catch
+        { /* malformed message, skip */
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -102,14 +119,28 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
 
         if (_ws.State == WebSocketState.Open)
         {
-            try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
-            catch { /* best effort */ }
+            try
+            {
+                await _ws.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    null,
+                    CancellationToken.None
+                );
+            }
+            catch
+            { /* best effort */
+            }
         }
 
         if (_receiveTask is not null)
         {
-            try { await _receiveTask; }
-            catch { /* expected */ }
+            try
+            {
+                await _receiveTask;
+            }
+            catch
+            { /* expected */
+            }
         }
 
         _receiveCts.Dispose();

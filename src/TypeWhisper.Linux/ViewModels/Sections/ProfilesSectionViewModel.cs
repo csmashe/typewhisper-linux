@@ -1,10 +1,11 @@
-using System.Collections.ObjectModel;
-using System.Diagnostics;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -15,29 +16,162 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class ProfilesSectionViewModel : ObservableObject
 {
-    private readonly IProfileService _profiles;
     private readonly IActiveWindowService _activeWindow;
-    private readonly PluginManager _pluginManager;
-    private readonly IPromptActionService _promptActions;
+    private readonly BrowserAccessibilitySetupHelper _browserSetup;
     private readonly IDetectionFailureTracker _failureTracker;
     private readonly GnomeWindowCallsSetupHelper _gnomeSetup;
-    private readonly BrowserAccessibilitySetupHelper _browserSetup;
-    private readonly DispatcherTimer _windowTimer;
     private readonly string _hostProcessName = Process.GetCurrentProcess().ProcessName;
+    private readonly PluginManager _pluginManager;
+    private readonly IProfileService _profiles;
+    private readonly IPromptActionService _promptActions;
+    private readonly DispatcherTimer _windowTimer;
+
+    [ObservableProperty]
+    private string? _browserAccessibilityStatusMessage;
+
+    [ObservableProperty]
+    private bool _canEnableBrowserAccessibility;
+
+    [ObservableProperty]
+    private bool _canInstallWindowCallsExtension;
+
+    [ObservableProperty]
+    private bool _canRevertBrowserAccessibility;
+
     private ProfilesContextWindow? _contextWindow;
+
+    [ObservableProperty]
+    private string _currentProcessName = "-";
+
+    [ObservableProperty]
+    private string _currentUrl = "-";
+
+    [ObservableProperty]
+    private string _currentWindowTitle = "-";
+
+    [ObservableProperty]
+    private CleanupLevel? _editCleanupLevelOverride;
+
+    [ObservableProperty]
+    private bool? _editDeveloperFormattingOverride;
+
+    [ObservableProperty]
+    private bool _editIsEnabled = true;
+
+    [ObservableProperty]
+    private string? _editLanguage;
+
+    [ObservableProperty]
+    private string? _editModelId;
+
+    [ObservableProperty]
+    private string _editName = "";
+
+    [ObservableProperty]
+    private int _editPriority;
+
+    [ObservableProperty]
+    private string? _editPromptActionId;
+
+    [ObservableProperty]
+    private ProfileStylePreset _editStylePreset = ProfileStylePreset.Raw;
+
+    [ObservableProperty]
+    private string? _editTask;
+
+    [ObservableProperty]
+    private string? _editTranslationTarget;
+
+    [ObservableProperty]
+    private bool? _editWhisperModeOverride;
+
+    [ObservableProperty]
+    private bool _hasMatchedProfile;
+
     // Cache the last non-host window so UpdateCurrentWindow can return stable
     // values when TypeWhisper itself is focused — querying the active-window
     // service in that state would return our own process and the live-context
     // display would flip to "typewhisper" on every timer tick.
     private string _lastExternalProcessName = "-";
-    private string _lastExternalWindowTitle = "-";
     private string _lastExternalUrl = "-";
+    private string _lastExternalWindowTitle = "-";
     private MatchResult _lastMatchResult = MatchResult.NoMatch;
+
+    [ObservableProperty]
+    private string _matchedProfileName = "No profile";
+
+    [ObservableProperty]
+    private string _processNameInput = "";
+
+    [ObservableProperty]
+    private Profile? _selectedProfile;
+
+    [ObservableProperty]
+    private string _urlPatternInput = "";
+
+    [ObservableProperty]
+    private string? _waylandDetectionWarning;
+
+    public ProfilesSectionViewModel(
+        IProfileService profiles,
+        IActiveWindowService activeWindow,
+        PluginManager pluginManager,
+        IPromptActionService promptActions,
+        IDetectionFailureTracker failureTracker,
+        GnomeWindowCallsSetupHelper gnomeSetup,
+        BrowserAccessibilitySetupHelper browserSetup
+    )
+    {
+        _profiles = profiles;
+        _activeWindow = activeWindow;
+        _pluginManager = pluginManager;
+        _promptActions = promptActions;
+        _failureTracker = failureTracker;
+        _gnomeSetup = gnomeSetup;
+        _browserSetup = browserSetup;
+        RefreshBrowserAccessibilityStatus();
+
+        _profiles.ProfilesChanged += () => Dispatcher.UIThread.Post(RefreshProfiles);
+        _pluginManager.PluginStateChanged += (_, _) =>
+            Dispatcher.UIThread.Post(RefreshModelOptions);
+        _promptActions.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshPromptActionOptions);
+        UrlPatternChips.CollectionChanged += (_, _) =>
+            OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
+        _failureTracker.OnFailure += (_, e) =>
+        {
+            if (!e.ShouldShowPersistentBanner)
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                WaylandDetectionWarning = e.Reason;
+                CanInstallWindowCallsExtension =
+                    _gnomeSetup.IsApplicable() && !_gnomeSetup.IsCurrentlyInstalled();
+            });
+        };
+
+        RefreshModelOptions();
+        RefreshPromptActionOptions();
+        foreach (var option in TranslationModelInfo.ProfileTargetOptions)
+        {
+            TranslationTargetOptions.Add(option);
+        }
+
+        RefreshProfiles();
+
+        _windowTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _windowTimer.Tick += (_, _) => UpdateCurrentWindow();
+        UpdateCurrentWindow();
+        _windowTimer.Start();
+    }
 
     public ObservableCollection<Profile> Profiles { get; } = [];
     public ObservableCollection<ProfileModelOption> ModelOptions { get; } = [];
     public ObservableCollection<PromptActionOption> PromptActionOptions { get; } = [];
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
+
     public ObservableCollection<ProfileStylePresetOption> StylePresetOptions { get; } =
     [
         new(ProfileStylePreset.Raw, "Raw"),
@@ -49,6 +183,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         new(ProfileStylePreset.TerminalSafe, "Terminal-safe"),
         new(ProfileStylePreset.MeetingNotes, "Meeting notes")
     ];
+
     public ObservableCollection<NullableCleanupLevelOption> CleanupOverrideOptions { get; } =
     [
         new(null, "Use style preset"),
@@ -57,44 +192,19 @@ public partial class ProfilesSectionViewModel : ObservableObject
         new(CleanupLevel.Medium, "Medium"),
         new(CleanupLevel.High, "High")
     ];
+
     public ObservableCollection<string> ProcessNameChips { get; } = [];
     public ObservableCollection<string> UrlPatternChips { get; } = [];
 
-    [ObservableProperty] private Profile? _selectedProfile;
-    [ObservableProperty] private string _editName = "";
-    [ObservableProperty] private string? _editLanguage;
-    [ObservableProperty] private string? _editTask;
-    [ObservableProperty] private string? _editTranslationTarget;
-    [ObservableProperty] private bool? _editWhisperModeOverride;
-    [ObservableProperty] private string? _editModelId;
-    [ObservableProperty] private string? _editPromptActionId;
-    [ObservableProperty] private ProfileStylePreset _editStylePreset = ProfileStylePreset.Raw;
-    [ObservableProperty] private CleanupLevel? _editCleanupLevelOverride;
-    [ObservableProperty] private bool? _editDeveloperFormattingOverride;
-    [ObservableProperty] private int _editPriority;
-    [ObservableProperty] private bool _editIsEnabled = true;
-    [ObservableProperty] private string _processNameInput = "";
-    [ObservableProperty] private string _urlPatternInput = "";
-    [ObservableProperty] private string _currentProcessName = "-";
-    [ObservableProperty] private string _currentWindowTitle = "-";
-    [ObservableProperty] private string _currentUrl = "-";
-    [ObservableProperty] private string _matchedProfileName = "No profile";
-    [ObservableProperty] private bool _hasMatchedProfile;
-    [ObservableProperty] private string? _waylandDetectionWarning;
-    [ObservableProperty] private bool _canInstallWindowCallsExtension;
-    [ObservableProperty] private string? _browserAccessibilityStatusMessage;
-    [ObservableProperty] private bool _canEnableBrowserAccessibility;
-    [ObservableProperty] private bool _canRevertBrowserAccessibility;
-
     /// <summary>
-    /// True when the URL Patterns block in the profile editor should be
-    /// rendered. URL-based profile rules need a working URL extraction
-    /// path: on X11 that's always available (xdotool + xclip); on Wayland
-    /// it needs browser accessibility configured. Hiding the section when
-    /// it can't possibly work avoids leading the user into building rules
-    /// that silently never match — but we keep the section visible when
-    /// the profile already has saved URL patterns so existing data isn't
-    /// orphaned from view.
+    ///     True when the URL Patterns block in the profile editor should be
+    ///     rendered. URL-based profile rules need a working URL extraction
+    ///     path: on X11 that's always available (xdotool + xclip); on Wayland
+    ///     it needs browser accessibility configured. Hiding the section when
+    ///     it can't possibly work avoids leading the user into building rules
+    ///     that silently never match — but we keep the section visible when
+    ///     the profile already has saved URL patterns so existing data isn't
+    ///     orphaned from view.
     /// </summary>
     public bool IsUrlPatternsSectionVisible =>
         !_browserSetup.IsApplicable()
@@ -104,42 +214,53 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public IReadOnlyList<string> LanguageChoices { get; } =
         ["", "auto", "en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
 
-    public IReadOnlyList<string> TaskChoices { get; } =
-        ["", "transcribe", "translate"];
+    public IReadOnlyList<string> TaskChoices { get; } = ["", "transcribe", "translate"];
 
     public bool HasSelectedProfile => SelectedProfile is not null;
     public int ProfileCount => Profiles.Count;
     public int EnabledProfileCount => Profiles.Count(static profile => profile.IsEnabled);
     public string Summary => $"{ProfileCount} profile(s), {EnabledProfileCount} enabled";
-    public string SelectedProfileSummary => SelectedProfile is null
-        ? "Select a profile from the list or create a new one."
-        : $"{ProcessNameChips.Count} app rule(s), {UrlPatternChips.Count} URL rule(s)";
+
+    public string SelectedProfileSummary =>
+        SelectedProfile is null
+            ? "Select a profile from the list or create a new one."
+            : $"{ProcessNameChips.Count} app rule(s), {UrlPatternChips.Count} URL rule(s)";
+
     public string SelectedProfileDisplayName => SelectedProfile?.Name ?? "No profile";
-    public string MatchStatusText => HasMatchedProfile
-        ? $"Matches {MatchedProfileName}"
-        : "No active match";
+
+    public string MatchStatusText =>
+        HasMatchedProfile ? $"Matches {MatchedProfileName}" : "No active match";
+
     public bool ShowLiveContextProfileHint => !HasSelectedProfile;
-    public bool HasCurrentProcess => !string.IsNullOrWhiteSpace(CurrentProcessName) && CurrentProcessName != "-";
+
+    public bool HasCurrentProcess =>
+        !string.IsNullOrWhiteSpace(CurrentProcessName) && CurrentProcessName != "-";
+
     public bool HasCurrentUrl => !string.IsNullOrWhiteSpace(CurrentUrl) && CurrentUrl != "-";
     public bool ShowNoBrowserUrlHint => !HasCurrentUrl;
-    public bool HasCurrentWindowTitle => !string.IsNullOrWhiteSpace(CurrentWindowTitle) && CurrentWindowTitle != "-";
+
+    public bool HasCurrentWindowTitle =>
+        !string.IsNullOrWhiteSpace(CurrentWindowTitle) && CurrentWindowTitle != "-";
+
     public string CurrentUrlPattern => TryExtractUrlPattern(CurrentUrl);
     public string EditIsEnabledStatusText => EditIsEnabled ? "On" : "Off";
+
     public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; } =
-    [
-        new(null, "Use global default"),
-        new(true, "Enabled"),
-        new(false, "Disabled")
-    ];
+        [new(null, "Use global default"), new(true, "Enabled"), new(false, "Disabled")];
+
     public TranslationTargetOption? SelectedTranslationTargetOption
     {
-        get => TranslationTargetOptions.FirstOrDefault(option =>
-            string.Equals(option.Code, EditTranslationTarget, StringComparison.Ordinal));
+        get =>
+            TranslationTargetOptions.FirstOrDefault(option =>
+                string.Equals(option.Code, EditTranslationTarget, StringComparison.Ordinal)
+            );
         set
         {
             var code = value?.Code;
             if (string.Equals(code, EditTranslationTarget, StringComparison.Ordinal))
+            {
                 return;
+            }
 
             EditTranslationTarget = code;
             OnPropertyChanged();
@@ -148,13 +269,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     public ProfileModelOption? SelectedModelOption
     {
-        get => ModelOptions.FirstOrDefault(option =>
-            string.Equals(option.Value, EditModelId, StringComparison.Ordinal));
+        get =>
+            ModelOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, EditModelId, StringComparison.Ordinal)
+            );
         set
         {
             var selected = value?.Value;
             if (string.Equals(selected, EditModelId, StringComparison.Ordinal))
+            {
                 return;
+            }
 
             EditModelId = selected;
             OnPropertyChanged();
@@ -163,13 +288,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     public PromptActionOption? SelectedPromptActionOption
     {
-        get => PromptActionOptions.FirstOrDefault(option =>
-            string.Equals(option.Value, EditPromptActionId, StringComparison.Ordinal));
+        get =>
+            PromptActionOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, EditPromptActionId, StringComparison.Ordinal)
+            );
         set
         {
             var selected = value?.Value;
             if (string.Equals(selected, EditPromptActionId, StringComparison.Ordinal))
+            {
                 return;
+            }
 
             EditPromptActionId = selected;
             OnPropertyChanged();
@@ -183,7 +312,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
         {
             var selected = value?.Value ?? ProfileStylePreset.Raw;
             if (selected == EditStylePreset)
+            {
                 return;
+            }
 
             EditStylePreset = selected;
             OnPropertyChanged();
@@ -196,7 +327,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
         set
         {
             if (value?.Value == EditWhisperModeOverride)
+            {
                 return;
+            }
 
             EditWhisperModeOverride = value?.Value;
             OnPropertyChanged();
@@ -205,11 +338,16 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     public NullableBooleanOption? SelectedDeveloperFormattingOverrideOption
     {
-        get => WhisperModeOptions.FirstOrDefault(option => option.Value == EditDeveloperFormattingOverride);
+        get =>
+            WhisperModeOptions.FirstOrDefault(option =>
+                option.Value == EditDeveloperFormattingOverride
+            );
         set
         {
             if (value?.Value == EditDeveloperFormattingOverride)
+            {
                 return;
+            }
 
             EditDeveloperFormattingOverride = value?.Value;
             OnPropertyChanged();
@@ -218,61 +356,20 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     public NullableCleanupLevelOption? SelectedCleanupOverrideOption
     {
-        get => CleanupOverrideOptions.FirstOrDefault(option => option.Value == EditCleanupLevelOverride);
+        get =>
+            CleanupOverrideOptions.FirstOrDefault(option =>
+                option.Value == EditCleanupLevelOverride
+            );
         set
         {
             if (value?.Value == EditCleanupLevelOverride)
+            {
                 return;
+            }
 
             EditCleanupLevelOverride = value?.Value;
             OnPropertyChanged();
         }
-    }
-
-    public ProfilesSectionViewModel(
-        IProfileService profiles,
-        IActiveWindowService activeWindow,
-        PluginManager pluginManager,
-        IPromptActionService promptActions,
-        IDetectionFailureTracker failureTracker,
-        GnomeWindowCallsSetupHelper gnomeSetup,
-        BrowserAccessibilitySetupHelper browserSetup)
-    {
-        _profiles = profiles;
-        _activeWindow = activeWindow;
-        _pluginManager = pluginManager;
-        _promptActions = promptActions;
-        _failureTracker = failureTracker;
-        _gnomeSetup = gnomeSetup;
-        _browserSetup = browserSetup;
-        RefreshBrowserAccessibilityStatus();
-
-        _profiles.ProfilesChanged += () => Dispatcher.UIThread.Post(RefreshProfiles);
-        _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModelOptions);
-        _promptActions.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshPromptActionOptions);
-        UrlPatternChips.CollectionChanged += (_, _) =>
-            OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
-        _failureTracker.OnFailure += (_, e) =>
-        {
-            if (!e.ShouldShowPersistentBanner) return;
-            Dispatcher.UIThread.Post(() =>
-            {
-                WaylandDetectionWarning = e.Reason;
-                CanInstallWindowCallsExtension =
-                    _gnomeSetup.IsApplicable() && !_gnomeSetup.IsCurrentlyInstalled();
-            });
-        };
-
-        RefreshModelOptions();
-        RefreshPromptActionOptions();
-        foreach (var option in TranslationModelInfo.ProfileTargetOptions)
-            TranslationTargetOptions.Add(option);
-        RefreshProfiles();
-
-        _windowTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _windowTimer.Tick += (_, _) => UpdateCurrentWindow();
-        UpdateCurrentWindow();
-        _windowTimer.Start();
     }
 
     partial void OnSelectedProfileChanged(Profile? value)
@@ -315,36 +412,57 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
 
         foreach (var processName in value.ProcessNames)
+        {
             ProcessNameChips.Add(processName);
+        }
+
         foreach (var urlPattern in value.UrlPatterns)
+        {
             UrlPatternChips.Add(urlPattern);
+        }
 
         NotifyStateChanged();
     }
 
-    partial void OnEditTranslationTargetChanged(string? value) =>
+    partial void OnEditTranslationTargetChanged(string? value)
+    {
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
+    }
 
-    partial void OnEditModelIdChanged(string? value) =>
+    partial void OnEditModelIdChanged(string? value)
+    {
         OnPropertyChanged(nameof(SelectedModelOption));
+    }
 
-    partial void OnEditPromptActionIdChanged(string? value) =>
+    partial void OnEditPromptActionIdChanged(string? value)
+    {
         OnPropertyChanged(nameof(SelectedPromptActionOption));
+    }
 
-    partial void OnEditStylePresetChanged(ProfileStylePreset value) =>
+    partial void OnEditStylePresetChanged(ProfileStylePreset value)
+    {
         OnPropertyChanged(nameof(SelectedStylePresetOption));
+    }
 
-    partial void OnEditCleanupLevelOverrideChanged(CleanupLevel? value) =>
+    partial void OnEditCleanupLevelOverrideChanged(CleanupLevel? value)
+    {
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
+    }
 
-    partial void OnEditDeveloperFormattingOverrideChanged(bool? value) =>
+    partial void OnEditDeveloperFormattingOverrideChanged(bool? value)
+    {
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+    }
 
-    partial void OnEditWhisperModeOverrideChanged(bool? value) =>
+    partial void OnEditWhisperModeOverrideChanged(bool? value)
+    {
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
+    }
 
-    partial void OnEditIsEnabledChanged(bool value) =>
+    partial void OnEditIsEnabledChanged(bool value)
+    {
         OnPropertyChanged(nameof(EditIsEnabledStatusText));
+    }
 
     [RelayCommand]
     private void AddProfile()
@@ -368,7 +486,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private void SaveProfile()
     {
         if (SelectedProfile is null || string.IsNullOrWhiteSpace(EditName))
+        {
             return;
+        }
 
         var updated = SelectedProfile with
         {
@@ -379,8 +499,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
             SelectedTask = string.IsNullOrWhiteSpace(EditTask) ? null : EditTask,
             TranslationTarget = EditTranslationTarget,
             WhisperModeOverride = EditWhisperModeOverride,
-            TranscriptionModelOverride = string.IsNullOrWhiteSpace(EditModelId) ? null : EditModelId,
-            PromptActionId = string.IsNullOrWhiteSpace(EditPromptActionId) ? null : EditPromptActionId,
+            TranscriptionModelOverride = string.IsNullOrWhiteSpace(EditModelId)
+                ? null
+                : EditModelId,
+            PromptActionId = string.IsNullOrWhiteSpace(EditPromptActionId)
+                ? null
+                : EditPromptActionId,
             StylePreset = EditStylePreset,
             CleanupLevelOverride = EditCleanupLevelOverride,
             DeveloperFormattingOverride = EditDeveloperFormattingOverride,
@@ -398,7 +522,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private void DuplicateProfile()
     {
         if (SelectedProfile is null)
+        {
             return;
+        }
 
         var duplicate = SelectedProfile with
         {
@@ -417,7 +543,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private void DeleteSelectedProfile()
     {
         if (SelectedProfile is null)
+        {
             return;
+        }
 
         _profiles.DeleteProfile(SelectedProfile.Id);
         RefreshProfiles();
@@ -428,7 +556,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private void ToggleProfileEnabled(Profile? profile)
     {
         if (profile is null)
+        {
             return;
+        }
 
         _profiles.UpdateProfile(profile with { IsEnabled = !profile.IsEnabled });
         RefreshProfiles();
@@ -439,10 +569,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
     {
         var value = ProcessNameInput.Trim();
         if (string.IsNullOrEmpty(value))
+        {
             return;
+        }
 
         if (!ProcessNameChips.Contains(value, StringComparer.OrdinalIgnoreCase))
+        {
             ProcessNameChips.Add(value);
+        }
 
         ProcessNameInput = "";
         OnPropertyChanged(nameof(SelectedProfileSummary));
@@ -460,10 +594,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
     {
         var value = UrlPatternInput.Trim();
         if (string.IsNullOrEmpty(value))
+        {
             return;
+        }
 
         if (!UrlPatternChips.Contains(value, StringComparer.OrdinalIgnoreCase))
+        {
             UrlPatternChips.Add(value);
+        }
 
         UrlPatternInput = "";
         OnPropertyChanged(nameof(SelectedProfileSummary));
@@ -485,10 +623,18 @@ public partial class ProfilesSectionViewModel : ObservableObject
         // would return our own process name and the self-host guard would
         // bail. The live-context timer tracks the most-recent non-host
         // process name and exposes it via CurrentProcessName.
-        if (string.IsNullOrWhiteSpace(CurrentProcessName)
+        if (
+            string.IsNullOrWhiteSpace(CurrentProcessName)
             || CurrentProcessName == "-"
-            || string.Equals(CurrentProcessName, _hostProcessName, StringComparison.OrdinalIgnoreCase))
+            || string.Equals(
+                CurrentProcessName,
+                _hostProcessName,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
             return;
+        }
 
         ProcessNameInput = CurrentProcessName;
     }
@@ -500,11 +646,15 @@ public partial class ProfilesSectionViewModel : ObservableObject
         // value, not a fresh GetBrowserUrl call (which would target the
         // TypeWhisper window itself and return null).
         if (string.IsNullOrWhiteSpace(CurrentUrl) || CurrentUrl == "-")
+        {
             return;
+        }
 
         var pattern = TryExtractUrlPattern(CurrentUrl);
         if (string.IsNullOrWhiteSpace(pattern))
+        {
             return;
+        }
 
         UrlPatternInput = pattern;
     }
@@ -513,10 +663,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private void AddCurrentProcessRule()
     {
         if (!HasCurrentProcess)
+        {
             return;
+        }
 
         if (!ProcessNameChips.Contains(CurrentProcessName, StringComparer.OrdinalIgnoreCase))
+        {
             ProcessNameChips.Add(CurrentProcessName);
+        }
 
         OnPropertyChanged(nameof(SelectedProfileSummary));
     }
@@ -526,10 +680,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
     {
         var pattern = CurrentUrlPattern;
         if (string.IsNullOrWhiteSpace(pattern))
+        {
             return;
+        }
 
         if (!UrlPatternChips.Contains(pattern, StringComparer.OrdinalIgnoreCase))
+        {
             UrlPatternChips.Add(pattern);
+        }
 
         OnPropertyChanged(nameof(SelectedProfileSummary));
     }
@@ -544,8 +702,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
 
         _contextWindow = new ProfilesContextWindow(this);
-        if (Avalonia.Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
-            && desktop.MainWindow is { } owner)
+        if (
+            Application.Current?.ApplicationLifetime
+                is IClassicDesktopStyleApplicationLifetime desktop
+            && desktop.MainWindow is { } owner
+        )
         {
             _contextWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner;
             _contextWindow.Show(owner);
@@ -565,7 +726,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         Profiles.Clear();
         foreach (var profile in _profiles.Profiles)
+        {
             Profiles.Add(profile);
+        }
 
         if (selectedId is not null)
         {
@@ -574,9 +737,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
 
         if (Profiles.Count > 0 && SelectedProfile is null)
+        {
             SelectedProfile = Profiles[0];
+        }
         else
+        {
             NotifyStateChanged();
+        }
     }
 
     private void RefreshModelOptions()
@@ -589,9 +756,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
         {
             foreach (var model in engine.TranscriptionModels)
             {
-                ModelOptions.Add(new ProfileModelOption(
-                    ModelManagerService.GetPluginModelId(engine.PluginId, model.Id),
-                    $"{engine.ProviderDisplayName} — {model.DisplayName}"));
+                ModelOptions.Add(
+                    new ProfileModelOption(
+                        ModelManagerService.GetPluginModelId(engine.PluginId, model.Id),
+                        $"{engine.ProviderDisplayName} — {model.DisplayName}"
+                    )
+                );
             }
         }
 
@@ -604,29 +774,43 @@ public partial class ProfilesSectionViewModel : ObservableObject
         PromptActionOptions.Clear();
         PromptActionOptions.Add(new PromptActionOption(null, "No prompt action"));
 
-        foreach (var action in _promptActions.Actions.OrderBy(action => action.SortOrder).ThenBy(action => action.Name))
+        foreach (
+            var action in _promptActions
+                .Actions.OrderBy(action => action.SortOrder)
+                .ThenBy(action => action.Name)
+        )
+        {
             PromptActionOptions.Add(new PromptActionOption(action.Id, action.Name));
+        }
 
-        EditPromptActionId = PromptActionOptions.Any(option => option.Value == selected) ? selected : null;
+        EditPromptActionId = PromptActionOptions.Any(option => option.Value == selected)
+            ? selected
+            : null;
     }
 
     private void SelectById(string id)
     {
         var match = Profiles.FirstOrDefault(profile => profile.Id == id);
         if (match is not null)
+        {
             SelectedProfile = match;
+        }
         else
+        {
             NotifyStateChanged();
+        }
     }
 
     private void UpdateCurrentWindow()
     {
         var processName = _activeWindow.GetActiveWindowProcessName();
         var title = _activeWindow.GetActiveWindowTitle();
-        var url = _activeWindow.GetBrowserUrl(allowInteractiveCapture: false);
+        var url = _activeWindow.GetBrowserUrl(false);
 
-        if (string.IsNullOrWhiteSpace(processName)
-            || string.Equals(processName, _hostProcessName, StringComparison.OrdinalIgnoreCase))
+        if (
+            string.IsNullOrWhiteSpace(processName)
+            || string.Equals(processName, _hostProcessName, StringComparison.OrdinalIgnoreCase)
+        )
         {
             processName = _lastExternalProcessName;
             title = _lastExternalWindowTitle;
@@ -651,7 +835,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             ? _failureTracker.LastFailureReason
             : null;
 
-        CanInstallWindowCallsExtension = WaylandDetectionWarning is not null
+        CanInstallWindowCallsExtension =
+            WaylandDetectionWarning is not null
             && _gnomeSetup.IsApplicable()
             && !_gnomeSetup.IsCurrentlyInstalled();
 
@@ -662,15 +847,20 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private void InstallWindowCallsExtension()
     {
         if (!_gnomeSetup.TryOpenInstallPage())
+        {
             return;
+        }
 
         // The provider picks the extension up automatically on the next
         // snapshot tick — no app restart needed. Recheck so the button
         // disappears as soon as the user finishes installing.
-        Dispatcher.UIThread.Post(() =>
-        {
-            CanInstallWindowCallsExtension = !_gnomeSetup.IsCurrentlyInstalled();
-        }, DispatcherPriority.Background);
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                CanInstallWindowCallsExtension = !_gnomeSetup.IsCurrentlyInstalled();
+            },
+            DispatcherPriority.Background
+        );
     }
 
     [RelayCommand]
@@ -698,11 +888,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var confirmed = await dialog.ShowConfirmationAsync(
             "Enable browser URL detection",
             message,
-            confirmText: "Apply changes",
-            cancelText: "Cancel");
+            "Apply changes"
+        );
 
         if (!confirmed)
+        {
             return;
+        }
 
         var result = await _browserSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
         // Re-evaluate the whole panel state — SetUpAsync just flipped both
@@ -786,11 +978,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var confirmed = await dialog.ShowConfirmationAsync(
             "Revert browser URL detection",
             message,
-            confirmText: "Revert",
-            cancelText: "Cancel");
+            "Revert"
+        );
 
         if (!confirmed)
+        {
             return;
+        }
 
         var result = await _browserSetup.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
         BrowserAccessibilityStatusMessage = result.Success
@@ -827,10 +1021,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private static string TryExtractUrlPattern(string? rawUrl)
     {
         if (string.IsNullOrWhiteSpace(rawUrl) || rawUrl == "-")
+        {
             return string.Empty;
+        }
 
-        if (Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host))
+        if (
+            Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri)
+            && !string.IsNullOrWhiteSpace(uri.Host)
+        )
+        {
             return uri.Host;
+        }
 
         return rawUrl;
     }

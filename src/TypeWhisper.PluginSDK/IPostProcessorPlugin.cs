@@ -3,8 +3,8 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Plugin that processes transcribed text after transcription (e.g. formatting, filtering).
-/// Plugins are executed in ascending <see cref="Priority"/> order.
+///     Plugin that processes transcribed text after transcription (e.g. formatting, filtering).
+///     Plugins are executed in ascending <see cref="Priority" /> order.
 /// </summary>
 public interface IPostProcessorPlugin : ITypeWhisperPlugin
 {

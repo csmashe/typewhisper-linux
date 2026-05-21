@@ -14,7 +14,8 @@ public sealed record WatchFolderOptions(
     string WatchPath,
     string? OutputPath,
     WatchFolderOutputFormat OutputFormat,
-    bool DeleteSource);
+    bool DeleteSource
+);
 
 public sealed record WatchFolderTranscriptionRequest(string FilePath);
 
@@ -25,7 +26,8 @@ public sealed record WatchFolderTranscriptionResult(
     double ProcessingTime,
     IReadOnlyList<TranscriptionSegment> Segments,
     string? EngineId,
-    string? ModelId);
+    string? ModelId
+);
 
 public sealed record WatchFolderExportArtifact(string FileExtension, string Content);
 
@@ -41,17 +43,25 @@ public sealed record WatchFolderHistoryItem
 
 public static class WatchFolderOutputFormats
 {
-    public static WatchFolderOutputFormat Parse(string? storedValue) =>
-        string.Equals(storedValue, "txt", StringComparison.OrdinalIgnoreCase) ? WatchFolderOutputFormat.PlainText :
-        string.Equals(storedValue, "srt", StringComparison.OrdinalIgnoreCase) ? WatchFolderOutputFormat.Srt :
-        string.Equals(storedValue, "vtt", StringComparison.OrdinalIgnoreCase) ? WatchFolderOutputFormat.Vtt :
-        WatchFolderOutputFormat.Markdown;
-
-    public static string ToStoredValue(WatchFolderOutputFormat format) => format switch
+    public static WatchFolderOutputFormat Parse(string? storedValue)
     {
-        WatchFolderOutputFormat.PlainText => "txt",
-        WatchFolderOutputFormat.Srt => "srt",
-        WatchFolderOutputFormat.Vtt => "vtt",
-        _ => "md"
-    };
+        return string.Equals(storedValue, "txt", StringComparison.OrdinalIgnoreCase)
+            ? WatchFolderOutputFormat.PlainText
+            : string.Equals(storedValue, "srt", StringComparison.OrdinalIgnoreCase)
+                ? WatchFolderOutputFormat.Srt
+                : string.Equals(storedValue, "vtt", StringComparison.OrdinalIgnoreCase)
+                    ? WatchFolderOutputFormat.Vtt
+                    : WatchFolderOutputFormat.Markdown;
+    }
+
+    public static string ToStoredValue(WatchFolderOutputFormat format)
+    {
+        return format switch
+        {
+            WatchFolderOutputFormat.PlainText => "txt",
+            WatchFolderOutputFormat.Srt => "srt",
+            WatchFolderOutputFormat.Vtt => "vtt",
+            _ => "md"
+        };
+    }
 }

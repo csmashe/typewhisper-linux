@@ -1,7 +1,7 @@
-using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -9,42 +9,37 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 {
-    private readonly ISnippetService _snippets;
     private readonly IDictionaryService _dictionary;
-    private readonly Action _snippetsChangedHandler;
     private readonly Action _entriesChangedHandler;
+    private readonly ISnippetService _snippets;
+    private readonly Action _snippetsChangedHandler;
 
-    public ObservableCollection<Snippet> FilteredSnippets { get; } = [];
-    public ObservableCollection<string> AvailableTags { get; } = ["All tags"];
+    [ObservableProperty]
+    private bool _caseSensitive;
 
-    [ObservableProperty] private string _newTrigger = "";
-    [ObservableProperty] private string _newReplacement = "";
-    [ObservableProperty] private string _newTags = "";
-    [ObservableProperty] private string _newProfileIds = "";
-    [ObservableProperty] private bool _caseSensitive;
-    [ObservableProperty] private SnippetTriggerMode _selectedTriggerMode = SnippetTriggerMode.Anywhere;
-    [ObservableProperty] private string _selectedTagFilter = "All tags";
-    [ObservableProperty] private bool _showEditor;
-    [ObservableProperty] private string? _editingSnippetId;
+    [ObservableProperty]
+    private string? _editingSnippetId;
 
-    public int SnippetCount => _snippets.Snippets.Count;
-    public int EnabledSnippetCount => _snippets.Snippets.Count(snippet => snippet.IsEnabled);
-    public string SummaryText => $"{SnippetCount} snippets, {EnabledSnippetCount} enabled";
-    public bool ShowEmptyState => FilteredSnippets.Count == 0;
-    public bool ShowSnippetList => FilteredSnippets.Count > 0;
-    public bool HasSelectedTagFilter => !string.Equals(SelectedTagFilter, "All tags", StringComparison.Ordinal);
-    public bool IsEditingExisting => !string.IsNullOrWhiteSpace(EditingSnippetId);
-    public string EditorTitle => IsEditingExisting ? "Edit snippet" : "New snippet";
-    public string EditorSaveText => IsEditingExisting ? "Save changes" : "Create snippet";
-    public string PreviewText => _snippets.PreviewReplacement(NewReplacement);
-    public bool ShowPreview => !string.IsNullOrWhiteSpace(NewReplacement);
-    public bool HasConflictWarning => !string.IsNullOrWhiteSpace(ConflictWarningText);
-    public string ConflictWarningText => BuildConflictWarning(NewTrigger);
-    public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
-    [
-        new(SnippetTriggerMode.Anywhere, "Anywhere"),
-        new(SnippetTriggerMode.ExactPhrase, "Exact phrase")
-    ];
+    [ObservableProperty]
+    private string _newProfileIds = "";
+
+    [ObservableProperty]
+    private string _newReplacement = "";
+
+    [ObservableProperty]
+    private string _newTags = "";
+
+    [ObservableProperty]
+    private string _newTrigger = "";
+
+    [ObservableProperty]
+    private string _selectedTagFilter = "All tags";
+
+    [ObservableProperty]
+    private SnippetTriggerMode _selectedTriggerMode = SnippetTriggerMode.Anywhere;
+
+    [ObservableProperty]
+    private bool _showEditor;
 
     public SnippetsSectionViewModel(ISnippetService snippets, IDictionaryService dictionary)
     {
@@ -57,14 +52,48 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         Refresh();
     }
 
+    public ObservableCollection<Snippet> FilteredSnippets { get; } = [];
+    public ObservableCollection<string> AvailableTags { get; } = ["All tags"];
+
+    public int SnippetCount => _snippets.Snippets.Count;
+    public int EnabledSnippetCount => _snippets.Snippets.Count(snippet => snippet.IsEnabled);
+    public string SummaryText => $"{SnippetCount} snippets, {EnabledSnippetCount} enabled";
+    public bool ShowEmptyState => FilteredSnippets.Count == 0;
+    public bool ShowSnippetList => FilteredSnippets.Count > 0;
+
+    public bool HasSelectedTagFilter =>
+        !string.Equals(SelectedTagFilter, "All tags", StringComparison.Ordinal);
+
+    public bool IsEditingExisting => !string.IsNullOrWhiteSpace(EditingSnippetId);
+    public string EditorTitle => IsEditingExisting ? "Edit snippet" : "New snippet";
+    public string EditorSaveText => IsEditingExisting ? "Save changes" : "Create snippet";
+    public string PreviewText => _snippets.PreviewReplacement(NewReplacement);
+    public bool ShowPreview => !string.IsNullOrWhiteSpace(NewReplacement);
+    public bool HasConflictWarning => !string.IsNullOrWhiteSpace(ConflictWarningText);
+    public string ConflictWarningText => BuildConflictWarning(NewTrigger);
+
+    public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
+    [
+        new(SnippetTriggerMode.Anywhere, "Anywhere"),
+        new(SnippetTriggerMode.ExactPhrase, "Exact phrase")
+    ];
+
     public void Dispose()
     {
         _snippets.SnippetsChanged -= _snippetsChangedHandler;
         _dictionary.EntriesChanged -= _entriesChangedHandler;
     }
 
-    partial void OnSelectedTagFilterChanged(string value) => Refresh();
-    partial void OnNewTriggerChanged(string value) => NotifyConflictWarningChanged();
+    partial void OnSelectedTagFilterChanged(string value)
+    {
+        Refresh();
+    }
+
+    partial void OnNewTriggerChanged(string value)
+    {
+        NotifyConflictWarningChanged();
+    }
+
     partial void OnNewReplacementChanged(string value)
     {
         OnPropertyChanged(nameof(PreviewText));
@@ -85,13 +114,18 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void ClearTagFilter() => SelectedTagFilter = "All tags";
+    private void ClearTagFilter()
+    {
+        SelectedTagFilter = "All tags";
+    }
 
     [RelayCommand]
     private void SaveSnippet()
     {
         if (string.IsNullOrWhiteSpace(NewTrigger) || string.IsNullOrWhiteSpace(NewReplacement))
+        {
             return;
+        }
 
         var existing = !string.IsNullOrWhiteSpace(EditingSnippetId)
             ? _snippets.Snippets.FirstOrDefault(snippet => snippet.Id == EditingSnippetId)
@@ -113,18 +147,28 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         };
 
         if (existing is null)
+        {
             _snippets.AddSnippet(snippet);
+        }
         else
+        {
             _snippets.UpdateSnippet(snippet);
+        }
 
         CancelEdit();
     }
 
     [RelayCommand]
-    private void Delete(Snippet snippet) => _snippets.DeleteSnippet(snippet.Id);
+    private void Delete(Snippet snippet)
+    {
+        _snippets.DeleteSnippet(snippet.Id);
+    }
 
     [RelayCommand]
-    private void ToggleEnabled(Snippet snippet) => _snippets.UpdateSnippet(snippet with { IsEnabled = !snippet.IsEnabled });
+    private void ToggleEnabled(Snippet snippet)
+    {
+        _snippets.UpdateSnippet(snippet with { IsEnabled = !snippet.IsEnabled });
+    }
 
     [RelayCommand]
     private void BeginCreate()
@@ -165,26 +209,44 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         ShowEditor = false;
     }
 
-    public string ExportToJson() => _snippets.ExportToJson();
+    public string ExportToJson()
+    {
+        return _snippets.ExportToJson();
+    }
 
-    public int ImportFromJson(string json) => _snippets.ImportFromJson(json);
+    public int ImportFromJson(string json)
+    {
+        return _snippets.ImportFromJson(json);
+    }
 
     private void Refresh()
     {
         RebuildTagFilter();
 
         FilteredSnippets.Clear();
-        IEnumerable<Snippet> snippets = _snippets.Snippets.OrderBy(snippet => snippet.Trigger, StringComparer.OrdinalIgnoreCase);
+        IEnumerable<Snippet> snippets = _snippets.Snippets.OrderBy(
+            snippet => snippet.Trigger,
+            StringComparer.OrdinalIgnoreCase
+        );
 
         if (HasSelectedTagFilter)
         {
-            snippets = snippets.Where(snippet => snippet.Tags
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Any(tag => string.Equals(tag, SelectedTagFilter, StringComparison.OrdinalIgnoreCase)));
+            snippets = snippets.Where(snippet =>
+                snippet
+                    .Tags.Split(
+                        ',',
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                    )
+                    .Any(tag =>
+                        string.Equals(tag, SelectedTagFilter, StringComparison.OrdinalIgnoreCase)
+                    )
+            );
         }
 
         foreach (var snippet in snippets)
+        {
             FilteredSnippets.Add(snippet);
+        }
 
         OnPropertyChanged(nameof(SnippetCount));
         OnPropertyChanged(nameof(EnabledSnippetCount));
@@ -203,18 +265,24 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     private string BuildConflictWarning(string trigger)
     {
         if (string.IsNullOrWhiteSpace(trigger))
+        {
             return "";
+        }
 
         var normalized = trigger.Trim();
         var conflict = _dictionary.Entries.FirstOrDefault(entry =>
             entry.IsEnabled
-            && string.Equals(entry.Original.Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+            && string.Equals(entry.Original.Trim(), normalized, StringComparison.OrdinalIgnoreCase)
+        );
 
         return conflict switch
         {
             { EntryType: DictionaryEntryType.Term } =>
                 $"This trigger matches an enabled dictionary term: {conflict.Original}.",
-            { EntryType: DictionaryEntryType.Correction, Replacement: { Length: > 0 } replacement } =>
+            {
+                    EntryType: DictionaryEntryType.Correction,
+                    Replacement: { Length: > 0 } replacement
+                } =>
                 $"This trigger matches a dictionary correction: {conflict.Original} -> {replacement}.",
             { EntryType: DictionaryEntryType.Correction } =>
                 $"This trigger matches a dictionary correction: {conflict.Original}.",
@@ -228,15 +296,20 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         AvailableTags.Clear();
         AvailableTags.Add("All tags");
         foreach (var tag in _snippets.AllTags)
+        {
             AvailableTags.Add(tag);
+        }
 
         SelectedTagFilter = AvailableTags.Contains(current) ? current : "All tags";
     }
 
-    private static IReadOnlyList<string> ParseProfileIds(string value) =>
-        value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    private static IReadOnlyList<string> ParseProfileIds(string value)
+    {
+        return value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
 }
 
 public sealed record SnippetTriggerModeOption(SnippetTriggerMode Value, string Label);

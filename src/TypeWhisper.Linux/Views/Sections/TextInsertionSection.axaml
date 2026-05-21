@@ -54,8 +54,9 @@
             <StackPanel Margin="0,0,0,18">
                 <TextBlock Text="Text insertion"
                            Classes="page-title" />
-                <TextBlock Text="Control how dictated text reaches your focused app. GNOME and KDE Wayland sessions need ydotool for auto-paste; wlroots compositors (Hyprland, Sway) use wtype; X11 uses xdotool."
-                           Classes="page-subtitle" />
+                <TextBlock
+                    Text="Control how dictated text reaches your focused app. GNOME and KDE Wayland sessions need ydotool for auto-paste; wlroots compositors (Hyprland, Sway) use wtype; X11 uses xdotool."
+                    Classes="page-subtitle" />
             </StackPanel>
 
             <TextBlock Text="Session"

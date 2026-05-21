@@ -1,33 +1,17 @@
 using Avalonia.Logging;
-using TypeWhisper.Linux;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Tests for the log-sink decorator that suppresses Avalonia's harmless
-/// startup XSMP warning ("SMLib/ICELib reported a new error: SESSION_MANAGER
-/// environment variable not defined") while passing every other log through.
+///     Tests for the log-sink decorator that suppresses Avalonia's harmless
+///     startup XSMP warning ("SMLib/ICELib reported a new error: SESSION_MANAGER
+///     environment variable not defined") while passing every other log through.
 /// </summary>
 public sealed class SuppressXsmpWarningLogSinkTests
 {
     private const string XsmpWarning =
         "SMLib/ICELib reported a new error: SESSION_MANAGER environment variable not defined";
-
-    /// <summary>Inner sink that records the message templates it receives.</summary>
-    private sealed class RecordingSink : ILogSink
-    {
-        public List<string> Messages { get; } = new();
-        public bool IsEnabledResult { get; set; } = true;
-
-        public bool IsEnabled(LogEventLevel level, string area) => IsEnabledResult;
-
-        public void Log(LogEventLevel level, string area, object? source, string messageTemplate)
-            => Messages.Add(messageTemplate);
-
-        public void Log(LogEventLevel level, string area, object? source, string messageTemplate, params object?[] propertyValues)
-            => Messages.Add(messageTemplate);
-    }
 
     [Fact]
     public void Log_XsmpWarning_IsDropped()
@@ -100,5 +84,33 @@ public sealed class SuppressXsmpWarningLogSinkTests
 
         inner.IsEnabledResult = true;
         Assert.True(sink.IsEnabled(LogEventLevel.Warning, "X11Platform"));
+    }
+
+    /// <summary>Inner sink that records the message templates it receives.</summary>
+    private sealed class RecordingSink : ILogSink
+    {
+        public List<string> Messages { get; } = new();
+        public bool IsEnabledResult { get; set; } = true;
+
+        public bool IsEnabled(LogEventLevel level, string area)
+        {
+            return IsEnabledResult;
+        }
+
+        public void Log(LogEventLevel level, string area, object? source, string messageTemplate)
+        {
+            Messages.Add(messageTemplate);
+        }
+
+        public void Log(
+            LogEventLevel level,
+            string area,
+            object? source,
+            string messageTemplate,
+            params object?[] propertyValues
+        )
+        {
+            Messages.Add(messageTemplate);
+        }
     }
 }

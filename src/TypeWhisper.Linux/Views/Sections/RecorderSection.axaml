@@ -50,8 +50,9 @@
             <StackPanel Margin="0,0,0,18">
                 <TextBlock Text="Recorder"
                            Classes="page-title" />
-                <TextBlock Text="Capture a longer take into a saved WAV file, then transcribe it automatically when recording stops."
-                           Classes="page-subtitle" />
+                <TextBlock
+                    Text="Capture a longer take into a saved WAV file, then transcribe it automatically when recording stops."
+                    Classes="page-subtitle" />
             </StackPanel>
 
             <TextBlock Text="Capture"
@@ -108,41 +109,41 @@
             <Border Classes="section-panel"
                     Margin="0">
                 <ItemsControl ItemsSource="{Binding Recordings}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:RecordingItem">
-                        <Border Classes="section-row"
-                                Margin="0,0,0,12">
-                            <Grid ColumnDefinitions="*,Auto"
-                                  ColumnSpacing="16">
-                                <StackPanel Grid.Column="0">
-                                    <TextBlock Text="{Binding FileName}"
-                                               Classes="row-title" />
-                                    <TextBlock Text="{Binding Transcript}"
-                                               Classes="row-hint"
-                                               TextTrimming="CharacterEllipsis"
-                                               MaxHeight="36"
-                                               Margin="0,4,0,0" />
-                                    <TextBlock Text="{Binding CreatedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}"
-                                               FontSize="10"
-                                               Foreground="#8A9AAE"
-                                               Margin="0,2,0,0" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="1"
-                                            Orientation="Horizontal"
-                                            Spacing="8"
-                                            VerticalAlignment="Center">
-                                    <Button Content="Copy"
-                                            Click="OnCopyTranscript"
-                                            Tag="{Binding Transcript}"
-                                            IsEnabled="{Binding Transcript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                    <Button Content="Delete"
-                                            Command="{Binding $parent[ItemsControl].((vm:RecorderSectionViewModel)DataContext).DeleteRecordingCommand}"
-                                            CommandParameter="{Binding}" />
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RecordingItem">
+                            <Border Classes="section-row"
+                                    Margin="0,0,0,12">
+                                <Grid ColumnDefinitions="*,Auto"
+                                      ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding FileName}"
+                                                   Classes="row-title" />
+                                        <TextBlock Text="{Binding Transcript}"
+                                                   Classes="row-hint"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   MaxHeight="36"
+                                                   Margin="0,4,0,0" />
+                                        <TextBlock Text="{Binding CreatedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}"
+                                                   FontSize="10"
+                                                   Foreground="#8A9AAE"
+                                                   Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"
+                                                Orientation="Horizontal"
+                                                Spacing="8"
+                                                VerticalAlignment="Center">
+                                        <Button Content="Copy"
+                                                Click="OnCopyTranscript"
+                                                Tag="{Binding Transcript}"
+                                                IsEnabled="{Binding Transcript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        <Button Content="Delete"
+                                                Command="{Binding $parent[ItemsControl].((vm:RecorderSectionViewModel)DataContext).DeleteRecordingCommand}"
+                                                CommandParameter="{Binding}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </Border>
         </StackPanel>

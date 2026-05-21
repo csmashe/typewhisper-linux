@@ -10,6 +10,11 @@ public sealed class ProfileService : IProfileService
     private List<Profile> _cache = [];
     private bool _cacheLoaded;
 
+    public ProfileService(string filePath)
+    {
+        _filePath = filePath;
+    }
+
     public IReadOnlyList<Profile> Profiles
     {
         get
@@ -20,11 +25,6 @@ public sealed class ProfileService : IProfileService
     }
 
     public event Action? ProfilesChanged;
-
-    public ProfileService(string filePath)
-    {
-        _filePath = filePath;
-    }
 
     public void AddProfile(Profile profile)
     {
@@ -40,7 +40,11 @@ public sealed class ProfileService : IProfileService
         EnsureCacheLoaded();
         var updated = profile with { UpdatedAt = DateTime.UtcNow };
         var idx = _cache.FindIndex(p => p.Id == profile.Id);
-        if (idx >= 0) _cache[idx] = updated;
+        if (idx >= 0)
+        {
+            _cache[idx] = updated;
+        }
+
         SortCache();
         SaveToDisk();
         ProfilesChanged?.Invoke();
@@ -54,7 +58,11 @@ public sealed class ProfileService : IProfileService
         ProfilesChanged?.Invoke();
     }
 
-    public MatchResult MatchProfile(string? processName, string? url, string? forcedProfileId = null)
+    public MatchResult MatchProfile(
+        string? processName,
+        string? url,
+        string? forcedProfileId = null
+    )
     {
         EnsureCacheLoaded();
 
@@ -62,7 +70,9 @@ public sealed class ProfileService : IProfileService
         {
             var forced = _cache.FirstOrDefault(p => p.Id == forcedProfileId);
             if (forced is not null)
+            {
                 return new MatchResult(forced, MatchKind.ManualOverride, null, 1, false);
+            }
         }
 
         var enabled = _cache.Where(p => p.IsEnabled).ToList();
@@ -75,36 +85,66 @@ public sealed class ProfileService : IProfileService
 
         foreach (var profile in enabled)
         {
-            var processMatches = processName is not null
+            var processMatches =
+                processName is not null
                 && profile.ProcessNames.Count > 0
                 && profile.ProcessNames.Any(pn =>
-                    processName.Equals(pn, StringComparison.OrdinalIgnoreCase));
+                    processName.Equals(pn, StringComparison.OrdinalIgnoreCase)
+                );
 
             string? urlMatchPattern = null;
             if (url is not null && profile.UrlPatterns.Count > 0)
             {
                 urlMatchPattern = profile.UrlPatterns.FirstOrDefault(pattern =>
-                    host is not null && MatchesUrlPattern(host, url, pattern));
+                    host is not null && MatchesUrlPattern(host, url, pattern)
+                );
             }
 
             if (processMatches && urlMatchPattern is not null)
+            {
                 appAndWebsite.Add((profile, urlMatchPattern));
+            }
             else if (urlMatchPattern is not null && profile.ProcessNames.Count == 0)
+            {
                 websiteOnly.Add((profile, urlMatchPattern));
+            }
             else if (processMatches && profile.UrlPatterns.Count == 0)
+            {
                 appOnly.Add(profile);
+            }
             else if (profile.ProcessNames.Count == 0 && profile.UrlPatterns.Count == 0)
+            {
                 global.Add(profile);
+            }
         }
 
         if (appAndWebsite.Count > 0)
-            return BuildResult(appAndWebsite, MatchKind.AppAndWebsite, includeDomain: true);
+        {
+            return BuildResult(appAndWebsite, MatchKind.AppAndWebsite, true);
+        }
+
         if (websiteOnly.Count > 0)
-            return BuildResult(websiteOnly, MatchKind.Website, includeDomain: true);
+        {
+            return BuildResult(websiteOnly, MatchKind.Website, true);
+        }
+
         if (appOnly.Count > 0)
-            return BuildResult(appOnly.Select(p => (p, (string?)null)).ToList(), MatchKind.App, includeDomain: false);
+        {
+            return BuildResult(
+                appOnly.Select(p => (p, (string?)null)).ToList(),
+                MatchKind.App,
+                false
+            );
+        }
+
         if (global.Count > 0)
-            return BuildResult(global.Select(p => (p, (string?)null)).ToList(), MatchKind.Global, includeDomain: false);
+        {
+            return BuildResult(
+                global.Select(p => (p, (string?)null)).ToList(),
+                MatchKind.Global,
+                false
+            );
+        }
 
         return MatchResult.NoMatch;
     }
@@ -112,7 +152,8 @@ public sealed class ProfileService : IProfileService
     private static MatchResult BuildResult(
         List<(Profile Profile, string? MatchedPattern)> tier,
         MatchKind kind,
-        bool includeDomain)
+        bool includeDomain
+    )
     {
         var maxPriority = tier.Max(t => t.Profile.Priority);
         var top = tier.Where(t => t.Profile.Priority == maxPriority).ToList();
@@ -129,9 +170,12 @@ public sealed class ProfileService : IProfileService
         try
         {
             if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
                 return uri.Host;
+            }
         }
         catch { }
+
         return null;
     }
 
@@ -157,7 +201,10 @@ public sealed class ProfileService : IProfileService
 
     private void EnsureCacheLoaded()
     {
-        if (_cacheLoaded) return;
+        if (_cacheLoaded)
+        {
+            return;
+        }
 
         try
         {
@@ -182,9 +229,14 @@ public sealed class ProfileService : IProfileService
         {
             var dir = Path.GetDirectoryName(_filePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
                 Directory.CreateDirectory(dir);
+            }
 
-            var json = JsonSerializer.Serialize(_cache, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(
+                _cache,
+                new JsonSerializerOptions { WriteIndented = true }
+            );
             File.WriteAllText(_filePath, json);
         }
         catch { }

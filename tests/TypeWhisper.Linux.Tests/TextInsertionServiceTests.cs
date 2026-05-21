@@ -9,10 +9,14 @@ public sealed class TextInsertionServiceTests
     [Fact]
     public async Task InsertTextAsync_successful_auto_paste_restores_previous_clipboard()
     {
-        var platform = new FakeTextInsertionPlatform { Clipboard = "previous", PasteSucceeds = true };
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("new text", autoPaste: true);
+        var result = await sut.InsertTextAsync("new text");
 
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.Equal("previous", platform.Clipboard);
@@ -23,10 +27,14 @@ public sealed class TextInsertionServiceTests
     [Fact]
     public async Task InsertTextAsync_retries_failed_paste_before_fallback()
     {
-        var platform = new FakeTextInsertionPlatform { Clipboard = "previous", PasteSucceeds = false };
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = false
+        };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("new text", autoPaste: true);
+        var result = await sut.InsertTextAsync("new text");
 
         Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.Equal("new text", platform.Clipboard);
@@ -44,7 +52,7 @@ public sealed class TextInsertionServiceTests
         };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("new text", autoPaste: true);
+        var result = await sut.InsertTextAsync("new text");
 
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.Equal("previous", platform.Clipboard);
@@ -57,7 +65,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("new text", autoPaste: false);
+        var result = await sut.InsertTextAsync("new text", false);
 
         Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.Equal("new text", platform.Clipboard);
@@ -75,7 +83,11 @@ public sealed class TextInsertionServiceTests
         };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("new text", autoPaste: true, targetWindowId: "target");
+        var result = await sut.InsertTextAsync(
+            "new text",
+            true,
+            "target"
+        );
 
         Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.Equal("new text", platform.Clipboard);
@@ -92,7 +104,7 @@ public sealed class TextInsertionServiceTests
         };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("new text", autoPaste: true);
+        var result = await sut.InsertTextAsync("new text");
 
         Assert.Equal(InsertionResult.MissingClipboardTool, result);
         Assert.False(platform.PasteSent);
@@ -108,7 +120,7 @@ public sealed class TextInsertionServiceTests
         };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("new text", autoPaste: true);
+        var result = await sut.InsertTextAsync("new text");
 
         Assert.Equal(InsertionResult.MissingPasteTool, result);
         Assert.False(platform.PasteSent);
@@ -125,7 +137,7 @@ public sealed class TextInsertionServiceTests
         };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("new text", autoPaste: false);
+        var result = await sut.InsertTextAsync("new text", false);
 
         Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.Equal("new text", platform.Clipboard);
@@ -144,8 +156,8 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync(
             "new text",
-            autoPaste: true,
-            targetWindowTitle: "Codex");
+            targetWindowTitle: "Codex"
+        );
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("new text", platform.TypedText);
@@ -161,8 +173,8 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync(
             "new text",
-            autoPaste: true,
-            targetProcessName: "codex");
+            targetProcessName: "codex"
+        );
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("new text", platform.TypedText);
@@ -177,9 +189,9 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync(
             "new text",
-            autoPaste: true,
             targetProcessName: "kitty",
-            targetWindowTitle: "typewhisper-linux");
+            targetWindowTitle: "typewhisper-linux"
+        );
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("new text", platform.TypedText);
@@ -190,16 +202,19 @@ public sealed class TextInsertionServiceTests
     [InlineData("firefox", "Example")]
     [InlineData("zen", "Teamwork — Zen Browser")]
     [InlineData(null, "Teamwork — Zen Browser")]
-    public async Task InsertTextAsync_browser_target_uses_direct_typing(string? processName, string windowTitle)
+    public async Task InsertTextAsync_browser_target_uses_direct_typing(
+        string? processName,
+        string windowTitle
+    )
     {
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
         var sut = new TextInsertionService(platform);
 
         var result = await sut.InsertTextAsync(
             "new text",
-            autoPaste: true,
             targetProcessName: processName,
-            targetWindowTitle: windowTitle);
+            targetWindowTitle: windowTitle
+        );
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("new text", platform.TypedText);
@@ -210,7 +225,10 @@ public sealed class TextInsertionServiceTests
     [Theory]
     [InlineData("zen", "Inbox (3,013) - chris@example.com - Mail — Zen Browser")]
     [InlineData("firefox", "Gmail - Inbox")]
-    public async Task InsertTextAsync_mail_browser_target_uses_clipboard_paste(string? processName, string windowTitle)
+    public async Task InsertTextAsync_mail_browser_target_uses_clipboard_paste(
+        string? processName,
+        string windowTitle
+    )
     {
         var platform = new FakeTextInsertionPlatform
         {
@@ -221,9 +239,9 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync(
             "new text",
-            autoPaste: true,
             targetProcessName: processName,
-            targetWindowTitle: windowTitle);
+            targetWindowTitle: windowTitle
+        );
 
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.True(platform.PasteSent);
@@ -243,10 +261,10 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync(
             "new text",
-            autoPaste: true,
             targetProcessName: "kitty",
             targetWindowTitle: "typewhisper-linux",
-            strategy: TextInsertionStrategy.ClipboardPaste);
+            strategy: TextInsertionStrategy.ClipboardPaste
+        );
 
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.True(platform.PasteSent);
@@ -262,9 +280,9 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync(
             "new text",
-            autoPaste: true,
             targetProcessName: "firefox",
-            strategy: TextInsertionStrategy.DirectTyping);
+            strategy: TextInsertionStrategy.DirectTyping
+        );
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("new text", platform.TypedText);
@@ -283,15 +301,13 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            PrefersDirectTypingForUnknownTarget = true,
+            PrefersDirectTypingForUnknownTarget = true
         };
         var sut = new TextInsertionService(platform);
 
         var result = await sut.InsertTextAsync(
-            "hello world",
-            autoPaste: true,
-            targetProcessName: null,
-            targetWindowTitle: null);
+            "hello world"
+        );
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("hello world", platform.TypedText);
@@ -299,13 +315,14 @@ public sealed class TextInsertionServiceTests
     }
 
     [Theory]
-    [InlineData("smart “quotes”")]            // smart quotes
-    [InlineData("em — dash")]                       // em dash
-    [InlineData("café")]                            // accented letter (é)
-    [InlineData("price €42")]                       // currency (€)
-    [InlineData("emoji \U0001F600 face")]                // emoji
+    [InlineData("smart “quotes”")] // smart quotes
+    [InlineData("em — dash")] // em dash
+    [InlineData("café")] // accented letter (é)
+    [InlineData("price €42")] // currency (€)
+    [InlineData("emoji \U0001F600 face")] // emoji
     public async Task InsertTextAsync_unknown_target_with_non_ascii_text_falls_back_to_clipboard_paste(
-        string text)
+        string text
+    )
     {
         // Codex adversarial review finding: ydotool's `type` synthesizes
         // evdev keycodes through the user's keyboard layout, so non-ASCII
@@ -317,15 +334,13 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            PrefersDirectTypingForUnknownTarget = true,
+            PrefersDirectTypingForUnknownTarget = true
         };
         var sut = new TextInsertionService(platform);
 
         var result = await sut.InsertTextAsync(
-            text,
-            autoPaste: true,
-            targetProcessName: null,
-            targetWindowTitle: null);
+            text
+        );
 
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.True(platform.PasteSent);
@@ -344,15 +359,13 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PrefersDirectTypingForUnknownTarget = true,
+            PrefersDirectTypingForUnknownTarget = true
         };
         var sut = new TextInsertionService(platform);
 
         var result = await sut.InsertTextAsync(
-            "line one\nline\ttwo",
-            autoPaste: true,
-            targetProcessName: null,
-            targetWindowTitle: null);
+            "line one\nline\ttwo"
+        );
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("line one\nline\ttwo", platform.TypedText);
@@ -373,9 +386,9 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync(
             "café",
-            autoPaste: true,
             targetProcessName: "ghostty",
-            targetWindowTitle: null);
+            targetWindowTitle: null
+        );
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("café", platform.TypedText);
@@ -390,8 +403,8 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync(
             "new text",
-            autoPaste: true,
-            strategy: TextInsertionStrategy.CopyOnly);
+            strategy: TextInsertionStrategy.CopyOnly
+        );
 
         Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.Equal("new text", platform.Clipboard);
@@ -409,7 +422,7 @@ public sealed class TextInsertionServiceTests
         };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("", autoPaste: true, autoEnter: true);
+        var result = await sut.InsertTextAsync("", autoEnter: true);
 
         Assert.Equal(InsertionResult.MissingPasteTool, result);
         Assert.False(platform.EnterSent);
@@ -421,7 +434,10 @@ public sealed class TextInsertionServiceTests
     public async Task LinuxTextInsertionPlatform_WaylandWithWtype_PasteCallsWtype()
     {
         var runner = new RecordingProcessRunner();
-        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: false, hasWtype: true), runner.Run);
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner.Run
+        );
 
         Assert.True(platform.IsPasteAvailable);
 
@@ -437,7 +453,10 @@ public sealed class TextInsertionServiceTests
     public async Task LinuxTextInsertionPlatform_WaylandWithoutWtype_FallsBackToXdotool()
     {
         var runner = new RecordingProcessRunner();
-        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: true, hasWtype: false), runner.Run);
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", true, false),
+            runner.Run
+        );
 
         Assert.True(platform.IsPasteAvailable);
 
@@ -445,14 +464,21 @@ public sealed class TextInsertionServiceTests
 
         Assert.True(result);
         Assert.All(runner.Calls, call => Assert.Equal("xdotool", call.FileName));
-        Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(new[] { "keydown", "--clearmodifiers", "Control_L" }));
+        Assert.Contains(
+            runner.Calls,
+            call =>
+                call.Arguments.SequenceEqual(new[] { "keydown", "--clearmodifiers", "Control_L" })
+        );
     }
 
     [Fact]
     public async Task LinuxTextInsertionPlatform_X11WithXdotool_UsesXdotool()
     {
         var runner = new RecordingProcessRunner();
-        var platform = new LinuxTextInsertionPlatform(SnapshotFor("X11", hasXdotool: true, hasWtype: false), runner.Run);
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("X11", true, false),
+            runner.Run
+        );
 
         Assert.True(platform.IsPasteAvailable);
 
@@ -461,14 +487,20 @@ public sealed class TextInsertionServiceTests
         Assert.True(typed);
         var call = Assert.Single(runner.Calls);
         Assert.Equal("xdotool", call.FileName);
-        Assert.Equal(new[] { "type", "--clearmodifiers", "--delay", "8", "--", "hello" }, call.Arguments);
+        Assert.Equal(
+            new[] { "type", "--clearmodifiers", "--delay", "8", "--", "hello" },
+            call.Arguments
+        );
     }
 
     [Fact]
     public async Task LinuxTextInsertionPlatform_WaylandTypeTextPassesDoubleDashSeparator()
     {
         var runner = new RecordingProcessRunner();
-        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: false, hasWtype: true), runner.Run);
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner.Run
+        );
 
         var result = await platform.TypeTextAsync("--flag value");
 
@@ -482,7 +514,10 @@ public sealed class TextInsertionServiceTests
     public async Task LinuxTextInsertionPlatform_WaylandSendEnterUsesWtypeKeyArgs()
     {
         var runner = new RecordingProcessRunner();
-        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: false, hasWtype: true), runner.Run);
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner.Run
+        );
 
         var result = await platform.SendEnterAsync();
 
@@ -496,7 +531,10 @@ public sealed class TextInsertionServiceTests
     public async Task LinuxTextInsertionPlatform_WaylandActivateWindowReturnsTrueWithoutInvocation()
     {
         var runner = new RecordingProcessRunner();
-        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", hasXdotool: false, hasWtype: true), runner.Run);
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner.Run
+        );
 
         var activated = await platform.ActivateWindowAsync("123");
 
@@ -509,7 +547,10 @@ public sealed class TextInsertionServiceTests
     public async Task LinuxTextInsertionPlatform_NoBackend_AllInputMethodsReturnFalse()
     {
         var runner = new RecordingProcessRunner();
-        var platform = new LinuxTextInsertionPlatform(SnapshotFor("X11", hasXdotool: false, hasWtype: false), runner.Run);
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("X11", false, false),
+            runner.Run
+        );
 
         Assert.False(platform.IsPasteAvailable);
         Assert.False(await platform.SendPasteAsync());
@@ -521,8 +562,21 @@ public sealed class TextInsertionServiceTests
         Assert.Empty(runner.Calls);
     }
 
-    private static LinuxCapabilitySnapshot SnapshotFor(string sessionType, bool hasXdotool, bool hasWtype) =>
-        SnapshotFor(sessionType, hasXdotool, hasWtype, compositor: "unknown", hasYdotool: false, hasYdotoolSocket: false);
+    private static LinuxCapabilitySnapshot SnapshotFor(
+        string sessionType,
+        bool hasXdotool,
+        bool hasWtype
+    )
+    {
+        return SnapshotFor(
+            sessionType,
+            hasXdotool,
+            hasWtype,
+            "unknown",
+            false,
+            false
+        );
+    }
 
     private static LinuxCapabilitySnapshot SnapshotFor(
         string sessionType,
@@ -530,34 +584,45 @@ public sealed class TextInsertionServiceTests
         bool hasWtype,
         string compositor,
         bool hasYdotool,
-        bool hasYdotoolSocket) =>
-        new(
-            SessionType: sessionType,
-            HasClipboardTool: true,
-            ClipboardToolName: sessionType == "Wayland" ? "wl-clipboard" : "xclip",
-            HasXdotool: hasXdotool,
-            HasWtype: hasWtype,
-            HasFfmpeg: false,
-            HasSpeechFeedback: false,
-            SpeechFeedbackCommand: null,
-            HasPactl: false,
-            HasPlayerCtl: false,
-            HasCanberraGtkPlay: false,
-            HasCudaGpu: false,
-            HasCudaRuntimeLibraries: false,
-            Compositor: compositor,
-            HasYdotool: hasYdotool,
-            HasYdotoolSocket: hasYdotoolSocket,
-            YdotoolSocketPath: hasYdotoolSocket ? "/run/user/1000/.ydotool_socket" : null);
+        bool hasYdotoolSocket
+    )
+    {
+        return new LinuxCapabilitySnapshot(
+            sessionType,
+            true,
+            sessionType == "Wayland" ? "wl-clipboard" : "xclip",
+            hasXdotool,
+            hasWtype,
+            false,
+            false,
+            null,
+            false,
+            false,
+            false,
+            false,
+            false,
+            compositor,
+            hasYdotool,
+            hasYdotoolSocket,
+            hasYdotoolSocket ? "/run/user/1000/.ydotool_socket" : null
+        );
+    }
 
     [Fact]
     public async Task LinuxTextInsertionPlatform_GnomeWayland_PrefersYdotoolOverWtype()
     {
         var runner = new RecordingProcessRunner();
         var platform = new LinuxTextInsertionPlatform(
-            SnapshotFor("Wayland", hasXdotool: true, hasWtype: true,
-                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true),
-            runner.Run);
+            SnapshotFor(
+                "Wayland",
+                true,
+                true,
+                "gnome",
+                true,
+                true
+            ),
+            runner.Run
+        );
 
         var typed = await platform.TypeTextAsync("hi");
 
@@ -570,7 +635,8 @@ public sealed class TextInsertionServiceTests
         // bring ydotool's ~40 ms/char default down to ~4 ms/char.
         Assert.Equal(
             new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "hi" },
-            call.Arguments);
+            call.Arguments
+        );
     }
 
     [Fact]
@@ -578,9 +644,16 @@ public sealed class TextInsertionServiceTests
     {
         var runner = new RecordingProcessRunner();
         var platform = new LinuxTextInsertionPlatform(
-            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-                compositor: "kde", hasYdotool: true, hasYdotoolSocket: true),
-            runner.Run);
+            SnapshotFor(
+                "Wayland",
+                false,
+                true,
+                "kde",
+                true,
+                true
+            ),
+            runner.Run
+        );
 
         var result = await platform.SendPasteAsync();
 
@@ -594,9 +667,16 @@ public sealed class TextInsertionServiceTests
     {
         var runner = new RecordingProcessRunner();
         var platform = new LinuxTextInsertionPlatform(
-            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-                compositor: "kde", hasYdotool: true, hasYdotoolSocket: true),
-            runner.Run);
+            SnapshotFor(
+                "Wayland",
+                false,
+                true,
+                "kde",
+                true,
+                true
+            ),
+            runner.Run
+        );
 
         Assert.True(platform.IsKdePlasma);
     }
@@ -606,9 +686,16 @@ public sealed class TextInsertionServiceTests
     {
         var runner = new RecordingProcessRunner();
         var platform = new LinuxTextInsertionPlatform(
-            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-                compositor: "hyprland", hasYdotool: true, hasYdotoolSocket: true),
-            runner.Run);
+            SnapshotFor(
+                "Wayland",
+                false,
+                true,
+                "hyprland",
+                true,
+                true
+            ),
+            runner.Run
+        );
 
         var typed = await platform.TypeTextAsync("hi");
 
@@ -625,9 +712,16 @@ public sealed class TextInsertionServiceTests
         // un-runnable, so the chain must skip it and try wtype next.
         var runner = new RecordingProcessRunner();
         var platform = new LinuxTextInsertionPlatform(
-            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: false),
-            runner.Run);
+            SnapshotFor(
+                "Wayland",
+                false,
+                true,
+                "gnome",
+                true,
+                false
+            ),
+            runner.Run
+        );
 
         var typed = await platform.TypeTextAsync("hi");
 
@@ -649,21 +743,32 @@ public sealed class TextInsertionServiceTests
         // observe the full walk happened.
         var runner = new ScriptedProcessRunner();
         runner.Queue.Enqueue(("ydotool", 1, string.Empty));
-        runner.Queue.Enqueue(("wtype", 1, "Compositor does not support the virtual keyboard protocol"));
+        runner.Queue.Enqueue(
+            ("wtype", 1, "Compositor does not support the virtual keyboard protocol")
+        );
         runner.Queue.Enqueue(("xdotool", 0, string.Empty));
 
         var platform = new LinuxTextInsertionPlatform(
-            SnapshotFor("Wayland", hasXdotool: true, hasWtype: true,
-                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true),
+            SnapshotFor(
+                "Wayland",
+                true,
+                true,
+                "gnome",
+                true,
+                true
+            ),
             (file, args, env) => runner.Run(file, args),
-            (file, args) => runner.RunWithStderr(file, args));
+            (file, args) => runner.RunWithStderr(file, args)
+        );
 
         var ok = await platform.TypeTextAsync("hi");
 
         Assert.True(ok);
         // ydotool was tried first, then wtype, then xdotool succeeded.
-        Assert.Equal(new[] { "ydotool", "wtype", "xdotool" },
-            runner.Calls.Select(c => c.FileName).ToArray());
+        Assert.Equal(
+            new[] { "ydotool", "wtype", "xdotool" },
+            runner.Calls.Select(c => c.FileName).ToArray()
+        );
 
         // Second dictation: both ydotool and wtype should be skipped
         // — only xdotool should be attempted.
@@ -683,13 +788,22 @@ public sealed class TextInsertionServiceTests
         // tries and rejects → reason must remain YdotoolSocketUnreachable.
         var runner = new ScriptedProcessRunner();
         runner.Queue.Enqueue(("ydotool", 1, string.Empty));
-        runner.Queue.Enqueue(("wtype", 1, "Compositor does not support the virtual keyboard protocol"));
+        runner.Queue.Enqueue(
+            ("wtype", 1, "Compositor does not support the virtual keyboard protocol")
+        );
 
         var platform = new LinuxTextInsertionPlatform(
-            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true),
+            SnapshotFor(
+                "Wayland",
+                false,
+                true,
+                "gnome",
+                true,
+                true
+            ),
             (file, args, env) => runner.Run(file, args),
-            (file, args) => runner.RunWithStderr(file, args));
+            (file, args) => runner.RunWithStderr(file, args)
+        );
 
         var ok = await platform.TypeTextAsync("hi");
 
@@ -709,9 +823,16 @@ public sealed class TextInsertionServiceTests
         // until the next app restart.
         var runner = new RecordingProcessRunner();
         var platform = new LinuxTextInsertionPlatform(
-            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-                compositor: "gnome", hasYdotool: false, hasYdotoolSocket: false),
-            runner.Run);
+            SnapshotFor(
+                "Wayland",
+                false,
+                true,
+                "gnome",
+                false,
+                false
+            ),
+            runner.Run
+        );
 
         // Pre-refresh: GNOME with no ydotool falls back to wtype.
         Assert.True(await platform.TypeTextAsync("before"));
@@ -719,8 +840,15 @@ public sealed class TextInsertionServiceTests
         runner.Calls.Clear();
 
         platform.ApplyRefreshedSnapshot(
-            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-                compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true));
+            SnapshotFor(
+                "Wayland",
+                false,
+                true,
+                "gnome",
+                true,
+                true
+            )
+        );
 
         // Post-refresh: GNOME now prefers ydotool — same instance.
         Assert.True(await platform.TypeTextAsync("after"));
@@ -738,19 +866,33 @@ public sealed class TextInsertionServiceTests
         var platform = new LinuxTextInsertionPlatform(
             commands,
             (file, args, env) => runner.Run(file, args),
-            async (file, args) => (await runner.Run(file, args).ConfigureAwait(false), string.Empty));
+            async (file, args) => (await runner.Run(file, args).ConfigureAwait(false), string.Empty)
+        );
 
         platform.ApplyRefreshedSnapshot(
-            SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-                compositor: "gnome", hasYdotool: false, hasYdotoolSocket: false));
+            SnapshotFor(
+                "Wayland",
+                false,
+                true,
+                "gnome",
+                false,
+                false
+            )
+        );
         Assert.True(await platform.TypeTextAsync("before"));
         Assert.Equal("wtype", Assert.Single(runner.Calls).FileName);
         runner.Calls.Clear();
 
         // Fire the event directly: this models what RefreshSnapshot
         // does after YdotoolSetupHelper installs the daemon.
-        var refreshed = SnapshotFor("Wayland", hasXdotool: false, hasWtype: true,
-            compositor: "gnome", hasYdotool: true, hasYdotoolSocket: true);
+        var refreshed = SnapshotFor(
+            "Wayland",
+            false,
+            true,
+            "gnome",
+            true,
+            true
+        );
         commands.RaiseSnapshotChangedForTests(refreshed);
 
         Assert.True(await platform.TypeTextAsync("after"));
@@ -770,9 +912,9 @@ public sealed class TextInsertionServiceTests
     }
 
     /// <summary>
-    /// Process runner that returns scripted (exit, stderr) tuples from a
-    /// queue, in order. Lets failure-surfacing tests model a sequence of
-    /// per-backend outcomes inside a single insertion attempt.
+    ///     Process runner that returns scripted (exit, stderr) tuples from a
+    ///     queue, in order. Lets failure-surfacing tests model a sequence of
+    ///     per-backend outcomes inside a single insertion attempt.
     /// </summary>
     private sealed class ScriptedProcessRunner
     {
@@ -782,14 +924,23 @@ public sealed class TextInsertionServiceTests
         public Task<int> Run(string fileName, IReadOnlyList<string> args)
         {
             Calls.Add((fileName, args.ToArray()));
-            var next = Queue.Count > 0 ? Queue.Dequeue() : (Expected: fileName, ExitCode: 0, Stderr: string.Empty);
+            var next =
+                Queue.Count > 0
+                    ? Queue.Dequeue()
+                    : (Expected: fileName, ExitCode: 0, Stderr: string.Empty);
             return Task.FromResult(next.ExitCode);
         }
 
-        public Task<(int exitCode, string stderr)> RunWithStderr(string fileName, IReadOnlyList<string> args)
+        public Task<(int exitCode, string stderr)> RunWithStderr(
+            string fileName,
+            IReadOnlyList<string> args
+        )
         {
             Calls.Add((fileName, args.ToArray()));
-            var next = Queue.Count > 0 ? Queue.Dequeue() : (Expected: fileName, ExitCode: 0, Stderr: string.Empty);
+            var next =
+                Queue.Count > 0
+                    ? Queue.Dequeue()
+                    : (Expected: fileName, ExitCode: 0, Stderr: string.Empty);
             return Task.FromResult((next.ExitCode, next.Stderr));
         }
     }
@@ -802,7 +953,7 @@ public sealed class TextInsertionServiceTests
         public bool PasteAvailable { get; set; } = true;
         public bool ActivateSucceeds { get; set; } = true;
         public bool PasteSucceeds { get; set; } = true;
-        public bool TypeSucceeds { get; set; } = true;
+        public bool TypeSucceeds { get; } = true;
         public Queue<bool>? PasteResults { get; set; }
         public bool PasteSent { get; private set; }
         public int PasteAttemptCount { get; private set; }
@@ -817,9 +968,12 @@ public sealed class TextInsertionServiceTests
 
         public bool PrefersDirectTypingForUnknownTarget { get; set; }
 
-        public InsertionFailureReason LastFailureReason { get; set; } = InsertionFailureReason.None;
+        public InsertionFailureReason LastFailureReason { get; } = InsertionFailureReason.None;
 
-        public Task<string?> TryGetClipboardTextAsync() => Task.FromResult(Clipboard);
+        public Task<string?> TryGetClipboardTextAsync()
+        {
+            return Task.FromResult(Clipboard);
+        }
 
         public Task<bool> SetClipboardTextAsync(string text)
         {
@@ -827,14 +981,23 @@ public sealed class TextInsertionServiceTests
             return Task.FromResult(true);
         }
 
-        public Task DelayAsync(TimeSpan delay) => Task.CompletedTask;
+        public Task DelayAsync(TimeSpan delay)
+        {
+            return Task.CompletedTask;
+        }
 
-        public string? GetActiveWindowId() => ActiveWindowId;
+        public string? GetActiveWindowId()
+        {
+            return ActiveWindowId;
+        }
 
         public Task<bool> ActivateWindowAsync(string windowId)
         {
             if (ActivateSucceeds)
+            {
                 ActiveWindowId = windowId;
+            }
+
             return Task.FromResult(ActivateSucceeds);
         }
 
@@ -842,9 +1005,9 @@ public sealed class TextInsertionServiceTests
         {
             PasteSent = true;
             PasteAttemptCount++;
-            return Task.FromResult(PasteResults?.Count > 0
-                ? PasteResults.Dequeue()
-                : PasteSucceeds);
+            return Task.FromResult(
+                PasteResults?.Count > 0 ? PasteResults.Dequeue() : PasteSucceeds
+            );
         }
 
         public Task<bool> TypeTextAsync(string text)
@@ -853,7 +1016,10 @@ public sealed class TextInsertionServiceTests
             return Task.FromResult(TypeSucceeds);
         }
 
-        public Task<bool> SendCopyAsync() => Task.FromResult(true);
+        public Task<bool> SendCopyAsync()
+        {
+            return Task.FromResult(true);
+        }
 
         public Task<bool> SendEnterAsync()
         {

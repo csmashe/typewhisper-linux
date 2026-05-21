@@ -1,7 +1,7 @@
 namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>
-/// Result returned from an action plugin execution.
+///     Result returned from an action plugin execution.
 /// </summary>
 /// <param name="Success">Whether the action completed successfully.</param>
 /// <param name="Message">Optional user-facing message describing the result.</param>
@@ -13,4 +13,5 @@ public sealed record ActionResult(
     string? Message = null,
     string? Url = null,
     string? Icon = null,
-    double DisplayDuration = 3.0);
+    double DisplayDuration = 3.0
+);

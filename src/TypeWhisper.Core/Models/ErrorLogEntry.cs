@@ -7,13 +7,16 @@ public sealed record ErrorLogEntry
     public required string Message { get; init; }
     public string Category { get; init; } = "general";
 
-    public static ErrorLogEntry Create(string message, string category = "general") => new()
+    public static ErrorLogEntry Create(string message, string category = "general")
     {
-        Id = Guid.NewGuid().ToString("N"),
-        Timestamp = DateTime.UtcNow,
-        Message = message,
-        Category = category
-    };
+        return new ErrorLogEntry
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = DateTime.UtcNow,
+            Message = message,
+            Category = category
+        };
+    }
 }
 
 public static class ErrorCategory

@@ -4,8 +4,8 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Sentinel-block round-trip tests. The Hyprland and Sway writers both
-/// rely on the same helper so a bug here would corrupt either config.
+///     Sentinel-block round-trip tests. The Hyprland and Sway writers both
+///     rely on the same helper so a bug here would corrupt either config.
 /// </summary>
 public sealed class SentinelBlockTests
 {
@@ -30,10 +30,12 @@ public sealed class SentinelBlockTests
     public void Scan_WellFormedBlock_ReportsMatchedPair()
     {
         var input =
-            "bind = SUPER, q, killactive\n" +
-            SentinelBlock.OpenSentinel + "\n" +
-            "bind  = CTRL SHIFT, SPACE, exec, typewhisper record start\n" +
-            SentinelBlock.CloseSentinel + "\n";
+            "bind = SUPER, q, killactive\n"
+            + SentinelBlock.OpenSentinel
+            + "\n"
+            + "bind  = CTRL SHIFT, SPACE, exec, typewhisper record start\n"
+            + SentinelBlock.CloseSentinel
+            + "\n";
         var scan = SentinelBlock.Scan(input);
         Assert.False(scan.Mismatched);
         Assert.Equal(1, scan.OpenLine);
@@ -52,9 +54,12 @@ public sealed class SentinelBlockTests
     public void Scan_DuplicateOpenSentinel_ReportsMismatch()
     {
         var input =
-            SentinelBlock.OpenSentinel + "\n" +
-            SentinelBlock.OpenSentinel + "\n" +
-            SentinelBlock.CloseSentinel + "\n";
+            SentinelBlock.OpenSentinel
+            + "\n"
+            + SentinelBlock.OpenSentinel
+            + "\n"
+            + SentinelBlock.CloseSentinel
+            + "\n";
         var scan = SentinelBlock.Scan(input);
         Assert.True(scan.Mismatched);
     }
@@ -63,7 +68,10 @@ public sealed class SentinelBlockTests
     public void ReplaceOrAppend_NoBlock_AppendsAtEnd()
     {
         var input = "bind = SUPER, q, killactive\n";
-        var output = SentinelBlock.ReplaceOrAppend(input, new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" });
+        var output = SentinelBlock.ReplaceOrAppend(
+            input,
+            new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" }
+        );
         Assert.Contains(SentinelBlock.OpenSentinel, output);
         Assert.Contains(SentinelBlock.CloseSentinel, output);
         Assert.Contains("typewhisper", output);
@@ -74,12 +82,17 @@ public sealed class SentinelBlockTests
     public void ReplaceOrAppend_ExistingBlock_ReplacesInPlace()
     {
         var input =
-            "bind = SUPER, q, killactive\n" +
-            SentinelBlock.OpenSentinel + "\n" +
-            "stale = junk\n" +
-            SentinelBlock.CloseSentinel + "\n" +
-            "bind = SUPER, x, exit\n";
-        var output = SentinelBlock.ReplaceOrAppend(input, new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" });
+            "bind = SUPER, q, killactive\n"
+            + SentinelBlock.OpenSentinel
+            + "\n"
+            + "stale = junk\n"
+            + SentinelBlock.CloseSentinel
+            + "\n"
+            + "bind = SUPER, x, exit\n";
+        var output = SentinelBlock.ReplaceOrAppend(
+            input,
+            new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" }
+        );
         Assert.DoesNotContain("stale = junk", output);
         Assert.Contains("typewhisper", output);
         // Trailing user content must survive.
@@ -94,7 +107,8 @@ public sealed class SentinelBlockTests
     {
         var input = SentinelBlock.OpenSentinel + "\nbind = ...\n";
         Assert.Throws<InvalidOperationException>(() =>
-            SentinelBlock.ReplaceOrAppend(input, new[] { "bind = x" }));
+            SentinelBlock.ReplaceOrAppend(input, new[] { "bind = x" })
+        );
     }
 
     [Fact]
@@ -108,10 +122,12 @@ public sealed class SentinelBlockTests
     public void Remove_ExistingBlock_RemovesIt()
     {
         var input =
-            "bind = SUPER, q, killactive\n" +
-            SentinelBlock.OpenSentinel + "\n" +
-            "bind  = CTRL SHIFT, SPACE, exec, typewhisper\n" +
-            SentinelBlock.CloseSentinel + "\n";
+            "bind = SUPER, q, killactive\n"
+            + SentinelBlock.OpenSentinel
+            + "\n"
+            + "bind  = CTRL SHIFT, SPACE, exec, typewhisper\n"
+            + SentinelBlock.CloseSentinel
+            + "\n";
         var output = SentinelBlock.Remove(input);
         Assert.DoesNotContain("typewhisper", output);
         Assert.DoesNotContain(SentinelBlock.OpenSentinel, output);
@@ -122,7 +138,10 @@ public sealed class SentinelBlockTests
     public void ReplaceOrAppend_AppendToFileEndingWithNewline_PreservesTrailingNewline()
     {
         var input = "bind = SUPER, q, killactive\n";
-        var output = SentinelBlock.ReplaceOrAppend(input, new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" });
+        var output = SentinelBlock.ReplaceOrAppend(
+            input,
+            new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" }
+        );
         Assert.EndsWith("\n", output);
     }
 
@@ -130,7 +149,10 @@ public sealed class SentinelBlockTests
     public void ReplaceOrAppend_AppendToFileWithoutTrailingNewline_StaysWithoutTrailingNewline()
     {
         var input = "bind = SUPER, q, killactive";
-        var output = SentinelBlock.ReplaceOrAppend(input, new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" });
+        var output = SentinelBlock.ReplaceOrAppend(
+            input,
+            new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" }
+        );
         Assert.False(output.EndsWith("\n"));
     }
 
@@ -140,11 +162,12 @@ public sealed class SentinelBlockTests
     public void Remove_RoundTrip_PreservesTrailingNewlineState(bool trailingNewline)
     {
         var input =
-            "bind = SUPER, q, killactive\n" +
-            SentinelBlock.OpenSentinel + "\n" +
-            "bind  = CTRL SHIFT, SPACE, exec, typewhisper\n" +
-            SentinelBlock.CloseSentinel +
-            (trailingNewline ? "\n" : string.Empty);
+            "bind = SUPER, q, killactive\n"
+            + SentinelBlock.OpenSentinel
+            + "\n"
+            + "bind  = CTRL SHIFT, SPACE, exec, typewhisper\n"
+            + SentinelBlock.CloseSentinel
+            + (trailingNewline ? "\n" : string.Empty);
         var output = SentinelBlock.Remove(input);
         Assert.Equal(trailingNewline, output.EndsWith("\n"));
     }
@@ -158,6 +181,7 @@ public sealed class SentinelBlockTests
             count++;
             idx += needle.Length;
         }
+
         return count;
     }
 }

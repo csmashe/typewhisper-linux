@@ -6,10 +6,10 @@ using TypeWhisper.Core.Interfaces;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Lowers the volume of all active PulseAudio/PipeWire sink inputs during
-/// dictation so that playback doesn't bleed into the microphone capture.
-/// Uses <c>pactl</c> — available on PipeWire via pipewire-pulse as well as
-/// on native PulseAudio. Silently no-ops when pactl is absent.
+///     Lowers the volume of all active PulseAudio/PipeWire sink inputs during
+///     dictation so that playback doesn't bleed into the microphone capture.
+///     Uses <c>pactl</c> — available on PipeWire via pipewire-pulse as well as
+///     on native PulseAudio. Silently no-ops when pactl is absent.
 /// </summary>
 public sealed class AudioDuckingService : IAudioDuckingService
 {
@@ -21,24 +21,40 @@ public sealed class AudioDuckingService : IAudioDuckingService
     public void DuckAudio(float factor)
     {
         if (_isDucked)
+        {
             return;
+        }
 
         try
         {
             var sinkInputs = RunCommand("pactl", "list short sink-inputs");
             if (string.IsNullOrWhiteSpace(sinkInputs))
-                return;
-
-            foreach (var line in sinkInputs.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                var inputId = line.Split('\t', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                return;
+            }
+
+            foreach (
+                var line in sinkInputs.Split(
+                    '\n',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                )
+            )
+            {
+                var inputId = line.Split(
+                        '\t',
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                    )
                     .FirstOrDefault();
                 if (string.IsNullOrWhiteSpace(inputId))
+                {
                     continue;
+                }
 
                 var currentVolume = GetSinkInputVolume(inputId);
                 if (string.IsNullOrWhiteSpace(currentVolume))
+                {
                     continue;
+                }
 
                 _savedVolumes[inputId] = currentVolume;
                 var duckedVolume = ScaleVolume(currentVolume, factor);
@@ -58,12 +74,16 @@ public sealed class AudioDuckingService : IAudioDuckingService
     public void RestoreAudio()
     {
         if (!_isDucked)
+        {
             return;
+        }
 
         try
         {
             foreach (var (inputId, volume) in _savedVolumes)
+            {
                 RunCommand("pactl", $"set-sink-input-volume {inputId} {volume}");
+            }
         }
         catch (Exception ex)
         {
@@ -80,7 +100,9 @@ public sealed class AudioDuckingService : IAudioDuckingService
     {
         var output = RunCommand("pactl", $"get-sink-input-volume {inputId}");
         if (string.IsNullOrWhiteSpace(output))
+        {
             return null;
+        }
 
         var match = VolumePercentRegex.Match(output);
         return match.Success ? match.Groups[1].Value + "%" : null;
@@ -89,8 +111,17 @@ public sealed class AudioDuckingService : IAudioDuckingService
     private static string ScaleVolume(string volumePercent, float factor)
     {
         var numericPart = volumePercent.Trim().TrimEnd('%');
-        if (!float.TryParse(numericPart, NumberStyles.Float, CultureInfo.InvariantCulture, out var percent))
+        if (
+            !float.TryParse(
+                numericPart,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var percent
+            )
+        )
+        {
             return volumePercent;
+        }
 
         var scaled = Math.Clamp(percent * factor, 0f, 150f);
         return $"{scaled.ToString("0.##", CultureInfo.InvariantCulture)}%";
@@ -100,16 +131,20 @@ public sealed class AudioDuckingService : IAudioDuckingService
     {
         try
         {
-            using var process = Process.Start(new ProcessStartInfo(fileName, arguments)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
+            using var process = Process.Start(
+                new ProcessStartInfo(fileName, arguments)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            );
 
             if (process is null)
+            {
                 return null;
+            }
 
             var stdout = process.StandardOutput.ReadToEnd();
             process.WaitForExit(1500);

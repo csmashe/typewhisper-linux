@@ -4,11 +4,11 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Probes for the "Window Calls" GNOME Shell extension and opens its
-/// install page when the user clicks the remediation button in the
-/// Profiles section. We don't run any privileged installation step
-/// ourselves — extensions.gnome.org requires the user to click "Install"
-/// in their browser with the GNOME Browser Integration extension active.
+///     Probes for the "Window Calls" GNOME Shell extension and opens its
+///     install page when the user clicks the remediation button in the
+///     Profiles section. We don't run any privileged installation step
+///     ourselves — extensions.gnome.org requires the user to click "Install"
+///     in their browser with the GNOME Browser Integration extension active.
 /// </summary>
 public sealed class GnomeWindowCallsSetupHelper
 {
@@ -21,29 +21,51 @@ public sealed class GnomeWindowCallsSetupHelper
     public bool IsApplicable()
     {
         var raw = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
-        if (string.IsNullOrWhiteSpace(raw)) return false;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
         var lower = raw.ToLowerInvariant();
         return lower.Contains("gnome") || lower.Contains("ubuntu");
     }
 
     public bool IsCurrentlyInstalled()
     {
-        if (!DesktopDetector.BinaryExists("gdbus")) return false;
+        if (!DesktopDetector.BinaryExists("gdbus"))
+        {
+            return false;
+        }
+
         try
         {
-            using var p = Process.Start(new ProcessStartInfo(
-                "gdbus",
-                $"introspect --session --dest {DBusDest} --object-path {DBusPath}")
+            using var p = Process.Start(
+                new ProcessStartInfo(
+                    "gdbus",
+                    $"introspect --session --dest {DBusDest} --object-path {DBusPath}"
+                )
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+            );
+            if (p is null)
             {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
-            if (p is null) return false;
+                return false;
+            }
 
             if (!p.WaitForExit(500))
             {
-                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                try
+                {
+                    p.Kill(true);
+                }
+                catch
+                {
+                    /* best effort */
+                }
+
                 return false;
             }
 
@@ -59,12 +81,14 @@ public sealed class GnomeWindowCallsSetupHelper
     {
         try
         {
-            using var p = Process.Start(new ProcessStartInfo("xdg-open", ExtensionInstallUrl)
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
+            using var p = Process.Start(
+                new ProcessStartInfo("xdg-open", ExtensionInstallUrl)
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }
+            );
             return p is not null;
         }
         catch

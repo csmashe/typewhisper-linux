@@ -1,4 +1,3 @@
-using System.IO;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TypeWhisper.Core;
@@ -20,9 +19,9 @@ using TypeWhisper.Linux.Views;
 namespace TypeWhisper.Linux;
 
 /// <summary>
-/// DI wiring for the Linux host. Keeps registrations Linux-native and omits
-/// Windows-only services such as Win32 hotkeys, WPF UI, Velopack, SMTC media
-/// pause, Core Audio ducking, supporter Discord, and license server flows.
+///     DI wiring for the Linux host. Keeps registrations Linux-native and omits
+///     Windows-only services such as Win32 hotkeys, WPF UI, Velopack, SMTC media
+///     pause, Core Audio ducking, supporter Discord, and license server flows.
 /// </summary>
 internal static class ServiceRegistrations
 {
@@ -32,20 +31,29 @@ internal static class ServiceRegistrations
 
         // Core — settings & JSON-file-backed data services (all portable)
         services.AddSingleton<ISettingsService>(
-            new SettingsService(TypeWhisperEnvironment.SettingsFilePath));
+            new SettingsService(TypeWhisperEnvironment.SettingsFilePath)
+        );
         services.AddSingleton<IErrorLogService>(new ErrorLogService(dataPath));
         services.AddSingleton<IHistoryService>(
-            new HistoryService(Path.Combine(dataPath, "history.json"), TypeWhisperEnvironment.AudioPath));
+            new HistoryService(
+                Path.Combine(dataPath, "history.json"),
+                TypeWhisperEnvironment.AudioPath
+            )
+        );
         services.AddSingleton<RecentTranscriptionStore>();
         services.AddSingleton<IDictionaryService>(
-            new DictionaryService(Path.Combine(dataPath, "dictionary.json")));
+            new DictionaryService(Path.Combine(dataPath, "dictionary.json"))
+        );
         services.AddSingleton<IVocabularyBoostingService, VocabularyBoostingService>();
         services.AddSingleton<ISnippetService>(
-            new SnippetService(Path.Combine(dataPath, "snippets.json")));
+            new SnippetService(Path.Combine(dataPath, "snippets.json"))
+        );
         services.AddSingleton<IProfileService>(
-            new ProfileService(Path.Combine(dataPath, "profiles.json")));
+            new ProfileService(Path.Combine(dataPath, "profiles.json"))
+        );
         services.AddSingleton<IPromptActionService>(
-            new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
+            new PromptActionService(Path.Combine(dataPath, "prompt-actions.json"))
+        );
         services.AddSingleton<CleanupService>();
         services.AddSingleton<CorrectionSuggestionService>();
         services.AddSingleton<IHistoryInsightsService, HistoryInsightsService>();
@@ -72,7 +80,9 @@ internal static class ServiceRegistrations
         services.AddSingleton<IActiveWindowProvider, XdotoolActiveWindowProvider>();
         services.AddSingleton<AtSpiUrlExtractor>();
         services.AddSingleton<ActiveWindowService>();
-        services.AddSingleton<IActiveWindowService>(sp => sp.GetRequiredService<ActiveWindowService>());
+        services.AddSingleton<IActiveWindowService>(sp =>
+            sp.GetRequiredService<ActiveWindowService>()
+        );
         services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<SystemCommandAvailabilityService>();

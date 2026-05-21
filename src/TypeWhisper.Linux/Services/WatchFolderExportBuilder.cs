@@ -9,7 +9,8 @@ public static class WatchFolderExportBuilder
         WatchFolderTranscriptionResult result,
         string fileName,
         string engineName,
-        DateTime date)
+        DateTime date
+    )
     {
         return format switch
         {
@@ -24,29 +25,36 @@ public static class WatchFolderExportBuilder
         WatchFolderTranscriptionResult result,
         string fileName,
         string engineName,
-        DateTime date)
+        DateTime date
+    )
     {
         var content = $"""
-        # Transcription: {fileName}
-        - Date: {date:G}
-        - Engine: {engineName}
+                       # Transcription: {fileName}
+                       - Date: {date:G}
+                       - Engine: {engineName}
 
-        {result.Text}
-        """;
+                       {result.Text}
+                       """;
 
         return new WatchFolderExportArtifact("md", content);
     }
 
     private static WatchFolderExportArtifact BuildSubtitle(
         string extension,
-        WatchFolderTranscriptionResult result)
+        WatchFolderTranscriptionResult result
+    )
     {
         if (result.Segments.Count == 0)
-            throw new InvalidOperationException("Subtitle export requires timestamped transcription segments.");
+        {
+            throw new InvalidOperationException(
+                "Subtitle export requires timestamped transcription segments."
+            );
+        }
 
-        var content = extension == "srt"
-            ? SubtitleExporter.ToSrt(result.Segments)
-            : SubtitleExporter.ToWebVtt(result.Segments);
+        var content =
+            extension == "srt"
+                ? SubtitleExporter.ToSrt(result.Segments)
+                : SubtitleExporter.ToWebVtt(result.Segments);
 
         return new WatchFolderExportArtifact(extension, content);
     }

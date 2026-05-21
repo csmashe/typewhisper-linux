@@ -1,7 +1,7 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using System.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -13,6 +13,11 @@ public sealed partial class SnippetService : ISnippetService
     private readonly object _gate = new();
     private List<Snippet> _cache = [];
     private bool _cacheLoaded;
+
+    public SnippetService(string filePath)
+    {
+        _filePath = filePath;
+    }
 
     public IReadOnlyList<Snippet> Snippets
     {
@@ -34,7 +39,12 @@ public sealed partial class SnippetService : ISnippetService
             lock (_gate)
             {
                 return _cache
-                    .SelectMany(s => s.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    .SelectMany(s =>
+                        s.Tags.Split(
+                            ',',
+                            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                        )
+                    )
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Order(StringComparer.OrdinalIgnoreCase)
                     .ToList();
@@ -44,11 +54,6 @@ public sealed partial class SnippetService : ISnippetService
 
     public event Action? SnippetsChanged;
 
-    public SnippetService(string filePath)
-    {
-        _filePath = filePath;
-    }
-
     public void AddSnippet(Snippet snippet)
     {
         EnsureCacheLoaded();
@@ -57,6 +62,7 @@ public sealed partial class SnippetService : ISnippetService
             _cache.Add(snippet);
             SaveToDisk();
         }
+
         SnippetsChanged?.Invoke();
     }
 
@@ -68,7 +74,9 @@ public sealed partial class SnippetService : ISnippetService
         {
             var idx = _cache.FindIndex(s => s.Id == snippet.Id);
             if (idx < 0 || _cache[idx] == snippet)
+            {
                 return;
+            }
 
             _cache[idx] = snippet;
             SaveToDisk();
@@ -76,7 +84,9 @@ public sealed partial class SnippetService : ISnippetService
         }
 
         if (changed)
+        {
             SnippetsChanged?.Invoke();
+        }
     }
 
     public void DeleteSnippet(string id)
@@ -87,7 +97,9 @@ public sealed partial class SnippetService : ISnippetService
         {
             var idx = _cache.FindIndex(s => s.Id == id);
             if (idx < 0)
+            {
                 return;
+            }
 
             _cache.RemoveAt(idx);
             SaveToDisk();
@@ -95,10 +107,16 @@ public sealed partial class SnippetService : ISnippetService
         }
 
         if (changed)
+        {
             SnippetsChanged?.Invoke();
+        }
     }
 
-    public string ApplySnippets(string text, Func<string>? clipboardProvider = null, string? profileId = null)
+    public string ApplySnippets(
+        string text,
+        Func<string>? clipboardProvider = null,
+        string? profileId = null
+    )
     {
         EnsureCacheLoaded();
         List<Snippet> activeSnippets;
@@ -117,7 +135,10 @@ public sealed partial class SnippetService : ISnippetService
                 ? StringComparison.Ordinal
                 : StringComparison.OrdinalIgnoreCase;
 
-            if (!text.Contains(snippet.Trigger, comparison)) continue;
+            if (!text.Contains(snippet.Trigger, comparison))
+            {
+                continue;
+            }
 
             var expanded = ExpandPlaceholders(snippet.Replacement, clipboardProvider);
             var pattern = BuildTriggerPattern(snippet);
@@ -126,7 +147,9 @@ public sealed partial class SnippetService : ISnippetService
             // literal dollar signs in snippet text are preserved verbatim.
             var replaced = Regex.Replace(text, pattern, expanded.Replace("$", "$$"), options);
             if (string.Equals(replaced, text, StringComparison.Ordinal))
+            {
                 continue;
+            }
 
             text = replaced;
 
@@ -137,26 +160,9 @@ public sealed partial class SnippetService : ISnippetService
         return text;
     }
 
-    private static bool AppliesToProfile(Snippet snippet, string? profileId)
+    public string PreviewReplacement(string replacement, Func<string>? clipboardProvider = null)
     {
-        if (snippet.ProfileIds.Count == 0)
-            return true;
-
-        if (string.IsNullOrWhiteSpace(profileId))
-            return false;
-
-        return snippet.ProfileIds.Contains(profileId, StringComparer.OrdinalIgnoreCase);
-    }
-
-    public string PreviewReplacement(string replacement, Func<string>? clipboardProvider = null) =>
-        ExpandPlaceholders(replacement, clipboardProvider);
-
-    private static string BuildTriggerPattern(Snippet snippet)
-    {
-        var escaped = Regex.Escape(snippet.Trigger);
-        return snippet.TriggerMode == SnippetTriggerMode.ExactPhrase
-            ? @"^\s*" + escaped + @"[.!?]?\s*$"
-            : escaped + @"[.!?]?";
+        return ExpandPlaceholders(replacement, clipboardProvider);
     }
 
     public string ExportToJson()
@@ -171,7 +177,10 @@ public sealed partial class SnippetService : ISnippetService
     public int ImportFromJson(string json)
     {
         var imported = JsonSerializer.Deserialize(json, SnippetJsonContext.Default.ListSnippet);
-        if (imported is null or { Count: 0 }) return 0;
+        if (imported is null or { Count: 0 })
+        {
+            return 0;
+        }
 
         EnsureCacheLoaded();
         var count = 0;
@@ -180,7 +189,9 @@ public sealed partial class SnippetService : ISnippetService
             foreach (var snippet in imported)
             {
                 if (_cache.Any(existing => SnippetIdentityEquals(existing, snippet)))
+                {
                     continue;
+                }
 
                 var newSnippet = snippet with { Id = Guid.NewGuid().ToString() };
                 _cache.Add(newSnippet);
@@ -188,25 +199,59 @@ public sealed partial class SnippetService : ISnippetService
             }
 
             if (count > 0)
+            {
                 SaveToDisk();
+            }
         }
 
         if (count > 0)
+        {
             SnippetsChanged?.Invoke();
+        }
 
         return count;
     }
 
-    private static bool SnippetIdentityEquals(Snippet left, Snippet right) =>
-        left.TriggerMode == right.TriggerMode &&
-        left.CaseSensitive == right.CaseSensitive &&
-        string.Equals(
-            left.Trigger,
-            right.Trigger,
-            left.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase) &&
-        (left.ProfileIds ?? []).Count == (right.ProfileIds ?? []).Count &&
-        (left.ProfileIds ?? []).Order(StringComparer.OrdinalIgnoreCase)
-            .SequenceEqual((right.ProfileIds ?? []).Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
+    private static bool AppliesToProfile(Snippet snippet, string? profileId)
+    {
+        if (snippet.ProfileIds.Count == 0)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(profileId))
+        {
+            return false;
+        }
+
+        return snippet.ProfileIds.Contains(profileId, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string BuildTriggerPattern(Snippet snippet)
+    {
+        var escaped = Regex.Escape(snippet.Trigger);
+        return snippet.TriggerMode == SnippetTriggerMode.ExactPhrase
+            ? @"^\s*" + escaped + @"[.!?]?\s*$"
+            : escaped + @"[.!?]?";
+    }
+
+    private static bool SnippetIdentityEquals(Snippet left, Snippet right)
+    {
+        return left.TriggerMode == right.TriggerMode
+               && left.CaseSensitive == right.CaseSensitive
+               && string.Equals(
+                   left.Trigger,
+                   right.Trigger,
+                   left.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase
+               )
+               && (left.ProfileIds ?? []).Count == (right.ProfileIds ?? []).Count
+               && (left.ProfileIds ?? [])
+               .Order(StringComparer.OrdinalIgnoreCase)
+               .SequenceEqual(
+                   (right.ProfileIds ?? []).Order(StringComparer.OrdinalIgnoreCase),
+                   StringComparer.OrdinalIgnoreCase
+               );
+    }
 
     private static string ExpandPlaceholders(string template, Func<string>? clipboardProvider)
     {
@@ -216,20 +261,24 @@ public sealed partial class SnippetService : ISnippetService
             .Replace("{day}", now.ToString("dddd"))
             .Replace("{year}", now.Year.ToString());
 
-        template = PlaceholderRegex().Replace(template, match =>
-        {
-            var name = match.Groups[1].Value;
-            var format = match.Groups[2].Success ? match.Groups[2].Value : null;
+        template = PlaceholderRegex()
+            .Replace(
+                template,
+                match =>
+                {
+                    var name = match.Groups[1].Value;
+                    var format = match.Groups[2].Success ? match.Groups[2].Value : null;
 
-            return name switch
-            {
-                "date" => now.ToString(format ?? "yyyy-MM-dd"),
-                "time" => now.ToString(format ?? "HH:mm"),
-                "datetime" => now.ToString(format ?? "yyyy-MM-dd HH:mm"),
-                "clipboard" => clipboardProvider?.Invoke() ?? "",
-                _ => match.Value
-            };
-        });
+                    return name switch
+                    {
+                        "date" => now.ToString(format ?? "yyyy-MM-dd"),
+                        "time" => now.ToString(format ?? "HH:mm"),
+                        "datetime" => now.ToString(format ?? "yyyy-MM-dd HH:mm"),
+                        "clipboard" => clipboardProvider?.Invoke() ?? "",
+                        _ => match.Value
+                    };
+                }
+            );
 
         return template;
     }
@@ -257,7 +306,9 @@ public sealed partial class SnippetService : ISnippetService
     private void IncrementUsageCounts(IReadOnlyDictionary<string, int> increments)
     {
         if (increments.Count == 0)
+        {
             return;
+        }
 
         lock (_gate)
         {
@@ -266,11 +317,15 @@ public sealed partial class SnippetService : ISnippetService
             foreach (var (id, delta) in increments)
             {
                 if (delta <= 0)
+                {
                     continue;
+                }
 
                 var idx = _cache.FindIndex(s => s.Id == id);
                 if (idx < 0)
+                {
                     continue;
+                }
 
                 _cache[idx] = _cache[idx] with
                 {
@@ -281,7 +336,9 @@ public sealed partial class SnippetService : ISnippetService
             }
 
             if (changed)
+            {
                 SaveToDisk();
+            }
         }
     }
 
@@ -290,18 +347,26 @@ public sealed partial class SnippetService : ISnippetService
         // Volatile.Read for the fast-path check avoids acquiring the lock on every call after load.
         // Volatile.Write inside the lock ensures the write is visible to all threads before they
         // exit the lock (double-checked locking pattern).
-        if (Volatile.Read(ref _cacheLoaded)) return;
+        if (Volatile.Read(ref _cacheLoaded))
+        {
+            return;
+        }
 
         lock (_gate)
         {
-            if (Volatile.Read(ref _cacheLoaded)) return;
+            if (Volatile.Read(ref _cacheLoaded))
+            {
+                return;
+            }
 
             try
             {
                 if (File.Exists(_filePath))
                 {
                     var json = File.ReadAllText(_filePath);
-                    _cache = JsonSerializer.Deserialize(json, SnippetJsonContext.Default.ListSnippet) ?? [];
+                    _cache =
+                        JsonSerializer.Deserialize(json, SnippetJsonContext.Default.ListSnippet)
+                        ?? [];
                 }
             }
             catch
@@ -320,7 +385,9 @@ public sealed partial class SnippetService : ISnippetService
         {
             var dir = Path.GetDirectoryName(_filePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
                 Directory.CreateDirectory(dir);
+            }
 
             var json = JsonSerializer.Serialize(_cache, SnippetJsonContext.Default.ListSnippet);
             File.WriteAllText(_filePath, json);
@@ -333,15 +400,21 @@ public sealed partial class SnippetService : ISnippetService
         try
         {
             if (!File.Exists(path))
+            {
                 return;
+            }
 
             var brokenPath = $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}";
             File.Move(path, brokenPath);
-            System.Diagnostics.Trace.WriteLine($"[SnippetService] Preserved unreadable file as {brokenPath}");
+            Trace.WriteLine(
+                $"[SnippetService] Preserved unreadable file as {brokenPath}"
+            );
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Trace.WriteLine($"[SnippetService] Could not preserve unreadable file: {ex.Message}");
+            Trace.WriteLine(
+                $"[SnippetService] Could not preserve unreadable file: {ex.Message}"
+            );
         }
     }
 }

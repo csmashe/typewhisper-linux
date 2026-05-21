@@ -1,5 +1,3 @@
-using System.IO;
-using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using Xunit;
@@ -7,11 +5,11 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Tests for the collection-settings view-model layer: the full
-/// <see cref="PluginsSectionViewModel"/> flow driven by a fake
-/// <see cref="IPluginCollectionSettingsProvider"/>, plus direct unit tests of
-/// <see cref="PluginCollectionRow"/>, <see cref="PluginCollectionItemRow"/> and
-/// <see cref="PluginSettingFieldRow"/>.
+///     Tests for the collection-settings view-model layer: the full
+///     <see cref="PluginsSectionViewModel" /> flow driven by a fake
+///     <see cref="IPluginCollectionSettingsProvider" />, plus direct unit tests of
+///     <see cref="PluginCollectionRow" />, <see cref="PluginCollectionItemRow" /> and
+///     <see cref="PluginSettingFieldRow" />.
 /// </summary>
 public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 {
@@ -19,13 +17,35 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
     public PluginCollectionSettingsViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "tw-vm-collection-" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "tw-vm-collection-" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     // ---- Full PluginsSectionViewModel flow --------------------------------
 
-    private (PluginsSectionViewModel Vm, PluginRow Row, FakeCollectionPlugin Plugin) CreateSectionWithCollectionPlugin()
+    private (
+        PluginsSectionViewModel Vm,
+        PluginRow Row,
+        FakeCollectionPlugin Plugin
+        ) CreateSectionWithCollectionPlugin()
     {
         var plugin = new FakeCollectionPlugin();
         var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, plugin.PluginId, plugin);
@@ -39,11 +59,11 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public async Task ToggleExpanded_PopulatesCollectionsFromProvider()
     {
         var (vm, row, plugin) = CreateSectionWithCollectionPlugin();
-        plugin.Items.Add(new PluginCollectionItem(new Dictionary<string, string?>
-        {
-            ["name"] = "Existing",
-            ["enabled"] = "true",
-        }));
+        plugin.Items.Add(
+            new PluginCollectionItem(
+                new Dictionary<string, string?> { ["name"] = "Existing", ["enabled"] = "true" }
+            )
+        );
 
         await vm.ToggleExpandedCommand.ExecuteAsync(row);
 
@@ -101,9 +121,15 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void FieldRow_AutoKind_WithOptions_ResolvesToDropdown()
     {
         var field = new PluginSettingFieldRow(
-            "shell", "Shell", "", "",
+            "shell",
+            "Shell",
+            "",
+            "",
             [new PluginSettingOption("bash", "bash")],
-            isSecret: false, PluginSettingKind.Auto, "bash");
+            false,
+            PluginSettingKind.Auto,
+            "bash"
+        );
 
         Assert.Equal(PluginSettingKind.Dropdown, field.Kind);
         Assert.True(field.IsDropdownKind);
@@ -113,8 +139,15 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void FieldRow_AutoKind_Secret_ResolvesToSecret()
     {
         var field = new PluginSettingFieldRow(
-            "key", "Key", "", "", [],
-            isSecret: true, PluginSettingKind.Auto, "");
+            "key",
+            "Key",
+            "",
+            "",
+            [],
+            true,
+            PluginSettingKind.Auto,
+            ""
+        );
 
         Assert.Equal(PluginSettingKind.Secret, field.Kind);
         Assert.True(field.IsSecretKind);
@@ -124,8 +157,15 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void FieldRow_AutoKind_Plain_ResolvesToText()
     {
         var field = new PluginSettingFieldRow(
-            "name", "Name", "", "", [],
-            isSecret: false, PluginSettingKind.Auto, "");
+            "name",
+            "Name",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Auto,
+            ""
+        );
 
         Assert.Equal(PluginSettingKind.Text, field.Kind);
         Assert.True(field.IsTextKind);
@@ -135,14 +175,28 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void FieldRow_ExplicitKinds_ArePreserved()
     {
         var multiline = new PluginSettingFieldRow(
-            "cmd", "Command", "", "", [],
-            isSecret: false, PluginSettingKind.Multiline, "");
+            "cmd",
+            "Command",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Multiline,
+            ""
+        );
         Assert.Equal(PluginSettingKind.Multiline, multiline.Kind);
         Assert.True(multiline.IsMultilineKind);
 
         var boolean = new PluginSettingFieldRow(
-            "enabled", "Enabled", "", "", [],
-            isSecret: false, PluginSettingKind.Boolean, "true");
+            "enabled",
+            "Enabled",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Boolean,
+            "true"
+        );
         Assert.Equal(PluginSettingKind.Boolean, boolean.Kind);
         Assert.True(boolean.IsBooleanKind);
     }
@@ -151,13 +205,27 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void FieldRow_HiddenKey_IsHidden()
     {
         var field = new PluginSettingFieldRow(
-            "__id", "Id", "", "", [],
-            isSecret: false, PluginSettingKind.Text, "");
+            "__id",
+            "Id",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Text,
+            ""
+        );
         Assert.True(field.IsHidden);
 
         var visible = new PluginSettingFieldRow(
-            "name", "Name", "", "", [],
-            isSecret: false, PluginSettingKind.Text, "");
+            "name",
+            "Name",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Text,
+            ""
+        );
         Assert.False(visible.IsHidden);
     }
 
@@ -165,8 +233,15 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void FieldRow_BoolValueSync_ValueToBool()
     {
         var field = new PluginSettingFieldRow(
-            "enabled", "Enabled", "", "", [],
-            isSecret: false, PluginSettingKind.Boolean, "false");
+            "enabled",
+            "Enabled",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Boolean,
+            "false"
+        );
         Assert.False(field.BoolValue);
 
         field.Value = "true";
@@ -180,8 +255,15 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void FieldRow_BoolValueSync_BoolToValue()
     {
         var field = new PluginSettingFieldRow(
-            "enabled", "Enabled", "", "", [],
-            isSecret: false, PluginSettingKind.Boolean, "false");
+            "enabled",
+            "Enabled",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Boolean,
+            "false"
+        );
 
         field.BoolValue = true;
         Assert.Equal("true", field.Value);
@@ -192,25 +274,36 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
     // ---- PluginCollectionRow / PluginCollectionItemRow direct tests -------
 
-    private static PluginCollectionDefinition ThingsDefinition() =>
-        new(
-            Key: "things",
-            Label: "Things",
-            Description: "Some things.",
-            ItemFields:
+    private static PluginCollectionDefinition ThingsDefinition()
+    {
+        return new PluginCollectionDefinition(
+            "things",
+            "Things",
+            "Some things.",
             [
                 new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
                 new PluginSettingDefinition("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
-                new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
+                new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text)
             ],
-            ItemLabelFieldKey: "name",
-            AddButtonLabel: "Add thing");
+            "name",
+            "Add thing"
+        );
+    }
 
     private static PluginCollectionRow CreateCollectionRow(params PluginCollectionItem[] items)
     {
         var ownerRow = new PluginRow(
-            owner: null, id: "p", name: "P", version: "1", author: "", description: "",
-            category: "utility", isLocal: true, hasExpandableSettings: true, isEnabled: true);
+            null,
+            "p",
+            "P",
+            "1",
+            "",
+            "",
+            "utility",
+            true,
+            true,
+            true
+        );
         return new PluginCollectionRow(ThingsDefinition(), ownerRow, items);
     }
 
@@ -258,7 +351,8 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void ItemRow_HeaderText_UpdatesWhenLabelFieldChanges()
     {
         var collection = CreateCollectionRow(
-            new PluginCollectionItem(new Dictionary<string, string?> { ["name"] = "Original" }));
+            new PluginCollectionItem(new Dictionary<string, string?> { ["name"] = "Original" })
+        );
         var item = collection.Items[0];
         Assert.Equal("Original", item.HeaderText);
 
@@ -266,7 +360,9 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         item.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(PluginCollectionItemRow.HeaderText))
+            {
                 observed = item.HeaderText;
+            }
         };
 
         item.Fields.Single(f => f.Key == "name").Value = "Renamed";
@@ -279,7 +375,8 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     public void ItemRow_HeaderText_BlankLabel_ShowsUnnamed()
     {
         var collection = CreateCollectionRow(
-            new PluginCollectionItem(new Dictionary<string, string?> { ["name"] = "" }));
+            new PluginCollectionItem(new Dictionary<string, string?> { ["name"] = "" })
+        );
         Assert.Equal("(unnamed)", collection.Items[0].HeaderText);
     }
 
@@ -288,60 +385,67 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     {
         var knownId = Guid.NewGuid().ToString("D");
         var collection = CreateCollectionRow(
-            new PluginCollectionItem(new Dictionary<string, string?>
-            {
-                ["name"] = "X",
-                ["__id"] = knownId,
-            }));
+            new PluginCollectionItem(
+                new Dictionary<string, string?> { ["name"] = "X", ["__id"] = knownId }
+            )
+        );
 
         Assert.Equal(knownId, collection.Items[0].HiddenId);
     }
 
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
-    }
-
     /// <summary>
-    /// Minimal plugin exposing only <see cref="IPluginCollectionSettingsProvider"/>
-    /// (no <see cref="IPluginSettingsProvider"/>) for view-model tests.
+    ///     Minimal plugin exposing only <see cref="IPluginCollectionSettingsProvider" />
+    ///     (no <see cref="IPluginSettingsProvider" />) for view-model tests.
     /// </summary>
-    private sealed class FakeCollectionPlugin : ITypeWhisperPlugin, IPluginCollectionSettingsProvider
+    private sealed class FakeCollectionPlugin
+        : ITypeWhisperPlugin,
+            IPluginCollectionSettingsProvider
     {
-        public string PluginId => "com.test.fake-collection";
-        public string PluginName => "Fake Collection";
-        public string PluginVersion => "1.0.0";
-
         public List<PluginCollectionItem> Items { get; } = [];
         public IReadOnlyList<PluginCollectionItem>? LastSetItems { get; private set; }
         public string? FailWith { get; set; }
 
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
-        public Task DeactivateAsync() => Task.CompletedTask;
-        public void Dispose() { }
-
-        public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
-            [ThingsDefinition()];
+        public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions()
+        {
+            return [ThingsDefinition()];
+        }
 
         public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
-            string collectionKey, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<PluginCollectionItem>>(Items.ToList());
+            string collectionKey,
+            CancellationToken ct = default
+        )
+        {
+            return Task.FromResult<IReadOnlyList<PluginCollectionItem>>(Items.ToList());
+        }
 
         public Task<PluginSettingsValidationResult> SetItemsAsync(
-            string collectionKey, IReadOnlyList<PluginCollectionItem> items, CancellationToken ct = default)
+            string collectionKey,
+            IReadOnlyList<PluginCollectionItem> items,
+            CancellationToken ct = default
+        )
         {
             LastSetItems = items;
-            return Task.FromResult(FailWith is null
-                ? new PluginSettingsValidationResult(true, "ok")
-                : new PluginSettingsValidationResult(false, FailWith));
+            return Task.FromResult(
+                FailWith is null
+                    ? new PluginSettingsValidationResult(true, "ok")
+                    : new PluginSettingsValidationResult(false, FailWith)
+            );
         }
+
+        public string PluginId => "com.test.fake-collection";
+        public string PluginName => "Fake Collection";
+        public string PluginVersion => "1.0.0";
+
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Dispose() { }
     }
 }

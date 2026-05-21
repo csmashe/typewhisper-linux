@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
-using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Models;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
@@ -12,26 +12,10 @@ namespace TypeWhisper.Linux.Services;
 public sealed class HttpApiService : IDisposable
 {
     private const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
-    private readonly ModelManagerService _models;
-    private readonly ISettingsService _settings;
-    private readonly AudioFileService _audioFiles;
-    private readonly IHistoryService _history;
-    private readonly IProfileService _profiles;
-    private readonly IDictionaryService _dictionary;
-    private readonly IVocabularyBoostingService _vocabularyBoosting;
-    private readonly IPostProcessingPipeline _pipeline;
-    private readonly ITranslationService _translation;
-    private readonly DictationOrchestrator _dictation;
 
-    private HttpListener? _listener;
-    private CancellationTokenSource? _cts;
-    private Task? _listenTask;
-    private int _port;
-    private bool _disposed;
-
-    public event Action? StateChanged;
-
-    public string StatusText { get; private set; } = "Local API is disabled.";
+    private const string AllowedCorsHeaders =
+        "Authorization, Content-Type, X-Language, X-Language-Hints, X-Task, X-Target-Language, "
+        + "X-Response-Format, X-Prompt, X-Engine, X-Model";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -40,7 +24,22 @@ public sealed class HttpApiService : IDisposable
         WriteIndented = false
     };
 
-    public bool IsRunning => _listener?.IsListening == true;
+    private readonly AudioFileService _audioFiles;
+    private readonly DictationOrchestrator _dictation;
+    private readonly IDictionaryService _dictionary;
+    private readonly IHistoryService _history;
+    private readonly ModelManagerService _models;
+    private readonly IPostProcessingPipeline _pipeline;
+    private readonly IProfileService _profiles;
+    private readonly ISettingsService _settings;
+    private readonly ITranslationService _translation;
+    private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private CancellationTokenSource? _cts;
+    private bool _disposed;
+
+    private HttpListener? _listener;
+    private Task? _listenTask;
+    private int _port;
 
     public HttpApiService(
         ModelManagerService models,
@@ -52,7 +51,8 @@ public sealed class HttpApiService : IDisposable
         IVocabularyBoostingService vocabularyBoosting,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
-        DictationOrchestrator dictation)
+        DictationOrchestrator dictation
+    )
     {
         _models = models;
         _settings = settings;
@@ -66,6 +66,30 @@ public sealed class HttpApiService : IDisposable
         _dictation = dictation;
     }
 
+    public string StatusText { get; private set; } = "Local API is disabled.";
+
+    public bool IsRunning => _listener?.IsListening == true;
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        Stop();
+        _cts?.Dispose();
+        try
+        {
+            _listenTask?.Wait(TimeSpan.FromSeconds(1));
+        }
+        catch { }
+
+        _disposed = true;
+    }
+
+    public event Action? StateChanged;
+
     public void Start(int port)
     {
         if (IsRunning && _port == port)
@@ -76,12 +100,12 @@ public sealed class HttpApiService : IDisposable
 
         if (port <= 0 || port > 65535)
         {
-            Stop(updateStatus: false);
+            Stop(false);
             SetStatus("Local API failed to start: port must be between 1 and 65535.");
             return;
         }
 
-        Stop(updateStatus: false);
+        Stop(false);
 
         try
         {
@@ -95,12 +119,15 @@ public sealed class HttpApiService : IDisposable
         }
         catch (Exception ex)
         {
-            Stop(updateStatus: false);
+            Stop(false);
             SetStatus($"Local API failed to start: {ex.Message}");
         }
     }
 
-    public void Stop() => Stop(updateStatus: true);
+    public void Stop()
+    {
+        Stop(true);
+    }
 
     private void Stop(bool updateStatus)
     {
@@ -110,7 +137,9 @@ public sealed class HttpApiService : IDisposable
         _listener = null;
         _port = 0;
         if (updateStatus)
+        {
             SetStatus("Local API is disabled.");
+        }
     }
 
     public void ApplySettings()
@@ -122,13 +151,17 @@ public sealed class HttpApiService : IDisposable
             Start(_settings.Current.ApiServerPort);
         }
         else
+        {
             Stop();
+        }
     }
 
     private void SetStatus(string status)
     {
         if (StatusText == status)
+        {
             return;
+        }
 
         StatusText = status;
         StateChanged?.Invoke();
@@ -175,10 +208,12 @@ public sealed class HttpApiService : IDisposable
                 if (!string.IsNullOrWhiteSpace(allowedOrigin))
                 {
                     response.Headers["Access-Control-Allow-Origin"] = allowedOrigin;
-                    response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+                    response.Headers["Access-Control-Allow-Methods"] =
+                        "GET, POST, PUT, DELETE, OPTIONS";
                     response.Headers["Access-Control-Allow-Headers"] = AllowedCorsHeaders;
                     response.Headers["Access-Control-Max-Age"] = "600";
                 }
+
                 response.StatusCode = 204;
                 response.ContentLength64 = 0;
                 return;
@@ -189,14 +224,26 @@ public sealed class HttpApiService : IDisposable
                 response.Headers["WWW-Authenticate"] = "Bearer";
                 // Include CORS headers so browser clients from allowed loopback
                 // origins can actually read the 401 body and react.
-                await WriteJsonAsync(response, 401, Serialize(new { error = "Unauthorized" }), ct, allowedOrigin);
+                await WriteJsonAsync(
+                    response,
+                    401,
+                    Serialize(new { error = "Unauthorized" }),
+                    ct,
+                    allowedOrigin
+                );
                 return;
             }
 
             if (!IsValidOrigin(request) || !IsAllowedLoopbackHost(request.Url?.Host))
             {
                 // Origin itself is forbidden — do not send CORS to it.
-                await WriteJsonAsync(response, 403, Serialize(new { error = "Forbidden" }), ct, origin: null);
+                await WriteJsonAsync(
+                    response,
+                    403,
+                    Serialize(new { error = "Forbidden" }),
+                    ct,
+                    null
+                );
                 return;
             }
 
@@ -222,7 +269,13 @@ public sealed class HttpApiService : IDisposable
         }
         catch (HttpApiRequestException ex)
         {
-            await WriteJsonAsync(response, ex.StatusCode, Serialize(new { error = ex.Message }), ct, GetAllowedOrigin(context.Request));
+            await WriteJsonAsync(
+                response,
+                ex.StatusCode,
+                Serialize(new { error = ex.Message }),
+                ct,
+                GetAllowedOrigin(context.Request)
+            );
         }
         catch (Exception ex)
         {
@@ -231,7 +284,13 @@ public sealed class HttpApiService : IDisposable
             // block isn't in scope here (the exception may have been thrown
             // before or after it was computed).
             var recoveredOrigin = GetAllowedOrigin(context.Request);
-            await WriteJsonAsync(response, 500, Serialize(new { error = "Internal server error" }), ct, recoveredOrigin);
+            await WriteJsonAsync(
+                response,
+                500,
+                Serialize(new { error = "Internal server error" }),
+                ct,
+                recoveredOrigin
+            );
         }
         finally
         {
@@ -242,25 +301,32 @@ public sealed class HttpApiService : IDisposable
     private (int, string) HandleStatus()
     {
         var plugin = _models.ActiveTranscriptionPlugin;
-        var activeModel = _models.ActiveModelId is { } activeModelId && ModelManagerService.IsPluginModel(activeModelId)
-            ? ModelManagerService.ParsePluginModelId(activeModelId).ModelId
-            : plugin?.SelectedModelId;
-        return (200, Serialize(new
-        {
-            status = plugin is not null ? "ready" : "no_model",
-            engine = plugin?.ProviderId,
-            model = activeModel,
-            activeModel = _models.ActiveModelId,
-            apiVersion = "1.0",
-            supportsStreaming = plugin?.SupportsStreaming ?? false,
-            supportsTranslation = plugin?.SupportsTranslation ?? false
-        }));
+        var activeModel =
+            _models.ActiveModelId is { } activeModelId
+            && ModelManagerService.IsPluginModel(activeModelId)
+                ? ModelManagerService.ParsePluginModelId(activeModelId).ModelId
+                : plugin?.SelectedModelId;
+        return (
+            200,
+            Serialize(
+                new
+                {
+                    status = plugin is not null ? "ready" : "no_model",
+                    engine = plugin?.ProviderId,
+                    model = activeModel,
+                    activeModel = _models.ActiveModelId,
+                    apiVersion = "1.0",
+                    supportsStreaming = plugin?.SupportsStreaming ?? false,
+                    supportsTranslation = plugin?.SupportsTranslation ?? false
+                }
+            )
+        );
     }
 
     private (int, string) HandleModels()
     {
-        var models = _models.PluginManager.TranscriptionEngines
-            .SelectMany(engine => engine.TranscriptionModels.Select(model =>
+        var models = _models.PluginManager.TranscriptionEngines.SelectMany(engine =>
+            engine.TranscriptionModels.Select(model =>
             {
                 var id = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
                 return new
@@ -268,33 +334,47 @@ public sealed class HttpApiService : IDisposable
                     id = model.Id,
                     fullId = id,
                     name = $"{engine.ProviderDisplayName}: {model.DisplayName}",
-                    sizeDescription = model.SizeDescription ?? (engine.SupportsModelDownload ? "Local" : "Cloud"),
+                    sizeDescription = model.SizeDescription
+                                      ?? (engine.SupportsModelDownload ? "Local" : "Cloud"),
                     engine = engine.ProviderId,
                     downloaded = _models.IsDownloaded(id),
                     selected = _settings.Current.SelectedModelId == id,
                     active = _models.ActiveModelId == id,
-                    status = _models.IsDownloaded(id) ? "ready" : engine.SupportsModelDownload ? "not_downloaded" : "not_configured"
+                    status = _models.IsDownloaded(id) ? "ready"
+                        : engine.SupportsModelDownload ? "not_downloaded"
+                        : "not_configured"
                 };
-            }));
+            })
+        );
 
         return (200, Serialize(new { models }));
     }
 
-    private async Task<(int, string)> HandleTranscribeAsync(HttpListenerRequest request, CancellationToken ct)
+    private async Task<(int, string)> HandleTranscribeAsync(
+        HttpListenerRequest request,
+        CancellationToken ct
+    )
     {
         // ContentLength64 is -1 for chunked (Transfer-Encoding: chunked) uploads.
         // Reject empty bodies and known-too-large bodies up front; let chunked
         // requests through so LimitedReadStream can enforce the cap while reading.
         if (request.ContentLength64 == 0 || request.ContentLength64 > MaxTranscribeRequestBytes)
+        {
             return (413, Serialize(new { error = "Request body too large" }));
+        }
 
-        var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(request, MaxTranscribeRequestBytes, ct);
+        var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(
+            request,
+            MaxTranscribeRequestBytes,
+            ct
+        );
         var transcribeRequest = HttpApiRequestParser.ParseTranscribe(apiRequest);
         var modelId = ResolveRequestedModelId(transcribeRequest);
 
         var tempPath = Path.Combine(
             Path.GetTempPath(),
-            $"typewhisper-api-{Guid.NewGuid():N}.{SanitizeExtension(transcribeRequest.FileExtension)}");
+            $"typewhisper-api-{Guid.NewGuid():N}.{SanitizeExtension(transcribeRequest.FileExtension)}"
+        );
         try
         {
             // Decode audio before acquiring the lease — ffmpeg shells out and
@@ -304,11 +384,14 @@ public sealed class HttpApiService : IDisposable
 
             var wav = await _audioFiles.LoadAudioAsWavAsync(tempPath, ct);
             var settings = _settings.Current;
-            var language = transcribeRequest.Language ?? (settings.Language == "auto" ? null : settings.Language);
+            var language =
+                transcribeRequest.Language
+                ?? (settings.Language == "auto" ? null : settings.Language);
             var prompt = MergePrompt(
                 transcribeRequest.Prompt,
                 BuildLanguageHintsPrompt(transcribeRequest.LanguageHints),
-                _dictionary.GetTermsForPrompt());
+                _dictionary.GetTermsForPrompt()
+            );
 
             // Hold the transcription lease only around plugin.TranscribeAsync so
             // a concurrent caller cannot swap the shared plugin's model mid-run.
@@ -334,16 +417,23 @@ public sealed class HttpApiService : IDisposable
                     language,
                     transcribeRequest.Task == TranscriptionTask.Translate,
                     prompt,
-                    ct);
+                    ct
+                );
                 engineProviderId = plugin.ProviderId;
                 selectedModelId = plugin.SelectedModelId;
             }
 
-            var processed = await _pipeline.ProcessAsync(result.Text, new PipelineOptions
-            {
-                VocabularyBooster = settings.VocabularyBoostingEnabled ? _vocabularyBoosting.Apply : null,
-                DictionaryCorrector = _dictionary.ApplyCorrections
-            }, ct);
+            var processed = await _pipeline.ProcessAsync(
+                result.Text,
+                new PipelineOptions
+                {
+                    VocabularyBooster = settings.VocabularyBoostingEnabled
+                        ? _vocabularyBoosting.Apply
+                        : null,
+                    DictionaryCorrector = _dictionary.ApplyCorrections
+                },
+                ct
+            );
 
             var finalText = processed.Text;
             if (!string.IsNullOrWhiteSpace(transcribeRequest.TargetLanguage))
@@ -354,7 +444,8 @@ public sealed class HttpApiService : IDisposable
                         finalText,
                         result.DetectedLanguage ?? language ?? "en",
                         transcribeRequest.TargetLanguage,
-                        ct);
+                        ct
+                    );
                 }
                 catch (NotSupportedException ex)
                 {
@@ -366,80 +457,111 @@ public sealed class HttpApiService : IDisposable
                 }
             }
 
-            if (transcribeRequest.ResponseFormat.Equals("verbose_json", StringComparison.OrdinalIgnoreCase))
+            if (
+                transcribeRequest.ResponseFormat.Equals(
+                    "verbose_json",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
-                return (200, Serialize(new
-                {
-                    text = finalText,
-                    language = result.DetectedLanguage,
-                    duration = result.DurationSeconds,
-                    noSpeechProbability = result.NoSpeechProbability,
-                    engine = engineProviderId,
-                    model = selectedModelId,
-                    segments = result.Segments.Select(segment => new
-                    {
-                        text = segment.Text,
-                        start = segment.Start,
-                        end = segment.End
-                    })
-                }));
+                return (
+                    200,
+                    Serialize(
+                        new
+                        {
+                            text = finalText,
+                            language = result.DetectedLanguage,
+                            duration = result.DurationSeconds,
+                            noSpeechProbability = result.NoSpeechProbability,
+                            engine = engineProviderId,
+                            model = selectedModelId,
+                            segments = result.Segments.Select(segment => new
+                            {
+                                text = segment.Text,
+                                start = segment.Start,
+                                end = segment.End
+                            })
+                        }
+                    )
+                );
             }
 
-            return (200, Serialize(new
-            {
-                text = finalText,
-                language = result.DetectedLanguage,
-                duration = result.DurationSeconds,
-                noSpeechProbability = result.NoSpeechProbability,
-                engine = engineProviderId,
-                model = selectedModelId
-            }));
+            return (
+                200,
+                Serialize(
+                    new
+                    {
+                        text = finalText,
+                        language = result.DetectedLanguage,
+                        duration = result.DurationSeconds,
+                        noSpeechProbability = result.NoSpeechProbability,
+                        engine = engineProviderId,
+                        model = selectedModelId
+                    }
+                )
+            );
         }
         finally
         {
-            try { File.Delete(tempPath); } catch { }
+            try
+            {
+                File.Delete(tempPath);
+            }
+            catch { }
         }
     }
 
     private (int, string) HandleHistorySearch(HttpListenerRequest request)
     {
         var query = request.QueryString["q"] ?? "";
-        var limit = int.TryParse(request.QueryString["limit"], out var parsedLimit) ? parsedLimit : 50;
-        var offset = int.TryParse(request.QueryString["offset"], out var parsedOffset) ? parsedOffset : 0;
+        var limit = int.TryParse(request.QueryString["limit"], out var parsedLimit)
+            ? parsedLimit
+            : 50;
+        var offset = int.TryParse(request.QueryString["offset"], out var parsedOffset)
+            ? parsedOffset
+            : 0;
 
-        var records = string.IsNullOrWhiteSpace(query)
-            ? _history.Records
-            : _history.Search(query);
+        var records = string.IsNullOrWhiteSpace(query) ? _history.Records : _history.Search(query);
 
-        var paged = records.Skip(offset).Take(limit).Select(record => new
-        {
-            id = record.Id,
-            timestamp = record.Timestamp.ToString("O"),
-            text = record.FinalText,
-            rawText = record.RawText,
-            app = record.AppProcessName,
-            duration = record.DurationSeconds,
-            language = record.Language,
-            engine = record.EngineUsed,
-            model = record.ModelUsed,
-            profile = record.ProfileName,
-            words = record.WordCount
-        });
+        var paged = records
+            .Skip(offset)
+            .Take(limit)
+            .Select(record => new
+            {
+                id = record.Id,
+                timestamp = record.Timestamp.ToString("O"),
+                text = record.FinalText,
+                rawText = record.RawText,
+                app = record.AppProcessName,
+                duration = record.DurationSeconds,
+                language = record.Language,
+                engine = record.EngineUsed,
+                model = record.ModelUsed,
+                profile = record.ProfileName,
+                words = record.WordCount
+            });
 
-        return (200, Serialize(new
-        {
-            total = records.Count,
-            offset,
-            limit,
-            records = paged
-        }));
+        return (
+            200,
+            Serialize(
+                new
+                {
+                    total = records.Count,
+                    offset,
+                    limit,
+                    records = paged
+                }
+            )
+        );
     }
 
     private (int, string) HandleHistoryDelete(HttpListenerRequest request)
     {
         var id = request.QueryString["id"];
         if (string.IsNullOrWhiteSpace(id))
+        {
             return (400, Serialize(new { error = "Missing id parameter" }));
+        }
 
         _history.DeleteRecord(id);
         return (200, Serialize(new { deleted = true, id }));
@@ -469,11 +591,15 @@ public sealed class HttpApiService : IDisposable
     {
         var id = request.QueryString["id"];
         if (string.IsNullOrWhiteSpace(id))
+        {
             return (400, Serialize(new { error = "Missing id parameter" }));
+        }
 
         var profile = _profiles.Profiles.FirstOrDefault(item => item.Id == id);
         if (profile is null)
+        {
             return (404, Serialize(new { error = "Profile not found" }));
+        }
 
         var isEnabled = !profile.IsEnabled;
         _profiles.UpdateProfile(profile with { IsEnabled = isEnabled });
@@ -483,14 +609,18 @@ public sealed class HttpApiService : IDisposable
     private async Task<(int, string)> HandleDictationStartAsync()
     {
         if (_dictation.IsRecording)
+        {
             return (409, Serialize(new { error = "Already recording" }));
+        }
 
         await _dictation.StartAsync();
 
         // The orchestrator can bail silently (no device, model load failure,
         // toggle gate already held); reflect actual state in the response.
         if (!_dictation.IsRecording)
+        {
             return (409, Serialize(new { error = "Failed to start dictation" }));
+        }
 
         return (200, Serialize(new { started = true }));
     }
@@ -498,23 +628,34 @@ public sealed class HttpApiService : IDisposable
     private async Task<(int, string)> HandleDictationStopAsync()
     {
         if (!_dictation.IsRecording)
+        {
             return (409, Serialize(new { error = "Not recording" }));
+        }
 
         await _dictation.StopAsync();
 
         if (_dictation.IsRecording)
+        {
             return (409, Serialize(new { error = "Failed to stop dictation" }));
+        }
 
         return (200, Serialize(new { stopped = true }));
     }
 
-    private (int, string) HandleDictationStatus() =>
-        (200, Serialize(new
-        {
-            state = _dictation.IsRecording ? "recording" : "idle",
-            isRecording = _dictation.IsRecording,
-            activeModel = _models.ActiveModelId
-        }));
+    private (int, string) HandleDictationStatus()
+    {
+        return (
+            200,
+            Serialize(
+                new
+                {
+                    state = _dictation.IsRecording ? "recording" : "idle",
+                    isRecording = _dictation.IsRecording,
+                    activeModel = _models.ActiveModelId
+                }
+            )
+        );
+    }
 
     private (int, string) HandleGetDictionaryTerms()
     {
@@ -522,16 +663,28 @@ public sealed class HttpApiService : IDisposable
         return (200, Serialize(new { terms, count = terms.Count }));
     }
 
-    private async Task<(int, string)> HandlePutDictionaryTermsAsync(HttpListenerRequest request, CancellationToken ct)
+    private async Task<(int, string)> HandlePutDictionaryTermsAsync(
+        HttpListenerRequest request,
+        CancellationToken ct
+    )
     {
-        var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(request, MaxTranscribeRequestBytes, ct);
+        var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(
+            request,
+            MaxTranscribeRequestBytes,
+            ct
+        );
         if (apiRequest.Body.Length == 0)
+        {
             return (400, Serialize(new { error = "Missing JSON body" }));
+        }
 
         DictionaryTermsRequest? payload;
         try
         {
-            payload = JsonSerializer.Deserialize<DictionaryTermsRequest>(apiRequest.Body, JsonOptions);
+            payload = JsonSerializer.Deserialize<DictionaryTermsRequest>(
+                apiRequest.Body,
+                JsonOptions
+            );
         }
         catch (JsonException)
         {
@@ -539,7 +692,9 @@ public sealed class HttpApiService : IDisposable
         }
 
         if (payload is null)
+        {
             return (400, Serialize(new { error = "Invalid JSON body" }));
+        }
 
         _dictionary.SetTerms(payload.Terms, payload.Replace ?? false);
         var terms = _dictionary.GetEnabledTerms();
@@ -554,22 +709,46 @@ public sealed class HttpApiService : IDisposable
 
     private string? ResolveRequestedModelId(TranscribeApiRequest request)
     {
-        if (!string.IsNullOrWhiteSpace(request.Model) && ModelManagerService.IsPluginModel(request.Model))
+        if (
+            !string.IsNullOrWhiteSpace(request.Model)
+            && ModelManagerService.IsPluginModel(request.Model)
+        )
+        {
             return request.Model;
+        }
 
         if (!string.IsNullOrWhiteSpace(request.Engine))
         {
             var engine = _models.PluginManager.TranscriptionEngines.FirstOrDefault(candidate =>
-                string.Equals(candidate.ProviderId, request.Engine, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(candidate.PluginId, request.Engine, StringComparison.OrdinalIgnoreCase));
+                string.Equals(
+                    candidate.ProviderId,
+                    request.Engine,
+                    StringComparison.OrdinalIgnoreCase
+                )
+                || string.Equals(
+                    candidate.PluginId,
+                    request.Engine,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            );
             if (engine is null)
+            {
                 throw new HttpApiRequestException(404, $"Unknown engine: {request.Engine}");
+            }
 
             var model = string.IsNullOrWhiteSpace(request.Model)
                 ? engine.SelectedModelId ?? engine.TranscriptionModels.FirstOrDefault()?.Id
                 : request.Model;
-            if (string.IsNullOrWhiteSpace(model) || engine.TranscriptionModels.All(candidate => candidate.Id != model))
-                throw new HttpApiRequestException(404, $"Unknown model for engine {request.Engine}: {request.Model}");
+            if (
+                string.IsNullOrWhiteSpace(model)
+                || engine.TranscriptionModels.All(candidate => candidate.Id != model)
+            )
+            {
+                throw new HttpApiRequestException(
+                    404,
+                    $"Unknown model for engine {request.Engine}: {request.Model}"
+                );
+            }
 
             return ModelManagerService.GetPluginModelId(engine.PluginId, model);
         }
@@ -577,9 +756,12 @@ public sealed class HttpApiService : IDisposable
         if (!string.IsNullOrWhiteSpace(request.Model))
         {
             var engine = _models.PluginManager.TranscriptionEngines.FirstOrDefault(candidate =>
-                candidate.TranscriptionModels.Any(model => model.Id == request.Model));
+                candidate.TranscriptionModels.Any(model => model.Id == request.Model)
+            );
             if (engine is null)
+            {
                 throw new HttpApiRequestException(404, $"Unknown model: {request.Model}");
+            }
 
             return ModelManagerService.GetPluginModelId(engine.PluginId, request.Model);
         }
@@ -587,7 +769,13 @@ public sealed class HttpApiService : IDisposable
         return _settings.Current.SelectedModelId;
     }
 
-    private static async Task WriteJsonAsync(HttpListenerResponse response, int statusCode, string body, CancellationToken ct, string? origin)
+    private static async Task WriteJsonAsync(
+        HttpListenerResponse response,
+        int statusCode,
+        string body,
+        CancellationToken ct,
+        string? origin
+    )
     {
         response.StatusCode = statusCode;
         response.ContentType = "application/json";
@@ -602,11 +790,10 @@ public sealed class HttpApiService : IDisposable
         await response.OutputStream.WriteAsync(bytes, ct);
     }
 
-    private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, JsonOptions);
-
-    private const string AllowedCorsHeaders =
-        "Authorization, Content-Type, X-Language, X-Language-Hints, X-Task, X-Target-Language, " +
-        "X-Response-Format, X-Prompt, X-Engine, X-Model";
+    private static string Serialize<T>(T value)
+    {
+        return JsonSerializer.Serialize(value, JsonOptions);
+    }
 
     private static string SanitizeExtension(string extension)
     {
@@ -616,16 +803,19 @@ public sealed class HttpApiService : IDisposable
             : clean;
     }
 
-    private static string? BuildLanguageHintsPrompt(IReadOnlyList<string> languageHints) =>
-        languageHints.Count == 0
+    private static string? BuildLanguageHintsPrompt(IReadOnlyList<string> languageHints)
+    {
+        return languageHints.Count == 0
             ? null
             : $"Likely spoken languages: {string.Join(", ", languageHints)}.";
+    }
 
     private static string? MergePrompt(params string?[] parts)
     {
         var merged = string.Join(
             Environment.NewLine,
-            parts.Where(part => !string.IsNullOrWhiteSpace(part)).Select(part => part!.Trim()));
+            parts.Where(part => !string.IsNullOrWhiteSpace(part)).Select(part => part!.Trim())
+        );
         return string.IsNullOrWhiteSpace(merged) ? null : merged;
     }
 
@@ -642,9 +832,16 @@ public sealed class HttpApiService : IDisposable
             // non-base64 blobs). Re-encrypt on the way through so the
             // stored value is always at-rest protected going forward.
             if (!string.Equals(storedToken, decryptedToken, StringComparison.Ordinal))
+            {
                 return;
+            }
 
-            _settings.Save(current with { ApiServerBearerToken = ApiKeyProtection.Encrypt(decryptedToken) });
+            _settings.Save(
+                current with
+                {
+                    ApiServerBearerToken = ApiKeyProtection.Encrypt(decryptedToken)
+                }
+            );
             return;
         }
 
@@ -656,41 +853,57 @@ public sealed class HttpApiService : IDisposable
     {
         var expectedToken = ReadBearerToken(_settings.Current);
         if (string.IsNullOrWhiteSpace(expectedToken))
+        {
             return false;
+        }
 
         var authorization = request.Headers["Authorization"];
-        if (string.IsNullOrWhiteSpace(authorization) || !authorization.StartsWith("Bearer ", StringComparison.Ordinal))
+        if (
+            string.IsNullOrWhiteSpace(authorization)
+            || !authorization.StartsWith("Bearer ", StringComparison.Ordinal)
+        )
+        {
             return false;
+        }
 
         var providedToken = authorization["Bearer ".Length..].Trim();
         // Short-circuit on length before FixedTimeEquals to avoid allocating
         // byte arrays of wildly different sizes, while keeping the constant-time
         // comparison for same-length inputs to prevent timing side-channels.
         if (providedToken.Length != expectedToken.Length)
+        {
             return false;
+        }
 
         return CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(providedToken),
-            Encoding.UTF8.GetBytes(expectedToken));
+            Encoding.UTF8.GetBytes(expectedToken)
+        );
     }
 
-    internal static string ReadBearerToken(Core.Models.AppSettings settings) =>
-        string.IsNullOrWhiteSpace(settings.ApiServerBearerToken)
+    internal static string ReadBearerToken(AppSettings settings)
+    {
+        return string.IsNullOrWhiteSpace(settings.ApiServerBearerToken)
             ? ""
             : ApiKeyProtection.Decrypt(settings.ApiServerBearerToken);
+    }
 
     private string? GetAllowedOrigin(HttpListenerRequest request)
     {
         var origin = request.Headers["Origin"];
         if (string.IsNullOrWhiteSpace(origin))
+        {
             return null;
+        }
 
         // Only echo back origins on the same loopback address and same port
         // as the listener — prevents a cross-origin page from using the API
         // by claiming a localhost origin.
-        if (Uri.TryCreate(origin, UriKind.Absolute, out var originUri)
+        if (
+            Uri.TryCreate(origin, UriKind.Absolute, out var originUri)
             && IsAllowedLoopbackHost(originUri.Host)
-            && originUri.Port == _port)
+            && originUri.Port == _port
+        )
         {
             return origin;
         }
@@ -702,7 +915,9 @@ public sealed class HttpApiService : IDisposable
     {
         var origin = request.Headers["Origin"];
         if (string.IsNullOrWhiteSpace(origin))
+        {
             return true;
+        }
 
         return string.Equals(origin, GetAllowedOrigin(request), StringComparison.OrdinalIgnoreCase);
     }
@@ -710,23 +925,14 @@ public sealed class HttpApiService : IDisposable
     private static bool IsAllowedLoopbackHost(string? host)
     {
         if (string.IsNullOrWhiteSpace(host))
+        {
             return false;
+        }
 
         return string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-            return;
-
-        Stop();
-        _cts?.Dispose();
-        try { _listenTask?.Wait(TimeSpan.FromSeconds(1)); } catch { }
-        _disposed = true;
+               || string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
     }
 }
 

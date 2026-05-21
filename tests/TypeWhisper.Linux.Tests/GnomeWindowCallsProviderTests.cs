@@ -4,11 +4,11 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Pure-function tests for the gvariant-tuple unwrap and JSON-payload
-/// parsing in <see cref="GnomeWindowCallsProvider"/>. The provider talks
-/// to a third-party GNOME Shell extension whose output formatting is
-/// stable but easy to get wrong on this end — these tests pin the
-/// parsing to a handful of representative gdbus outputs.
+///     Pure-function tests for the gvariant-tuple unwrap and JSON-payload
+///     parsing in <see cref="GnomeWindowCallsProvider" />. The provider talks
+///     to a third-party GNOME Shell extension whose output formatting is
+///     stable but easy to get wrong on this end — these tests pin the
+///     parsing to a handful of representative gdbus outputs.
 /// </summary>
 public sealed class GnomeWindowCallsProviderTests
 {
@@ -55,12 +55,12 @@ public sealed class GnomeWindowCallsProviderTests
         // the Window Calls extension installed (Fedora 44, GNOME 46) —
         // canonical field is "has_focus", title and wm_class are inline.
         var output =
-            @"('[" +
-            @"{""id"":111,""title"":""TypeWhisper"",""wm_class"":""typewhisper""," +
-            @"""wm_class_instance"":""typewhisper"",""pid"":15798,""has_focus"":false}," +
-            @"{""id"":222,""title"":""Mozilla Firefox"",""wm_class"":""org.mozilla.firefox""," +
-            @"""wm_class_instance"":""org.mozilla.firefox"",""pid"":31434,""has_focus"":true}" +
-            @"]',)";
+            @"('["
+            + @"{""id"":111,""title"":""TypeWhisper"",""wm_class"":""typewhisper"","
+            + @"""wm_class_instance"":""typewhisper"",""pid"":15798,""has_focus"":false},"
+            + @"{""id"":222,""title"":""Mozilla Firefox"",""wm_class"":""org.mozilla.firefox"","
+            + @"""wm_class_instance"":""org.mozilla.firefox"",""pid"":31434,""has_focus"":true}"
+            + @"]',)";
 
         var focused = GnomeWindowCallsProvider.ParseFocusedWindow(output);
 
@@ -76,8 +76,7 @@ public sealed class GnomeWindowCallsProviderTests
     {
         // The original ickyicky fork used `focus` instead of `has_focus`.
         // We accept either so users with the older variant aren't stuck.
-        var output =
-            @"('[{""wm_class"":""x"",""pid"":1,""id"":2,""focus"":true}]',)";
+        var output = @"('[{""wm_class"":""x"",""pid"":1,""id"":2,""focus"":true}]',)";
 
         var focused = GnomeWindowCallsProvider.ParseFocusedWindow(output);
 
@@ -101,8 +100,7 @@ public sealed class GnomeWindowCallsProviderTests
     public void ReturnsNullWhenNoWindowHasFocus()
     {
         // Transient state during workspace switches — no focused window.
-        var output =
-            @"('[{""wm_class"":""firefox"",""pid"":1,""id"":2,""has_focus"":false}]',)";
+        var output = @"('[{""wm_class"":""firefox"",""pid"":1,""id"":2,""has_focus"":false}]',)";
 
         Assert.Null(GnomeWindowCallsProvider.ParseFocusedWindow(output));
     }
@@ -116,8 +114,7 @@ public sealed class GnomeWindowCallsProviderTests
     [Fact]
     public void HandlesStringWindowIdVariant()
     {
-        var output =
-            @"('[{""wm_class"":""x"",""pid"":1,""id"":""abc-123"",""has_focus"":true}]',)";
+        var output = @"('[{""wm_class"":""x"",""pid"":1,""id"":""abc-123"",""has_focus"":true}]',)";
 
         var focused = GnomeWindowCallsProvider.ParseFocusedWindow(output);
 

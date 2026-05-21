@@ -6,7 +6,9 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GoogleCloudStt;
 
-public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed partial class GoogleCloudSttPlugin
+    : ITranscriptionEnginePlugin,
+        IPluginSettingsProvider
 {
     private const string ApiEndpoint = "https://speech.googleapis.com/v1/speech:recognize";
 
@@ -38,7 +40,7 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        [new PluginModelInfo("latest_long", "Google Cloud (Long)")];
+    [new PluginModelInfo("latest_long", "Google Cloud (Long)")];
 
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
@@ -52,7 +54,12 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
@@ -75,10 +82,7 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
                 languageCode = langCode,
                 model = "latest_long",
             },
-            audio = new
-            {
-                content = audioBase64,
-            },
+            audio = new { content = audioBase64 },
         };
 
         var json = JsonSerializer.Serialize(requestBody);
@@ -99,12 +103,17 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
 
         var sb = new StringBuilder();
 
-        if (root.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+        if (
+            root.TryGetProperty("results", out var results)
+            && results.ValueKind == JsonValueKind.Array
+        )
         {
             foreach (var result in results.EnumerateArray())
             {
-                if (result.TryGetProperty("alternatives", out var alternatives)
-                    && alternatives.ValueKind == JsonValueKind.Array)
+                if (
+                    result.TryGetProperty("alternatives", out var alternatives)
+                    && alternatives.ValueKind == JsonValueKind.Array
+                )
                 {
                     foreach (var alt in alternatives.EnumerateArray())
                     {
@@ -126,9 +135,15 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
         {
             var billedStr = billedTime.GetString() ?? "";
             // Format: "15s" or "15.500s"
-            if (billedStr.EndsWith("s") &&
-                double.TryParse(billedStr[..^1], System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture, out var secs))
+            if (
+                billedStr.EndsWith("s")
+                && double.TryParse(
+                    billedStr[..^1],
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var secs
+                )
+            )
             {
                 duration = secs;
             }
@@ -136,9 +151,11 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
 
         // Extract language from the first result's languageCode if present
         string? detectedLang = null;
-        if (root.TryGetProperty("results", out var resultsForLang)
+        if (
+            root.TryGetProperty("results", out var resultsForLang)
             && resultsForLang.ValueKind == JsonValueKind.Array
-            && resultsForLang.GetArrayLength() > 0)
+            && resultsForLang.GetArrayLength() > 0
+        )
         {
             var first = resultsForLang[0];
             if (first.TryGetProperty("languageCode", out var lc))
@@ -148,34 +165,36 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
         return new PluginTranscriptionResult(
             sb.ToString().Trim(),
             detectedLang ?? requestedLanguage,
-            duration);
+            duration
+        );
     }
 
-    private static string MapToGoogleLanguageCode(string iso) => iso.ToLowerInvariant() switch
-    {
-        "en" => "en-US",
-        "de" => "de-DE",
-        "fr" => "fr-FR",
-        "es" => "es-ES",
-        "it" => "it-IT",
-        "pt" => "pt-BR",
-        "ja" => "ja-JP",
-        "ko" => "ko-KR",
-        "zh" => "zh-CN",
-        "ru" => "ru-RU",
-        "nl" => "nl-NL",
-        "pl" => "pl-PL",
-        "sv" => "sv-SE",
-        "da" => "da-DK",
-        "fi" => "fi-FI",
-        "no" => "nb-NO",
-        "tr" => "tr-TR",
-        "ar" => "ar-SA",
-        "hi" => "hi-IN",
-        "uk" => "uk-UA",
-        "cs" => "cs-CZ",
-        _ => iso,
-    };
+    private static string MapToGoogleLanguageCode(string iso) =>
+        iso.ToLowerInvariant() switch
+        {
+            "en" => "en-US",
+            "de" => "de-DE",
+            "fr" => "fr-FR",
+            "es" => "es-ES",
+            "it" => "it-IT",
+            "pt" => "pt-BR",
+            "ja" => "ja-JP",
+            "ko" => "ko-KR",
+            "zh" => "zh-CN",
+            "ru" => "ru-RU",
+            "nl" => "nl-NL",
+            "pl" => "pl-PL",
+            "sv" => "sv-SE",
+            "da" => "da-DK",
+            "fi" => "fi-FI",
+            "no" => "nb-NO",
+            "tr" => "tr-TR",
+            "ar" => "ar-SA",
+            "hi" => "hi-IN",
+            "uk" => "uk-UA",
+            "cs" => "cs-CZ",
+            _ => iso,
+        };
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -192,24 +211,33 @@ public sealed partial class GoogleCloudSttPlugin : ITranscriptionEnginePlugin, I
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, null, "Required for Google Cloud Speech-to-Text."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Google Cloud STT model.",
-            Options: TranscriptionModels.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new("api-key", "API key", true, null, "Required for Google Cloud Speech-to-Text."),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Google Cloud STT model.",
+                Options: TranscriptionModels
+                    .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
+                    .ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {

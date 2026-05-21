@@ -1,28 +1,40 @@
-using System.Diagnostics;
-using System.Net.Sockets;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
+using System.Net.Sockets;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.ViewModels;
+using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Linux.Views;
 
 namespace TypeWhisper.Linux;
 
-public partial class App : Application
+public class App : Application
 {
+    /// <summary>
+    ///     Upstream AppSettings default; meaningful on Windows but no
+    ///     better than any other default on Linux, so we migrate past it.
+    /// </summary>
+    private const string UpstreamDefaultHotkey = "Ctrl+Shift+F9";
+
+    /// <summary>
+    ///     Tray-menu Exit flips this; Close-button handler checks it to decide
+    ///     whether to actually quit or hide to the tray.
+    /// </summary>
+    public static bool ShuttingDown { get; private set; }
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
     }
-
-    /// <summary>
-    /// Tray-menu Exit flips this; Close-button handler checks it to decide
-    /// whether to actually quit or hide to the tray.
-    /// </summary>
-    public static bool ShuttingDown { get; private set; }
 
     public override void OnFrameworkInitializationCompleted()
     {
@@ -53,7 +65,10 @@ public partial class App : Application
             // entry point. Tray Exit always quits (flips ShuttingDown first).
             main.Closing += (_, e) =>
             {
-                if (ShuttingDown) return;
+                if (ShuttingDown)
+                {
+                    return;
+                }
 
                 // Only hide to the tray when one actually exists to restore
                 // the window from. Hiding with no tray (stock GNOME has none)
@@ -81,7 +96,9 @@ public partial class App : Application
             tray.ShowSettingsRequested += (_, _) =>
             {
                 ShowMainWindow(main);
-                (main.DataContext as ViewModels.MainWindowViewModel)?.Navigate<ViewModels.Sections.GeneralSectionViewModel>();
+                (
+                    main.DataContext as MainWindowViewModel
+                )?.Navigate<GeneralSectionViewModel>();
             };
             tray.ExitRequested += (_, _) =>
             {
@@ -118,7 +135,7 @@ public partial class App : Application
                 Debug.WriteLine($"[App] Control socket start failed: {ex.Message}");
             }
 
-            var overlay = services.GetRequiredService<Views.DictationOverlayWindow>();
+            var overlay = services.GetRequiredService<DictationOverlayWindow>();
             overlay.Initialize();
 
             // Sync the hotkey service's mode + binding with AppSettings. The
@@ -141,33 +158,49 @@ public partial class App : Application
             settings.SettingsChanged += s =>
             {
                 hotkey.Mode = s.Mode;
-                if (!string.IsNullOrWhiteSpace(s.ToggleHotkey)
+                if (
+                    !string.IsNullOrWhiteSpace(s.ToggleHotkey)
                     && s.ToggleHotkey != lastApplied
-                    && hotkey.TrySetHotkeyFromString(s.ToggleHotkey))
+                    && hotkey.TrySetHotkeyFromString(s.ToggleHotkey)
+                )
                 {
                     lastApplied = hotkey.CurrentHotkeyString;
                 }
 
-                if (s.PromptPaletteHotkey != lastPromptPaletteApplied
-                    && hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey))
+                if (
+                    s.PromptPaletteHotkey != lastPromptPaletteApplied
+                    && hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey)
+                )
                 {
                     lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
                 }
 
-                if (s.RecentTranscriptionsHotkey != lastRecentTranscriptionsApplied
-                    && hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey))
+                if (
+                    s.RecentTranscriptionsHotkey != lastRecentTranscriptionsApplied
+                    && hotkey.TrySetRecentTranscriptionsHotkeyFromString(
+                        s.RecentTranscriptionsHotkey
+                    )
+                )
                 {
-                    lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
+                    lastRecentTranscriptionsApplied =
+                        hotkey.CurrentRecentTranscriptionsHotkeyString;
                 }
 
-                if (s.CopyLastTranscriptionHotkey != lastCopyLastTranscriptionApplied
-                    && hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey))
+                if (
+                    s.CopyLastTranscriptionHotkey != lastCopyLastTranscriptionApplied
+                    && hotkey.TrySetCopyLastTranscriptionHotkeyFromString(
+                        s.CopyLastTranscriptionHotkey
+                    )
+                )
                 {
-                    lastCopyLastTranscriptionApplied = hotkey.CurrentCopyLastTranscriptionHotkeyString;
+                    lastCopyLastTranscriptionApplied =
+                        hotkey.CurrentCopyLastTranscriptionHotkeyString;
                 }
 
-                if (s.TransformSelectionHotkey != lastTransformSelectionApplied
-                    && hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey))
+                if (
+                    s.TransformSelectionHotkey != lastTransformSelectionApplied
+                    && hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey)
+                )
                 {
                     lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
                 }
@@ -186,16 +219,21 @@ public partial class App : Application
                 // Feed this through the overlay feedback path by reusing
                 // dictation status events rather than creating a second toast
                 // implementation.
-                Debug.WriteLine($"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}");
+                Debug.WriteLine(
+                    $"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}"
+                );
             };
             hotkey.RecentTranscriptionsRequested += (_, _) => recentTranscriptions.TogglePalette();
-            hotkey.CopyLastTranscriptionRequested += (_, _) => _ = recentTranscriptions.CopyLastTranscriptionToClipboardAsync();
+            hotkey.CopyLastTranscriptionRequested += (_, _) =>
+                _ = recentTranscriptions.CopyLastTranscriptionToClipboardAsync();
             var transformSelection = services.GetRequiredService<TransformSelectionService>();
             hotkey.TransformSelectionRequested += (_, _) => _ = transformSelection.ToggleAsync();
 
             // Launch hidden to the tray if --minimized was passed.
             if (Program.StartMinimized)
+            {
                 main.Opened += (_, _) => HideToTray(main);
+            }
 
             var bootstrapTask = BootstrapDeferredAsync(services);
 
@@ -206,17 +244,13 @@ public partial class App : Application
                 main.Opened += async (_, _) =>
                 {
                     await bootstrapTask;
-                    (main.DataContext as ViewModels.MainWindowViewModel)?.OpenWizard();
+                    (main.DataContext as MainWindowViewModel)?.OpenWizard();
                 };
             }
         }
 
         base.OnFrameworkInitializationCompleted();
     }
-
-    /// <summary>Upstream AppSettings default; meaningful on Windows but no
-    /// better than any other default on Linux, so we migrate past it.</summary>
-    private const string UpstreamDefaultHotkey = "Ctrl+Shift+F9";
 
     private static void ReconcileHotkeyOnStartup(HotkeyService hotkey, ISettingsService settings)
     {
@@ -233,8 +267,8 @@ public partial class App : Application
         // the hotkey to F9 when the user has never explicitly chosen a key.
         var linuxDefault = hotkey.CurrentHotkeyString;
         var persisted = s.ToggleHotkey;
-        var shouldMigrate = string.IsNullOrWhiteSpace(persisted)
-                            || persisted == UpstreamDefaultHotkey;
+        var shouldMigrate =
+            string.IsNullOrWhiteSpace(persisted) || persisted == UpstreamDefaultHotkey;
 
         if (shouldMigrate)
         {
@@ -249,29 +283,35 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// True on wlroots-based compositors (Hyprland, Sway), which have no
-    /// "minimize" concept — an X11 iconify request is a no-op there, so the
-    /// minimize-based hide-to-tray would leave the window on screen. wlroots
-    /// does handle Window.Hide()/Show() cleanly; the unpainted-surface-on-
-    /// Show() bug behind backlog #3/#16 is specific to GNOME Mutter.
+    ///     True on wlroots-based compositors (Hyprland, Sway), which have no
+    ///     "minimize" concept — an X11 iconify request is a no-op there, so the
+    ///     minimize-based hide-to-tray would leave the window on screen. wlroots
+    ///     does handle Window.Hide()/Show() cleanly; the unpainted-surface-on-
+    ///     Show() bug behind backlog #3/#16 is specific to GNOME Mutter.
     /// </summary>
     private static bool TrayHideUsesWindowHide()
-        => Services.Hotkey.DeSetup.DesktopDetector.DetectId() is "hyprland" or "sway";
+    {
+        return DesktopDetector.DetectId() is "hyprland" or "sway";
+    }
 
     /// <summary>
-    /// Hide the window to the tray so the tray icon becomes the only entry
-    /// point. Compositor-dependent — no single mechanism both removes the
-    /// window from screen *and* from the dock everywhere:
-    /// <list type="bullet">
-    /// <item>GNOME Mutter (and other minimize-honoring desktops): minimize
-    /// FIRST, then ShowInTaskbar=false. Mutter ignores an iconify request on
-    /// a window that already has SKIP_TASKBAR set (minimize means "send it to
-    /// the dash," and a skip-taskbar window has nowhere to go), so the order
-    /// matters. Keeps the surface mapped, dodging the Hide()/Show() repaint
-    /// bug — backlog #3/#16.</item>
-    /// <item>wlroots (Hyprland/Sway): no minimize concept, so a real
-    /// Window.Hide() — which repaints correctly on Show() there.</item>
-    /// </list>
+    ///     Hide the window to the tray so the tray icon becomes the only entry
+    ///     point. Compositor-dependent — no single mechanism both removes the
+    ///     window from screen *and* from the dock everywhere:
+    ///     <list type="bullet">
+    ///         <item>
+    ///             GNOME Mutter (and other minimize-honoring desktops): minimize
+    ///             FIRST, then ShowInTaskbar=false. Mutter ignores an iconify request on
+    ///             a window that already has SKIP_TASKBAR set (minimize means "send it to
+    ///             the dash," and a skip-taskbar window has nowhere to go), so the order
+    ///             matters. Keeps the surface mapped, dodging the Hide()/Show() repaint
+    ///             bug — backlog #3/#16.
+    ///         </item>
+    ///         <item>
+    ///             wlroots (Hyprland/Sway): no minimize concept, so a real
+    ///             Window.Hide() — which repaints correctly on Show() there.
+    ///         </item>
+    ///     </list>
     /// </summary>
     private static void HideToTray(MainWindow window)
     {
@@ -281,7 +321,7 @@ public partial class App : Application
             return;
         }
 
-        window.WindowState = Avalonia.Controls.WindowState.Minimized;
+        window.WindowState = WindowState.Minimized;
         window.ShowInTaskbar = false;
     }
 
@@ -294,23 +334,27 @@ public partial class App : Application
         // (wlroots).
         window.ShowInTaskbar = true;
 
-        if (window.WindowState == Avalonia.Controls.WindowState.Minimized)
-            window.WindowState = Avalonia.Controls.WindowState.Normal;
+        if (window.WindowState == WindowState.Minimized)
+        {
+            window.WindowState = WindowState.Normal;
+        }
 
         // wlroots hide-to-tray uses a real Hide(); bring the surface back.
         if (!window.IsVisible)
+        {
             window.Show();
+        }
 
         window.Activate();
         // GNOME Wayland may ignore an Activate() issued in the same UI turn
         // as the state change; re-issue it once the change has been applied.
-        Avalonia.Threading.Dispatcher.UIThread.Post(window.Activate);
+        Dispatcher.UIThread.Post(window.Activate);
     }
 
     /// <summary>
-    /// Best-effort ordered shutdown of services that own native threads.
-    /// Runs before desktop.Shutdown() so the Host isn't left racing
-    /// libuiohook / PortAudio on exit.
+    ///     Best-effort ordered shutdown of services that own native threads.
+    ///     Runs before desktop.Shutdown() so the Host isn't left racing
+    ///     libuiohook / PortAudio on exit.
     /// </summary>
     private static async Task TearDownAsync(IServiceProvider services)
     {
@@ -319,63 +363,90 @@ public partial class App : Application
             var sessionAudio = services.GetService<SessionAudioFileService>();
             sessionAudio?.DeleteSessionCaptures();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}");
+        }
 
         try
         {
             var retention = services.GetService<HistoryRetentionCoordinator>();
             retention?.HandleShutdown();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] History retention shutdown failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] History retention shutdown failed: {ex.Message}");
+        }
 
         try
         {
             var hotkey = services.GetService<HotkeyService>();
             hotkey?.Dispose();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] Hotkey dispose failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Hotkey dispose failed: {ex.Message}");
+        }
 
         try
         {
             var controlSocket = services.GetService<ControlSocketServer>();
             controlSocket?.Dispose();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] Control socket dispose failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Control socket dispose failed: {ex.Message}");
+        }
 
         try
         {
             var tray = services.GetService<TrayIconService>();
             tray?.Dispose();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}");
+        }
 
         try
         {
             var models = services.GetService<ModelManagerService>();
             models?.UnloadModel();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] Model unload failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Model unload failed: {ex.Message}");
+        }
 
         try
         {
             var audio = services.GetService<AudioRecordingService>();
             audio?.Dispose();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}");
+        }
 
         try
         {
             var playback = services.GetService<AudioPlaybackService>();
             playback?.Dispose();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] Playback dispose failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Playback dispose failed: {ex.Message}");
+        }
 
         try
         {
             var api = services.GetService<HttpApiService>();
             api?.Dispose();
         }
-        catch (Exception ex) { Debug.WriteLine($"[App] HTTP API dispose failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] HTTP API dispose failed: {ex.Message}");
+        }
 
         // Placeholder: keeps the method async for future awaitable teardown
         // steps without forcing callers to change the signature.
@@ -402,13 +473,21 @@ public partial class App : Application
         await pluginManager.InitializeAsync();
 
         var pluginRegistry = services.GetRequiredService<PluginRegistryService>();
-        _ = pluginRegistry.FirstRunAutoInstallAsync()
+        _ = pluginRegistry
+            .FirstRunAutoInstallAsync()
             .ContinueWith(_ => pluginRegistry.CheckForUpdatesAsync(), TaskScheduler.Default)
-            .ContinueWith(t =>
-            {
-                if (t.IsFaulted)
-                    Debug.WriteLine($"[App] Plugin registry check failed: {t.Exception?.Message}");
-            }, TaskScheduler.Default);
+            .ContinueWith(
+                t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        Debug.WriteLine(
+                            $"[App] Plugin registry check failed: {t.Exception?.Message}"
+                        );
+                    }
+                },
+                TaskScheduler.Default
+            );
 
         var historyRetention = services.GetRequiredService<HistoryRetentionCoordinator>();
         historyRetention.Initialize();
@@ -444,28 +523,35 @@ public partial class App : Application
 
     private static void ApplyConfiguredMicrophone(
         AudioRecordingService audio,
-        ISettingsService settings)
+        ISettingsService settings
+    )
     {
         var configuredIndex = settings.Current.SelectedMicrophoneDevice;
         var configuredId = settings.Current.SelectedMicrophoneDeviceId;
         if (!configuredIndex.HasValue && string.IsNullOrWhiteSpace(configuredId))
+        {
             return;
+        }
 
         try
         {
             var resolved = audio.ResolveConfiguredDevice(configuredIndex, configuredId);
             if (resolved is null)
+            {
                 return;
+            }
 
             audio.SelectedDeviceIndex = resolved.Index;
 
             if (resolved.Index != configuredIndex || resolved.PersistentId != configuredId)
             {
-                settings.Save(settings.Current with
-                {
-                    SelectedMicrophoneDevice = resolved.Index,
-                    SelectedMicrophoneDeviceId = resolved.PersistentId
-                });
+                settings.Save(
+                    settings.Current with
+                    {
+                        SelectedMicrophoneDevice = resolved.Index,
+                        SelectedMicrophoneDeviceId = resolved.PersistentId
+                    }
+                );
             }
         }
         catch (Exception ex)

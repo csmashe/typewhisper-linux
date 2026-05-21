@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
@@ -12,11 +12,11 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class PromptPaletteService
 {
-    private readonly IServiceProvider _services;
-    private readonly IPromptActionService _promptActions;
-    private readonly PromptProcessingService _processing;
-    private readonly TextInsertionService _textInsertion;
     private readonly PluginManager _pluginManager;
+    private readonly PromptProcessingService _processing;
+    private readonly IPromptActionService _promptActions;
+    private readonly IServiceProvider _services;
+    private readonly TextInsertionService _textInsertion;
 
     private bool _opening;
 
@@ -25,7 +25,8 @@ public sealed class PromptPaletteService
         IPromptActionService promptActions,
         PromptProcessingService processing,
         TextInsertionService textInsertion,
-        PluginManager pluginManager)
+        PluginManager pluginManager
+    )
     {
         _services = services;
         _promptActions = promptActions;
@@ -37,7 +38,9 @@ public sealed class PromptPaletteService
     public async Task TogglePaletteAsync()
     {
         if (_opening)
+        {
             return;
+        }
 
         _opening = true;
         try
@@ -54,7 +57,9 @@ public sealed class PromptPaletteService
     {
         var actions = _promptActions.EnabledActions;
         if (actions.Count == 0)
+        {
             return;
+        }
 
         var capturedText = await _textInsertion.CaptureSelectedTextAsync();
 
@@ -68,7 +73,9 @@ public sealed class PromptPaletteService
         });
 
         if (selectedAction is null || string.IsNullOrWhiteSpace(capturedText))
+        {
             return;
+        }
 
         await ExecuteActionAsync(selectedAction, capturedText);
     }
@@ -79,7 +86,8 @@ public sealed class PromptPaletteService
         {
             await ShowWarningAsync(
                 "TypeWhisper",
-                "No LLM provider available. Please configure an API key in Plugins.");
+                "No LLM provider available. Please configure an API key in Plugins."
+            );
             return;
         }
 
@@ -95,7 +103,7 @@ public sealed class PromptPaletteService
                 return;
             }
 
-            await _textInsertion.InsertTextAsync(result, autoPaste: true);
+            await _textInsertion.InsertTextAsync(result);
         }
         catch (OperationCanceledException)
         {
@@ -104,20 +112,29 @@ public sealed class PromptPaletteService
         catch (Exception ex)
         {
             Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
-            await ShowWarningAsync(
-                "TypeWhisper",
-                $"Prompt processing failed: {ex.Message}");
+            await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
         }
     }
 
     private IActionPlugin? ResolveActionPlugin(PromptAction action)
     {
         if (string.IsNullOrWhiteSpace(action.TargetActionPluginId))
+        {
             return null;
+        }
 
         return _pluginManager.ActionPlugins.FirstOrDefault(plugin =>
-            string.Equals(plugin.PluginId, action.TargetActionPluginId, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(plugin.ActionId, action.TargetActionPluginId, StringComparison.OrdinalIgnoreCase));
+            string.Equals(
+                plugin.PluginId,
+                action.TargetActionPluginId,
+                StringComparison.OrdinalIgnoreCase
+            )
+            || string.Equals(
+                plugin.ActionId,
+                action.TargetActionPluginId,
+                StringComparison.OrdinalIgnoreCase
+            )
+        );
     }
 
     private static async Task ShowWarningAsync(string title, string message)

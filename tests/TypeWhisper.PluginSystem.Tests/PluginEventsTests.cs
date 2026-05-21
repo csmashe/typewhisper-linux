@@ -78,11 +78,7 @@ public class PluginEventsTests
     [Fact]
     public void TextInsertedEvent_AllFields()
     {
-        var evt = new TextInsertedEvent
-        {
-            Text = "pasted text",
-            TargetApp = "notepad"
-        };
+        var evt = new TextInsertedEvent { Text = "pasted text", TargetApp = "notepad" };
 
         Assert.Equal("pasted text", evt.Text);
         Assert.Equal("notepad", evt.TargetApp);
@@ -109,11 +105,7 @@ public class PluginEventsTests
     [Fact]
     public void RecordWith_CreatesModifiedCopy()
     {
-        var original = new TranscriptionCompletedEvent
-        {
-            Text = "original",
-            DurationSeconds = 1.0
-        };
+        var original = new TranscriptionCompletedEvent { Text = "original", DurationSeconds = 1.0 };
 
         var modified = original with { Text = "modified" };
 

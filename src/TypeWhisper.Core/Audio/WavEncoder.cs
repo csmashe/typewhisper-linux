@@ -4,7 +4,12 @@ namespace TypeWhisper.Core.Audio;
 
 public static class WavEncoder
 {
-    public static byte[] Encode(float[] samples, int sampleRate = 16000, int channels = 1, int bitsPerSample = 16)
+    public static byte[] Encode(
+        float[] samples,
+        int sampleRate = 16000,
+        int channels = 1,
+        int bitsPerSample = 16
+    )
     {
         var bytesPerSample = bitsPerSample / 8;
         var dataLength = samples.Length * bytesPerSample;
@@ -18,11 +23,17 @@ public static class WavEncoder
         // fmt sub-chunk
         "fmt "u8.CopyTo(buffer.AsSpan(12));
         BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(16), 16); // chunk size (always 16 for PCM)
-        BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(20), 1);  // audio format: 1 = PCM
+        BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(20), 1); // audio format: 1 = PCM
         BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(22), (short)channels);
         BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(24), sampleRate);
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(28), sampleRate * channels * bytesPerSample); // byte rate
-        BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(32), (short)(channels * bytesPerSample)); // block align
+        BinaryPrimitives.WriteInt32LittleEndian(
+            buffer.AsSpan(28),
+            sampleRate * channels * bytesPerSample
+        ); // byte rate
+        BinaryPrimitives.WriteInt16LittleEndian(
+            buffer.AsSpan(32),
+            (short)(channels * bytesPerSample)
+        ); // block align
         BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(34), (short)bitsPerSample);
 
         // data sub-chunk

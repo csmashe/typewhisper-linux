@@ -1,11 +1,8 @@
-using System;
-using System.Diagnostics;
-using System.IO;
-using System.Net.Sockets;
 using Avalonia;
 using Avalonia.Logging;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.Diagnostics;
+using System.Net.Sockets;
 using TypeWhisper.Core;
 using TypeWhisper.Linux.Cli;
 using TypeWhisper.Linux.Cli.Commands;
@@ -67,9 +64,14 @@ public static class Program
             if (action.Kind == CliActionKind.BareToggle)
             {
                 if (ControlSocketClient.TrySendToggle(socketPath, out var probeError))
+                {
                     return 0;
+                }
+
                 if (!string.IsNullOrEmpty(probeError))
+                {
                     Trace.WriteLine($"[Program] Control socket probe: {probeError}");
+                }
             }
             else if (ControlSocketClient.IsLivePeer(socketPath))
             {
@@ -87,8 +89,7 @@ public static class Program
 
         try
         {
-            var exitCode = BuildAvaloniaApp()
-                .StartWithClassicDesktopLifetime(args);
+            var exitCode = BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
 
             // Graceful shutdown with a hard cap. SharpHook's libuiohook thread
             // waits on X11 events and can block Dispose() indefinitely on a
@@ -101,9 +102,11 @@ public static class Program
                 Trace.WriteLine("[Program] Host.StopAsync timed out — forcing exit.");
                 Environment.Exit(exitCode);
             }
+
             return exitCode;
         }
-        catch (Exception ex) when (ex is SocketException sx && sx.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        catch (Exception ex)
+            when (ex is SocketException sx && sx.SocketErrorCode == SocketError.AddressAlreadyInUse)
         {
             // App startup raced another instance to the bind; treat the same
             // as the early probe finding a live peer.
@@ -114,15 +117,18 @@ public static class Program
 
     public static AppBuilder BuildAvaloniaApp()
     {
-        var builder = AppBuilder.Configure<App>()
+        var builder = AppBuilder
+            .Configure<App>()
             .UsePlatformDetect()
-            .With(new X11PlatformOptions
-            {
-                // Avalonia's X11 IBus integration can log noisy DBus errors
-                // when IBus destroys an input context before Avalonia releases it.
-                // Set TYPEWHISPER_DISABLE_IME=1 to disable IME composition.
-                EnableIme = !IsImeDisabled()
-            })
+            .With(
+                new X11PlatformOptions
+                {
+                    // Avalonia's X11 IBus integration can log noisy DBus errors
+                    // when IBus destroys an input context before Avalonia releases it.
+                    // Set TYPEWHISPER_DISABLE_IME=1 to disable IME composition.
+                    EnableIme = !IsImeDisabled()
+                }
+            )
 #if DEBUG
             .WithDeveloperTools()
 #endif
@@ -134,19 +140,27 @@ public static class Program
         // backend emits on every Wayland startup is dropped — see
         // SuppressXsmpWarningLogSink for why it's safe to ignore.
         if (Logger.Sink is { } sink)
+        {
             Logger.Sink = new SuppressXsmpWarningLogSink(sink);
+        }
 
         return builder;
     }
 
     private static IHost BuildHost(string[] args)
-        => Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder(args)
+    {
+        return Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder(args)
             .ConfigureServices(ServiceRegistrations.Register)
             .Build();
+    }
 
-    private static bool IsImeDisabled() =>
-        Environment.GetEnvironmentVariable("TYPEWHISPER_DISABLE_IME") is { } value &&
-        (value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
-         value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-         value.Equals("yes", StringComparison.OrdinalIgnoreCase));
+    private static bool IsImeDisabled()
+    {
+        return Environment.GetEnvironmentVariable("TYPEWHISPER_DISABLE_IME") is { } value
+               && (
+                   value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+               );
+    }
 }

@@ -4,8 +4,8 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Pure-function tests for the per-DE accelerator format converters.
-/// These don't touch disk or shell out — fast and stable in CI.
+///     Pure-function tests for the per-DE accelerator format converters.
+///     These don't touch disk or shell out — fast and stable in CI.
 /// </summary>
 public sealed class DesktopWriterFormattingTests
 {

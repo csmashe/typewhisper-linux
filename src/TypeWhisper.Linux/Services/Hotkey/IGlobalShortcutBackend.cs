@@ -1,9 +1,9 @@
 namespace TypeWhisper.Linux.Services.Hotkey;
 
 /// <summary>
-/// Pluggable global-shortcut delivery mechanism. Concrete backends are
-/// SharpHook (X11 and Wayland focused-only), evdev (Wayland, raw device
-/// access), and XDG portal (Wayland, session-bus protocol).
+///     Pluggable global-shortcut delivery mechanism. Concrete backends are
+///     SharpHook (X11 and Wayland focused-only), evdev (Wayland, raw device
+///     access), and XDG portal (Wayland, session-bus protocol).
 /// </summary>
 public interface IGlobalShortcutBackend : IAsyncDisposable
 {
@@ -12,11 +12,11 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     bool SupportsPressRelease { get; }
 
     /// <summary>
-    /// True when the backend delivers shortcuts regardless of which window
-    /// owns focus. False for backends that only see events while the
-    /// application has the keyboard (SharpHook on Wayland) — the status
-    /// panel surfaces this so users aren't told their hotkey is "global"
-    /// when in practice it isn't.
+    ///     True when the backend delivers shortcuts regardless of which window
+    ///     owns focus. False for backends that only see events while the
+    ///     application has the keyboard (SharpHook on Wayland) — the status
+    ///     panel surfaces this so users aren't told their hotkey is "global"
+    ///     when in practice it isn't.
     /// </summary>
     bool IsGlobalScope { get; }
 
@@ -24,7 +24,8 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
 
     Task<GlobalShortcutRegistrationResult> RegisterAsync(
         GlobalShortcutSet shortcuts,
-        CancellationToken ct);
+        CancellationToken ct
+    );
 
     Task UnregisterAsync(CancellationToken ct);
 

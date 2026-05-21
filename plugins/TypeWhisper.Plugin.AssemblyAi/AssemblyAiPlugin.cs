@@ -71,10 +71,17 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
+            throw new InvalidOperationException(
+                "Plugin not configured. API key and model required."
+            );
 
         // Step 1: Upload audio
         var uploadUrl = await UploadAudioAsync(wavAudio, ct);
@@ -97,14 +104,20 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
         var json = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"AssemblyAI upload error {(int)response.StatusCode}: {json}");
+            throw new HttpRequestException(
+                $"AssemblyAI upload error {(int)response.StatusCode}: {json}"
+            );
 
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.GetProperty("upload_url").GetString()
             ?? throw new InvalidOperationException("Missing upload_url in response");
     }
 
-    private async Task<string> SubmitTranscriptionAsync(string audioUrl, string? language, CancellationToken ct)
+    private async Task<string> SubmitTranscriptionAsync(
+        string audioUrl,
+        string? language,
+        CancellationToken ct
+    )
     {
         var body = new Dictionary<string, object>
         {
@@ -119,34 +132,48 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v2/transcript");
         request.Headers.Add("Authorization", _apiKey);
-        request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(body),
+            Encoding.UTF8,
+            "application/json"
+        );
 
         var response = await _httpClient.SendAsync(request, ct);
         var json = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"AssemblyAI submit error {(int)response.StatusCode}: {json}");
+            throw new HttpRequestException(
+                $"AssemblyAI submit error {(int)response.StatusCode}: {json}"
+            );
 
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.GetProperty("id").GetString()
             ?? throw new InvalidOperationException("Missing id in response");
     }
 
-    private async Task<PluginTranscriptionResult> PollForResultAsync(string transcriptId, CancellationToken ct)
+    private async Task<PluginTranscriptionResult> PollForResultAsync(
+        string transcriptId,
+        CancellationToken ct
+    )
     {
         for (var i = 0; i < 300; i++)
         {
             ct.ThrowIfCancellationRequested();
             await Task.Delay(1000, ct);
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v2/transcript/{transcriptId}");
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"{BaseUrl}/v2/transcript/{transcriptId}"
+            );
             request.Headers.Add("Authorization", _apiKey);
 
             var response = await _httpClient.SendAsync(request, ct);
             var json = await response.Content.ReadAsStringAsync(ct);
 
             if (!response.IsSuccessStatusCode)
-                throw new HttpRequestException($"AssemblyAI poll error {(int)response.StatusCode}: {json}");
+                throw new HttpRequestException(
+                    $"AssemblyAI poll error {(int)response.StatusCode}: {json}"
+                );
 
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -154,16 +181,27 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
 
             if (status == "error")
             {
-                var error = root.TryGetProperty("error", out var errEl) ? errEl.GetString() : "Unknown error";
+                var error = root.TryGetProperty("error", out var errEl)
+                    ? errEl.GetString()
+                    : "Unknown error";
                 throw new InvalidOperationException($"AssemblyAI transcription failed: {error}");
             }
 
             if (status == "completed")
             {
                 var text = root.GetProperty("text").GetString() ?? "";
-                var duration = root.TryGetProperty("audio_duration", out var durEl) ? durEl.GetDouble() : 0.0;
-                string? detectedLanguage = root.TryGetProperty("language_code", out var langEl) ? langEl.GetString() : null;
-                return new PluginTranscriptionResult(text, detectedLanguage, duration, NoSpeechProbability: null);
+                var duration = root.TryGetProperty("audio_duration", out var durEl)
+                    ? durEl.GetDouble()
+                    : 0.0;
+                string? detectedLanguage = root.TryGetProperty("language_code", out var langEl)
+                    ? langEl.GetString()
+                    : null;
+                return new PluginTranscriptionResult(
+                    text,
+                    detectedLanguage,
+                    duration,
+                    NoSpeechProbability: null
+                );
             }
         }
 
@@ -191,7 +229,10 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
 
     internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v2/transcript?limit=1");
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{BaseUrl}/v2/transcript?limit=1"
+        );
         request.Headers.Add("Authorization", apiKey);
         try
         {
@@ -210,24 +251,37 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, "aa...", "Required for AssemblyAI transcription and streaming."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the AssemblyAI speech model.",
-            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new(
+                "api-key",
+                "API key",
+                true,
+                "aa...",
+                "Required for AssemblyAI transcription and streaming."
+            ),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the AssemblyAI speech model.",
+                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {

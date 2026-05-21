@@ -60,8 +60,9 @@
             <StackPanel Margin="0,0,0,18">
                 <TextBlock Text="File transcription"
                            Classes="page-title" />
-                <TextBlock Text="Transcribe existing recordings or media files without using the microphone. Audio and video inputs are converted locally before transcription."
-                           Classes="page-subtitle" />
+                <TextBlock
+                    Text="Transcribe existing recordings or media files without using the microphone. Audio and video inputs are converted locally before transcription."
+                    Classes="page-subtitle" />
             </StackPanel>
 
             <TextBlock Text="Import"
@@ -74,8 +75,9 @@
                             <StackPanel Margin="0,0,16,0">
                                 <TextBlock Text="Choose source files"
                                            Classes="row-title" />
-                                <TextBlock Text="Drop supported audio or video files here, or browse manually. Supported formats include WAV, MP3, M4A, FLAC, MP4, MOV, MKV, AVI, and WEBM."
-                                           Classes="row-hint" />
+                                <TextBlock
+                                    Text="Drop supported audio or video files here, or browse manually. Supported formats include WAV, MP3, M4A, FLAC, MP4, MOV, MKV, AVI, and WEBM."
+                                    Classes="row-hint" />
                             </StackPanel>
 
                             <Button Grid.Column="1"
@@ -101,11 +103,12 @@
                                            FontSize="15"
                                            FontWeight="SemiBold"
                                            HorizontalAlignment="Center" />
-                                <TextBlock Text="The file is converted to a mono 16 kHz WAV stream before transcription."
-                                           Classes="row-hint"
-                                           TextAlignment="Center"
-                                           HorizontalAlignment="Center"
-                                           MaxWidth="460" />
+                                <TextBlock
+                                    Text="The file is converted to a mono 16 kHz WAV stream before transcription."
+                                    Classes="row-hint"
+                                    TextAlignment="Center"
+                                    HorizontalAlignment="Center"
+                                    MaxWidth="460" />
                                 <TextBlock Text="{Binding ImporterUnavailableReason}"
                                            FontSize="12"
                                            Foreground="#AFC0D3"

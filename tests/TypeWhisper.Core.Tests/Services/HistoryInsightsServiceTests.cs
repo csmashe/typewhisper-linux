@@ -22,10 +22,24 @@ public sealed class HistoryInsightsServiceTests
     {
         var records = new[]
         {
-            Record("one two three", "code", duration: 3, TextInsertionStatus.Pasted),
-            Record("one two", "code", duration: 5, TextInsertionStatus.Typed, snippetApplied: true),
-            Record("one two three four", "browser", duration: 4, TextInsertionStatus.MissingPasteTool, dictionaryApplied: true),
-            Record("one two three", "notes", duration: 6, TextInsertionStatus.CopiedToClipboard, cleanupApplied: true, promptApplied: true, translationApplied: true)
+            Record("one two three", "code", 3, TextInsertionStatus.Pasted),
+            Record("one two", "code", 5, TextInsertionStatus.Typed, snippetApplied: true),
+            Record(
+                "one two three four",
+                "browser",
+                4,
+                TextInsertionStatus.MissingPasteTool,
+                dictionaryApplied: true
+            ),
+            Record(
+                "one two three",
+                "notes",
+                6,
+                TextInsertionStatus.CopiedToClipboard,
+                true,
+                promptApplied: true,
+                translationApplied: true
+            )
         };
 
         var result = _sut.Build(records);
@@ -60,8 +74,10 @@ public sealed class HistoryInsightsServiceTests
         bool snippetApplied = false,
         bool dictionaryApplied = false,
         bool promptApplied = false,
-        bool translationApplied = false) =>
-        new()
+        bool translationApplied = false
+    )
+    {
+        return new TranscriptionRecord
         {
             Id = Guid.NewGuid().ToString(),
             Timestamp = DateTime.UtcNow,
@@ -76,4 +92,5 @@ public sealed class HistoryInsightsServiceTests
             PromptActionApplied = promptApplied,
             TranslationApplied = translationApplied
         };
+    }
 }

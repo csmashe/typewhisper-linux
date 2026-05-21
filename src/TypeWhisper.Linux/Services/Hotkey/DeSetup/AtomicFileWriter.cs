@@ -1,12 +1,12 @@
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-/// Shared atomic file-write helper for the per-desktop shortcut writers.
-/// Writes to a sibling temp file then <see cref="File.Move(string,string,bool)"/>s
-/// it over the target so the destination never exists half-written.
-/// When the target already exists, its Unix permission bits are copied
-/// onto the temp file first — a user who hardened their compositor
-/// config to e.g. 0600 keeps that mode across our writes.
+///     Shared atomic file-write helper for the per-desktop shortcut writers.
+///     Writes to a sibling temp file then <see cref="File.Move(string,string,bool)" />s
+///     it over the target so the destination never exists half-written.
+///     When the target already exists, its Unix permission bits are copied
+///     onto the temp file first — a user who hardened their compositor
+///     config to e.g. 0600 keeps that mode across our writes.
 /// </summary>
 internal static class AtomicFileWriter
 {
@@ -14,7 +14,10 @@ internal static class AtomicFileWriter
     {
         var dir = Path.GetDirectoryName(target);
         if (string.IsNullOrEmpty(dir))
+        {
             throw new ArgumentException("Target path must include a directory.", nameof(target));
+        }
+
         var tmp = Path.Combine(dir, $".{Path.GetFileName(target)}.{Path.GetRandomFileName()}.tmp");
         try
         {
@@ -22,14 +25,29 @@ internal static class AtomicFileWriter
             if (File.Exists(target) && !OperatingSystem.IsWindows())
             {
                 // Preserve a user-hardened config's permission bits.
-                try { File.SetUnixFileMode(tmp, File.GetUnixFileMode(target)); }
-                catch { /* unsupported FS — best effort */ }
+                try
+                {
+                    File.SetUnixFileMode(tmp, File.GetUnixFileMode(target));
+                }
+                catch
+                {
+                    /* unsupported FS — best effort */
+                }
             }
-            File.Move(tmp, target, overwrite: true);
+
+            File.Move(tmp, target, true);
         }
         catch
         {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            try
+            {
+                if (File.Exists(tmp))
+                {
+                    File.Delete(tmp);
+                }
+            }
+            catch { }
+
             throw;
         }
     }

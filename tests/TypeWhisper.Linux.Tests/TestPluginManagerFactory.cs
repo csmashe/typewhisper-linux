@@ -1,5 +1,5 @@
-using System.Reflection;
 using Moq;
+using System.Reflection;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
@@ -14,7 +14,8 @@ internal static class TestPluginManagerFactory
         IReadOnlyList<ILlmProviderPlugin>? llmProviders = null,
         IReadOnlyList<IActionPlugin>? actionPlugins = null,
         IReadOnlyList<ITtsProviderPlugin>? ttsProviders = null,
-        IReadOnlyList<LoadedPlugin>? loadedPlugins = null)
+        IReadOnlyList<LoadedPlugin>? loadedPlugins = null
+    )
     {
         var activeWindow = new Mock<IActiveWindowService>();
         var profiles = new Mock<IProfileService>();
@@ -26,16 +27,28 @@ internal static class TestPluginManagerFactory
             new PluginEventBus(),
             activeWindow.Object,
             profiles.Object,
-            settings.Object);
+            settings.Object
+        );
 
         if (llmProviders is not null)
+        {
             SetPrivateField(pluginManager, "_llmProviders", llmProviders.ToList());
+        }
+
         if (actionPlugins is not null)
+        {
             SetPrivateField(pluginManager, "_actionPlugins", actionPlugins.ToList());
+        }
+
         if (ttsProviders is not null)
+        {
             SetPrivateField(pluginManager, "_ttsProviders", ttsProviders.ToList());
+        }
+
         if (loadedPlugins is not null)
+        {
             SetPrivateField(pluginManager, "_allPlugins", loadedPlugins.ToList());
+        }
 
         return pluginManager;
     }
@@ -44,13 +57,21 @@ internal static class TestPluginManagerFactory
     {
         var settings = new Mock<ISettingsService>();
         settings.SetupGet(service => service.Current).Returns(current);
-        settings.Setup(service => service.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(saved => settings.SetupGet(service => service.Current).Returns(saved));
+        settings
+            .Setup(service => service.Save(It.IsAny<AppSettings>()))
+            .Callback<AppSettings>(saved =>
+                settings.SetupGet(service => service.Current).Returns(saved)
+            );
         return settings;
     }
 
-    public static LoadedPlugin CreateLoadedPlugin(string pluginDir, string pluginId, ITypeWhisperPlugin plugin) =>
-        new(
+    public static LoadedPlugin CreateLoadedPlugin(
+        string pluginDir,
+        string pluginId,
+        ITypeWhisperPlugin plugin
+    )
+    {
+        return new LoadedPlugin(
             new PluginManifest
             {
                 Id = pluginId,
@@ -61,14 +82,17 @@ internal static class TestPluginManagerFactory
             },
             plugin,
             new PluginAssemblyLoadContext(pluginDir),
-            pluginDir);
+            pluginDir
+        );
+    }
 
     // PluginManager's plugin lists are populated by the loader at runtime;
     // there's no public seam for injecting test doubles. Reflection is the
     // pragmatic solution until the production API exposes one.
     private static void SetPrivateField(object target, string fieldName, object value)
     {
-        var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+        var field =
+            target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingFieldException(target.GetType().FullName, fieldName);
         field.SetValue(target, value);
     }

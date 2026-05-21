@@ -6,7 +6,8 @@ namespace TypeWhisper.Core.Services;
 public sealed record VoiceCommandParseResult(
     string Text,
     bool AutoEnter = false,
-    bool CancelInsertion = false);
+    bool CancelInsertion = false
+);
 
 public sealed class VoiceCommandParser
 {
@@ -19,7 +20,9 @@ public sealed class VoiceCommandParser
     public VoiceCommandParseResult Parse(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
+        {
             return new VoiceCommandParseResult(text);
+        }
 
         var current = text.Trim();
         var trailingOutput = new StringBuilder();
@@ -32,8 +35,13 @@ public sealed class VoiceCommandParser
             if (TryRemoveSuffix(current, CancelSuffix, out var withoutCancel))
             {
                 var remaining = TrimTrailingNoise(withoutCancel);
-                if (string.IsNullOrWhiteSpace(remaining) || string.IsNullOrWhiteSpace(Parse(remaining).Text))
+                if (
+                    string.IsNullOrWhiteSpace(remaining)
+                    || string.IsNullOrWhiteSpace(Parse(remaining).Text)
+                )
+                {
                     return new VoiceCommandParseResult("", CancelInsertion: true);
+                }
 
                 current = remaining;
                 continue;
@@ -69,7 +77,10 @@ public sealed class VoiceCommandParser
     private static Regex BuildSuffixRegex(string phrase)
     {
         var escaped = Regex.Escape(phrase).Replace(@"\ ", @"\s+");
-        return new Regex($@"(?:^|\s){escaped}[\s,.;:!?]*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        return new Regex(
+            $@"(?:^|\s){escaped}[\s,.;:!?]*$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled
+        );
     }
 
     private static bool TryRemoveSuffix(string text, Regex suffix, out string result)
@@ -84,5 +95,8 @@ public sealed class VoiceCommandParser
         return true;
     }
 
-    private static string TrimTrailingNoise(string text) => TrailingNoise.Replace(text, "");
+    private static string TrimTrailingNoise(string text)
+    {
+        return TrailingNoise.Replace(text, "");
+    }
 }

@@ -4,10 +4,10 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Pure-function tests for the Chromium <c>--force-renderer-accessibility</c>
-/// flag insertion. The interesting cases are wrapped launchers — Flatpak and
-/// env(1) — where naively inserting after the first space would route the
-/// flag to the wrapper instead of the browser.
+///     Pure-function tests for the Chromium <c>--force-renderer-accessibility</c>
+///     flag insertion. The interesting cases are wrapped launchers — Flatpak and
+///     env(1) — where naively inserting after the first space would route the
+///     flag to the wrapper instead of the browser.
 /// </summary>
 public sealed class BrowserAccessibilityExecPatchTests
 {
@@ -17,7 +17,9 @@ public sealed class BrowserAccessibilityExecPatchTests
     public void InsertsBeforeFieldCode_OnPlainLauncher()
     {
         var result = BrowserAccessibilitySetupHelper.InsertChromiumFlag(
-            "Exec=/usr/bin/chromium %U", Flag);
+            "Exec=/usr/bin/chromium %U",
+            Flag
+        );
         Assert.Equal($"Exec=/usr/bin/chromium {Flag} %U", result);
     }
 
@@ -26,37 +28,41 @@ public sealed class BrowserAccessibilityExecPatchTests
     {
         var result = BrowserAccessibilitySetupHelper.InsertChromiumFlag(
             "Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=chromium org.chromium.Chromium %U",
-            Flag);
+            Flag
+        );
         Assert.Equal(
             $"Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=chromium org.chromium.Chromium {Flag} %U",
-            result);
+            result
+        );
     }
 
     [Fact]
     public void InsertsBeforeFlatpakEscapeMarker()
     {
         var result = BrowserAccessibilitySetupHelper.InsertChromiumFlag(
-            "Exec=/usr/bin/flatpak run com.google.Chrome @@u %U @@", Flag);
-        Assert.Equal(
-            $"Exec=/usr/bin/flatpak run com.google.Chrome {Flag} @@u %U @@",
-            result);
+            "Exec=/usr/bin/flatpak run com.google.Chrome @@u %U @@",
+            Flag
+        );
+        Assert.Equal($"Exec=/usr/bin/flatpak run com.google.Chrome {Flag} @@u %U @@", result);
     }
 
     [Fact]
     public void InsertsBeforeFieldCode_OnEnvWrappedLauncher()
     {
         var result = BrowserAccessibilitySetupHelper.InsertChromiumFlag(
-            "Exec=env GTK_USE_PORTAL=1 /usr/bin/chromium %U", Flag);
-        Assert.Equal(
-            $"Exec=env GTK_USE_PORTAL=1 /usr/bin/chromium {Flag} %U",
-            result);
+            "Exec=env GTK_USE_PORTAL=1 /usr/bin/chromium %U",
+            Flag
+        );
+        Assert.Equal($"Exec=env GTK_USE_PORTAL=1 /usr/bin/chromium {Flag} %U", result);
     }
 
     [Fact]
     public void AppendsFlag_WhenExecHasNoFieldCode()
     {
         var result = BrowserAccessibilitySetupHelper.InsertChromiumFlag(
-            "Exec=/usr/bin/chromium", Flag);
+            "Exec=/usr/bin/chromium",
+            Flag
+        );
         Assert.Equal($"Exec=/usr/bin/chromium {Flag}", result);
     }
 
@@ -67,10 +73,10 @@ public sealed class BrowserAccessibilityExecPatchTests
         // code — the second char isn't alphanumeric, so the flag still
         // appends at end.
         var result = BrowserAccessibilitySetupHelper.InsertChromiumFlag(
-            "Exec=/usr/bin/chromium --user-data-dir=/tmp/%%foo", Flag);
-        Assert.Equal(
-            $"Exec=/usr/bin/chromium --user-data-dir=/tmp/%%foo {Flag}",
-            result);
+            "Exec=/usr/bin/chromium --user-data-dir=/tmp/%%foo",
+            Flag
+        );
+        Assert.Equal($"Exec=/usr/bin/chromium --user-data-dir=/tmp/%%foo {Flag}", result);
     }
 
     [Fact]
@@ -80,17 +86,25 @@ public sealed class BrowserAccessibilityExecPatchTests
         // plus per-action shortcuts like "New Window", "New Private
         // Window"). Every one of them needs the env wrapper so menu
         // shortcuts also get accessibility.
-        var input = string.Join('\n',
+        var input = string.Join(
+            '\n',
             "[Desktop Entry]",
             "Name=Firefox",
             "Exec=firefox %u",
             "[Desktop Action new-window]",
-            "Exec=firefox --new-window %u");
+            "Exec=firefox --new-window %u"
+        );
 
         var patched = BrowserAccessibilitySetupHelper.PrependEnvWrapperToExecLines(input);
 
-        Assert.Contains("Exec=env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge firefox %u", patched);
-        Assert.Contains("Exec=env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge firefox --new-window %u", patched);
+        Assert.Contains(
+            "Exec=env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge firefox %u",
+            patched
+        );
+        Assert.Contains(
+            "Exec=env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge firefox --new-window %u",
+            patched
+        );
     }
 
     [Fact]
@@ -98,7 +112,8 @@ public sealed class BrowserAccessibilityExecPatchTests
     {
         // Running setup twice in a row shouldn't double-wrap. The skip
         // condition is the literal MOZ_ENABLE_ACCESSIBILITY= marker.
-        var alreadyPatched = "Exec=env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge firefox %u";
+        var alreadyPatched =
+            "Exec=env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge firefox %u";
 
         var result = BrowserAccessibilitySetupHelper.PrependEnvWrapperToExecLines(alreadyPatched);
 

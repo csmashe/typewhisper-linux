@@ -3,8 +3,8 @@ using System.Text.RegularExpressions;
 namespace TypeWhisper.Core.Services;
 
 /// <summary>
-/// Converts spoken file references (e.g. "at auth service dot ts") into formatted
-/// file paths or @-references suitable for pasting into IDE chat or code editors.
+///     Converts spoken file references (e.g. "at auth service dot ts") into formatted
+///     file paths or @-references suitable for pasting into IDE chat or code editors.
 /// </summary>
 public sealed partial class IdeFileReferenceService
 {
@@ -17,13 +17,11 @@ public sealed partial class IdeFileReferenceService
         "reference "
     ];
 
-    private static readonly string[] PlainReferencePrefixes =
-    [
-        "file ",
-        "open file "
-    ];
+    private static readonly string[] PlainReferencePrefixes = ["file ", "open file "];
 
-    private static readonly Dictionary<string, string> ExtensionAliases = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, string> ExtensionAliases = new(
+        StringComparer.OrdinalIgnoreCase
+    )
     {
         ["ts"] = "ts",
         ["typescript"] = "ts",
@@ -46,22 +44,32 @@ public sealed partial class IdeFileReferenceService
     public string ToFileReference(string spokenText)
     {
         if (string.IsNullOrWhiteSpace(spokenText))
+        {
             return "";
+        }
 
         var normalized = Normalize(spokenText);
         normalized = DotEnvRegex().Replace(normalized, ".env");
-        normalized = ExtensionRegex().Replace(normalized, match =>
-        {
-            var name = Slug(match.Groups["name"].Value);
-            var extension = ResolveExtension(match.Groups["extension"].Value);
-            return extension is null ? match.Value : $"{name}.{extension}";
-        });
+        normalized = ExtensionRegex()
+            .Replace(
+                normalized,
+                match =>
+                {
+                    var name = Slug(match.Groups["name"].Value);
+                    var extension = ResolveExtension(match.Groups["extension"].Value);
+                    return extension is null ? match.Value : $"{name}.{extension}";
+                }
+            );
 
         if (normalized.StartsWith(".env", StringComparison.OrdinalIgnoreCase))
+        {
             return ".env";
+        }
 
         if (LooksLikeFileName(normalized))
+        {
             return normalized;
+        }
 
         return Slug(normalized);
     }
@@ -75,11 +83,15 @@ public sealed partial class IdeFileReferenceService
     public string? TryFormatReferenceCommand(string spokenText)
     {
         if (string.IsNullOrWhiteSpace(spokenText))
+        {
             return null;
+        }
 
         var normalized = Normalize(spokenText).Trim('.', '!', '?', ',');
         if (normalized.Length == 0)
+        {
             return null;
+        }
 
         foreach (var prefix in AtReferencePrefixes)
         {
@@ -102,31 +114,38 @@ public sealed partial class IdeFileReferenceService
         return null;
     }
 
-    private static string Normalize(string value) =>
-        RepeatedWhitespaceRegex()
-            .Replace(value.Trim().ToLowerInvariant(), " ");
+    private static string Normalize(string value)
+    {
+        return RepeatedWhitespaceRegex().Replace(value.Trim().ToLowerInvariant(), " ");
+    }
 
     private static string? ResolveExtension(string value)
     {
         value = value.Trim().Replace(" dot ", ".", StringComparison.OrdinalIgnoreCase);
-        return ExtensionAliases.TryGetValue(value, out var extension)
-            ? extension
-            : value.Length is >= 1 and <= 5 && PlainExtensionRegex().IsMatch(value)
-                ? value
-                : null;
+        return ExtensionAliases.TryGetValue(value, out var extension) ? extension
+            : value.Length is >= 1 and <= 5 && PlainExtensionRegex().IsMatch(value) ? value
+            : null;
     }
 
-    private static string Slug(string value) =>
-        string.Join('_', WordRegex().Matches(value).Select(match => match.Value.ToLowerInvariant()));
+    private static string Slug(string value)
+    {
+        return string.Join(
+            '_',
+            WordRegex().Matches(value).Select(match => match.Value.ToLowerInvariant())
+        );
+    }
 
-    private static bool LooksLikeFileName(string value) =>
-        value.Contains('.', StringComparison.Ordinal)
-        || value.Contains('/', StringComparison.Ordinal)
-        || value.StartsWith("@", StringComparison.Ordinal);
+    private static bool LooksLikeFileName(string value)
+    {
+        return value.Contains('.', StringComparison.Ordinal)
+               || value.Contains('/', StringComparison.Ordinal)
+               || value.StartsWith("@", StringComparison.Ordinal);
+    }
 
-    private static bool LooksLikeSpokenFileName(string value) =>
-        DotEnvRegex().IsMatch(value)
-        || ExtensionRegex().IsMatch(value);
+    private static bool LooksLikeSpokenFileName(string value)
+    {
+        return DotEnvRegex().IsMatch(value) || ExtensionRegex().IsMatch(value);
+    }
 
     [GeneratedRegex(@"\bdot\s+env\b", RegexOptions.IgnoreCase)]
     private static partial Regex DotEnvRegex();

@@ -1,7 +1,7 @@
-using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -12,24 +12,58 @@ public partial class DictionarySectionViewModel : ObservableObject
     private readonly IDictionaryService _dict;
     private readonly ISettingsService _settings;
 
+    [ObservableProperty]
+    private bool _caseSensitive;
+
+    [ObservableProperty]
+    private DictionaryEntryType _newEntryType = DictionaryEntryType.Correction;
+
+    [ObservableProperty]
+    private string _newOriginal = "";
+
+    [ObservableProperty]
+    private int _newPriority;
+
+    [ObservableProperty]
+    private string _newReplacement = "";
+
+    [ObservableProperty]
+    private string _searchText = "";
+
+    [ObservableProperty]
+    private int _selectedTab;
+
+    [ObservableProperty]
+    private bool _vocabularyBoostingEnabled;
+
+    public DictionarySectionViewModel(IDictionaryService dict, ISettingsService settings)
+    {
+        _dict = dict;
+        _settings = settings;
+        _vocabularyBoostingEnabled = settings.Current.VocabularyBoostingEnabled;
+
+        _dict.EntriesChanged += () => Dispatcher.UIThread.Post(Refresh);
+        InitializePacks();
+        Refresh();
+    }
+
     public ObservableCollection<DictionaryEntry> FilteredEntries { get; } = [];
     public ObservableCollection<TermPackItemViewModel> Packs { get; } = [];
 
-    [ObservableProperty] private int _selectedTab;
-    [ObservableProperty] private string _searchText = "";
-    [ObservableProperty] private bool _vocabularyBoostingEnabled;
-    [ObservableProperty] private string _newOriginal = "";
-    [ObservableProperty] private string _newReplacement = "";
-    [ObservableProperty] private bool _caseSensitive;
-    [ObservableProperty] private int _newPriority;
-    [ObservableProperty] private DictionaryEntryType _newEntryType = DictionaryEntryType.Correction;
-
     public bool HasSearchText => !string.IsNullOrWhiteSpace(SearchText);
-    public int EntryCount => SelectedTab == 3 ? Packs.Count(pack => pack.IsEnabled) : FilteredEntries.Count;
-    public int ActiveBoostingTermCount => _dict.Entries.Count(entry => entry.IsEnabled && entry.EntryType == DictionaryEntryType.Term);
-    public string VocabularyBoostingStatusText => ActiveBoostingTermCount == 0
-        ? "No active terms available for boosting"
-        : $"{ActiveBoostingTermCount} active term(s) available for boosting";
+
+    public int EntryCount =>
+        SelectedTab == 3 ? Packs.Count(pack => pack.IsEnabled) : FilteredEntries.Count;
+
+    public int ActiveBoostingTermCount =>
+        _dict.Entries.Count(entry =>
+            entry.IsEnabled && entry.EntryType == DictionaryEntryType.Term
+        );
+
+    public string VocabularyBoostingStatusText =>
+        ActiveBoostingTermCount == 0
+            ? "No active terms available for boosting"
+            : $"{ActiveBoostingTermCount} active term(s) available for boosting";
 
     public bool IsAllTabSelected => SelectedTab == 0;
     public bool IsTermsTabSelected => SelectedTab == 1;
@@ -43,28 +77,45 @@ public partial class DictionarySectionViewModel : ObservableObject
     public bool ShowSearchBox => SelectedTab != 3;
     public bool ShowFilterRow => SelectedTab != 3;
     public bool ShowPacksHeader => SelectedTab == 3;
-    public string EmptyStateTitle => SelectedTab switch
-    {
-        1 => "No terms yet",
-        2 => "No corrections yet",
-        _ => "No entries yet"
-    };
-    public string EmptyStateSubtitle => SelectedTab switch
-    {
-        1 => "Add terms or enable a pack",
-        2 => "Add corrections to rewrite recognized text",
-        _ => "Add terms and corrections or enable a pack"
-    };
 
-    public DictionarySectionViewModel(IDictionaryService dict, ISettingsService settings)
-    {
-        _dict = dict;
-        _settings = settings;
-        _vocabularyBoostingEnabled = settings.Current.VocabularyBoostingEnabled;
+    public string EmptyStateTitle =>
+        SelectedTab switch
+        {
+            1 => "No terms yet",
+            2 => "No corrections yet",
+            _ => "No entries yet"
+        };
 
-        _dict.EntriesChanged += () => Dispatcher.UIThread.Post(Refresh);
-        InitializePacks();
-        Refresh();
+    public string EmptyStateSubtitle =>
+        SelectedTab switch
+        {
+            1 => "Add terms or enable a pack",
+            2 => "Add corrections to rewrite recognized text",
+            _ => "Add terms and corrections or enable a pack"
+        };
+
+    public bool IsNewTypeCorrection
+    {
+        get => NewEntryType == DictionaryEntryType.Correction;
+        set
+        {
+            if (value)
+            {
+                NewEntryType = DictionaryEntryType.Correction;
+            }
+        }
+    }
+
+    public bool IsNewTypeTerm
+    {
+        get => NewEntryType == DictionaryEntryType.Term;
+        set
+        {
+            if (value)
+            {
+                NewEntryType = DictionaryEntryType.Term;
+            }
+        }
     }
 
     partial void OnSelectedTabChanged(int value)
@@ -85,7 +136,9 @@ public partial class DictionarySectionViewModel : ObservableObject
     partial void OnVocabularyBoostingEnabledChanged(bool value)
     {
         if (_settings.Current.VocabularyBoostingEnabled == value)
+        {
             return;
+        }
 
         _settings.Save(_settings.Current with { VocabularyBoostingEnabled = value });
     }
@@ -94,26 +147,6 @@ public partial class DictionarySectionViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(IsNewTypeCorrection));
         OnPropertyChanged(nameof(IsNewTypeTerm));
-    }
-
-    public bool IsNewTypeCorrection
-    {
-        get => NewEntryType == DictionaryEntryType.Correction;
-        set
-        {
-            if (value)
-                NewEntryType = DictionaryEntryType.Correction;
-        }
-    }
-
-    public bool IsNewTypeTerm
-    {
-        get => NewEntryType == DictionaryEntryType.Term;
-        set
-        {
-            if (value)
-                NewEntryType = DictionaryEntryType.Term;
-        }
     }
 
     [RelayCommand]
@@ -131,28 +164,43 @@ public partial class DictionarySectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ClearSearch() => SearchText = "";
+    private void ClearSearch()
+    {
+        SearchText = "";
+    }
 
-    public string ExportToCsv() => _dict.ExportToCsv();
+    public string ExportToCsv()
+    {
+        return _dict.ExportToCsv();
+    }
 
-    public int ImportFromCsv(string csv) => _dict.ImportFromCsv(csv);
+    public int ImportFromCsv(string csv)
+    {
+        return _dict.ImportFromCsv(csv);
+    }
 
     [RelayCommand]
     private void AddEntry()
     {
         if (string.IsNullOrWhiteSpace(NewOriginal))
-            return;
-
-        _dict.AddEntry(new DictionaryEntry
         {
-            Id = Guid.NewGuid().ToString(),
-            EntryType = NewEntryType,
-            Original = NewOriginal.Trim(),
-            Replacement = string.IsNullOrWhiteSpace(NewReplacement) ? null : NewReplacement.Trim(),
-            CaseSensitive = CaseSensitive,
-            IsEnabled = true,
-            Priority = Math.Clamp(NewPriority, 0, 999),
-        });
+            return;
+        }
+
+        _dict.AddEntry(
+            new DictionaryEntry
+            {
+                Id = Guid.NewGuid().ToString(),
+                EntryType = NewEntryType,
+                Original = NewOriginal.Trim(),
+                Replacement = string.IsNullOrWhiteSpace(NewReplacement)
+                    ? null
+                    : NewReplacement.Trim(),
+                CaseSensitive = CaseSensitive,
+                IsEnabled = true,
+                Priority = Math.Clamp(NewPriority, 0, 999)
+            }
+        );
 
         NewOriginal = "";
         NewReplacement = "";
@@ -161,23 +209,34 @@ public partial class DictionarySectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void Delete(DictionaryEntry entry) => _dict.DeleteEntry(entry.Id);
+    private void Delete(DictionaryEntry entry)
+    {
+        _dict.DeleteEntry(entry.Id);
+    }
 
     [RelayCommand]
-    private void ToggleEnabled(DictionaryEntry entry) =>
+    private void ToggleEnabled(DictionaryEntry entry)
+    {
         _dict.UpdateEntry(entry with { IsEnabled = !entry.IsEnabled });
+    }
 
     [RelayCommand]
-    private void ToggleStarred(DictionaryEntry entry) =>
+    private void ToggleStarred(DictionaryEntry entry)
+    {
         _dict.UpdateEntry(entry with { IsStarred = !entry.IsStarred });
+    }
 
     [RelayCommand]
-    private void IncreasePriority(DictionaryEntry entry) =>
+    private void IncreasePriority(DictionaryEntry entry)
+    {
         _dict.UpdateEntry(entry with { Priority = Math.Min(entry.Priority + 1, 999) });
+    }
 
     [RelayCommand]
-    private void DecreasePriority(DictionaryEntry entry) =>
+    private void DecreasePriority(DictionaryEntry entry)
+    {
         _dict.UpdateEntry(entry with { Priority = Math.Max(entry.Priority - 1, 0) });
+    }
 
     [RelayCommand]
     private void TogglePack(TermPackItemViewModel pack)
@@ -200,9 +259,13 @@ public partial class DictionarySectionViewModel : ObservableObject
     private void InitializePacks()
     {
         Packs.Clear();
-        var enabledIds = _settings.Current.EnabledPackIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var enabledIds = _settings.Current.EnabledPackIds.ToHashSet(
+            StringComparer.OrdinalIgnoreCase
+        );
         foreach (var pack in TermPack.AllPacks)
+        {
             Packs.Add(new TermPackItemViewModel(pack, enabledIds.Contains(pack.Id)));
+        }
     }
 
     private void SaveEnabledPacks()
@@ -230,14 +293,21 @@ public partial class DictionarySectionViewModel : ObservableObject
             var search = SearchText.Trim();
             entries = entries.Where(entry =>
                 entry.Original.Contains(search, StringComparison.OrdinalIgnoreCase)
-                || (entry.Replacement?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false));
+                || (
+                    entry.Replacement?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false
+                )
+            );
         }
 
-        foreach (var entry in entries
-                     .OrderByDescending(entry => entry.IsStarred)
-                     .ThenByDescending(entry => entry.Priority)
-                     .ThenBy(entry => entry.Original, StringComparer.OrdinalIgnoreCase))
+        foreach (
+            var entry in entries
+                .OrderByDescending(entry => entry.IsStarred)
+                .ThenByDescending(entry => entry.Priority)
+                .ThenBy(entry => entry.Original, StringComparer.OrdinalIgnoreCase)
+        )
+        {
             FilteredEntries.Add(entry);
+        }
 
         OnPropertyChanged(nameof(EntryCount));
         OnPropertyChanged(nameof(ActiveBoostingTermCount));
@@ -256,18 +326,21 @@ public partial class DictionarySectionViewModel : ObservableObject
 
 public partial class TermPackItemViewModel : ObservableObject
 {
-    public TermPack Pack { get; }
-
-    [ObservableProperty] private bool _isEnabled;
-
-    public int TermCount => Pack.Terms.Length;
-    public string TermCountLabel => $"{TermCount} Terms";
-    public string TermsPreview => string.Join(", ", Pack.Terms.Take(8)) +
-                                  (Pack.Terms.Length > 8 ? $" +{Pack.Terms.Length - 8}" : "");
+    [ObservableProperty]
+    private bool _isEnabled;
 
     public TermPackItemViewModel(TermPack pack, bool isEnabled)
     {
         Pack = pack;
         _isEnabled = isEnabled;
     }
+
+    public TermPack Pack { get; }
+
+    public int TermCount => Pack.Terms.Length;
+    public string TermCountLabel => $"{TermCount} Terms";
+
+    public string TermsPreview =>
+        string.Join(", ", Pack.Terms.Take(8))
+        + (Pack.Terms.Length > 8 ? $" +{Pack.Terms.Length - 8}" : "");
 }

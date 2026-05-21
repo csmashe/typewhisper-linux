@@ -6,7 +6,9 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.CloudflareAsr;
 
-public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed partial class CloudflareAsrPlugin
+    : ITranscriptionEnginePlugin,
+        IPluginSettingsProvider
 {
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
     private IPluginHostServices? _host;
@@ -44,7 +46,8 @@ public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IP
 
     public string ProviderId => "cloudflare-asr";
     public string ProviderDisplayName => "Cloudflare ASR";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiToken) && !string.IsNullOrEmpty(_accountId);
+    public bool IsConfigured =>
+        !string.IsNullOrEmpty(_apiToken) && !string.IsNullOrEmpty(_accountId);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
 
@@ -61,12 +64,20 @@ public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IP
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. Account ID and API token required.");
+            throw new InvalidOperationException(
+                "Plugin not configured. Account ID and API token required."
+            );
 
-        var url = $"https://api.cloudflare.com/client/v4/accounts/{_accountId}/ai/run/@cf/openai/whisper";
+        var url =
+            $"https://api.cloudflare.com/client/v4/accounts/{_accountId}/ai/run/@cf/openai/whisper";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
@@ -77,7 +88,9 @@ public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IP
         var json = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"Cloudflare API error {(int)response.StatusCode}: {json}");
+            throw new HttpRequestException(
+                $"Cloudflare API error {(int)response.StatusCode}: {json}"
+            );
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -92,20 +105,29 @@ public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IP
         // Language and duration are nested under result.language / result.duration;
         // both fields are optional and absent when Cloudflare can't determine them.
         string? detectedLanguage = null;
-        if (root.TryGetProperty("result", out var res)
-            && res.TryGetProperty("language", out var langEl))
+        if (
+            root.TryGetProperty("result", out var res)
+            && res.TryGetProperty("language", out var langEl)
+        )
         {
             detectedLanguage = langEl.GetString();
         }
 
         double duration = 0;
-        if (root.TryGetProperty("result", out var res2)
-            && res2.TryGetProperty("duration", out var durEl))
+        if (
+            root.TryGetProperty("result", out var res2)
+            && res2.TryGetProperty("duration", out var durEl)
+        )
         {
             duration = durEl.GetDouble();
         }
 
-        return new PluginTranscriptionResult(text.Trim(), detectedLanguage, duration, NoSpeechProbability: null);
+        return new PluginTranscriptionResult(
+            text.Trim(),
+            detectedLanguage,
+            duration,
+            NoSpeechProbability: null
+        );
     }
 
     public void Dispose()
@@ -142,26 +164,39 @@ public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IP
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("account-id", "Account ID", false, null, "Required Cloudflare account identifier."),
-        new("api-token", "API token", true, null, "Cloudflare API token with Workers AI access."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Cloudflare ASR model.",
-            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new("account-id", "Account ID", false, null, "Required Cloudflare account identifier."),
+            new(
+                "api-token",
+                "API token",
+                true,
+                null,
+                "Cloudflare API token with Workers AI access."
+            ),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Cloudflare ASR model.",
+                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "account-id" => _accountId,
-            "api-token" => _apiToken,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "account-id" => _accountId,
+                "api-token" => _apiToken,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {
@@ -182,9 +217,17 @@ public sealed partial class CloudflareAsrPlugin : ITranscriptionEnginePlugin, IP
     {
         if (string.IsNullOrWhiteSpace(_accountId) || string.IsNullOrWhiteSpace(_apiToken))
             return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(false, "Enter both Account ID and API token first."));
+                new PluginSettingsValidationResult(
+                    false,
+                    "Enter both Account ID and API token first."
+                )
+            );
 
         return Task.FromResult<PluginSettingsValidationResult?>(
-            new PluginSettingsValidationResult(true, "Credentials saved. Remote validation is not implemented yet."));
+            new PluginSettingsValidationResult(
+                true,
+                "Credentials saved. Remote validation is not implemented yet."
+            )
+        );
     }
 }

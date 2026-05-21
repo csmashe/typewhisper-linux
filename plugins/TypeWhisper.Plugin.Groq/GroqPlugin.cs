@@ -7,7 +7,10 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Groq;
 
-public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, IPluginSettingsProvider
+public sealed partial class GroqPlugin
+    : ITranscriptionEnginePlugin,
+        ILlmProviderPlugin,
+        IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.groq.com/openai";
     private readonly HttpClient _httpClient;
@@ -21,7 +24,12 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
     private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
     [
         new("whisper-large-v3", "Whisper Large V3", "whisper-large-v3", SupportsTranslation: true),
-        new("whisper-large-v3-turbo", "Whisper Large V3 Turbo", "whisper-large-v3-turbo", SupportsTranslation: false),
+        new(
+            "whisper-large-v3-turbo",
+            "Whisper Large V3 Turbo",
+            "whisper-large-v3-turbo",
+            SupportsTranslation: false
+        ),
     ];
 
     private static readonly IReadOnlyList<PluginModelInfo> FallbackLlmModels =
@@ -34,9 +42,7 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
     ];
 
     public GroqPlugin()
-        : this(CreateHttpClient())
-    {
-    }
+        : this(CreateHttpClient()) { }
 
     internal GroqPlugin(HttpClient httpClient)
     {
@@ -53,11 +59,15 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
     {
         _host = host;
         _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? TranscriptionModelEntries[0].Id;
+        _selectedModelId =
+            host.GetSetting<string>("selectedModel") ?? TranscriptionModelEntries[0].Id;
         _selectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
-        _fetchedLlmModels = NormalizeFetchedLlmModels(host.GetSetting<List<FetchedLlmModel>>("fetchedLlmModels") ?? []);
+        _fetchedLlmModels = NormalizeFetchedLlmModels(
+            host.GetSetting<List<FetchedLlmModel>>("fetchedLlmModels") ?? []
+        );
 
-        var selectedTranscription = TranscriptionModelEntries.FirstOrDefault(m => m.Id == _selectedModelId)
+        var selectedTranscription =
+            TranscriptionModelEntries.FirstOrDefault(m => m.Id == _selectedModelId)
             ?? TranscriptionModelEntries[0];
         _selectedModelId = selectedTranscription.Id;
         _selectedApiModelName = selectedTranscription.ApiModelName;
@@ -96,7 +106,8 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
 
     public void SelectModel(string modelId)
     {
-        var entry = TranscriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
+        var entry =
+            TranscriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
             ?? throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
         _selectedApiModelName = entry.ApiModelName;
@@ -104,14 +115,30 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured || _selectedApiModelName is null)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
+            throw new InvalidOperationException(
+                "Plugin not configured. API key and model required."
+            );
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient, BaseUrl, _apiKey!, _selectedApiModelName,
-            wavAudio, language, translate, "verbose_json", ct, prompt);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            _selectedApiModelName,
+            wavAudio,
+            language,
+            translate,
+            "verbose_json",
+            ct,
+            prompt
+        );
     }
 
     // ILlmProviderPlugin
@@ -124,14 +151,26 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
             ? _fetchedLlmModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList()
             : FallbackLlmModels;
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("API key not configured");
 
         var modelId = ResolveLlmModelId(string.IsNullOrWhiteSpace(model) ? null : model);
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, modelId, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            modelId,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
 
     // API key management (for settings view)
@@ -205,12 +244,16 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
             return data.EnumerateArray()
                 .Select(e => new FetchedLlmModel(
                     e.GetProperty("id").GetString() ?? "",
-                    e.TryGetProperty("owned_by", out var ob) ? ob.GetString() : null))
+                    e.TryGetProperty("owned_by", out var ob) ? ob.GetString() : null
+                ))
                 .Where(m => IsLlmModel(m.Id))
                 .OrderBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch
         {
             return null;
@@ -256,7 +299,10 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
 
     private void NormalizeSelectedLlmModel()
     {
-        var availableIds = new HashSet<string>(SupportedModels.Select(m => m.Id), StringComparer.OrdinalIgnoreCase);
+        var availableIds = new HashSet<string>(
+            SupportedModels.Select(m => m.Id),
+            StringComparer.OrdinalIgnoreCase
+        );
         if (_selectedLlmModelId is not null && availableIds.Contains(_selectedLlmModelId))
             return;
 
@@ -265,7 +311,9 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
             _host?.SetSetting("selectedLlmModel", _selectedLlmModelId);
     }
 
-    private static List<FetchedLlmModel> NormalizeFetchedLlmModels(IEnumerable<FetchedLlmModel> models) =>
+    private static List<FetchedLlmModel> NormalizeFetchedLlmModels(
+        IEnumerable<FetchedLlmModel> models
+    ) =>
         models
             .Where(m => !string.IsNullOrWhiteSpace(m.Id) && IsLlmModel(m.Id))
             .DistinctBy(m => m.Id)
@@ -282,41 +330,50 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
     // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "gsk_...",
-            Description: "Stored securely and used for both Groq transcription and LLM requests."),
-        new(
-            Key: "selectedModel",
-            Label: "Transcription model",
-            Description: "Choose the Groq transcription model.",
-            Options: TranscriptionModelEntries
-                .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
-                .ToList()),
-        new(
-            Key: "selectedLlmModel",
-            Label: "LLM model",
-            Description: _fetchedLlmModels.Count > 0
-                ? $"Showing {_fetchedLlmModels.Count} Groq LLM model(s) fetched from the API."
-                : "Using the default Groq LLM list. Click Validate to test the key and refresh current models.",
-            Options: SupportedModels
-                .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
-                .ToList())
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "gsk_...",
+                Description: "Stored securely and used for both Groq transcription and LLM requests."
+            ),
+            new(
+                Key: "selectedModel",
+                Label: "Transcription model",
+                Description: "Choose the Groq transcription model.",
+                Options: TranscriptionModelEntries
+                    .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
+                    .ToList()
+            ),
+            new(
+                Key: "selectedLlmModel",
+                Label: "LLM model",
+                Description: _fetchedLlmModels.Count > 0
+                    ? $"Showing {_fetchedLlmModels.Count} Groq LLM model(s) fetched from the API."
+                    : "Using the default Groq LLM list. Click Validate to test the key and refresh current models.",
+                Options: SupportedModels
+                    .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
+                    .ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            "selectedLlmModel" => _selectedLlmModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                "selectedLlmModel" => _selectedLlmModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {
@@ -347,14 +404,24 @@ public sealed partial class GroqPlugin : ITranscriptionEnginePlugin, ILlmProvide
         if (models is not null)
         {
             SetFetchedLlmModels(models);
-            return new PluginSettingsValidationResult(true, $"API key is valid. Fetched {models.Count} Groq LLM model(s).");
+            return new PluginSettingsValidationResult(
+                true,
+                $"API key is valid. Fetched {models.Count} Groq LLM model(s)."
+            );
         }
 
-        return new PluginSettingsValidationResult(true, "API key is valid. Using saved/default LLM models.");
+        return new PluginSettingsValidationResult(
+            true,
+            "API key is valid. Using saved/default LLM models."
+        );
     }
 
     private sealed record TranscriptionModelEntry(
-        string Id, string DisplayName, string ApiModelName, bool SupportsTranslation);
+        string Id,
+        string DisplayName,
+        string ApiModelName,
+        bool SupportsTranslation
+    );
 }
 
 internal sealed record FetchedLlmModel(string Id, string? OwnedBy);

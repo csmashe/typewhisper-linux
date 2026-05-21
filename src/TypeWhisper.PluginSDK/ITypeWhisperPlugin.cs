@@ -1,7 +1,7 @@
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Base interface for all TypeWhisper plugins.
+///     Base interface for all TypeWhisper plugins.
 /// </summary>
 public interface ITypeWhisperPlugin : IDisposable
 {

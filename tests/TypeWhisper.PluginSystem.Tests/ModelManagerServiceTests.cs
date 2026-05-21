@@ -1,21 +1,21 @@
-using System.Reflection;
 using Moq;
+using System.Reflection;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
-using TypeWhisper.PluginSDK;
-using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public class ModelManagerServiceTests
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
-    private readonly Mock<IProfileService> _profiles = new();
-    private readonly Mock<ISettingsService> _settings = new();
     private readonly PluginEventBus _eventBus = new();
     private readonly PluginLoader _loader = new();
+    private readonly Mock<IProfileService> _profiles = new();
+    private readonly Mock<ISettingsService> _settings = new();
 
     public ModelManagerServiceTests()
     {
@@ -25,14 +25,30 @@ public class ModelManagerServiceTests
     [Fact]
     public void Engine_WithoutActiveModel_DoesNotFallbackToArbitraryConfiguredPlugin()
     {
-        _settings.Setup(s => s.Current).Returns(new AppSettings
-        {
-            SelectedModelId = ModelManagerService.GetPluginModelId("com.typewhisper.sherpa-onnx", "parakeet")
-        });
+        _settings
+            .Setup(s => s.Current)
+            .Returns(
+                new AppSettings
+                {
+                    SelectedModelId = ModelManagerService.GetPluginModelId(
+                        "com.typewhisper.sherpa-onnx",
+                        "parakeet"
+                    )
+                }
+            );
 
         var pluginManager = CreatePluginManager(
-            new FakeTranscriptionPlugin("com.typewhisper.openai-compatible", configured: true, selectedModelId: "whisper"),
-            new FakeTranscriptionPlugin("com.typewhisper.sherpa-onnx", configured: true, selectedModelId: null));
+            new FakeTranscriptionPlugin(
+                "com.typewhisper.openai-compatible",
+                true,
+                "whisper"
+            ),
+            new FakeTranscriptionPlugin(
+                "com.typewhisper.sherpa-onnx",
+                true,
+                null
+            )
+        );
 
         var sut = new ModelManagerService(pluginManager, _settings.Object);
 
@@ -47,16 +63,14 @@ public class ModelManagerServiceTests
         const string modelId = "parakeet";
         var fullModelId = ModelManagerService.GetPluginModelId(pluginId, modelId);
 
-        _settings.Setup(s => s.Current).Returns(new AppSettings
-        {
-            SelectedModelId = fullModelId
-        });
+        _settings.Setup(s => s.Current).Returns(new AppSettings { SelectedModelId = fullModelId });
 
         var plugin = new FakeTranscriptionPlugin(
             pluginId,
-            configured: true,
-            selectedModelId: null,
-            supportsModelDownload: true);
+            true,
+            null,
+            true
+        );
         var pluginManager = CreatePluginManager(plugin);
         var sut = new ModelManagerService(pluginManager, _settings.Object);
 
@@ -130,8 +144,13 @@ public class ModelManagerServiceTests
     {
         var sut = CreateServiceWithLoadableModel(out var goodModelId, out var plugin);
 
-        var unknownModelId = ModelManagerService.GetPluginModelId("com.typewhisper.nonexistent", "ghost");
-        await Assert.ThrowsAsync<ArgumentException>(() => sut.AcquireTranscriptionAsync(unknownModelId));
+        var unknownModelId = ModelManagerService.GetPluginModelId(
+            "com.typewhisper.nonexistent",
+            "ghost"
+        );
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            sut.AcquireTranscriptionAsync(unknownModelId)
+        );
 
         // The failed acquire released the lock — a subsequent valid acquire still succeeds.
         await using var lease = await sut.AcquireTranscriptionAsync(goodModelId);
@@ -236,9 +255,13 @@ public class ModelManagerServiceTests
     {
         var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
         await using (await sut.AcquireTranscriptionAsync(fullModelId)) { }
+
         var fake = (FakeTranscriptionPlugin)plugin;
 
-        var otherModelId = ModelManagerService.GetPluginModelId("com.typewhisper.sherpa-onnx", "whisper");
+        var otherModelId = ModelManagerService.GetPluginModelId(
+            "com.typewhisper.sherpa-onnx",
+            "whisper"
+        );
         var attempt = await sut.TryAcquireTranscriptionAsync(otherModelId);
 
         // A different requested model must skip silently, never swap the active model.
@@ -284,19 +307,27 @@ public class ModelManagerServiceTests
     }
 
     private ModelManagerService CreateServiceWithLoadableModel(
-        out string fullModelId, out ITranscriptionEnginePlugin plugin)
+        out string fullModelId,
+        out ITranscriptionEnginePlugin plugin
+    )
     {
         const string pluginId = "com.typewhisper.sherpa-onnx";
         fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
         _settings.Setup(s => s.Current).Returns(new AppSettings { SelectedModelId = fullModelId });
 
         var fake = new FakeTranscriptionPlugin(
-            pluginId, configured: true, selectedModelId: null, supportsModelDownload: true);
+            pluginId,
+            true,
+            null,
+            true
+        );
         plugin = fake;
         return new ModelManagerService(CreatePluginManager(fake), _settings.Object);
     }
 
-    private PluginManager CreatePluginManager(params ITranscriptionEnginePlugin[] transcriptionEngines)
+    private PluginManager CreatePluginManager(
+        params ITranscriptionEnginePlugin[] transcriptionEngines
+    )
     {
         var pluginManager = new PluginManager(
             _loader,
@@ -304,7 +335,8 @@ public class ModelManagerServiceTests
             _activeWindow.Object,
             _profiles.Object,
             _settings.Object,
-            []);
+            []
+        );
 
         SetPrivateField(pluginManager, "_transcriptionEngines", transcriptionEngines.ToList());
         return pluginManager;
@@ -312,7 +344,8 @@ public class ModelManagerServiceTests
 
     private static void SetPrivateField(object target, string fieldName, object value)
     {
-        var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+        var field =
+            target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingFieldException(target.GetType().FullName, fieldName);
         field.SetValue(target, value);
     }
@@ -323,14 +356,33 @@ public class ModelManagerServiceTests
             string pluginId,
             bool configured,
             string? selectedModelId,
-            bool supportsModelDownload = false)
+            bool supportsModelDownload = false
+        )
         {
             PluginId = pluginId;
             IsConfigured = configured;
             SelectedModelId = selectedModelId;
             SupportsModelDownload = supportsModelDownload;
-            TranscriptionModels = [new PluginModelInfo("parakeet", "Parakeet"), new PluginModelInfo("whisper", "Whisper")];
+            TranscriptionModels =
+            [
+                new PluginModelInfo("parakeet", "Parakeet"),
+                new PluginModelInfo("whisper", "Whisper")
+            ];
         }
+
+        public string? LastLoadedModelId { get; private set; }
+
+        /// <summary>Completes once <see cref="LoadModelAsync" /> has begun.</summary>
+        public TaskCompletionSource LoadStarted { get; } = new();
+
+        /// <summary>When set, <see cref="LoadModelAsync" /> parks until it completes.</summary>
+        public TaskCompletionSource? LoadGate { get; set; }
+
+        /// <summary>Completes once <see cref="UnloadModelAsync" /> has begun.</summary>
+        public TaskCompletionSource UnloadStarted { get; } = new();
+
+        /// <summary>When set, <see cref="UnloadModelAsync" /> parks until it completes.</summary>
+        public TaskCompletionSource? UnloadGate { get; set; }
 
         public string PluginId { get; }
         public string PluginName => PluginId;
@@ -342,28 +394,30 @@ public class ModelManagerServiceTests
         public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; }
         public string? SelectedModelId { get; private set; }
         public bool SupportsTranslation => false;
-        public string? LastLoadedModelId { get; private set; }
 
-        /// <summary>Completes once <see cref="LoadModelAsync"/> has begun.</summary>
-        public TaskCompletionSource LoadStarted { get; } = new();
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
 
-        /// <summary>When set, <see cref="LoadModelAsync"/> parks until it completes.</summary>
-        public TaskCompletionSource? LoadGate { get; set; }
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
 
-        /// <summary>Completes once <see cref="UnloadModelAsync"/> has begun.</summary>
-        public TaskCompletionSource UnloadStarted { get; } = new();
+        public void SelectModel(string modelId)
+        {
+            SelectedModelId = modelId;
+        }
 
-        /// <summary>When set, <see cref="UnloadModelAsync"/> parks until it completes.</summary>
-        public TaskCompletionSource? UnloadGate { get; set; }
-
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
-        public Task DeactivateAsync() => Task.CompletedTask;
-        public void SelectModel(string modelId) => SelectedModelId = modelId;
         public async Task LoadModelAsync(string modelId, CancellationToken ct)
         {
             LoadStarted.TrySetResult();
             if (LoadGate is not null)
+            {
                 await LoadGate.Task.WaitAsync(ct);
+            }
+
             LastLoadedModelId = modelId;
             SelectedModelId = modelId;
         }
@@ -372,12 +426,23 @@ public class ModelManagerServiceTests
         {
             UnloadStarted.TrySetResult();
             if (UnloadGate is not null)
+            {
                 await UnloadGate.Task;
+            }
+
             SelectedModelId = null;
         }
 
-        public Task<PluginTranscriptionResult> TranscribeAsync(byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct) =>
-            Task.FromResult(new PluginTranscriptionResult("ok", language ?? "en", 1));
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio,
+            string? language,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult(new PluginTranscriptionResult("ok", language ?? "en", 1));
+        }
 
         public void Dispose() { }
     }

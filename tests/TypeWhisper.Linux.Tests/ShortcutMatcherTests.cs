@@ -7,21 +7,25 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class ShortcutMatcherTests
 {
-    private static GlobalShortcutSet DefaultSet() => new(
-        DictationKey: KeyCode.VcSpace,
-        DictationModifiers: ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-        PromptPaletteKey: null,
-        PromptPaletteModifiers: ModifierMask.None,
-        RecentTranscriptionsKey: null,
-        RecentTranscriptionsModifiers: ModifierMask.None,
-        CopyLastTranscriptionKey: null,
-        CopyLastTranscriptionModifiers: ModifierMask.None,
-        TransformSelectionKey: null,
-        TransformSelectionModifiers: ModifierMask.None,
-        CancelKey: KeyCode.VcEscape,
-        CancelModifiers: ModifierMask.None,
-        Mode: RecordingMode.Toggle,
-        IsCancelEnabled: false);
+    private static GlobalShortcutSet DefaultSet()
+    {
+        return new GlobalShortcutSet(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            RecordingMode.Toggle,
+            false
+        );
+    }
 
     [Fact]
     public void Match_DefaultBinding_IdentifiesDictation()
@@ -29,7 +33,8 @@ public sealed class ShortcutMatcherTests
         var kind = ShortcutMatcher.Match(
             KeyCode.VcSpace,
             ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-            DefaultSet());
+            DefaultSet()
+        );
 
         Assert.Equal(ShortcutMatchKind.Dictation, kind);
     }
@@ -59,7 +64,8 @@ public sealed class ShortcutMatcherTests
         var kind = ShortcutMatcher.Match(
             KeyCode.VcSpace,
             ModifierMask.RightCtrl | ModifierMask.RightShift,
-            DefaultSet());
+            DefaultSet()
+        );
 
         Assert.Equal(ShortcutMatchKind.Dictation, kind);
     }

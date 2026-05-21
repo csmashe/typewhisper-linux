@@ -1,29 +1,38 @@
 using System.Diagnostics;
-using System.IO;
 using System.Runtime.InteropServices;
 
 namespace TypeWhisper.Linux.Services.Ipc;
 
 /// <summary>
-/// Resolves the path to the TypeWhisper IPC control socket and ensures the
-/// containing directory exists with user-only permissions.
+///     Resolves the path to the TypeWhisper IPC control socket and ensures the
+///     containing directory exists with user-only permissions.
 /// </summary>
 /// <remarks>
-/// Preferred location is <c>$XDG_RUNTIME_DIR/typewhisper/control.sock</c>. The
-/// runtime dir is already owned by the user and created with mode 0700 by
-/// systemd-logind, so we only need to create the <c>typewhisper/</c> subdir.
-/// If <c>XDG_RUNTIME_DIR</c> is unset (older logind, sandbox, custom setups)
-/// we fall back to <c>/tmp/typewhisper-$UID/</c> and explicitly chmod 0700 so
-/// other local users can't probe or hijack the socket.
+///     Preferred location is <c>$XDG_RUNTIME_DIR/typewhisper/control.sock</c>. The
+///     runtime dir is already owned by the user and created with mode 0700 by
+///     systemd-logind, so we only need to create the <c>typewhisper/</c> subdir.
+///     If <c>XDG_RUNTIME_DIR</c> is unset (older logind, sandbox, custom setups)
+///     we fall back to <c>/tmp/typewhisper-$UID/</c> and explicitly chmod 0700 so
+///     other local users can't probe or hijack the socket.
 /// </remarks>
 internal static class SocketPathResolver
 {
     private const string SocketFileName = "control.sock";
 
+    // statx(2) ABI: kernel-defined struct, arch-independent. stx_uid is at
+    // offset 20 (after stx_mask:4, stx_blksize:4, stx_attributes:8, stx_nlink:4).
+    // We allocate the full 256-byte buffer the kernel writes into and read
+    // only the owner uid.
+    private const int StatxBufSize = 256;
+    private const int StatxUidOffset = 20;
+    private const int AT_FDCWD = -100;
+    private const int AT_SYMLINK_NOFOLLOW = 0x100;
+    private const uint STATX_UID = 0x00000008;
+
     /// <summary>
-    /// Resolves the control-socket path, creating any missing parent
-    /// directories with appropriate permissions. Does not create the socket
-    /// file itself — that's the server's job.
+    ///     Resolves the control-socket path, creating any missing parent
+    ///     directories with appropriate permissions. Does not create the socket
+    ///     file itself — that's the server's job.
     /// </summary>
     public static string ResolveControlSocketPath()
     {
@@ -42,7 +51,9 @@ internal static class SocketPathResolver
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[SocketPathResolver] XDG path {dir} unusable: {ex.Message}. Falling back to /tmp.");
+                Trace.WriteLine(
+                    $"[SocketPathResolver] XDG path {dir} unusable: {ex.Message}. Falling back to /tmp."
+                );
             }
         }
 
@@ -60,7 +71,10 @@ internal static class SocketPathResolver
         try
         {
             if (!Directory.Exists(fallback))
+            {
                 Directory.CreateDirectory(fallback);
+            }
+
             TryChmod(fallback, 0b111_000_000); // 0700
         }
         catch (Exception ex)
@@ -70,14 +84,19 @@ internal static class SocketPathResolver
         }
 
         if (!IsDirectoryPrivateAndOwned(fallback, uid))
+        {
             return CreatePrivateSocketPath(uid);
+        }
 
         return Path.Combine(fallback, SocketFileName);
     }
 
     private static string CreatePrivateSocketPath(int uid)
     {
-        var privatePath = Path.Combine(Path.GetTempPath(), $"typewhisper-{uid}-{Environment.ProcessId}");
+        var privatePath = Path.Combine(
+            Path.GetTempPath(),
+            $"typewhisper-{uid}-{Environment.ProcessId}"
+        );
         Directory.CreateDirectory(privatePath);
         TryChmod(privatePath, 0b111_000_000); // 0700
         // If chmod didn't take (read-only FS, unusual mount), don't return a
@@ -86,10 +105,20 @@ internal static class SocketPathResolver
         // surfaces the exception to the user instead of silently degrading.
         if (!IsDirectoryPrivateAndOwned(privatePath, uid))
         {
-            try { Directory.Delete(privatePath, recursive: true); } catch { /* best effort */ }
+            try
+            {
+                Directory.Delete(privatePath, true);
+            }
+            catch
+            {
+                /* best effort */
+            }
+
             throw new IOException(
-                $"Could not secure private socket directory {privatePath} with mode 0700.");
+                $"Could not secure private socket directory {privatePath} with mode 0700."
+            );
         }
+
         Trace.WriteLine($"[SocketPathResolver] Using private socket directory {privatePath}.");
         return Path.Combine(privatePath, SocketFileName);
     }
@@ -103,12 +132,19 @@ internal static class SocketPathResolver
                 Trace.WriteLine($"[SocketPathResolver] Could not determine owner of {path}.");
                 return false;
             }
+
             if (ownerUid != uid)
             {
-                Trace.WriteLine($"[SocketPathResolver] {path} not owned by uid {uid} (actual {ownerUid}).");
+                Trace.WriteLine(
+                    $"[SocketPathResolver] {path} not owned by uid {uid} (actual {ownerUid})."
+                );
                 return false;
             }
-            return DirectoryHasExpectedMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            return DirectoryHasExpectedMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
         }
         catch (Exception ex)
         {
@@ -117,16 +153,6 @@ internal static class SocketPathResolver
         }
     }
 
-    // statx(2) ABI: kernel-defined struct, arch-independent. stx_uid is at
-    // offset 20 (after stx_mask:4, stx_blksize:4, stx_attributes:8, stx_nlink:4).
-    // We allocate the full 256-byte buffer the kernel writes into and read
-    // only the owner uid.
-    private const int StatxBufSize = 256;
-    private const int StatxUidOffset = 20;
-    private const int AT_FDCWD = -100;
-    private const int AT_SYMLINK_NOFOLLOW = 0x100;
-    private const uint STATX_UID = 0x00000008;
-
     private static bool TryGetOwnerUid(string path, out int ownerUid)
     {
         ownerUid = -1;
@@ -134,7 +160,9 @@ internal static class SocketPathResolver
         try
         {
             for (var i = 0; i < StatxBufSize; i++)
+            {
                 Marshal.WriteByte(buffer, i, 0);
+            }
 
             var rc = statx(AT_FDCWD, path, AT_SYMLINK_NOFOLLOW, STATX_UID, buffer);
             if (rc != 0)
@@ -165,8 +193,13 @@ internal static class SocketPathResolver
             var mode = File.GetUnixFileMode(path);
 #pragma warning restore CA1416
             // We require user-only bits with no group/other access.
-            const UnixFileMode forbidden = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
-                | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+            const UnixFileMode forbidden =
+                UnixFileMode.GroupRead
+                | UnixFileMode.GroupWrite
+                | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead
+                | UnixFileMode.OtherWrite
+                | UnixFileMode.OtherExecute;
             return (mode & forbidden) == 0 && (mode & expected) == expected;
         }
         catch (Exception ex)
@@ -183,7 +216,11 @@ internal static class SocketPathResolver
         {
             var rc = chmod(path, mode);
             if (rc != 0)
-                Trace.WriteLine($"[SocketPathResolver] chmod({path}, 0{Convert.ToString(mode, 8)}) returned {rc}.");
+            {
+                Trace.WriteLine(
+                    $"[SocketPathResolver] chmod({path}, 0{Convert.ToString(mode, 8)}) returned {rc}."
+                );
+            }
         }
         catch (Exception ex)
         {
@@ -198,5 +235,11 @@ internal static class SocketPathResolver
     private static extern int chmod(string path, uint mode);
 
     [DllImport("libc", SetLastError = true)]
-    private static extern int statx(int dirfd, string pathname, int flags, uint mask, IntPtr statxbuf);
+    private static extern int statx(
+        int dirfd,
+        string pathname,
+        int flags,
+        uint mask,
+        IntPtr statxbuf
+    );
 }

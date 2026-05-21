@@ -1,8 +1,7 @@
-using System.Collections.ObjectModel;
-using System.IO;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -12,195 +11,106 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class DictationSectionViewModel : ObservableObject
 {
+    private readonly AudioRecordingService _audio;
+    private readonly SystemCommandAvailabilityService _commands;
     private readonly DictationOrchestrator _dictation;
     private readonly ModelManagerService _models;
-    private readonly AudioRecordingService _audio;
-    private readonly ISettingsService _settings;
     private readonly PluginManager _pluginManager;
-    private readonly SystemCommandAvailabilityService _commands;
+    private readonly ISettingsService _settings;
+
+    [ObservableProperty]
+    private string _activeModelLabel = "No model loaded";
+
+    [ObservableProperty]
+    private bool _audioDuckingEnabled;
+
+    [ObservableProperty]
+    private double _audioDuckingLevel = 0.2;
+
+    [ObservableProperty]
+    private bool _autoAddDictionaryCorrections;
+
+    [ObservableProperty]
+    private bool _autoPaste;
+
+    [ObservableProperty]
+    private CleanupLevel _cleanupLevel = CleanupLevel.None;
+
+    [ObservableProperty]
+    private string _computeBackend = "cpu";
+
+    [ObservableProperty]
+    private string _cudaSetupStatus = "";
+
+    [ObservableProperty]
+    private string _engineName = "No engine selected";
+
+    [ObservableProperty]
+    private bool _isRecording;
+
+    [ObservableProperty]
+    private string _language = "auto";
+
+    [ObservableProperty]
+    private string? _lastCapturePath;
+
+    [ObservableProperty]
+    private string? _lastTranscription;
+
+    [ObservableProperty]
+    private string _microphoneStatus = "";
+
+    [ObservableProperty]
+    private bool _modelReady;
+
+    private CancellationTokenSource? _modelSelectionCts;
+
+    [ObservableProperty]
+    private string _modelStatusText = "Not ready";
+
+    [ObservableProperty]
+    private string _newInsertionAppProcess = "";
+
+    [ObservableProperty]
+    private TextInsertionStrategy _newInsertionStrategy = TextInsertionStrategy.Auto;
+
+    [ObservableProperty]
+    private bool _pauseMediaDuringRecording;
+
     // Tracks whether the Dictation page is visible so we restart the mic
     // preview after recording ends — without this, the meter goes dark
     // when recording completes even if the page is still open.
     private bool _previewAttached;
-    private CancellationTokenSource? _modelSelectionCts;
 
-    public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
-    public ObservableCollection<AudioInputDevice> Devices { get; } = [];
-    public ObservableCollection<ComputeBackendOption> ComputeBackendOptions { get; } =
-    [
-        new("cpu", "CPU"),
-        new("cuda", "CUDA")
-    ];
-    public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
-    [
-        new("auto", "Auto detect"),
-        new("de", "Deutsch"),
-        new("en", "English"),
-        new("fr", "Français"),
-        new("es", "Español"),
-        new("it", "Italiano"),
-        new("pt", "Português"),
-        new("nl", "Nederlands"),
-        new("pl", "Polski"),
-        new("cs", "Čeština"),
-        new("sv", "Svenska"),
-        new("da", "Dansk"),
-        new("fi", "Suomi"),
-    ];
-    public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
-    public ObservableCollection<CleanupLevelOption> CleanupLevelOptions { get; } =
-    [
-        new(CleanupLevel.None, "None"),
-        new(CleanupLevel.Light, "Light"),
-        new(CleanupLevel.Medium, "Medium"),
-        new(CleanupLevel.High, "High")
-    ];
-    public ObservableCollection<InsertionStrategyOption> InsertionStrategyOptions { get; } =
-    [
-        new(TextInsertionStrategy.Auto, "Auto"),
-        new(TextInsertionStrategy.ClipboardPaste, "Clipboard paste"),
-        new(TextInsertionStrategy.DirectTyping, "Direct typing"),
-        new(TextInsertionStrategy.CopyOnly, "Copy only")
-    ];
-    public ObservableCollection<AppInsertionStrategyRow> AppInsertionStrategies { get; } = [];
+    [ObservableProperty]
+    private double _previewLevel;
 
-    [ObservableProperty] private string _statusText = "Press your hotkey or click Toggle to start recording.";
-    [ObservableProperty] private bool _isRecording;
-    [ObservableProperty] private string? _lastCapturePath;
-    [ObservableProperty] private string? _lastTranscription;
-    [ObservableProperty] private string _activeModelLabel = "No model loaded";
-    [ObservableProperty] private string _engineName = "No engine selected";
-    [ObservableProperty] private string _modelStatusText = "Not ready";
-    [ObservableProperty] private bool _modelReady;
-    [ObservableProperty] private DictationModelOption? _selectedModel;
-    [ObservableProperty] private string _computeBackend = "cpu";
-    [ObservableProperty] private AudioInputDevice? _selectedDevice;
-    [ObservableProperty] private string _language = "auto";
-    [ObservableProperty] private string? _translationTargetLanguage;
-    [ObservableProperty] private CleanupLevel _cleanupLevel = CleanupLevel.None;
-    [ObservableProperty] private bool _autoPaste;
-    [ObservableProperty] private bool _autoAddDictionaryCorrections;
-    [ObservableProperty] private string _newInsertionAppProcess = "";
-    [ObservableProperty] private TextInsertionStrategy _newInsertionStrategy = TextInsertionStrategy.Auto;
-    [ObservableProperty] private bool _whisperModeEnabled;
-    [ObservableProperty] private bool _soundFeedbackEnabled = true;
-    [ObservableProperty] private bool _transcribeShortQuietClipsAggressively;
-    [ObservableProperty] private bool _silenceAutoStopEnabled;
-    [ObservableProperty] private int _silenceAutoStopSeconds = 10;
-    [ObservableProperty] private bool _audioDuckingEnabled;
-    [ObservableProperty] private bool _pauseMediaDuringRecording;
-    [ObservableProperty] private double _previewLevel;
-    [ObservableProperty] private string _microphoneStatus = "";
-    [ObservableProperty] private double _audioDuckingLevel = 0.2;
-    [ObservableProperty] private string _cudaSetupStatus = "";
+    [ObservableProperty]
+    private AudioInputDevice? _selectedDevice;
 
-    public bool CanUseAudioDucking => _commands.HasPactl;
-    public bool ShowAudioDuckingUnavailableReason => !CanUseAudioDucking;
-    public string AudioDuckingUnavailableReason => "Unavailable: pactl is not installed on this system.";
+    [ObservableProperty]
+    private DictationModelOption? _selectedModel;
 
-    public bool CanUseMediaPause => _commands.HasPlayerCtl;
-    public bool ShowMediaPauseUnavailableReason => !CanUseMediaPause;
-    public string MediaPauseUnavailableReason => "Unavailable: playerctl is not installed on this system.";
+    [ObservableProperty]
+    private bool _silenceAutoStopEnabled;
 
-    public bool CanUseSoundFeedback => _commands.HasCanberraGtkPlay;
-    public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
-    public string SoundFeedbackUnavailableReason => "Unavailable: canberra-gtk-play is not installed on this system.";
-    public bool CanDeleteSelectedModel => SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
-    public bool ShowCudaLibraryPathAction => _commands.HasCudaGpu && !CanUseCuda && FindCuda12LibraryPath() is not null;
-    public string CudaLibraryPathActionText => "Fix CUDA path";
-    public bool CanUseCuda => _commands.HasCudaGpu && _commands.HasCudaRuntimeLibraries;
-    public string ComputeBackendHint
-    {
-        get
-        {
-            if (string.Equals(ComputeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
-                return ShowCudaLibraryPathAction
-                    ? "CPU mode is active. CUDA 12 is installed, but TypeWhisper cannot see it yet."
-                    : "CPU mode is active.";
+    [ObservableProperty]
+    private int _silenceAutoStopSeconds = 10;
 
-            if (CanUseCuda)
-                return "CUDA is ready for whisper.cpp models. Other local plugins use CPU.";
+    [ObservableProperty]
+    private bool _soundFeedbackEnabled = true;
 
-            if (!_commands.HasCudaGpu)
-                return "CUDA unavailable: no NVIDIA GPU/driver was detected. CPU is used.";
+    [ObservableProperty]
+    private string _statusText = "Press your hotkey or click Toggle to start recording.";
 
-            return FindCuda12LibraryPath() is null
-                ? "CUDA 12 runtime libraries are not installed yet. CPU is used."
-                : "CUDA 12 is installed, but TypeWhisper cannot see it yet.";
-        }
-    }
+    [ObservableProperty]
+    private bool _transcribeShortQuietClipsAggressively;
 
-    public ComputeBackendOption? SelectedComputeBackendOption
-    {
-        get => ComputeBackendOptions.FirstOrDefault(option =>
-            string.Equals(option.Value, ComputeBackend, StringComparison.OrdinalIgnoreCase));
-        set
-        {
-            var selected = value?.Value ?? "cpu";
-            if (string.Equals(selected, ComputeBackend, StringComparison.OrdinalIgnoreCase))
-                return;
+    [ObservableProperty]
+    private string? _translationTargetLanguage;
 
-            ComputeBackend = selected;
-            OnPropertyChanged();
-        }
-    }
-
-    public TranslationTargetOption? SelectedTranslationTargetOption
-    {
-        get => TranslationTargetOptions.FirstOrDefault(option =>
-            string.Equals(option.Code, TranslationTargetLanguage, StringComparison.Ordinal));
-        set
-        {
-            var code = value?.Code;
-            if (string.Equals(code, TranslationTargetLanguage, StringComparison.Ordinal))
-                return;
-
-            TranslationTargetLanguage = code;
-            OnPropertyChanged();
-        }
-    }
-
-    public SpokenLanguageOption? SelectedLanguageOption
-    {
-        get => LanguageChoices.FirstOrDefault(option =>
-            string.Equals(option.Code, Language, StringComparison.Ordinal));
-        set
-        {
-            var code = value?.Code ?? "auto";
-            if (string.Equals(code, Language, StringComparison.Ordinal))
-                return;
-
-            Language = code;
-            OnPropertyChanged();
-        }
-    }
-
-    public CleanupLevelOption? SelectedCleanupLevelOption
-    {
-        get => CleanupLevelOptions.FirstOrDefault(option => option.Value == CleanupLevel);
-        set
-        {
-            var selected = value?.Value ?? CleanupLevel.None;
-            if (selected == CleanupLevel)
-                return;
-
-            CleanupLevel = selected;
-        }
-    }
-
-    public InsertionStrategyOption? SelectedNewInsertionStrategyOption
-    {
-        get => InsertionStrategyOptions.FirstOrDefault(option => option.Value == NewInsertionStrategy);
-        set
-        {
-            var selected = value?.Value ?? TextInsertionStrategy.Auto;
-            if (selected == NewInsertionStrategy)
-                return;
-
-            NewInsertionStrategy = selected;
-            OnPropertyChanged();
-        }
-    }
+    [ObservableProperty]
+    private bool _whisperModeEnabled;
 
     public DictationSectionViewModel(
         DictationOrchestrator dictation,
@@ -208,7 +118,8 @@ public partial class DictationSectionViewModel : ObservableObject
         AudioRecordingService audio,
         ISettingsService settings,
         PluginManager pluginManager,
-        SystemCommandAvailabilityService commands)
+        SystemCommandAvailabilityService commands
+    )
     {
         _dictation = dictation;
         _models = models;
@@ -242,46 +153,243 @@ public partial class DictationSectionViewModel : ObservableObject
         _dictation.TranscriptionCompleted += (_, text) =>
             Dispatcher.UIThread.Post(() => LastTranscription = text);
 
-        _dictation.StatusMessage += (_, msg) =>
-            Dispatcher.UIThread.Post(() => StatusText = msg);
+        _dictation.StatusMessage += (_, msg) => Dispatcher.UIThread.Post(() => StatusText = msg);
 
         _audio.LevelChanged += OnLevelChanged;
         _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModelState);
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModels);
-        _settings.SettingsChanged += settingsValue => Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
+        _settings.SettingsChanged += settingsValue =>
+            Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
 
         foreach (var option in TranslationModelInfo.GlobalTargetOptions)
+        {
             TranslationTargetOptions.Add(option);
+        }
 
         RefreshModels();
         RefreshDevices();
         RefreshFromSettings(_settings.Current);
     }
 
+    public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
+    public ObservableCollection<AudioInputDevice> Devices { get; } = [];
+
+    public ObservableCollection<ComputeBackendOption> ComputeBackendOptions { get; } =
+        [new("cpu", "CPU"), new("cuda", "CUDA")];
+
+    public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
+    [
+        new("auto", "Auto detect"),
+        new("de", "Deutsch"),
+        new("en", "English"),
+        new("fr", "Français"),
+        new("es", "Español"),
+        new("it", "Italiano"),
+        new("pt", "Português"),
+        new("nl", "Nederlands"),
+        new("pl", "Polski"),
+        new("cs", "Čeština"),
+        new("sv", "Svenska"),
+        new("da", "Dansk"),
+        new("fi", "Suomi")
+    ];
+
+    public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
+
+    public ObservableCollection<CleanupLevelOption> CleanupLevelOptions { get; } =
+    [
+        new(CleanupLevel.None, "None"),
+        new(CleanupLevel.Light, "Light"),
+        new(CleanupLevel.Medium, "Medium"),
+        new(CleanupLevel.High, "High")
+    ];
+
+    public ObservableCollection<InsertionStrategyOption> InsertionStrategyOptions { get; } =
+    [
+        new(TextInsertionStrategy.Auto, "Auto"),
+        new(TextInsertionStrategy.ClipboardPaste, "Clipboard paste"),
+        new(TextInsertionStrategy.DirectTyping, "Direct typing"),
+        new(TextInsertionStrategy.CopyOnly, "Copy only")
+    ];
+
+    public ObservableCollection<AppInsertionStrategyRow> AppInsertionStrategies { get; } = [];
+
+    public bool CanUseAudioDucking => _commands.HasPactl;
+    public bool ShowAudioDuckingUnavailableReason => !CanUseAudioDucking;
+
+    public string AudioDuckingUnavailableReason =>
+        "Unavailable: pactl is not installed on this system.";
+
+    public bool CanUseMediaPause => _commands.HasPlayerCtl;
+    public bool ShowMediaPauseUnavailableReason => !CanUseMediaPause;
+
+    public string MediaPauseUnavailableReason =>
+        "Unavailable: playerctl is not installed on this system.";
+
+    public bool CanUseSoundFeedback => _commands.HasCanberraGtkPlay;
+    public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
+
+    public string SoundFeedbackUnavailableReason =>
+        "Unavailable: canberra-gtk-play is not installed on this system.";
+
+    public bool CanDeleteSelectedModel =>
+        SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
+
+    public bool ShowCudaLibraryPathAction =>
+        _commands.HasCudaGpu && !CanUseCuda && FindCuda12LibraryPath() is not null;
+
+    public string CudaLibraryPathActionText => "Fix CUDA path";
+    public bool CanUseCuda => _commands.HasCudaGpu && _commands.HasCudaRuntimeLibraries;
+
+    public string ComputeBackendHint
+    {
+        get
+        {
+            if (string.Equals(ComputeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+            {
+                return ShowCudaLibraryPathAction
+                    ? "CPU mode is active. CUDA 12 is installed, but TypeWhisper cannot see it yet."
+                    : "CPU mode is active.";
+            }
+
+            if (CanUseCuda)
+            {
+                return "CUDA is ready for whisper.cpp models. Other local plugins use CPU.";
+            }
+
+            if (!_commands.HasCudaGpu)
+            {
+                return "CUDA unavailable: no NVIDIA GPU/driver was detected. CPU is used.";
+            }
+
+            return FindCuda12LibraryPath() is null
+                ? "CUDA 12 runtime libraries are not installed yet. CPU is used."
+                : "CUDA 12 is installed, but TypeWhisper cannot see it yet.";
+        }
+    }
+
+    public ComputeBackendOption? SelectedComputeBackendOption
+    {
+        get =>
+            ComputeBackendOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, ComputeBackend, StringComparison.OrdinalIgnoreCase)
+            );
+        set
+        {
+            var selected = value?.Value ?? "cpu";
+            if (string.Equals(selected, ComputeBackend, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            ComputeBackend = selected;
+            OnPropertyChanged();
+        }
+    }
+
+    public TranslationTargetOption? SelectedTranslationTargetOption
+    {
+        get =>
+            TranslationTargetOptions.FirstOrDefault(option =>
+                string.Equals(option.Code, TranslationTargetLanguage, StringComparison.Ordinal)
+            );
+        set
+        {
+            var code = value?.Code;
+            if (string.Equals(code, TranslationTargetLanguage, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            TranslationTargetLanguage = code;
+            OnPropertyChanged();
+        }
+    }
+
+    public SpokenLanguageOption? SelectedLanguageOption
+    {
+        get =>
+            LanguageChoices.FirstOrDefault(option =>
+                string.Equals(option.Code, Language, StringComparison.Ordinal)
+            );
+        set
+        {
+            var code = value?.Code ?? "auto";
+            if (string.Equals(code, Language, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Language = code;
+            OnPropertyChanged();
+        }
+    }
+
+    public CleanupLevelOption? SelectedCleanupLevelOption
+    {
+        get => CleanupLevelOptions.FirstOrDefault(option => option.Value == CleanupLevel);
+        set
+        {
+            var selected = value?.Value ?? CleanupLevel.None;
+            if (selected == CleanupLevel)
+            {
+                return;
+            }
+
+            CleanupLevel = selected;
+        }
+    }
+
+    public InsertionStrategyOption? SelectedNewInsertionStrategyOption
+    {
+        get =>
+            InsertionStrategyOptions.FirstOrDefault(option => option.Value == NewInsertionStrategy);
+        set
+        {
+            var selected = value?.Value ?? TextInsertionStrategy.Auto;
+            if (selected == NewInsertionStrategy)
+            {
+                return;
+            }
+
+            NewInsertionStrategy = selected;
+            OnPropertyChanged();
+        }
+    }
+
     [RelayCommand]
-    private async Task Toggle() => await _dictation.ToggleAsync();
+    private async Task Toggle()
+    {
+        await _dictation.ToggleAsync();
+    }
 
     [RelayCommand]
     private void RefreshDevices()
     {
         Devices.Clear();
         foreach (var d in _audio.GetInputDevices())
+        {
             Devices.Add(d);
+        }
 
         SelectedDevice = _audio.ResolveConfiguredDevice(
             _settings.Current.SelectedMicrophoneDevice,
-            _settings.Current.SelectedMicrophoneDeviceId);
+            _settings.Current.SelectedMicrophoneDeviceId
+        );
 
-        MicrophoneStatus = Devices.Count == 0
-            ? "No input devices detected."
-            : $"{Devices.Count} input device(s) available.";
+        MicrophoneStatus =
+            Devices.Count == 0
+                ? "No input devices detected."
+                : $"{Devices.Count} input device(s) available.";
     }
 
     public void ActivatePreview()
     {
         _previewAttached = true;
         if (!_audio.StartPreview() && Devices.Count > 0)
+        {
             MicrophoneStatus = "Could not start live input preview for the selected microphone.";
+        }
     }
 
     public void DeactivatePreview()
@@ -301,10 +409,13 @@ public partial class DictationSectionViewModel : ObservableObject
             foreach (var model in engine.TranscriptionModels)
             {
                 var fullModelId = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
-                ModelOptions.Add(new DictationModelOption(
-                    fullModelId,
-                    model.DisplayName,
-                    engine.ProviderDisplayName));
+                ModelOptions.Add(
+                    new DictationModelOption(
+                        fullModelId,
+                        model.DisplayName,
+                        engine.ProviderDisplayName
+                    )
+                );
             }
         }
 
@@ -332,8 +443,11 @@ public partial class DictationSectionViewModel : ObservableObject
 
         SelectedDevice = _audio.ResolveConfiguredDevice(
             settings.SelectedMicrophoneDevice,
-            settings.SelectedMicrophoneDeviceId);
-        SelectedModel = ModelOptions.FirstOrDefault(option => option.ModelId == settings.SelectedModelId);
+            settings.SelectedMicrophoneDeviceId
+        );
+        SelectedModel = ModelOptions.FirstOrDefault(option =>
+            option.ModelId == settings.SelectedModelId
+        );
 
         OnPropertyChanged(nameof(SelectedLanguageOption));
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
@@ -343,20 +457,27 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshModelState();
     }
 
-    private void RefreshAppInsertionStrategies(IReadOnlyDictionary<string, TextInsertionStrategy>? strategies)
+    private void RefreshAppInsertionStrategies(
+        IReadOnlyDictionary<string, TextInsertionStrategy>? strategies
+    )
     {
         AppInsertionStrategies.Clear();
 
         foreach (var strategy in strategies ?? new Dictionary<string, TextInsertionStrategy>())
         {
             if (string.IsNullOrWhiteSpace(strategy.Key))
+            {
                 continue;
+            }
 
-            AppInsertionStrategies.Add(new AppInsertionStrategyRow(
-                strategy.Key,
-                strategy.Value,
-                InsertionStrategyOptions,
-                SaveAppInsertionStrategies));
+            AppInsertionStrategies.Add(
+                new AppInsertionStrategyRow(
+                    strategy.Key,
+                    strategy.Value,
+                    InsertionStrategyOptions,
+                    SaveAppInsertionStrategies
+                )
+            );
         }
     }
 
@@ -419,14 +540,18 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         if (_settings.Current.ComputeBackend != normalized)
+        {
             _settings.Save(_settings.Current with { ComputeBackend = normalized });
+        }
 
         OnPropertyChanged(nameof(SelectedComputeBackendOption));
         OnPropertyChanged(nameof(ComputeBackendHint));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
 
         if (SelectedModel is { } selected && _models.IsDownloaded(selected.ModelId))
+        {
             _ = DownloadAndLoadSelectedModelAsync(selected);
+        }
     }
 
     private async Task DownloadAndLoadSelectedModelAsync(DictationModelOption selected)
@@ -444,7 +569,9 @@ public partial class DictationSectionViewModel : ObservableObject
             await _models.DownloadAndLoadModelAsync(selected.ModelId, cts.Token);
 
             if (cts.IsCancellationRequested || SelectedModel?.ModelId != selected.ModelId)
+            {
                 return;
+            }
 
             StatusText = $"{selected.DisplayLabel} is ready.";
             RefreshModelState();
@@ -456,19 +583,27 @@ public partial class DictationSectionViewModel : ObservableObject
         catch (Exception ex)
         {
             if (SelectedModel?.ModelId == selected.ModelId)
+            {
                 StatusText = $"Model setup failed: {FormatModelStatusError(ex.Message)}";
+            }
+
             RefreshModelState();
         }
         finally
         {
             if (ReferenceEquals(_modelSelectionCts, cts))
+            {
                 _modelSelectionCts = null;
+            }
+
             cts.Dispose();
         }
     }
 
-    private static string NormalizeComputeBackend(string? backend) =>
-        string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+    private static string NormalizeComputeBackend(string? backend)
+    {
+        return string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+    }
 
     [RelayCommand]
     private void AddCudaLibraryPathToShellProfile()
@@ -485,7 +620,8 @@ public partial class DictationSectionViewModel : ObservableObject
             var cudaLibraryPath = FindCuda12LibraryPath();
             if (cudaLibraryPath is null)
             {
-                StatusText = "CUDA 12 libraries are not installed yet. Install CUDA 12, then run this action again.";
+                StatusText =
+                    "CUDA 12 libraries are not installed yet. Install CUDA 12, then run this action again.";
                 return;
             }
 
@@ -494,16 +630,24 @@ public partial class DictationSectionViewModel : ObservableObject
             var existing = File.Exists(profilePath) ? File.ReadAllText(profilePath) : string.Empty;
 
             Directory.CreateDirectory(Path.GetDirectoryName(profilePath)!);
-            if (!existing.Contains(exportLine, StringComparison.Ordinal)
-                && !existing.Contains(cudaLibraryPath, StringComparison.Ordinal))
+            if (
+                !existing.Contains(exportLine, StringComparison.Ordinal)
+                && !existing.Contains(cudaLibraryPath, StringComparison.Ordinal)
+            )
             {
-                var prefix = existing.Length > 0 && !existing.EndsWith('\n') ? Environment.NewLine : string.Empty;
-                File.AppendAllText(profilePath,
-                    $"{prefix}{Environment.NewLine}# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}{exportLine}{Environment.NewLine}");
+                var prefix =
+                    existing.Length > 0 && !existing.EndsWith('\n')
+                        ? Environment.NewLine
+                        : string.Empty;
+                File.AppendAllText(
+                    profilePath,
+                    $"{prefix}{Environment.NewLine}# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}{exportLine}{Environment.NewLine}"
+                );
             }
 
             WriteDesktopEnvironmentFile(home, cudaLibraryPath);
-            CudaSetupStatus = "Saved. This affects future launches only: open a new terminal, or log out and back in for desktop launches, then restart TypeWhisper.";
+            CudaSetupStatus =
+                "Saved. This affects future launches only: open a new terminal, or log out and back in for desktop launches, then restart TypeWhisper.";
             StatusText = "CUDA path saved. Restart TypeWhisper from a new environment to use CUDA.";
         }
         catch (Exception ex)
@@ -517,16 +661,24 @@ public partial class DictationSectionViewModel : ObservableObject
     {
         var shell = Environment.GetEnvironmentVariable("SHELL") ?? string.Empty;
         if (shell.EndsWith("/zsh", StringComparison.Ordinal))
+        {
             return Path.Combine(home, ".zshrc");
+        }
+
         if (shell.EndsWith("/fish", StringComparison.Ordinal))
+        {
             return Path.Combine(home, ".config", "fish", "config.fish");
+        }
+
         return Path.Combine(home, ".bashrc");
     }
 
-    private static string GetCudaLibraryPathExport(string profilePath, string cudaLibraryPath) =>
-        profilePath.EndsWith("config.fish", StringComparison.Ordinal)
+    private static string GetCudaLibraryPathExport(string profilePath, string cudaLibraryPath)
+    {
+        return profilePath.EndsWith("config.fish", StringComparison.Ordinal)
             ? $"set -gx LD_LIBRARY_PATH {cudaLibraryPath} $LD_LIBRARY_PATH"
             : $"export LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}";
+    }
 
     // ~/.config/environment.d/ is read by systemd-environment-d-generator and
     // picked up by GUI sessions on Wayland — covers the case where the user
@@ -538,13 +690,17 @@ public partial class DictationSectionViewModel : ObservableObject
         Directory.CreateDirectory(environmentDir);
 
         var path = Path.Combine(environmentDir, "typewhisper-cuda.conf");
-        File.WriteAllText(path,
-            $"# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}{Environment.NewLine}");
+        File.WriteAllText(
+            path,
+            $"# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}{Environment.NewLine}"
+        );
         return path;
     }
 
     private static string? FindCuda12LibraryPath()
-        => SystemCommandAvailabilityService.FindCuda12RuntimeDirectory();
+    {
+        return SystemCommandAvailabilityService.FindCuda12RuntimeDirectory();
+    }
 
     partial void OnModelStatusTextChanged(string value)
     {
@@ -554,7 +710,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private static string FormatModelStatusError(string? message)
     {
         if (!IsCudaMissingLibraryError(message))
+        {
             return string.IsNullOrWhiteSpace(message) ? "Error" : message;
+        }
 
         var cudaLibraryPath = FindCuda12LibraryPath();
         return cudaLibraryPath is null
@@ -562,17 +720,23 @@ public partial class DictationSectionViewModel : ObservableObject
             : "CUDA 12 is installed, but TypeWhisper cannot see it yet. Click Fix CUDA path, then restart TypeWhisper.";
     }
 
-    private static bool IsCudaMissingLibraryError(string? message) =>
-        !string.IsNullOrWhiteSpace(message)
-        && (message.Contains("libcudart.so.12", StringComparison.Ordinal)
-            || message.Contains("libcublas.so.12", StringComparison.Ordinal))
-        && message.Contains("cannot open shared object file", StringComparison.OrdinalIgnoreCase);
+    private static bool IsCudaMissingLibraryError(string? message)
+    {
+        return !string.IsNullOrWhiteSpace(message)
+               && (
+                   message.Contains("libcudart.so.12", StringComparison.Ordinal)
+                   || message.Contains("libcublas.so.12", StringComparison.Ordinal)
+               )
+               && message.Contains("cannot open shared object file", StringComparison.OrdinalIgnoreCase);
+    }
 
     public async Task DeleteSelectedModelAsync()
     {
         var selected = SelectedModel;
         if (selected is null || !CanDeleteSelectedModel)
+        {
             return;
+        }
 
         _modelSelectionCts?.Cancel();
         StatusText = $"Deleting {selected.DisplayLabel}...";
@@ -581,7 +745,9 @@ public partial class DictationSectionViewModel : ObservableObject
         {
             await _models.DeleteModelAsync(selected.ModelId);
             if (_settings.Current.SelectedModelId == selected.ModelId)
+            {
                 _settings.Save(_settings.Current with { SelectedModelId = null });
+            }
 
             SelectedModel = null;
             StatusText = $"{selected.DisplayLabel} was deleted from disk.";
@@ -599,14 +765,18 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnSelectedDeviceChanged(AudioInputDevice? value)
     {
         if (value is null)
+        {
             return;
+        }
 
         _audio.SelectedDeviceIndex = value.Index;
-        _settings.Save(_settings.Current with
-        {
-            SelectedMicrophoneDevice = value.Index,
-            SelectedMicrophoneDeviceId = value.PersistentId
-        });
+        _settings.Save(
+            _settings.Current with
+            {
+                SelectedMicrophoneDevice = value.Index,
+                SelectedMicrophoneDeviceId = value.PersistentId
+            }
+        );
     }
 
     partial void OnLanguageChanged(string value)
@@ -628,10 +798,14 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 
     partial void OnAutoPasteChanged(bool value)
-        => _settings.Save(_settings.Current with { AutoPaste = value });
+    {
+        _settings.Save(_settings.Current with { AutoPaste = value });
+    }
 
     partial void OnAutoAddDictionaryCorrectionsChanged(bool value)
-        => _settings.Save(_settings.Current with { AutoAddDictionaryCorrections = value });
+    {
+        _settings.Save(_settings.Current with { AutoAddDictionaryCorrections = value });
+    }
 
     [RelayCommand]
     private void AddAppInsertionStrategy()
@@ -644,7 +818,8 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         var existing = AppInsertionStrategies.FirstOrDefault(row =>
-            string.Equals(row.ProcessName, processName, StringComparison.OrdinalIgnoreCase));
+            string.Equals(row.ProcessName, processName, StringComparison.OrdinalIgnoreCase)
+        );
         if (existing is not null)
         {
             existing.Strategy = NewInsertionStrategy;
@@ -654,11 +829,14 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        AppInsertionStrategies.Add(new AppInsertionStrategyRow(
-            processName,
-            NewInsertionStrategy,
-            InsertionStrategyOptions,
-            SaveAppInsertionStrategies));
+        AppInsertionStrategies.Add(
+            new AppInsertionStrategyRow(
+                processName,
+                NewInsertionStrategy,
+                InsertionStrategyOptions,
+                SaveAppInsertionStrategies
+            )
+        );
         SaveAppInsertionStrategies();
         NewInsertionAppProcess = "";
         StatusText = $"Added insertion strategy for {processName}.";
@@ -668,7 +846,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private void RemoveAppInsertionStrategy(AppInsertionStrategyRow? row)
     {
         if (row is null)
+        {
             return;
+        }
 
         AppInsertionStrategies.Remove(row);
         SaveAppInsertionStrategies();
@@ -684,7 +864,8 @@ public partial class DictationSectionViewModel : ObservableObject
             .ToDictionary(
                 group => group.First().ProcessName,
                 group => group.Last().Strategy,
-                StringComparer.OrdinalIgnoreCase);
+                StringComparer.OrdinalIgnoreCase
+            );
 
         _settings.Save(_settings.Current with { AppInsertionStrategies = strategies });
     }
@@ -695,7 +876,9 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 
     partial void OnWhisperModeEnabledChanged(bool value)
-        => _settings.Save(_settings.Current with { WhisperModeEnabled = value });
+    {
+        _settings.Save(_settings.Current with { WhisperModeEnabled = value });
+    }
 
     partial void OnSoundFeedbackEnabledChanged(bool value)
     {
@@ -709,15 +892,21 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 
     partial void OnTranscribeShortQuietClipsAggressivelyChanged(bool value)
-        => _settings.Save(_settings.Current with { TranscribeShortQuietClipsAggressively = value });
+    {
+        _settings.Save(_settings.Current with { TranscribeShortQuietClipsAggressively = value });
+    }
 
     partial void OnSilenceAutoStopEnabledChanged(bool value)
-        => _settings.Save(_settings.Current with { SilenceAutoStopEnabled = value });
+    {
+        _settings.Save(_settings.Current with { SilenceAutoStopEnabled = value });
+    }
 
     partial void OnSilenceAutoStopSecondsChanged(int value)
     {
         if (value <= 0)
+        {
             return;
+        }
 
         _settings.Save(_settings.Current with { SilenceAutoStopSeconds = value });
     }
@@ -734,7 +923,14 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 
     partial void OnAudioDuckingLevelChanged(double value)
-        => _settings.Save(_settings.Current with { AudioDuckingLevel = (float)Math.Clamp(value, 0d, 0.5d) });
+    {
+        _settings.Save(
+            _settings.Current with
+            {
+                AudioDuckingLevel = (float)Math.Clamp(value, 0d, 0.5d)
+            }
+        );
+    }
 
     partial void OnPauseMediaDuringRecordingChanged(bool value)
     {
@@ -756,27 +952,18 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 }
 
-public sealed record DictationModelOption(
-    string ModelId,
-    string DisplayName,
-    string EngineName)
+public sealed record DictationModelOption(string ModelId, string DisplayName, string EngineName)
 {
     public string DisplayLabel => $"{EngineName} / {DisplayName}";
 }
 
 public sealed record ComputeBackendOption(string Value, string DisplayName);
 
-public sealed record SpokenLanguageOption(
-    string Code,
-    string DisplayName);
+public sealed record SpokenLanguageOption(string Code, string DisplayName);
 
-public sealed record CleanupLevelOption(
-    CleanupLevel Value,
-    string DisplayName);
+public sealed record CleanupLevelOption(CleanupLevel Value, string DisplayName);
 
-public sealed record InsertionStrategyOption(
-    TextInsertionStrategy Value,
-    string DisplayName);
+public sealed record InsertionStrategyOption(TextInsertionStrategy Value, string DisplayName);
 
 public sealed class AppInsertionStrategyRow : ObservableObject
 {
@@ -784,13 +971,28 @@ public sealed class AppInsertionStrategyRow : ObservableObject
     private string _processName;
     private TextInsertionStrategy _strategy;
 
+    public AppInsertionStrategyRow(
+        string processName,
+        TextInsertionStrategy strategy,
+        IReadOnlyList<InsertionStrategyOption> strategyOptions,
+        Action changed
+    )
+    {
+        _processName = processName;
+        _strategy = strategy;
+        StrategyOptions = strategyOptions;
+        _changed = changed;
+    }
+
     public string ProcessName
     {
         get => _processName;
         set
         {
             if (SetProperty(ref _processName, value))
+            {
                 _changed();
+            }
         }
     }
 
@@ -816,21 +1018,11 @@ public sealed class AppInsertionStrategyRow : ObservableObject
         {
             var selected = value?.Value ?? TextInsertionStrategy.Auto;
             if (selected == Strategy)
+            {
                 return;
+            }
 
             Strategy = selected;
         }
-    }
-
-    public AppInsertionStrategyRow(
-        string processName,
-        TextInsertionStrategy strategy,
-        IReadOnlyList<InsertionStrategyOption> strategyOptions,
-        Action changed)
-    {
-        _processName = processName;
-        _strategy = strategy;
-        StrategyOptions = strategyOptions;
-        _changed = changed;
     }
 }

@@ -30,14 +30,21 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
     public Task DeactivateAsync() => Task.CompletedTask;
 
-    public async Task<ActionResult> ExecuteAsync(string input, ActionContext context, CancellationToken ct)
+    public async Task<ActionResult> ExecuteAsync(
+        string input,
+        ActionContext context,
+        CancellationToken ct
+    )
     {
         if (_host is null)
             return new ActionResult(false, "Plugin not activated");
 
         var vaultPath = _host.GetSetting<string>("vault-path");
         if (string.IsNullOrWhiteSpace(vaultPath))
-            return new ActionResult(false, "No Obsidian vault configured. Please set a vault path in the plugin settings.");
+            return new ActionResult(
+                false,
+                "No Obsidian vault configured. Please set a vault path in the plugin settings."
+            );
 
         if (!Directory.Exists(vaultPath))
             return new ActionResult(false, $"Vault path not found: {vaultPath}");
@@ -242,40 +249,57 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            "vault-path",
-            "Vault path",
-            Description: _detectedVaults.Count > 0
-                ? $"Detected {_detectedVaults.Count} Obsidian vault(s). Enter a path manually if needed."
-                : "Absolute path to your Obsidian vault.",
-            Placeholder: "/path/to/vault"),
-        new("subfolder", "Subfolder", false, "TypeWhisper", "Folder within the vault where notes are saved."),
-        new(
-            "daily-note-mode",
-            "Save mode",
-            Description: "Choose whether to append to a daily note or create one note per transcription.",
-            Options:
-            [
-                new PluginSettingOption("false", "One note per transcription"),
-                new PluginSettingOption("true", "Append to daily note")
-            ]),
-        new("filename-template", "Filename template", false, "{{date}} {{time}} Transcription", "Available placeholders: {{date}}, {{time}}, {{app}}.")
-    ];
+        [
+            new(
+                "vault-path",
+                "Vault path",
+                Description: _detectedVaults.Count > 0
+                    ? $"Detected {_detectedVaults.Count} Obsidian vault(s). Enter a path manually if needed."
+                    : "Absolute path to your Obsidian vault.",
+                Placeholder: "/path/to/vault"
+            ),
+            new(
+                "subfolder",
+                "Subfolder",
+                false,
+                "TypeWhisper",
+                "Folder within the vault where notes are saved."
+            ),
+            new(
+                "daily-note-mode",
+                "Save mode",
+                Description: "Choose whether to append to a daily note or create one note per transcription.",
+                Options:
+                [
+                    new PluginSettingOption("false", "One note per transcription"),
+                    new PluginSettingOption("true", "Append to daily note"),
+                ]
+            ),
+            new(
+                "filename-template",
+                "Filename template",
+                false,
+                "{{date}} {{time}} Transcription",
+                "Available placeholders: {{date}}, {{time}}, {{app}}."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default)
     {
         if (_host is null)
             return Task.FromResult<string?>(null);
 
-        return Task.FromResult(key switch
-        {
-            "vault-path" => _host.GetSetting<string>("vault-path"),
-            "subfolder" => _host.GetSetting<string>("subfolder") ?? "TypeWhisper",
-            "daily-note-mode" => _host.GetSetting<bool>("daily-note-mode") ? "true" : "false",
-            "filename-template" => _host.GetSetting<string>("filename-template") ?? "{{date}} {{time}} Transcription",
-            _ => null,
-        });
+        return Task.FromResult(
+            key switch
+            {
+                "vault-path" => _host.GetSetting<string>("vault-path"),
+                "subfolder" => _host.GetSetting<string>("subfolder") ?? "TypeWhisper",
+                "daily-note-mode" => _host.GetSetting<bool>("daily-note-mode") ? "true" : "false",
+                "filename-template" => _host.GetSetting<string>("filename-template")
+                    ?? "{{date}} {{time}} Transcription",
+                _ => null,
+            }
+        );
     }
 
     public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
@@ -289,14 +313,24 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
                 _host.SetSetting("vault-path", value?.Trim() ?? string.Empty);
                 break;
             case "subfolder":
-                _host.SetSetting("subfolder", string.IsNullOrWhiteSpace(value) ? "TypeWhisper" : value.Trim());
+                _host.SetSetting(
+                    "subfolder",
+                    string.IsNullOrWhiteSpace(value) ? "TypeWhisper" : value.Trim()
+                );
                 break;
             case "daily-note-mode":
-                _host.SetSetting("daily-note-mode", string.Equals(value, "true", StringComparison.OrdinalIgnoreCase));
+                _host.SetSetting(
+                    "daily-note-mode",
+                    string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+                );
                 break;
             case "filename-template":
-                _host.SetSetting("filename-template",
-                    string.IsNullOrWhiteSpace(value) ? "{{date}} {{time}} Transcription" : value.Trim());
+                _host.SetSetting(
+                    "filename-template",
+                    string.IsNullOrWhiteSpace(value)
+                        ? "{{date}} {{time}} Transcription"
+                        : value.Trim()
+                );
                 break;
         }
 
@@ -306,20 +340,33 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (_host is null)
-            return Task.FromResult<PluginSettingsValidationResult?>(new PluginSettingsValidationResult(false, "Plugin not activated."));
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(false, "Plugin not activated.")
+            );
 
         var vaultPath = _host.GetSetting<string>("vault-path");
         if (string.IsNullOrWhiteSpace(vaultPath))
-            return Task.FromResult<PluginSettingsValidationResult?>(new PluginSettingsValidationResult(false, "Enter a vault path first."));
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(false, "Enter a vault path first.")
+            );
 
         if (!Directory.Exists(vaultPath))
-            return Task.FromResult<PluginSettingsValidationResult?>(new PluginSettingsValidationResult(false, $"Vault path not found: {vaultPath}"));
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(false, $"Vault path not found: {vaultPath}")
+            );
 
         var obsidianDir = Path.Combine(vaultPath, ".obsidian");
         return Task.FromResult<PluginSettingsValidationResult?>(
             Directory.Exists(obsidianDir)
-                ? new PluginSettingsValidationResult(true, $"Vault detected: {Path.GetFileName(vaultPath)}")
-                : new PluginSettingsValidationResult(false, "Folder exists but is not an Obsidian vault (missing .obsidian directory)."));
+                ? new PluginSettingsValidationResult(
+                    true,
+                    $"Vault detected: {Path.GetFileName(vaultPath)}"
+                )
+                : new PluginSettingsValidationResult(
+                    false,
+                    "Folder exists but is not an Obsidian vault (missing .obsidian directory)."
+                )
+        );
     }
 
     public void Dispose() { }

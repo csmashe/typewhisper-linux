@@ -6,7 +6,10 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAi;
 
-public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, IPluginSettingsProvider
+public sealed partial class OpenAiPlugin
+    : ITranscriptionEnginePlugin,
+        ILlmProviderPlugin,
+        IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.openai.com";
     private const string TranslationModel = "gpt-4o-mini";
@@ -21,8 +24,20 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
     [
         new("whisper-1", "Whisper 1", "whisper-1", "verbose_json", SupportsTranslation: true),
-        new("gpt-4o-transcribe", "GPT-4o Transcribe", "gpt-4o-transcribe", "json", SupportsTranslation: false),
-        new("gpt-4o-mini-transcribe", "GPT-4o Mini Transcribe", "gpt-4o-mini-transcribe", "json", SupportsTranslation: false),
+        new(
+            "gpt-4o-transcribe",
+            "GPT-4o Transcribe",
+            "gpt-4o-transcribe",
+            "json",
+            SupportsTranslation: false
+        ),
+        new(
+            "gpt-4o-mini-transcribe",
+            "GPT-4o Mini Transcribe",
+            "gpt-4o-mini-transcribe",
+            "json",
+            SupportsTranslation: false
+        ),
     ];
 
     public string PluginId => "com.typewhisper.openai";
@@ -64,7 +79,8 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
 
     public void SelectModel(string modelId)
     {
-        var entry = TranscriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
+        var entry =
+            TranscriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
             ?? throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
         _selectedApiModelName = entry.ApiModelName;
@@ -72,29 +88,57 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured || _selectedApiModelName is null)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
+            throw new InvalidOperationException(
+                "Plugin not configured. API key and model required."
+            );
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient, BaseUrl, _apiKey!, _selectedApiModelName,
-            wavAudio, language, translate, _selectedResponseFormat, ct, prompt);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            _selectedApiModelName,
+            wavAudio,
+            language,
+            translate,
+            _selectedResponseFormat,
+            ct,
+            prompt
+        );
     }
 
     public string ProviderName => "OpenAI";
     public bool IsAvailable => IsConfigured;
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-        [new PluginModelInfo(TranslationModel, "GPT-4o Mini")];
+    [new PluginModelInfo(TranslationModel, "GPT-4o Mini")];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("API key not configured");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
 
     internal string? ApiKey => _apiKey;
@@ -135,19 +179,24 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "sk-...",
-            Description: "Required for OpenAI transcription and LLM requests.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "sk-...",
+                Description: "Required for OpenAI transcription and LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;
@@ -167,6 +216,10 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     }
 
     private sealed record TranscriptionModelEntry(
-        string Id, string DisplayName, string ApiModelName,
-        string ResponseFormat, bool SupportsTranslation);
+        string Id,
+        string DisplayName,
+        string ApiModelName,
+        string ResponseFormat,
+        bool SupportsTranslation
+    );
 }

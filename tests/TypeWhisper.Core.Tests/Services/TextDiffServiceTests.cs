@@ -16,7 +16,8 @@ public class TextDiffServiceTests
     {
         var result = TextDiffService.ExtractCorrections(
             "I used kubernets today",
-            "I used Kubernetes today");
+            "I used Kubernetes today"
+        );
 
         Assert.Single(result);
         Assert.Equal("kubernets", result[0].Original);
@@ -28,7 +29,8 @@ public class TextDiffServiceTests
     {
         var result = TextDiffService.ExtractCorrections(
             "the tenser flow and pie torch are great",
-            "the TensorFlow and PyTorch are great");
+            "the TensorFlow and PyTorch are great"
+        );
 
         Assert.Equal(2, result.Count);
     }
@@ -38,7 +40,8 @@ public class TextDiffServiceTests
     {
         var result = TextDiffService.ExtractCorrections(
             "this is a completely different sentence about cats",
-            "the weather is nice today for a walk outside");
+            "the weather is nice today for a walk outside"
+        );
 
         Assert.Empty(result);
     }
@@ -67,7 +70,8 @@ public class TextDiffServiceTests
     {
         var result = TextDiffService.ExtractCorrections(
             "the react native app",
-            "the React Native app");
+            "the React Native app"
+        );
 
         Assert.Equal(2, result.Count);
     }

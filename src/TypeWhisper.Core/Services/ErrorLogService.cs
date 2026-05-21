@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Reflection;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -7,26 +9,29 @@ namespace TypeWhisper.Core.Services;
 public sealed class ErrorLogService : IErrorLogService
 {
     private const int MaxEntries = 200;
-
-    private readonly string _logFilePath;
     private readonly List<ErrorLogEntry> _entries = [];
     private readonly Lock _lock = new();
 
-    public IReadOnlyList<ErrorLogEntry> Entries
-    {
-        get
-        {
-            lock (_lock) return _entries.ToList();
-        }
-    }
-
-    public event Action? EntriesChanged;
+    private readonly string _logFilePath;
 
     public ErrorLogService(string dataDirectory)
     {
         _logFilePath = Path.Combine(dataDirectory, "error-log.json");
         LoadFromDisk();
     }
+
+    public IReadOnlyList<ErrorLogEntry> Entries
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _entries.ToList();
+            }
+        }
+    }
+
+    public event Action? EntriesChanged;
 
     public void AddEntry(string message, string category = "general")
     {
@@ -37,7 +42,9 @@ public sealed class ErrorLogService : IErrorLogService
             _entries.Insert(0, entry);
 
             while (_entries.Count > MaxEntries)
+            {
                 _entries.RemoveAt(_entries.Count - 1);
+            }
         }
 
         SaveToDisk();
@@ -46,7 +53,11 @@ public sealed class ErrorLogService : IErrorLogService
 
     public void ClearAll()
     {
-        lock (_lock) _entries.Clear();
+        lock (_lock)
+        {
+            _entries.Clear();
+        }
+
         SaveToDisk();
         EntriesChanged?.Invoke();
     }
@@ -62,7 +73,7 @@ public sealed class ErrorLogService : IErrorLogService
                 platform = "Linux",
                 os_version = Environment.OSVersion.VersionString,
                 dotnet_version = Environment.Version.ToString(),
-                locale = System.Globalization.CultureInfo.CurrentCulture.Name,
+                locale = CultureInfo.CurrentCulture.Name,
                 timezone = TimeZoneInfo.Local.Id
             },
             error_count = _entries.Count,
@@ -81,7 +92,10 @@ public sealed class ErrorLogService : IErrorLogService
     {
         try
         {
-            if (!File.Exists(_logFilePath)) return;
+            if (!File.Exists(_logFilePath))
+            {
+                return;
+            }
 
             var json = File.ReadAllText(_logFilePath);
             var entries = JsonSerializer.Deserialize<List<ErrorLogEntry>>(json);
@@ -105,13 +119,21 @@ public sealed class ErrorLogService : IErrorLogService
         try
         {
             List<ErrorLogEntry> snapshot;
-            lock (_lock) snapshot = [.. _entries];
+            lock (_lock)
+            {
+                snapshot = [.. _entries];
+            }
 
-            var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(
+                snapshot,
+                new JsonSerializerOptions { WriteIndented = true }
+            );
 
             var dir = Path.GetDirectoryName(_logFilePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
                 Directory.CreateDirectory(dir);
+            }
 
             File.WriteAllText(_logFilePath, json);
         }
@@ -123,7 +145,7 @@ public sealed class ErrorLogService : IErrorLogService
 
     private static string GetAppVersion()
     {
-        var asm = System.Reflection.Assembly.GetEntryAssembly();
+        var asm = Assembly.GetEntryAssembly();
         return asm?.GetName().Version?.ToString() ?? "unknown";
     }
 }

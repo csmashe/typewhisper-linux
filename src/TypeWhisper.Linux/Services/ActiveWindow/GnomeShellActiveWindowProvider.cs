@@ -1,20 +1,19 @@
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
-using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
-/// GNOME Shell active-window provider. Gated on <c>XDG_CURRENT_DESKTOP</c>
-/// containing "GNOME" or "ubuntu". Talks to the
-/// <c>org.gnome.Shell.Introspect</c> session-bus interface via
-/// <c>gdbus</c> and parses the dict-of-dicts gvariant payload for the
-/// window with <c>has-focus: true</c>. When introspection is disabled
-/// (<c>gsettings set org.gnome.shell introspect true</c>) the
-/// <c>Source</c> stays "gnome-shell" so the failure tracker can surface
-/// the right remediation.
+///     GNOME Shell active-window provider. Gated on <c>XDG_CURRENT_DESKTOP</c>
+///     containing "GNOME" or "ubuntu". Talks to the
+///     <c>org.gnome.Shell.Introspect</c> session-bus interface via
+///     <c>gdbus</c> and parses the dict-of-dicts gvariant payload for the
+///     window with <c>has-focus: true</c>. When introspection is disabled
+///     (<c>gsettings set org.gnome.shell introspect true</c>) the
+///     <c>Source</c> stays "gnome-shell" so the failure tracker can surface
+///     the right remediation.
 /// </summary>
 public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
 {
@@ -23,9 +22,17 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
     public bool IsApplicable()
     {
         var raw = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
-        if (string.IsNullOrWhiteSpace(raw)) return false;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
         var lower = raw.ToLowerInvariant();
-        if (!lower.Contains("gnome") && !lower.Contains("ubuntu")) return false;
+        if (!lower.Contains("gnome") && !lower.Contains("ubuntu"))
+        {
+            return false;
+        }
+
         return DesktopDetector.BinaryExists("gdbus");
     }
 
@@ -33,13 +40,18 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
     {
         try
         {
-            var (exit, output) = await ProviderProcessRunner.RunAsync(
-                "gdbus",
-                "call --session --dest org.gnome.Shell --object-path /org/gnome/Shell/Introspect --method org.gnome.Shell.Introspect.GetWindows",
-                ct).ConfigureAwait(false);
+            var (exit, output) = await ProviderProcessRunner
+                .RunAsync(
+                    "gdbus",
+                    "call --session --dest org.gnome.Shell --object-path /org/gnome/Shell/Introspect --method org.gnome.Shell.Introspect.GetWindows",
+                    ct
+                )
+                .ConfigureAwait(false);
 
             if (exit != 0 || string.IsNullOrWhiteSpace(output))
+            {
                 return null;
+            }
 
             return ParseFocusedWindow(output);
         }
@@ -58,7 +70,9 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
         foreach (var window in EnumerateWindows(gvariantOutput))
         {
             if (!TryReadBool(window.Body, "has-focus", out var focused) || !focused)
+            {
                 continue;
+            }
 
             var appId = TryReadString(window.Body, "app-id");
             var wmClass = TryReadString(window.Body, "wm-class");
@@ -69,18 +83,22 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
             // path. See GnomeWindowCallsProvider for the full rationale.
             var rawIdentity = pid is > 0 ? TryReadProcComm(pid.Value) : null;
             if (string.IsNullOrWhiteSpace(rawIdentity))
+            {
                 rawIdentity = wmClass;
+            }
+
             var processName = !string.IsNullOrWhiteSpace(rawIdentity)
                 ? ProcessNameNormalizer.Normalize(rawIdentity).ToLowerInvariant()
                 : null;
 
             return new ActiveWindowSnapshot(
-                ProcessName: processName,
-                Title: string.IsNullOrWhiteSpace(title) ? null : title,
-                WindowId: window.Id,
-                AppId: string.IsNullOrWhiteSpace(appId) ? null : appId,
-                Source: Name,
-                IsTrusted: true);
+                processName,
+                string.IsNullOrWhiteSpace(title) ? null : title,
+                window.Id,
+                string.IsNullOrWhiteSpace(appId) ? null : appId,
+                Name,
+                true
+            );
         }
 
         return null;
@@ -98,7 +116,10 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
         while (i < output.Length)
         {
             var idMatch = Regex.Match(output[i..], @"uint64\s+(\d+)\s*:\s*\{");
-            if (!idMatch.Success) yield break;
+            if (!idMatch.Success)
+            {
+                yield break;
+            }
 
             var id = idMatch.Groups[1].Value;
             var bodyStart = i + idMatch.Index + idMatch.Length;
@@ -116,8 +137,11 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
                         j += 2;
                         continue;
                     }
+
                     if (c == stringQuote)
+                    {
                         inString = false;
+                    }
                 }
                 else
                 {
@@ -126,13 +150,24 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
                         inString = true;
                         stringQuote = c;
                     }
-                    else if (c == '{') depth++;
-                    else if (c == '}') depth--;
+                    else if (c == '{')
+                    {
+                        depth++;
+                    }
+                    else if (c == '}')
+                    {
+                        depth--;
+                    }
                 }
+
                 j++;
             }
 
-            if (depth != 0) yield break;
+            if (depth != 0)
+            {
+                yield break;
+            }
+
             yield return (id, output.Substring(bodyStart, j - bodyStart - 1));
             i = j;
         }
@@ -150,7 +185,11 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
         value = false;
         var pattern = $@"'{Regex.Escape(key)}'\s*:\s*<(true|false)>";
         var m = Regex.Match(body, pattern);
-        if (!m.Success) return false;
+        if (!m.Success)
+        {
+            return false;
+        }
+
         value = m.Groups[1].Value == "true";
         return true;
     }
@@ -171,7 +210,11 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
         try
         {
             var path = $"/proc/{pid}/comm";
-            if (!File.Exists(path)) return null;
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
             return File.ReadAllText(path).Trim();
         }
         catch

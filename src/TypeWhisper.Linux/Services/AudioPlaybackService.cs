@@ -1,13 +1,13 @@
+using PortAudioSharp;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using PortAudioSharp;
 using TypeWhisper.Core;
 using PaStream = PortAudioSharp.Stream;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Minimal playback for session-scoped mono PCM16 WAV dictation captures.
+///     Minimal playback for session-scoped mono PCM16 WAV dictation captures.
 /// </summary>
 public sealed class AudioPlaybackService : IDisposable
 {
@@ -18,31 +18,44 @@ public sealed class AudioPlaybackService : IDisposable
     private static readonly object _paInitLock = new();
 
     private readonly object _gate = new();
-    private PaStream? _stream;
-    private float[] _samples = [];
     private int _position;
-
-    public string? CurrentFile { get; private set; }
-    public bool IsPlaying { get; private set; }
-
-    public event Action? PlaybackStateChanged;
+    private float[] _samples = [];
+    private PaStream? _stream;
 
     public AudioPlaybackService()
     {
         EnsurePortAudioInitialized();
     }
 
-    public bool CanPlay(string? audioFileName) =>
-        ResolveAudioPath(audioFileName) is { } path && File.Exists(path);
+    public string? CurrentFile { get; private set; }
+    public bool IsPlaying { get; private set; }
+
+    public void Dispose()
+    {
+        Stop();
+        EnsurePortAudioTerminated();
+    }
+
+    public event Action? PlaybackStateChanged;
+
+    public bool CanPlay(string? audioFileName)
+    {
+        return ResolveAudioPath(audioFileName) is { } path && File.Exists(path);
+    }
 
     public void Play(string audioFileName)
     {
         if (ResolveAudioPath(audioFileName) is not { } path || !File.Exists(path))
+        {
             return;
+        }
 
         lock (_gate)
         {
-            if (IsPlaying && string.Equals(CurrentFile, audioFileName, StringComparison.OrdinalIgnoreCase))
+            if (
+                IsPlaying
+                && string.Equals(CurrentFile, audioFileName, StringComparison.OrdinalIgnoreCase)
+            )
             {
                 StopCore();
                 NotifyPlaybackChanged();
@@ -71,17 +84,18 @@ public sealed class AudioPlaybackService : IDisposable
                     channelCount = Channels,
                     sampleFormat = SampleFormat.Float32,
                     suggestedLatency = outputInfo.defaultLowOutputLatency,
-                    hostApiSpecificStreamInfo = IntPtr.Zero,
+                    hostApiSpecificStreamInfo = IntPtr.Zero
                 };
 
                 _stream = new PaStream(
-                    inParams: null,
-                    outParams: outputParams,
-                    sampleRate: sampleRate,
-                    framesPerBuffer: FramesPerBuffer,
-                    streamFlags: StreamFlags.ClipOff,
-                    callback: PlaybackCallback,
-                    userData: IntPtr.Zero);
+                    null,
+                    outputParams,
+                    sampleRate,
+                    FramesPerBuffer,
+                    StreamFlags.ClipOff,
+                    PlaybackCallback,
+                    IntPtr.Zero
+                );
 
                 _stream.Start();
                 CurrentFile = audioFileName;
@@ -115,10 +129,13 @@ public sealed class AudioPlaybackService : IDisposable
         uint frameCount,
         ref StreamCallbackTimeInfo timeInfo,
         StreamCallbackFlags statusFlags,
-        IntPtr userData)
+        IntPtr userData
+    )
     {
         if (output == IntPtr.Zero || frameCount == 0)
+        {
             return StreamCallbackResult.Continue;
+        }
 
         var requested = (int)frameCount;
         var buffer = new float[requested];
@@ -149,7 +166,9 @@ public sealed class AudioPlaybackService : IDisposable
             {
                 done = _stream is null || !_stream.IsActive || _stream.IsStopped;
                 if (!done)
+                {
                     continue;
+                }
 
                 StopCore();
             }
@@ -161,7 +180,15 @@ public sealed class AudioPlaybackService : IDisposable
 
     private void StopCore()
     {
-        try { _stream?.Stop(); } catch { /* best effort */ }
+        try
+        {
+            _stream?.Stop();
+        }
+        catch
+        {
+            /* best effort */
+        }
+
         _stream?.Dispose();
         _stream = null;
         _samples = [];
@@ -177,7 +204,9 @@ public sealed class AudioPlaybackService : IDisposable
     private static string? ResolveAudioPath(string? audioFileName)
     {
         if (string.IsNullOrWhiteSpace(audioFileName))
+        {
             return null;
+        }
 
         string root;
         string candidate;
@@ -195,8 +224,10 @@ public sealed class AudioPlaybackService : IDisposable
             ? root
             : root + Path.DirectorySeparatorChar;
 
-        if (candidate.Equals(root, StringComparison.Ordinal)
-            || candidate.StartsWith(rootWithSep, StringComparison.Ordinal))
+        if (
+            candidate.Equals(root, StringComparison.Ordinal)
+            || candidate.StartsWith(rootWithSep, StringComparison.Ordinal)
+        )
         {
             return candidate;
         }
@@ -217,11 +248,13 @@ public sealed class AudioPlaybackService : IDisposable
         _ = reader.ReadInt32();
         var wave = new string(reader.ReadChars(4));
         if (riff != "RIFF" || wave != "WAVE")
+        {
             throw new InvalidDataException("Unsupported WAV container.");
+        }
 
         short audioFormat = 0;
         short channels = 0;
-        int sampleRate = 0;
+        var sampleRate = 0;
         short bitsPerSample = 0;
         byte[]? data = null;
 
@@ -241,7 +274,9 @@ public sealed class AudioPlaybackService : IDisposable
 
                 var remaining = chunkSize - 16;
                 if (remaining > 0)
+                {
                     reader.ReadBytes(remaining);
+                }
             }
             else if (chunkId == "data")
             {
@@ -252,14 +287,18 @@ public sealed class AudioPlaybackService : IDisposable
                 reader.BaseStream.Seek(chunkSize, SeekOrigin.Current);
             }
 
-                // The WAV spec requires every chunk to be padded to an even byte
+            // The WAV spec requires every chunk to be padded to an even byte
             // boundary; skip the pad byte when the chunk size is odd.
             if ((chunkSize & 1) == 1 && reader.BaseStream.Position < reader.BaseStream.Length)
+            {
                 reader.BaseStream.Seek(1, SeekOrigin.Current);
+            }
         }
 
         if (audioFormat != 1 || channels != 1 || bitsPerSample != 16 || data is null)
+        {
             throw new InvalidDataException("Only mono PCM16 WAV playback is supported.");
+        }
 
         var samples = new float[data.Length / 2];
         for (var i = 0; i < samples.Length; i++)
@@ -273,7 +312,14 @@ public sealed class AudioPlaybackService : IDisposable
 
     private void NotifyPlaybackChanged()
     {
-        try { PlaybackStateChanged?.Invoke(); } catch { /* ignore */ }
+        try
+        {
+            PlaybackStateChanged?.Invoke();
+        }
+        catch
+        {
+            /* ignore */
+        }
     }
 
     private static void EnsurePortAudioInitialized()
@@ -284,7 +330,10 @@ public sealed class AudioPlaybackService : IDisposable
         lock (_paInitLock)
         {
             if (_paInitCount == 0)
+            {
                 PortAudio.Initialize();
+            }
+
             _paInitCount++;
         }
     }
@@ -294,16 +343,14 @@ public sealed class AudioPlaybackService : IDisposable
         lock (_paInitLock)
         {
             if (_paInitCount <= 0)
+            {
                 return;
+            }
 
             if (--_paInitCount == 0)
+            {
                 PortAudio.Terminate();
+            }
         }
-    }
-
-    public void Dispose()
-    {
-        Stop();
-        EnsurePortAudioTerminated();
     }
 }

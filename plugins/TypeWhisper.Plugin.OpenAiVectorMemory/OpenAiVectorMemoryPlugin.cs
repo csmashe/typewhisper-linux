@@ -13,10 +13,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     private const string EmbeddingModel = "text-embedding-3-small";
     private const string EmbeddingUrl = "https://api.openai.com/v1/embeddings";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -45,19 +42,24 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "sk-...",
-            Description: "OpenAI API key used to generate embeddings for vector memory.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "sk-...",
+                Description: "OpenAI API key used to generate embeddings for vector memory."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;
@@ -77,7 +79,8 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         Task.FromResult<PluginSettingsValidationResult?>(
             string.IsNullOrWhiteSpace(_apiKey)
                 ? new PluginSettingsValidationResult(false, "Enter an API key first.")
-                : new PluginSettingsValidationResult(true, "API key configured."));
+                : new PluginSettingsValidationResult(true, "API key configured.")
+        );
 
     public async Task StoreAsync(string content, CancellationToken ct)
     {
@@ -105,7 +108,11 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         }
     }
 
-    public async Task<IReadOnlyList<string>> SearchAsync(string query, int maxResults = 5, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> SearchAsync(
+        string query,
+        int maxResults = 5,
+        CancellationToken ct = default
+    )
     {
         EnsureConfigured();
 
@@ -194,11 +201,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
 
     private async Task<float[]> GetEmbeddingAsync(string text, CancellationToken ct)
     {
-        var requestBody = JsonSerializer.Serialize(new
-        {
-            model = EmbeddingModel,
-            input = text,
-        });
+        var requestBody = JsonSerializer.Serialize(new { model = EmbeddingModel, input = text });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, EmbeddingUrl);
         request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
@@ -209,15 +212,17 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
 
         if (!response.IsSuccessStatusCode)
         {
-            _host?.Log(PluginLogLevel.Error, $"Embedding API error {response.StatusCode}: {responseBody}");
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Embedding API error {response.StatusCode}: {responseBody}"
+            );
             throw new HttpRequestException(
-                $"OpenAI Embedding API returned {(int)response.StatusCode}: {responseBody}");
+                $"OpenAI Embedding API returned {(int)response.StatusCode}: {responseBody}"
+            );
         }
 
         using var doc = JsonDocument.Parse(responseBody);
-        var embeddingArray = doc.RootElement
-            .GetProperty("data")[0]
-            .GetProperty("embedding");
+        var embeddingArray = doc.RootElement.GetProperty("data")[0].GetProperty("embedding");
 
         var embedding = new float[embeddingArray.GetArrayLength()];
         var i = 0;
@@ -234,7 +239,9 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         if (a.Length != b.Length)
             return 0;
 
-        double dot = 0, normA = 0, normB = 0;
+        double dot = 0,
+            normA = 0,
+            normB = 0;
         for (var i = 0; i < a.Length; i++)
         {
             dot += a[i] * (double)b[i];
@@ -259,7 +266,8 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
             try
             {
                 var json = await File.ReadAllTextAsync(_filePath, ct);
-                _entries = JsonSerializer.Deserialize<List<VectorMemoryEntry>>(json, JsonOptions) ?? [];
+                _entries =
+                    JsonSerializer.Deserialize<List<VectorMemoryEntry>>(json, JsonOptions) ?? [];
             }
             catch (Exception ex)
             {
@@ -291,7 +299,9 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     private void EnsureConfigured()
     {
         if (string.IsNullOrEmpty(_apiKey))
-            throw new InvalidOperationException("OpenAI API key not configured. Set it in plugin settings.");
+            throw new InvalidOperationException(
+                "OpenAI API key not configured. Set it in plugin settings."
+            );
     }
 
     public void Dispose()

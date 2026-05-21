@@ -35,17 +35,27 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-    [
-        new PluginModelInfo("llama-4-scout-17b-16e-instruct", "Llama 4 Scout 17B"),
-    ];
+    [new PluginModelInfo("llama-4-scout-17b-16e-instruct", "Llama 4 Scout 17B")];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsAvailable)
             throw new InvalidOperationException("API key not configured");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
 
     internal string? ApiKey => _apiKey;
@@ -86,19 +96,24 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "csk-...",
-            Description: "Required for Cerebras LLM requests.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "csk-...",
+                Description: "Required for Cerebras LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;

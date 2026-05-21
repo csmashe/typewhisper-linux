@@ -1,15 +1,14 @@
 using System.Diagnostics;
-using System.IO;
 using TypeWhisper.Core;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Copies bundled plugins from the app's install directory into
-/// <c>~/.local/share/TypeWhisper/Plugins/</c>. Unlike the original
-/// first-run-only behavior, this now repairs stale or partially deployed
-/// bundled plugins on startup while leaving non-bundled/manual installs
-/// alone.
+///     Copies bundled plugins from the app's install directory into
+///     <c>~/.local/share/TypeWhisper/Plugins/</c>. Unlike the original
+///     first-run-only behavior, this now repairs stale or partially deployed
+///     bundled plugins on startup while leaving non-bundled/manual installs
+///     alone.
 /// </summary>
 public sealed class BundledPluginDeployer
 {
@@ -18,7 +17,9 @@ public sealed class BundledPluginDeployer
         var source = FindBundledPluginsDir();
         if (source is null)
         {
-            Trace.WriteLine("[BundledPluginDeployer] No bundled Plugins/ dir next to executable — skipping.");
+            Trace.WriteLine(
+                "[BundledPluginDeployer] No bundled Plugins/ dir next to executable — skipping."
+            );
             return 0;
         }
 
@@ -35,8 +36,10 @@ public sealed class BundledPluginDeployer
             {
                 if (NeedsRepairOrUpdate(pluginDir, dest))
                 {
-                    CopyDirectory(pluginDir, dest, overwrite: true);
-                    Trace.WriteLine($"[BundledPluginDeployer] Synced bundled plugin {name} → {dest}");
+                    CopyDirectory(pluginDir, dest, true);
+                    Trace.WriteLine(
+                        $"[BundledPluginDeployer] Synced bundled plugin {name} → {dest}"
+                    );
                     deployed++;
                 }
                 else
@@ -63,19 +66,28 @@ public sealed class BundledPluginDeployer
     private static bool NeedsRepairOrUpdate(string src, string dst)
     {
         if (!Directory.Exists(dst))
+        {
             return true;
+        }
 
         foreach (var srcFile in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(src, srcFile);
             var dstFile = Path.Combine(dst, relativePath);
             if (!File.Exists(dstFile))
+            {
                 return true;
+            }
 
             var srcInfo = new FileInfo(srcFile);
             var dstInfo = new FileInfo(dstFile);
-            if (srcInfo.Length != dstInfo.Length || srcInfo.LastWriteTimeUtc > dstInfo.LastWriteTimeUtc)
+            if (
+                srcInfo.Length != dstInfo.Length
+                || srcInfo.LastWriteTimeUtc > dstInfo.LastWriteTimeUtc
+            )
+            {
                 return true;
+            }
         }
 
         return false;
@@ -85,8 +97,13 @@ public sealed class BundledPluginDeployer
     {
         Directory.CreateDirectory(dst);
         foreach (var file in Directory.GetFiles(src))
-            File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite: overwrite);
+        {
+            File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite);
+        }
+
         foreach (var sub in Directory.GetDirectories(src))
+        {
             CopyDirectory(sub, Path.Combine(dst, Path.GetFileName(sub)), overwrite);
+        }
     }
 }

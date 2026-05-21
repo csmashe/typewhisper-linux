@@ -105,10 +105,11 @@
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <StackPanel Spacing="6">
-                            <TextBlock Text="On: the close (X) button hides the window to the tray icon — it leaves the dock and the app keeps running, reachable from the tray menu. Off: the close button quits TypeWhisper."
-                                       FontSize="12"
-                                       Foreground="#8A9AAE"
-                                       TextWrapping="Wrap" />
+                            <TextBlock
+                                Text="On: the close (X) button hides the window to the tray icon — it leaves the dock and the app keeps running, reachable from the tray menu. Off: the close button quits TypeWhisper."
+                                FontSize="12"
+                                Foreground="#8A9AAE"
+                                TextWrapping="Wrap" />
                             <TextBlock IsVisible="{Binding IsTrayUnavailable}"
                                        Text="No system tray was detected on this desktop, so this option is unavailable — the close button will quit TypeWhisper. On GNOME, install the AppIndicator extension to enable it."
                                        FontSize="12"
@@ -236,10 +237,11 @@
 
                     <Border Grid.Row="2"
                             Padding="18,12">
-                        <TextBlock Text="Installs the bundled CLI launcher to ~/.local/bin/typewhisper. Use the bearer token above through TYPEWHISPER_API_TOKEN or --token."
-                                   FontSize="12"
-                                   Foreground="#8A9AAE"
-                                   TextWrapping="Wrap" />
+                        <TextBlock
+                            Text="Installs the bundled CLI launcher to ~/.local/bin/typewhisper. Use the bearer token above through TYPEWHISPER_API_TOKEN or --token."
+                            FontSize="12"
+                            Foreground="#8A9AAE"
+                            TextWrapping="Wrap" />
                     </Border>
 
                     <Border Grid.Row="3"

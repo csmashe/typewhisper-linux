@@ -1,29 +1,47 @@
-using System.IO;
 using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
-using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public class PluginManagerTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
-    private readonly Mock<IProfileService> _profiles = new();
-    private readonly Mock<ISettingsService> _settings = new();
     private readonly PluginEventBus _eventBus = new();
     private readonly PluginLoader _loader = new();
     private readonly string _pluginSearchDir;
+    private readonly Mock<IProfileService> _profiles = new();
+    private readonly Mock<ISettingsService> _settings = new();
     private PluginManager? _manager;
 
     public PluginManagerTests()
     {
-        _pluginSearchDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.PluginManagerTests_" + Guid.NewGuid().ToString("N"));
+        _pluginSearchDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.PluginManagerTests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_pluginSearchDir);
         _profiles.Setup(p => p.Profiles).Returns(new List<Profile>());
         _settings.Setup(s => s.Current).Returns(new AppSettings());
+    }
+
+    public void Dispose()
+    {
+        _manager?.Dispose();
+        try
+        {
+            if (Directory.Exists(_pluginSearchDir))
+            {
+                Directory.Delete(_pluginSearchDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup in tests
+        }
     }
 
     private PluginManager CreateManager()
@@ -34,7 +52,8 @@ public class PluginManagerTests : IDisposable
             _activeWindow.Object,
             _profiles.Object,
             _settings.Object,
-            [_pluginSearchDir]);
+            [_pluginSearchDir]
+        );
         return _manager;
     }
 
@@ -101,10 +120,7 @@ public class PluginManagerTests : IDisposable
     {
         var customSettings = new AppSettings
         {
-            PluginEnabledState = new Dictionary<string, bool>
-            {
-                ["com.test.plugin"] = true
-            }
+            PluginEnabledState = new Dictionary<string, bool> { ["com.test.plugin"] = true }
         };
         _settings.Setup(s => s.Current).Returns(customSettings);
 
@@ -117,10 +133,9 @@ public class PluginManagerTests : IDisposable
     [Fact]
     public async Task InitializeAsync_EmptyPluginEnabledState_NoError()
     {
-        _settings.Setup(s => s.Current).Returns(new AppSettings
-        {
-            PluginEnabledState = new Dictionary<string, bool>()
-        });
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings { PluginEnabledState = new Dictionary<string, bool>() });
 
         var manager = CreateManager();
         var ex = await Record.ExceptionAsync(() => manager.InitializeAsync());
@@ -159,35 +174,26 @@ public class PluginManagerTests : IDisposable
 
         Assert.True(eventFired);
     }
-
-    public void Dispose()
-    {
-        _manager?.Dispose();
-        try
-        {
-            if (Directory.Exists(_pluginSearchDir))
-                Directory.Delete(_pluginSearchDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup in tests
-        }
-    }
 }
 
 // Verifies enable/disable/capability-index logic without loading real plugin assemblies.
 public class PluginManagerWithFakePluginTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
+    private readonly PluginEventBus _eventBus = new();
     private readonly Mock<IProfileService> _profiles = new();
     private readonly Mock<ISettingsService> _settings = new();
-    private readonly PluginEventBus _eventBus = new();
     private PluginManager? _manager;
 
     public PluginManagerWithFakePluginTests()
     {
         _profiles.Setup(p => p.Profiles).Returns(new List<Profile>());
         _settings.Setup(s => s.Current).Returns(new AppSettings());
+    }
+
+    public void Dispose()
+    {
+        _manager?.Dispose();
     }
 
     [Fact]
@@ -197,7 +203,9 @@ public class PluginManagerWithFakePluginTests : IDisposable
         mockPlugin.Setup(p => p.PluginId).Returns("com.test.fake");
         mockPlugin.Setup(p => p.PluginName).Returns("Fake LLM");
         mockPlugin.Setup(p => p.PluginVersion).Returns("1.0.0");
-        mockPlugin.Setup(p => p.ActivateAsync(It.IsAny<IPluginHostServices>())).Returns(Task.CompletedTask);
+        mockPlugin
+            .Setup(p => p.ActivateAsync(It.IsAny<IPluginHostServices>()))
+            .Returns(Task.CompletedTask);
         mockPlugin.Setup(p => p.DeactivateAsync()).Returns(Task.CompletedTask);
         mockPlugin.Setup(p => p.ProviderName).Returns("FakeProvider");
         mockPlugin.Setup(p => p.IsAvailable).Returns(true);
@@ -208,7 +216,8 @@ public class PluginManagerWithFakePluginTests : IDisposable
             _eventBus,
             _activeWindow.Object,
             _profiles.Object,
-            _settings.Object);
+            _settings.Object
+        );
 
         Assert.False(_manager.IsEnabled("com.test.fake"));
 
@@ -220,7 +229,8 @@ public class PluginManagerWithFakePluginTests : IDisposable
     public async Task DisablePluginAsync_NotActivated_PersistsDisabledState()
     {
         AppSettings? savedSettings = null;
-        _settings.Setup(s => s.Save(It.IsAny<AppSettings>()))
+        _settings
+            .Setup(s => s.Save(It.IsAny<AppSettings>()))
             .Callback<AppSettings>(s => savedSettings = s);
 
         _manager = new PluginManager(
@@ -228,15 +238,11 @@ public class PluginManagerWithFakePluginTests : IDisposable
             _eventBus,
             _activeWindow.Object,
             _profiles.Object,
-            _settings.Object);
+            _settings.Object
+        );
 
         await _manager.DisablePluginAsync("com.test.notfound");
 
         Assert.Null(savedSettings);
-    }
-
-    public void Dispose()
-    {
-        _manager?.Dispose();
     }
 }

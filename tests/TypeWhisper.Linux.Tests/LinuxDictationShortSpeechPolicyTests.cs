@@ -10,7 +10,8 @@ public sealed class LinuxDictationShortSpeechPolicyTests
     {
         Assert.Equal(
             LinuxShortSpeechDecision.DiscardTooShort,
-            LinuxDictationShortSpeechPolicy.Classify(0, peakLevel: 0));
+            LinuxDictationShortSpeechPolicy.Classify(0, 0)
+        );
     }
 
     [Fact]
@@ -18,7 +19,8 @@ public sealed class LinuxDictationShortSpeechPolicyTests
     {
         Assert.Equal(
             LinuxShortSpeechDecision.DiscardNoSpeech,
-            LinuxDictationShortSpeechPolicy.Classify(0.12, peakLevel: 0.0029f));
+            LinuxDictationShortSpeechPolicy.Classify(0.12, 0.0029f)
+        );
     }
 
     [Fact]
@@ -28,8 +30,10 @@ public sealed class LinuxDictationShortSpeechPolicyTests
             LinuxShortSpeechDecision.Transcribe,
             LinuxDictationShortSpeechPolicy.Classify(
                 0.12,
-                peakLevel: 0.0029f,
-                transcribeShortQuietClipsAggressively: true));
+                0.0029f,
+                true
+            )
+        );
     }
 
     [Fact]
@@ -37,9 +41,16 @@ public sealed class LinuxDictationShortSpeechPolicyTests
     {
         var wav = MakeWav(0.08, 0.1f);
 
-        var padded = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(wav, rawDuration: 0.08);
+        var padded = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(
+            wav,
+            0.08
+        );
 
-        Assert.Equal(0.75, LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(padded), precision: 4);
+        Assert.Equal(
+            0.75,
+            LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(padded),
+            4
+        );
         Assert.True(padded.Length > wav.Length);
     }
 
@@ -48,9 +59,16 @@ public sealed class LinuxDictationShortSpeechPolicyTests
     {
         var wav = MakeWav(1.2, 0.1f);
 
-        var padded = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(wav, rawDuration: 1.2);
+        var padded = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(
+            wav,
+            1.2
+        );
 
-        Assert.Equal(1.5, LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(padded), precision: 4);
+        Assert.Equal(
+            1.5,
+            LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(padded),
+            4
+        );
     }
 
     [Fact]
@@ -87,7 +105,9 @@ public sealed class LinuxDictationShortSpeechPolicyTests
 
         var sample = (short)(Math.Clamp(sampleValue, -1f, 1f) * short.MaxValue);
         for (var i = 0; i < sampleCount; i++)
+        {
             writer.Write(sample);
+        }
 
         return ms.ToArray();
     }

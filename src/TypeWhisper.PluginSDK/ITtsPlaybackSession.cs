@@ -1,7 +1,7 @@
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Represents an active text-to-speech playback session.
+///     Represents an active text-to-speech playback session.
 /// </summary>
 public interface ITtsPlaybackSession
 {

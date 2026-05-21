@@ -38,10 +38,13 @@ internal static class LinuxDictationShortSpeechPolicy
     public static LinuxShortSpeechDecision Classify(
         double rawDuration,
         float peakLevel,
-        bool transcribeShortQuietClipsAggressively = false)
+        bool transcribeShortQuietClipsAggressively = false
+    )
     {
         if (rawDuration < UltraShortTapSeconds)
+        {
             return LinuxShortSpeechDecision.DiscardTooShort;
+        }
 
         if (rawDuration < ShortClipSeconds)
         {
@@ -68,18 +71,29 @@ internal static class LinuxDictationShortSpeechPolicy
     public static byte[] PadWavForFinalTranscription(byte[] wav, double rawDuration)
     {
         if (!IsStandardPcm16MonoWav(wav))
+        {
             return wav;
+        }
 
         var currentSampleCount = (wav.Length - WavHeaderBytes) / BytesPerSample;
         var targetSampleCount = currentSampleCount;
 
         if (rawDuration < MinimumTranscriptionSeconds)
-            targetSampleCount = Math.Max(targetSampleCount, (int)(MinimumTranscriptionSeconds * SampleRate));
+        {
+            targetSampleCount = Math.Max(
+                targetSampleCount,
+                (int)(MinimumTranscriptionSeconds * SampleRate)
+            );
+        }
         else
+        {
             targetSampleCount += (int)(TailPaddingSeconds * SampleRate);
+        }
 
         if (targetSampleCount <= currentSampleCount)
+        {
             return wav;
+        }
 
         var padded = new byte[WavHeaderBytes + targetSampleCount * BytesPerSample];
         Array.Copy(wav, padded, wav.Length);
@@ -91,7 +105,9 @@ internal static class LinuxDictationShortSpeechPolicy
     public static double ComputeDurationSeconds(byte[] wav)
     {
         if (!IsStandardPcm16MonoWav(wav))
+        {
             return 0;
+        }
 
         return (wav.Length - WavHeaderBytes) / (double)(SampleRate * BytesPerSample);
     }
@@ -99,7 +115,9 @@ internal static class LinuxDictationShortSpeechPolicy
     public static float ComputePeakLevel(byte[] wav)
     {
         if (!IsStandardPcm16MonoWav(wav))
+        {
             return 0f;
+        }
 
         var peak = 0;
         for (var i = WavHeaderBytes; i + 1 < wav.Length; i += BytesPerSample)
@@ -111,23 +129,28 @@ internal static class LinuxDictationShortSpeechPolicy
         return Math.Clamp(peak / (float)short.MaxValue, 0f, 1f);
     }
 
-    private static bool IsStandardPcm16MonoWav(byte[] wav) =>
+    private static bool IsStandardPcm16MonoWav(byte[] wav)
+    {
         // Validate WAV header: RIFF/WAVE magic, PCM format (1), 1 channel,
         // expected sample rate (16 kHz), and 16-bit depth at the fixed
         // offsets defined by the canonical 44-byte header layout.
-        wav.Length >= WavHeaderBytes &&
-        wav[0] == (byte)'R' &&
-        wav[1] == (byte)'I' &&
-        wav[2] == (byte)'F' &&
-        wav[3] == (byte)'F' &&
-        wav[8] == (byte)'W' &&
-        wav[9] == (byte)'A' &&
-        wav[10] == (byte)'V' &&
-        wav[11] == (byte)'E' &&
-        BitConverter.ToInt16(wav, 20) == 1 &&  // wFormatTag = PCM
-        BitConverter.ToInt16(wav, 22) == 1 &&  // nChannels = mono
-        BitConverter.ToInt32(wav, 24) == SampleRate &&
-        BitConverter.ToInt16(wav, 34) == 16;   // wBitsPerSample
+        return wav.Length >= WavHeaderBytes
+               && wav[0] == (byte)'R'
+               && wav[1] == (byte)'I'
+               && wav[2] == (byte)'F'
+               && wav[3] == (byte)'F'
+               && wav[8] == (byte)'W'
+               && wav[9] == (byte)'A'
+               && wav[10] == (byte)'V'
+               && wav[11] == (byte)'E'
+               && BitConverter.ToInt16(wav, 20) == 1
+               && // wFormatTag = PCM
+               BitConverter.ToInt16(wav, 22) == 1
+               && // nChannels = mono
+               BitConverter.ToInt32(wav, 24) == SampleRate
+               && BitConverter.ToInt16(wav, 34) == 16;
+        // wBitsPerSample
+    }
 
     private static void WriteInt32LittleEndian(byte[] buffer, int offset, int value)
     {

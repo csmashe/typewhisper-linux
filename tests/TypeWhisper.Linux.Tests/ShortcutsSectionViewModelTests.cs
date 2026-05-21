@@ -11,8 +11,26 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
 
     public ShortcutsSectionViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.Linux.ShortcutsVmTests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.Linux.ShortcutsVmTests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     [Fact]
@@ -39,10 +57,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+P");
         settings.Save(settings.Current with { PromptPaletteHotkey = "Ctrl+Shift+P" });
 
-        var sut = new ShortcutsSectionViewModel(hotkey, settings)
-        {
-            PromptPaletteHotkeyText = ""
-        };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { PromptPaletteHotkeyText = "" };
 
         sut.ApplyPromptPaletteHotkeyCommand.Execute(null);
 
@@ -144,18 +159,5 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         // backend yet → status panel shows the placeholder.
         Assert.Equal("(not initialized)", sut.ActiveBackendId);
         Assert.Equal("(not initialized)", sut.ActiveBackendDisplayName);
-    }
-
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
     }
 }

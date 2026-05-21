@@ -14,17 +14,17 @@ public class PluginManifestTests
     public void Deserialize_AllFields()
     {
         var json = """
-        {
-            "id": "com.example.test",
-            "name": "Test Plugin",
-            "version": "2.1.0",
-            "minHostVersion": "1.0.0",
-            "author": "Test Author",
-            "description": "A test plugin for unit tests",
-            "assemblyName": "TestPlugin.dll",
-            "pluginClass": "TestPlugin.MyPlugin"
-        }
-        """;
+                   {
+                       "id": "com.example.test",
+                       "name": "Test Plugin",
+                       "version": "2.1.0",
+                       "minHostVersion": "1.0.0",
+                       "author": "Test Author",
+                       "description": "A test plugin for unit tests",
+                       "assemblyName": "TestPlugin.dll",
+                       "pluginClass": "TestPlugin.MyPlugin"
+                   }
+                   """;
 
         var manifest = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
 
@@ -43,14 +43,14 @@ public class PluginManifestTests
     public void Deserialize_OnlyRequiredFields()
     {
         var json = """
-        {
-            "id": "com.example.minimal",
-            "name": "Minimal",
-            "version": "1.0.0",
-            "assemblyName": "Minimal.dll",
-            "pluginClass": "Minimal.Plugin"
-        }
-        """;
+                   {
+                       "id": "com.example.minimal",
+                       "name": "Minimal",
+                       "version": "1.0.0",
+                       "assemblyName": "Minimal.dll",
+                       "pluginClass": "Minimal.Plugin"
+                   }
+                   """;
 
         var manifest = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
 
@@ -98,14 +98,14 @@ public class PluginManifestTests
     public void Deserialize_CaseInsensitive()
     {
         var json = """
-        {
-            "ID": "com.example.case",
-            "NAME": "Case Test",
-            "VERSION": "1.0.0",
-            "ASSEMBLYNAME": "Case.dll",
-            "PLUGINCLASS": "Case.Plugin"
-        }
-        """;
+                   {
+                       "ID": "com.example.case",
+                       "NAME": "Case Test",
+                       "VERSION": "1.0.0",
+                       "ASSEMBLYNAME": "Case.dll",
+                       "PLUGINCLASS": "Case.Plugin"
+                   }
+                   """;
 
         var manifest = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
 
@@ -118,16 +118,16 @@ public class PluginManifestTests
     public void Deserialize_ExtraFields_AreIgnored()
     {
         var json = """
-        {
-            "id": "com.example.extra",
-            "name": "Extra",
-            "version": "1.0.0",
-            "assemblyName": "Extra.dll",
-            "pluginClass": "Extra.Plugin",
-            "someUnknownField": "value",
-            "anotherField": 42
-        }
-        """;
+                   {
+                       "id": "com.example.extra",
+                       "name": "Extra",
+                       "version": "1.0.0",
+                       "assemblyName": "Extra.dll",
+                       "pluginClass": "Extra.Plugin",
+                       "someUnknownField": "value",
+                       "anotherField": 42
+                   }
+                   """;
 
         var manifest = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
 

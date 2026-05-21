@@ -1,8 +1,7 @@
-using System.IO;
 using Moq;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.Script;
 using TypeWhisper.PluginSDK;
-using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -14,26 +13,52 @@ public class ScriptCollectionSettingsTests : IDisposable
 
     public ScriptCollectionSettingsTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "tw-script-test-" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "tw-script-test-" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
     }
 
+    private string ConfigPath => Path.Combine(_tempDir, "scripts.json");
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup in tests.
+        }
+    }
+
     private static PluginCollectionItem Item(
-        string name, string command, string shell = "", string enabled = "true", string? id = null)
+        string name,
+        string command,
+        string shell = "",
+        string enabled = "true",
+        string? id = null
+    )
     {
         var values = new Dictionary<string, string?>
         {
             ["name"] = name,
             ["command"] = command,
             ["shell"] = shell,
-            ["enabled"] = enabled,
+            ["enabled"] = enabled
         };
         if (id is not null)
+        {
             values["__id"] = id;
+        }
+
         return new PluginCollectionItem(values);
     }
-
-    private string ConfigPath => Path.Combine(_tempDir, "scripts.json");
 
     [Fact]
     public async Task SetItems_ThenGetItems_RoundTripsAndWritesJson()
@@ -41,11 +66,13 @@ public class ScriptCollectionSettingsTests : IDisposable
         var plugin = new ScriptPlugin();
         plugin.SetDataDirectory(_tempDir);
 
-        var result = await plugin.SetItemsAsync(CollectionKey,
-        [
-            Item("First", "echo hello", "bash"),
-            Item("Second", "echo world", "sh", enabled: "false"),
-        ]);
+        var result = await plugin.SetItemsAsync(
+            CollectionKey,
+            [
+                Item("First", "echo hello", "bash"),
+                Item("Second", "echo world", "sh", "false")
+            ]
+        );
 
         Assert.True(result.IsSuccess);
         Assert.True(File.Exists(ConfigPath));
@@ -102,11 +129,10 @@ public class ScriptCollectionSettingsTests : IDisposable
         var plugin = new ScriptPlugin();
         plugin.SetDataDirectory(_tempDir);
 
-        await plugin.SetItemsAsync(CollectionKey,
-        [
-            Item("On", "echo a", enabled: "true"),
-            Item("Off", "echo b", enabled: "false"),
-        ]);
+        await plugin.SetItemsAsync(
+            CollectionKey,
+            [Item("On", "echo a", enabled: "true"), Item("Off", "echo b", enabled: "false")]
+        );
 
         // Reload via a fresh non-activated plugin to confirm persistence.
         var reloaded = new ScriptPlugin();
@@ -150,7 +176,7 @@ public class ScriptCollectionSettingsTests : IDisposable
         var plugin = new ScriptPlugin();
         plugin.SetDataDirectory(_tempDir);
 
-        var bad = await plugin.SetItemsAsync(CollectionKey, [Item("Name", "echo x", shell: "zsh")]);
+        var bad = await plugin.SetItemsAsync(CollectionKey, [Item("Name", "echo x", "zsh")]);
         Assert.False(bad.IsSuccess);
     }
 
@@ -160,7 +186,7 @@ public class ScriptCollectionSettingsTests : IDisposable
         var plugin = new ScriptPlugin();
         plugin.SetDataDirectory(_tempDir);
 
-        var bad = await plugin.SetItemsAsync(CollectionKey, [Item("Name", "echo x", shell: "cmd")]);
+        var bad = await plugin.SetItemsAsync(CollectionKey, [Item("Name", "echo x", "cmd")]);
         Assert.False(bad.IsSuccess);
     }
 
@@ -170,7 +196,10 @@ public class ScriptCollectionSettingsTests : IDisposable
         var plugin = new ScriptPlugin();
         plugin.SetDataDirectory(_tempDir);
 
-        var result = await plugin.SetItemsAsync(CollectionKey, [Item("PwshScript", "echo x", shell: "pwsh")]);
+        var result = await plugin.SetItemsAsync(
+            CollectionKey,
+            [Item("PwshScript", "echo x", "pwsh")]
+        );
         Assert.True(result.IsSuccess);
 
         var items = await plugin.GetItemsAsync(CollectionKey);
@@ -188,11 +217,10 @@ public class ScriptCollectionSettingsTests : IDisposable
         Assert.NotNull(plugin.Service);
         Assert.Empty(plugin.Service!.Scripts);
 
-        await plugin.SetItemsAsync(CollectionKey,
-        [
-            Item("Live1", "echo 1"),
-            Item("Live2", "echo 2"),
-        ]);
+        await plugin.SetItemsAsync(
+            CollectionKey,
+            [Item("Live1", "echo 1"), Item("Live2", "echo 2")]
+        );
 
         Assert.Equal(2, plugin.Service.Scripts.Count);
         Assert.Equal("Live1", plugin.Service.Scripts[0].Name);
@@ -257,18 +285,5 @@ public class ScriptCollectionSettingsTests : IDisposable
         host.SetupGet(h => h.PluginDataDirectory).Returns(dataDir);
         host.SetupGet(h => h.EventBus).Returns(new PluginEventBus());
         return host.Object;
-    }
-
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup in tests.
-        }
     }
 }

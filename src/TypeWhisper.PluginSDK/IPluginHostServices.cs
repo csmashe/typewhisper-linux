@@ -3,25 +3,10 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Services provided by the host application to plugins during activation.
+///     Services provided by the host application to plugins during activation.
 /// </summary>
 public interface IPluginHostServices
 {
-    /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
-    Task StoreSecretAsync(string key, string value);
-
-    /// <summary>Loads a previously stored secret, or null if not found.</summary>
-    Task<string?> LoadSecretAsync(string key);
-
-    /// <summary>Deletes a stored secret.</summary>
-    Task DeleteSecretAsync(string key);
-
-    /// <summary>Gets a per-plugin setting value deserialized from JSON, or default if not found.</summary>
-    T? GetSetting<T>(string key);
-
-    /// <summary>Sets a per-plugin setting value (serialized to JSON).</summary>
-    void SetSetting<T>(string key, T value);
-
     /// <summary>Directory where the plugin can store its own data files.</summary>
     string PluginDataDirectory { get; }
 
@@ -37,25 +22,40 @@ public interface IPluginHostServices
     /// <summary>Names of all available dictation profiles.</summary>
     IReadOnlyList<string> AvailableProfileNames { get; }
 
+    /// <summary>
+    ///     Localization service for the plugin. Loads strings from JSON files in the
+    ///     plugin's Localization/ subdirectory (e.g. Localization/en.json, Localization/de.json).
+    /// </summary>
+    IPluginLocalization Localization { get; }
+
+    /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
+    Task StoreSecretAsync(string key, string value);
+
+    /// <summary>Loads a previously stored secret, or null if not found.</summary>
+    Task<string?> LoadSecretAsync(string key);
+
+    /// <summary>Deletes a stored secret.</summary>
+    Task DeleteSecretAsync(string key);
+
+    /// <summary>Gets a per-plugin setting value deserialized from JSON, or default if not found.</summary>
+    T? GetSetting<T>(string key);
+
+    /// <summary>Sets a per-plugin setting value (serialized to JSON).</summary>
+    void SetSetting<T>(string key, T value);
+
     /// <summary>Logs a message through the host logging system.</summary>
     void Log(PluginLogLevel level, string message);
 
     /// <summary>
-    /// Notifies the host that the plugin's capabilities have changed (e.g. new models available).
-    /// The host will rebuild its capability indices and update the UI accordingly.
+    ///     Notifies the host that the plugin's capabilities have changed (e.g. new models available).
+    ///     The host will rebuild its capability indices and update the UI accordingly.
     /// </summary>
     void NotifyCapabilitiesChanged();
 
     /// <summary>
-    /// Localization service for the plugin. Loads strings from JSON files in the
-    /// plugin's Localization/ subdirectory (e.g. Localization/en.json, Localization/de.json).
-    /// </summary>
-    IPluginLocalization Localization { get; }
-
-    /// <summary>
-    /// Tells the host whether the plugin is currently rendering its own streaming text overlay.
-    /// Pass <c>true</c> when starting a custom streaming display; <c>false</c> when done.
-    /// While active, the host suppresses its built-in streaming overlay to avoid duplication.
+    ///     Tells the host whether the plugin is currently rendering its own streaming text overlay.
+    ///     Pass <c>true</c> when starting a custom streaming display; <c>false</c> when done.
+    ///     While active, the host suppresses its built-in streaming overlay to avoid duplication.
     /// </summary>
     void SetStreamingDisplayActive(bool active) { }
 }

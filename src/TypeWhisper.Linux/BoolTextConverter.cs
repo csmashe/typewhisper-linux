@@ -1,12 +1,12 @@
-using System.Globalization;
 using Avalonia.Data.Converters;
+using System.Globalization;
 
 namespace TypeWhisper.Linux;
 
 /// <summary>
-/// Maps a bool to one of two strings via a converter parameter in the form:
-/// <c>True=yes|False=no</c>. If the parameter is absent or a key is missing,
-/// the original value is returned unchanged.
+///     Maps a bool to one of two strings via a converter parameter in the form:
+///     <c>True=yes|False=no</c>. If the parameter is absent or a key is missing,
+///     the original value is returned unchanged.
 /// </summary>
 public sealed class BoolTextConverter : IValueConverter
 {
@@ -19,7 +19,10 @@ public sealed class BoolTextConverter : IValueConverter
             return value;
         }
 
-        var parts = mapping.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = mapping.Split(
+            '|',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+        );
         string? trueValue = null;
         string? falseValue = null;
 
@@ -44,5 +47,13 @@ public sealed class BoolTextConverter : IValueConverter
         return boolValue ? trueValue ?? value : falseValue ?? value;
     }
 
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => value;
+    public object? ConvertBack(
+        object? value,
+        Type targetType,
+        object? parameter,
+        CultureInfo culture
+    )
+    {
+        return value;
+    }
 }

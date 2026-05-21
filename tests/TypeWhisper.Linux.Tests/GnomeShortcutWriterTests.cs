@@ -4,11 +4,11 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-/// Highest-risk surface in Phase 6 per the phase spec: the GNOME
-/// custom-keybindings list parser. A bug here can silently overwrite
-/// the user's other custom shortcuts. The tests cover every shape
-/// gsettings is documented (or observed in the wild) to emit, plus a
-/// few hand-edited-via-dconf-editor variants.
+///     Highest-risk surface in Phase 6 per the phase spec: the GNOME
+///     custom-keybindings list parser. A bug here can silently overwrite
+///     the user's other custom shortcuts. The tests cover every shape
+///     gsettings is documented (or observed in the wild) to emit, plus a
+///     few hand-edited-via-dconf-editor variants.
 /// </summary>
 public sealed class GnomeShortcutWriterTests
 {
@@ -30,9 +30,13 @@ public sealed class GnomeShortcutWriterTests
     public void ParseGSettingsList_SingleEntry_ReturnsOneItem()
     {
         var result = GnomeShortcutWriter.ParseGSettingsList(
-            "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/']");
+            "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/']"
+        );
         Assert.Single(result);
-        Assert.Equal("/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/", result[0]);
+        Assert.Equal(
+            "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/",
+            result[0]
+        );
     }
 
     [Fact]
@@ -104,7 +108,9 @@ public sealed class GnomeShortcutWriterTests
         // \n inside a single-quoted entry is not something gsettings
         // emits — accepting it would let us silently rewrite the
         // user's entry on round-trip.
-        Assert.Throws<FormatException>(() => GnomeShortcutWriter.ParseGSettingsList(@"['foo\nbar']"));
+        Assert.Throws<FormatException>(() =>
+            GnomeShortcutWriter.ParseGSettingsList(@"['foo\nbar']")
+        );
     }
 
     [Fact]
@@ -143,7 +149,10 @@ public sealed class GnomeShortcutWriterTests
     [Fact]
     public void FormatGnomeAccel_ProducesGtkAcceleratorFormat()
     {
-        Assert.Equal("<Control><Shift>space", GnomeShortcutWriter.FormatGnomeAccel("Ctrl+Shift+Space"));
+        Assert.Equal(
+            "<Control><Shift>space",
+            GnomeShortcutWriter.FormatGnomeAccel("Ctrl+Shift+Space")
+        );
         Assert.Equal("<Control><Alt>F9", GnomeShortcutWriter.FormatGnomeAccel("Ctrl+Alt+F9"));
         Assert.Equal("<Super>k", GnomeShortcutWriter.FormatGnomeAccel("Super+K"));
     }

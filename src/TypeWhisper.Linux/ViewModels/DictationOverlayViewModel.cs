@@ -1,7 +1,7 @@
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
-using CommunityToolkit.Mvvm.ComponentModel;
 using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.Linux.ViewModels;
@@ -9,46 +9,63 @@ namespace TypeWhisper.Linux.ViewModels;
 public partial class DictationOverlayViewModel : ObservableObject
 {
     private readonly AudioRecordingService _audio;
-    private readonly ISettingsService _settings;
-    private readonly DispatcherTimer _recordingTimer;
     private readonly DispatcherTimer _feedbackTimer;
+    private readonly DispatcherTimer _recordingTimer;
+    private readonly ISettingsService _settings;
+
+    [ObservableProperty]
+    private string? _activeAppName;
+
+    [ObservableProperty]
+    private string? _activeProfileName;
+
+    [ObservableProperty]
+    private float _audioLevel;
+
+    [ObservableProperty]
+    private bool _feedbackIsError;
+
+    [ObservableProperty]
+    private string? _feedbackText;
+
+    [ObservableProperty]
+    private bool _isOverlayVisible;
+
+    [ObservableProperty]
+    private bool _isRecording;
+
+    [ObservableProperty]
+    private string? _partialText;
+
+    [ObservableProperty]
+    private double _recordingSeconds;
+
     private DateTime? _sessionStartedAtUtc;
 
-    [ObservableProperty] private bool _isOverlayVisible;
-    [ObservableProperty] private bool _showFeedback;
-    [ObservableProperty] private bool _feedbackIsError;
-    [ObservableProperty] private bool _isRecording;
-    [ObservableProperty] private string _statusText = "Ready";
-    [ObservableProperty] private string? _partialText;
-    [ObservableProperty] private string? _feedbackText;
-    [ObservableProperty] private string? _activeProfileName;
-    [ObservableProperty] private string? _activeAppName;
-    [ObservableProperty] private double _recordingSeconds;
-    [ObservableProperty] private float _audioLevel;
+    [ObservableProperty]
+    private bool _showFeedback;
+
+    [ObservableProperty]
+    private string _statusText = "Ready";
 
     public DictationOverlayViewModel(
         DictationOrchestrator dictation,
         TransformSelectionService transformSelection,
         AudioRecordingService audio,
         ISettingsService settings,
-        IDetectionFailureTracker failureTracker)
+        IDetectionFailureTracker failureTracker
+    )
     {
         _audio = audio;
         _settings = settings;
 
-        _recordingTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(100)
-        };
+        _recordingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _recordingTimer.Tick += (_, _) => RefreshRecordingSeconds();
 
         // Auto-hide feedback after 2 seconds. New events call
         // RestartFeedbackTimer() to re-arm even when ShowFeedback is already true
         // (a plain re-assignment skips OnShowFeedbackChanged due to value equality).
-        _feedbackTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(2)
-        };
+        _feedbackTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _feedbackTimer.Tick += (_, _) =>
         {
             _feedbackTimer.Stop();
@@ -63,14 +80,17 @@ public partial class DictationOverlayViewModel : ObservableObject
         transformSelection.OverlayStateChanged += (_, state) =>
             Dispatcher.UIThread.Post(() => ApplyState(state));
 
-        _audio.LevelChanged += (_, level) =>
-            Dispatcher.UIThread.Post(() => AudioLevel = level);
+        _audio.LevelChanged += (_, level) => Dispatcher.UIThread.Post(() => AudioLevel = level);
 
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(RefreshOverlaySlots);
 
         failureTracker.OnFailure += (_, e) =>
         {
-            if (e.ShouldShowPersistentBanner) return;
+            if (e.ShouldShowPersistentBanner)
+            {
+                return;
+            }
+
             Dispatcher.UIThread.Post(() =>
             {
                 FeedbackText = e.Reason;
@@ -97,14 +117,27 @@ public partial class DictationOverlayViewModel : ObservableObject
     // 18px minimum (static indicator pip) + up to 54px of live meter fill.
     public double AudioMeterWidth => 18 + Math.Clamp(AudioLevel, 0f, 1f) * 54;
     public string FeedbackForeground => FeedbackIsError ? "#FF8888" : "#66E3A2";
-    public bool ShowLeftMeter => ResolveWidget(_settings.Current.OverlayLeftWidget) == OverlaySlotKind.Meter;
-    public bool ShowLeftText => ResolveWidget(_settings.Current.OverlayLeftWidget) == OverlaySlotKind.Text;
+
+    public bool ShowLeftMeter =>
+        ResolveWidget(_settings.Current.OverlayLeftWidget) == OverlaySlotKind.Meter;
+
+    public bool ShowLeftText =>
+        ResolveWidget(_settings.Current.OverlayLeftWidget) == OverlaySlotKind.Text;
+
     public string LeftText => ResolveText(_settings.Current.OverlayLeftWidget);
-    public bool ShowRightMeter => ResolveWidget(_settings.Current.OverlayRightWidget) == OverlaySlotKind.Meter;
-    public bool ShowRightText => ResolveWidget(_settings.Current.OverlayRightWidget) == OverlaySlotKind.Text;
+
+    public bool ShowRightMeter =>
+        ResolveWidget(_settings.Current.OverlayRightWidget) == OverlaySlotKind.Meter;
+
+    public bool ShowRightText =>
+        ResolveWidget(_settings.Current.OverlayRightWidget) == OverlaySlotKind.Text;
+
     public string RightText => ResolveText(_settings.Current.OverlayRightWidget);
 
-    partial void OnIsOverlayVisibleChanged(bool value) => OnPropertyChanged(nameof(HasVisibleContent));
+    partial void OnIsOverlayVisibleChanged(bool value)
+    {
+        OnPropertyChanged(nameof(HasVisibleContent));
+    }
 
     partial void OnShowFeedbackChanged(bool value)
     {
@@ -112,7 +145,9 @@ public partial class DictationOverlayViewModel : ObservableObject
 
         _feedbackTimer.Stop();
         if (value)
+        {
             _feedbackTimer.Start();
+        }
     }
 
     private void RestartFeedbackTimer()
@@ -121,7 +156,10 @@ public partial class DictationOverlayViewModel : ObservableObject
         _feedbackTimer.Start();
     }
 
-    partial void OnRecordingSecondsChanged(double value) => OnPropertyChanged(nameof(RecordingTimerText));
+    partial void OnRecordingSecondsChanged(double value)
+    {
+        OnPropertyChanged(nameof(RecordingTimerText));
+    }
 
     partial void OnAudioLevelChanged(float value)
     {
@@ -130,7 +168,10 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(RightText));
     }
 
-    partial void OnFeedbackIsErrorChanged(bool value) => OnPropertyChanged(nameof(FeedbackForeground));
+    partial void OnFeedbackIsErrorChanged(bool value)
+    {
+        OnPropertyChanged(nameof(FeedbackForeground));
+    }
 
     private void ApplyState(DictationOverlayState state)
     {
@@ -181,37 +222,43 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(RightText));
     }
 
-    private OverlaySlotKind ResolveWidget(OverlayWidget widget) => widget switch
+    private OverlaySlotKind ResolveWidget(OverlayWidget widget)
     {
-        OverlayWidget.None => OverlaySlotKind.None,
-        OverlayWidget.Indicator => OverlaySlotKind.Meter,
-        OverlayWidget.Waveform => OverlaySlotKind.Meter,
-        OverlayWidget.Timer => OverlaySlotKind.Text,
-        OverlayWidget.Clock => OverlaySlotKind.Text,
-        OverlayWidget.Profile => OverlaySlotKind.Text,
-        OverlayWidget.HotkeyMode => OverlaySlotKind.Text,
-        OverlayWidget.AppName => OverlaySlotKind.Text,
-        _ => OverlaySlotKind.None
-    };
-
-    private string ResolveText(OverlayWidget widget) => widget switch
-    {
-        OverlayWidget.Timer => RecordingTimerText,
-        OverlayWidget.Clock => DateTime.Now.ToString("t"),
-        OverlayWidget.Profile => ActiveProfileName ?? "",
-        OverlayWidget.HotkeyMode => _settings.Current.Mode switch
+        return widget switch
         {
-            RecordingMode.Toggle => "Toggle",
-            RecordingMode.PushToTalk => "Push to talk",
-            RecordingMode.Hybrid => "Hybrid",
+            OverlayWidget.None => OverlaySlotKind.None,
+            OverlayWidget.Indicator => OverlaySlotKind.Meter,
+            OverlayWidget.Waveform => OverlaySlotKind.Meter,
+            OverlayWidget.Timer => OverlaySlotKind.Text,
+            OverlayWidget.Clock => OverlaySlotKind.Text,
+            OverlayWidget.Profile => OverlaySlotKind.Text,
+            OverlayWidget.HotkeyMode => OverlaySlotKind.Text,
+            OverlayWidget.AppName => OverlaySlotKind.Text,
+            _ => OverlaySlotKind.None
+        };
+    }
+
+    private string ResolveText(OverlayWidget widget)
+    {
+        return widget switch
+        {
+            OverlayWidget.Timer => RecordingTimerText,
+            OverlayWidget.Clock => DateTime.Now.ToString("t"),
+            OverlayWidget.Profile => ActiveProfileName ?? "",
+            OverlayWidget.HotkeyMode => _settings.Current.Mode switch
+            {
+                RecordingMode.Toggle => "Toggle",
+                RecordingMode.PushToTalk => "Push to talk",
+                RecordingMode.Hybrid => "Hybrid",
+                _ => ""
+            },
+            OverlayWidget.AppName => ActiveAppName ?? "",
+            OverlayWidget.Indicator => "",
+            OverlayWidget.Waveform => "",
+            OverlayWidget.None => "",
             _ => ""
-        },
-        OverlayWidget.AppName => ActiveAppName ?? "",
-        OverlayWidget.Indicator => "",
-        OverlayWidget.Waveform => "",
-        OverlayWidget.None => "",
-        _ => ""
-    };
+        };
+    }
 }
 
 internal enum OverlaySlotKind

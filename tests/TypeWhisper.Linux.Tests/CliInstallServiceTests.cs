@@ -5,8 +5,21 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class CliInstallServiceTests : IDisposable
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"tw-cli-test-{Guid.NewGuid():N}");
     private readonly string? _originalPath = Environment.GetEnvironmentVariable("PATH");
+
+    private readonly string _tempDir = Path.Combine(
+        Path.GetTempPath(),
+        $"tw-cli-test-{Guid.NewGuid():N}"
+    );
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("PATH", _originalPath);
+        if (Directory.Exists(_tempDir))
+        {
+            Directory.Delete(_tempDir, true);
+        }
+    }
 
     [Fact]
     public void GetState_reports_missing_bundle()
@@ -14,7 +27,8 @@ public sealed class CliInstallServiceTests : IDisposable
         var service = new CliInstallService(
             () => null,
             () => Path.Combine(_tempDir, "install"),
-            () => Path.Combine(_tempDir, "bin"));
+            () => Path.Combine(_tempDir, "bin")
+        );
 
         var state = service.GetState();
 
@@ -38,7 +52,8 @@ public sealed class CliInstallServiceTests : IDisposable
         var service = new CliInstallService(
             () => Path.Combine(sourceDir, "typewhisper"),
             () => installDir,
-            () => launcherDir);
+            () => launcherDir
+        );
 
         var state = service.Install();
 
@@ -48,7 +63,10 @@ public sealed class CliInstallServiceTests : IDisposable
         Assert.True(File.Exists(Path.Combine(installDir, "typewhisper")));
         Assert.True(File.Exists(Path.Combine(installDir, "typewhisper.dll")));
         Assert.True(File.Exists(Path.Combine(installDir, "typewhisper.runtimeconfig.json")));
-        Assert.Contains(Path.Combine(installDir, "typewhisper"), File.ReadAllText(Path.Combine(launcherDir, "typewhisper")));
+        Assert.Contains(
+            Path.Combine(installDir, "typewhisper"),
+            File.ReadAllText(Path.Combine(launcherDir, "typewhisper"))
+        );
     }
 
     [Fact]
@@ -57,14 +75,17 @@ public sealed class CliInstallServiceTests : IDisposable
         var cli = CliInstallService.BuildCliExamples(9876);
         var curl = CliInstallService.BuildCurlExamples(9876);
 
-        Assert.Contains(cli, command => command.Contains("TYPEWHISPER_API_TOKEN", StringComparison.Ordinal));
-        Assert.Contains(curl, command => command.Contains("Authorization: Bearer $TYPEWHISPER_API_TOKEN", StringComparison.Ordinal));
-    }
-
-    public void Dispose()
-    {
-        Environment.SetEnvironmentVariable("PATH", _originalPath);
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        Assert.Contains(
+            cli,
+            command => command.Contains("TYPEWHISPER_API_TOKEN", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            curl,
+            command =>
+                command.Contains(
+                    "Authorization: Bearer $TYPEWHISPER_API_TOKEN",
+                    StringComparison.Ordinal
+                )
+        );
     }
 }

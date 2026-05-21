@@ -6,26 +6,29 @@ using TypeWhisper.Linux.Services.ActiveWindow;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Linux active-window orchestrator. The compositor-specific work lives in
-/// the <see cref="IActiveWindowProvider"/> chain (xdotool, Hyprland, Sway,
-/// KWin, GNOME Shell) — this class iterates the chain and returns the
-/// first non-null snapshot. The synchronous <see cref="GetActiveWindowProcessName"/>
-/// and <see cref="GetActiveWindowTitle"/> getters walk the same chain with
-/// a tight per-provider budget so legacy callers keep working unchanged.
-/// AT-SPI URL extraction is delegated to <see cref="AtSpiUrlExtractor"/>;
-/// xclip clipboard capture remains here as the last-resort X11 fallback.
+///     Linux active-window orchestrator. The compositor-specific work lives in
+///     the <see cref="IActiveWindowProvider" /> chain (xdotool, Hyprland, Sway,
+///     KWin, GNOME Shell) — this class iterates the chain and returns the
+///     first non-null snapshot. The synchronous <see cref="GetActiveWindowProcessName" />
+///     and <see cref="GetActiveWindowTitle" /> getters walk the same chain with
+///     a tight per-provider budget so legacy callers keep working unchanged.
+///     AT-SPI URL extraction is delegated to <see cref="AtSpiUrlExtractor" />;
+///     xclip clipboard capture remains here as the last-resort X11 fallback.
 /// </summary>
 public sealed class ActiveWindowService : IActiveWindowService
 {
+    private const int AtSpiStateFocused = 11;
+    private const int AtSpiStateEditable = 18;
+    private const int AtSpiRoleEditBar = 77;
+    private const int AtSpiRoleEntry = 79;
     private static readonly TimeSpan ProviderSyncBudget = TimeSpan.FromMilliseconds(150);
-
-    private readonly IReadOnlyList<IActiveWindowProvider> _providers;
-    private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
 
     private static readonly bool IsXdotoolAvailable = CheckXdotoolAvailable();
     private static readonly bool IsXclipAvailable = CheckCommandAvailable("xclip", "-version");
 
-    private static readonly HashSet<string> BrowserProcessNames = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> BrowserProcessNames = new(
+        StringComparer.OrdinalIgnoreCase
+    )
     {
         "chrome",
         "msedge",
@@ -56,73 +59,33 @@ public sealed class ActiveWindowService : IActiveWindowService
         "zen"
     ];
 
-    private const int AtSpiStateFocused = 11;
-    private const int AtSpiStateEditable = 18;
-    private const int AtSpiRoleEditBar = 77;
-    private const int AtSpiRoleEntry = 79;
+    private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
 
-    public ActiveWindowService(IEnumerable<IActiveWindowProvider> providers, AtSpiUrlExtractor atSpiUrlExtractor)
+    private readonly IReadOnlyList<IActiveWindowProvider> _providers;
+
+    public ActiveWindowService(
+        IEnumerable<IActiveWindowProvider> providers,
+        AtSpiUrlExtractor atSpiUrlExtractor
+    )
     {
         _providers = providers.ToList();
         _atSpiUrlExtractor = atSpiUrlExtractor;
-    }
-
-    public async Task<ActiveWindowSnapshot?> GetActiveWindowSnapshotAsync(CancellationToken ct)
-    {
-        foreach (var provider in _providers)
-        {
-            if (!provider.IsApplicable()) continue;
-            try
-            {
-                // Give each provider its own slice of the caller's budget
-                // so a slow earlier provider can't starve later fallbacks.
-                // Without this, a single 50 ms caller CTS that's mostly
-                // consumed by the first applicable provider leaves every
-                // remaining provider with a near-cancelled token and they
-                // all early-return null. We still link the caller token
-                // so external cancellation (e.g. shutdown) propagates.
-                using var perProviderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                perProviderCts.CancelAfter(ProviderSyncBudget);
-                var snapshot = await provider.TryGetActiveWindowAsync(perProviderCts.Token).ConfigureAwait(false);
-                if (snapshot is not null) return snapshot;
-            }
-            catch
-            {
-                // Providers should never throw, but defensively skip any that do.
-            }
-        }
-        return null;
     }
 
     public string? GetActiveWindowProcessName()
     {
         var snapshot = GetActiveWindowSnapshotSync();
         if (snapshot?.ProcessName is { Length: > 0 } name)
+        {
             return name;
+        }
 
         return TryInferBrowserProcessNameFromTitle(snapshot?.Title);
     }
 
-    public string? GetActiveWindowTitle() => GetActiveWindowSnapshotSync()?.Title;
-
-    private ActiveWindowSnapshot? GetActiveWindowSnapshotSync()
+    public string? GetActiveWindowTitle()
     {
-        foreach (var provider in _providers)
-        {
-            if (!provider.IsApplicable()) continue;
-
-            using var cts = new CancellationTokenSource(ProviderSyncBudget);
-            try
-            {
-                var snapshot = provider.TryGetActiveWindowAsync(cts.Token).GetAwaiter().GetResult();
-                if (snapshot is not null) return snapshot;
-            }
-            catch
-            {
-                // Skip misbehaving providers — orchestration must never throw.
-            }
-        }
-        return null;
+        return GetActiveWindowSnapshotSync()?.Title;
     }
 
     public string? GetBrowserUrl(bool allowInteractiveCapture = true)
@@ -135,23 +98,39 @@ public sealed class ActiveWindowService : IActiveWindowService
 
         var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(processName, title);
         if (atSpiUrl is not null)
+        {
             return atSpiUrl;
+        }
 
         var inferredUrl = TryInferBrowserUrlFromTitle(title);
         if (inferredUrl is not null)
+        {
             return inferredUrl;
+        }
 
-        if (!allowInteractiveCapture || !IsXclipAvailable || !IsXdotoolAvailable || !IsSupportedBrowserWindow(processName, title))
+        if (
+            !allowInteractiveCapture
+            || !IsXclipAvailable
+            || !IsXdotoolAvailable
+            || !IsSupportedBrowserWindow(processName, title)
+        )
+        {
             return null;
+        }
 
         // Only reuse the snapshot's WindowId when it came from the X11/xdotool
         // provider — Wayland providers (sway, kwin, gnome-shell, hyprland)
         // expose compositor-specific ids that xdotool can't address.
         var windowId = snapshot?.Source == "xdotool" ? snapshot.WindowId : null;
         if (string.IsNullOrWhiteSpace(windowId))
+        {
             windowId = RunXdotool("getactivewindow");
+        }
+
         if (string.IsNullOrWhiteSpace(windowId))
+        {
             return null;
+        }
 
         return TryCaptureBrowserUrl(windowId);
     }
@@ -168,7 +147,9 @@ public sealed class ActiveWindowService : IActiveWindowService
                 try
                 {
                     if (process.Id != ownId && !string.IsNullOrWhiteSpace(process.MainWindowTitle))
+                    {
                         names.Add(process.ProcessName);
+                    }
                 }
                 catch
                 {
@@ -188,9 +169,77 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
+    public async Task<ActiveWindowSnapshot?> GetActiveWindowSnapshotAsync(CancellationToken ct)
+    {
+        foreach (var provider in _providers)
+        {
+            if (!provider.IsApplicable())
+            {
+                continue;
+            }
+
+            try
+            {
+                // Give each provider its own slice of the caller's budget
+                // so a slow earlier provider can't starve later fallbacks.
+                // Without this, a single 50 ms caller CTS that's mostly
+                // consumed by the first applicable provider leaves every
+                // remaining provider with a near-cancelled token and they
+                // all early-return null. We still link the caller token
+                // so external cancellation (e.g. shutdown) propagates.
+                using var perProviderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                perProviderCts.CancelAfter(ProviderSyncBudget);
+                var snapshot = await provider
+                    .TryGetActiveWindowAsync(perProviderCts.Token)
+                    .ConfigureAwait(false);
+                if (snapshot is not null)
+                {
+                    return snapshot;
+                }
+            }
+            catch
+            {
+                // Providers should never throw, but defensively skip any that do.
+            }
+        }
+
+        return null;
+    }
+
+    private ActiveWindowSnapshot? GetActiveWindowSnapshotSync()
+    {
+        foreach (var provider in _providers)
+        {
+            if (!provider.IsApplicable())
+            {
+                continue;
+            }
+
+            using var cts = new CancellationTokenSource(ProviderSyncBudget);
+            try
+            {
+                var snapshot = provider.TryGetActiveWindowAsync(cts.Token).GetAwaiter().GetResult();
+                if (snapshot is not null)
+                {
+                    return snapshot;
+                }
+            }
+            catch
+            {
+                // Skip misbehaving providers — orchestration must never throw.
+            }
+        }
+
+        return null;
+    }
+
     public string? GetActiveWindowId()
     {
-        if (!IsXdotoolAvailable) return null;
+        if (!IsXdotoolAvailable)
+        {
+            return null;
+        }
+
         var windowId = RunXdotool("getactivewindow");
         return string.IsNullOrWhiteSpace(windowId) ? null : windowId;
     }
@@ -198,7 +247,9 @@ public sealed class ActiveWindowService : IActiveWindowService
     public bool TryActivateWindow(string? windowId)
     {
         if (string.IsNullOrWhiteSpace(windowId) || !IsXdotoolAvailable)
+        {
             return false;
+        }
 
         var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId}", out _);
         return exitCode == 0;
@@ -214,10 +265,14 @@ public sealed class ActiveWindowService : IActiveWindowService
 
             // Clear first so a failed copy does not return stale clipboard contents.
             if (!TryWriteClipboardText(string.Empty))
+            {
                 return null;
+            }
 
             if (!SendBrowserAddressBarCaptureKeys(windowId))
+            {
                 return null;
+            }
 
             var copied = TryReadClipboardText();
             return SanitizeCapturedBrowserUrl(copied);
@@ -225,7 +280,9 @@ public sealed class ActiveWindowService : IActiveWindowService
         finally
         {
             if (previousClipboard is not null)
+            {
                 TryWriteClipboardText(previousClipboard);
+            }
         }
     }
 
@@ -234,12 +291,16 @@ public sealed class ActiveWindowService : IActiveWindowService
         // Linux adaptation: browsers reliably expose Ctrl+L / Ctrl+C on X11,
         // so we can capture the address bar without adding a full AT-SPI stack.
         if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+l"))
+        {
             return false;
+        }
 
         Thread.Sleep(60);
 
         if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+c"))
+        {
             return false;
+        }
 
         Thread.Sleep(80);
 
@@ -265,20 +326,28 @@ public sealed class ActiveWindowService : IActiveWindowService
         return exitCode == 0;
     }
 
-    internal static bool IsSupportedBrowserProcess(string? processName) =>
-        !string.IsNullOrWhiteSpace(processName) && BrowserProcessNames.Contains(processName);
+    internal static bool IsSupportedBrowserProcess(string? processName)
+    {
+        return !string.IsNullOrWhiteSpace(processName) && BrowserProcessNames.Contains(processName);
+    }
 
-    internal static bool IsSupportedBrowserWindow(string? processName, string? title) =>
-        IsSupportedBrowserProcess(processName)
-        || TryInferBrowserProcessNameFromTitle(title) is not null;
+    internal static bool IsSupportedBrowserWindow(string? processName, string? title)
+    {
+        return IsSupportedBrowserProcess(processName)
+               || TryInferBrowserProcessNameFromTitle(title) is not null;
+    }
 
     internal static string? TryInferBrowserProcessNameFromTitle(string? title)
     {
         if (string.IsNullOrWhiteSpace(title))
+        {
             return null;
+        }
 
         if (title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase))
+        {
             return "zen";
+        }
 
         return null;
     }
@@ -286,15 +355,19 @@ public sealed class ActiveWindowService : IActiveWindowService
     internal static string? TryInferBrowserUrlFromTitle(string? title)
     {
         if (string.IsNullOrWhiteSpace(title))
+        {
             return null;
+        }
 
         // Zen / Firefox Flatpak builds frequently report no process name via
         // xdotool (the XWayland surface is sandboxed under a different PID).
         // Matching the Gmail title suffix is reliable enough to activate
         // email-scoped profiles without having to focus the address bar, which
         // would be visible to the user and potentially disruptive.
-        if (title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
-            && title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase))
+        if (
+            title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
+            && title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase)
+        )
         {
             return "https://mail.google.com";
         }
@@ -305,19 +378,27 @@ public sealed class ActiveWindowService : IActiveWindowService
     internal static bool IsSupportedBrowserIdentity(string? identity)
     {
         if (string.IsNullOrWhiteSpace(identity))
+        {
             return false;
+        }
 
         if (IsSupportedBrowserProcess(identity))
+        {
             return true;
+        }
 
-        return BrowserAppNameHints.Any(hint => identity.Contains(hint, StringComparison.OrdinalIgnoreCase));
+        return BrowserAppNameHints.Any(hint =>
+            identity.Contains(hint, StringComparison.OrdinalIgnoreCase)
+        );
     }
 
     internal static string? SanitizeCapturedBrowserUrl(string? value)
     {
         var trimmed = value?.Trim();
         if (string.IsNullOrWhiteSpace(trimmed) || !IsLikelyUrl(trimmed))
+        {
             return null;
+        }
 
         return NormalizeUrl(trimmed);
     }
@@ -325,15 +406,23 @@ public sealed class ActiveWindowService : IActiveWindowService
     internal static bool IsLikelyUrl(string value)
     {
         if (value.Length < 3 || value.Length > 2048)
+        {
             return false;
+        }
 
-        if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        if (
+            value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
+        )
+        {
             return true;
+        }
 
         if (value.Contains(' ') || !value.Contains('.'))
+        {
             return false;
+        }
 
         var host = value.Split('/')[0];
         return host.Contains('.');
@@ -341,10 +430,14 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     internal static string NormalizeUrl(string value)
     {
-        if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        if (
+            value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
+        )
+        {
             return value;
+        }
 
         return "https://" + value;
     }
@@ -357,58 +450,90 @@ public sealed class ActiveWindowService : IActiveWindowService
     }
 
     /// <summary>
-    /// Scores an AT-SPI accessible node as a candidate for the browser's
-    /// current URL. Higher is better; <see cref="int.MinValue"/> means the
-    /// node's text is not a URL and should be ignored entirely.
-    /// The heuristic weights: role (EditBar > Entry), focused state,
-    /// editable state, AT-SPI Text interface, HTTP scheme, path depth,
-    /// and "address" in the accessible name.
+    ///     Scores an AT-SPI accessible node as a candidate for the browser's
+    ///     current URL. Higher is better; <see cref="int.MinValue" /> means the
+    ///     node's text is not a URL and should be ignored entirely.
+    ///     The heuristic weights: role (EditBar > Entry), focused state,
+    ///     editable state, AT-SPI Text interface, HTTP scheme, path depth,
+    ///     and "address" in the accessible name.
     /// </summary>
     internal static int ScoreBrowserUrlCandidate(
         int role,
         IReadOnlyList<uint> states,
         string? name,
         string? candidateText,
-        IReadOnlyList<string> interfaces)
+        IReadOnlyList<string> interfaces
+    )
     {
         var sanitized = SanitizeCapturedBrowserUrl(candidateText);
         if (sanitized is null)
+        {
             return int.MinValue;
+        }
 
         var score = 100;
         if (role == AtSpiRoleEditBar)
+        {
             score += 120;
+        }
         else if (role == AtSpiRoleEntry)
+        {
             score += 80;
+        }
 
         if (HasState(states, AtSpiStateFocused))
+        {
             score += 50;
+        }
+
         if (HasState(states, AtSpiStateEditable))
+        {
             score += 15;
+        }
+
         if (interfaces.Contains("org.a11y.atspi.Text", StringComparer.Ordinal))
+        {
             score += 10;
+        }
+
         if (sanitized.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        {
             score += 10;
+        }
+
         if (sanitized.Contains('/', StringComparison.Ordinal))
+        {
             score += 5;
-        if (!string.IsNullOrWhiteSpace(name) && name.Contains("address", StringComparison.OrdinalIgnoreCase))
+        }
+
+        if (
+            !string.IsNullOrWhiteSpace(name)
+            && name.Contains("address", StringComparison.OrdinalIgnoreCase)
+        )
+        {
             score += 40;
+        }
 
         return score;
     }
 
-    private static bool CheckXdotoolAvailable() => CheckCommandAvailable("xdotool", "--version");
+    private static bool CheckXdotoolAvailable()
+    {
+        return CheckCommandAvailable("xdotool", "--version");
+    }
 
     private static bool CheckCommandAvailable(string command, string args)
     {
         try
         {
-            using var p = Process.Start(new ProcessStartInfo(command, args)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
+            using var p = Process.Start(
+                new ProcessStartInfo(command, args)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+            );
             p?.WaitForExit(1000);
             return p?.ExitCode == 0;
         }
@@ -430,13 +555,18 @@ public sealed class ActiveWindowService : IActiveWindowService
 
         try
         {
-            using var p = Process.Start(new ProcessStartInfo(fileName, args)
+            using var p = Process.Start(
+                new ProcessStartInfo(fileName, args)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+            );
+            if (p is null)
             {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
-            if (p is null) return -1;
+                return -1;
+            }
 
             // Drain stdout and stderr concurrently. Reading only stdout would
             // deadlock if stderr's 4 kB kernel pipe buffer fills while the
@@ -446,7 +576,15 @@ public sealed class ActiveWindowService : IActiveWindowService
             var stderrTask = p.StandardError.ReadToEndAsync();
             if (!p.WaitForExit(1000))
             {
-                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                try
+                {
+                    p.Kill(true);
+                }
+                catch
+                {
+                    /* best effort */
+                }
+
                 return -1;
             }
 
@@ -464,14 +602,19 @@ public sealed class ActiveWindowService : IActiveWindowService
     {
         try
         {
-            using var p = Process.Start(new ProcessStartInfo(fileName, args)
+            using var p = Process.Start(
+                new ProcessStartInfo(fileName, args)
+                {
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+            );
+            if (p is null)
             {
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
-            if (p is null) return -1;
+                return -1;
+            }
 
             p.StandardInput.Write(input);
             p.StandardInput.Close();

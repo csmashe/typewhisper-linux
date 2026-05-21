@@ -227,9 +227,10 @@
                                             Content="Capture current"
                                             Command="{Binding CaptureCurrentProcessNameCommand}" />
                                 </Grid>
-                                <TextBlock Text="Enter process names and press Enter, or use Live Context for the current app."
-                                           Classes="page-subtitle"
-                                           Margin="0,0,0,14" />
+                                <TextBlock
+                                    Text="Enter process names and press Enter, or use Live Context for the current app."
+                                    Classes="page-subtitle"
+                                    Margin="0,0,0,14" />
 
                                 <StackPanel IsVisible="{Binding IsUrlPatternsSectionVisible}">
                                     <TextBlock Text="URL Patterns"
@@ -301,9 +302,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Task"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Choose when this profile should transcribe normally or translate instead."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Choose when this profile should transcribe normally or translate instead."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding TaskChoices}"
@@ -319,9 +321,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Translation"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Overrides the global translation setting for this profile."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Overrides the global translation setting for this profile."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding TranslationTargetOptions}"
@@ -389,9 +392,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Whisper Mode (AGC)"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Override the global whisper mode behavior for this profile."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Override the global whisper mode behavior for this profile."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding WhisperModeOptions}"
@@ -412,9 +416,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Style Preset"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Controls cleanup and developer-safe formatting for this profile."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Controls cleanup and developer-safe formatting for this profile."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding StylePresetOptions}"
@@ -436,9 +441,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Cleanup Override"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Use this only when the style preset needs a different cleanup level."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Use this only when the style preset needs a different cleanup level."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding CleanupOverrideOptions}"
@@ -459,9 +465,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Developer Formatting Override"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Force symbol and casing formatting on or off for this profile."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Force symbol and casing formatting on or off for this profile."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <!-- Reuses WhisperModeOptions (NullableBooleanOption list)
                                              because the three choices — inherit / on / off — are

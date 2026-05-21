@@ -41,7 +41,7 @@ internal sealed class WebhookStore
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     private readonly string _configPath;
@@ -58,7 +58,8 @@ internal sealed class WebhookStore
     /// </summary>
     public List<WebhookConfig> Load()
     {
-        if (!File.Exists(_configPath)) return [];
+        if (!File.Exists(_configPath))
+            return [];
 
         var json = File.ReadAllText(_configPath);
         return JsonSerializer.Deserialize<List<WebhookConfig>>(json, s_jsonOptions) ?? [];
@@ -80,7 +81,7 @@ public sealed class WebhookService
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     private readonly HttpClient _httpClient = new();
@@ -139,17 +140,24 @@ public sealed class WebhookService
     {
         foreach (var webhook in Webhooks.ToList())
         {
-            if (!webhook.IsEnabled) continue;
+            if (!webhook.IsEnabled)
+                continue;
 
-            if (webhook.ProfileFilter.Count > 0
-                && (evt.ProfileName is null || !webhook.ProfileFilter.Contains(evt.ProfileName)))
+            if (
+                webhook.ProfileFilter.Count > 0
+                && (evt.ProfileName is null || !webhook.ProfileFilter.Contains(evt.ProfileName))
+            )
                 continue;
 
             await SendSingleAsync(webhook, evt, retryOnFailure: true);
         }
     }
 
-    private async Task SendSingleAsync(WebhookConfig webhook, TranscriptionCompletedEvent evt, bool retryOnFailure)
+    private async Task SendSingleAsync(
+        WebhookConfig webhook,
+        TranscriptionCompletedEvent evt,
+        bool retryOnFailure
+    )
     {
         try
         {
@@ -160,7 +168,7 @@ public sealed class WebhookService
                 durationSeconds = evt.DurationSeconds,
                 modelId = evt.ModelId,
                 profileName = evt.ProfileName,
-                timestamp = evt.Timestamp
+                timestamp = evt.Timestamp,
             };
 
             var json = JsonSerializer.Serialize(payload, s_jsonOptions);
@@ -179,24 +187,28 @@ public sealed class WebhookService
 
             if (response.IsSuccessStatusCode)
             {
-                AddLogEntry(new DeliveryLogEntry
-                {
-                    WebhookName = webhook.Name,
-                    Url = webhook.Url,
-                    StatusCode = statusCode,
-                    Success = true
-                });
+                AddLogEntry(
+                    new DeliveryLogEntry
+                    {
+                        WebhookName = webhook.Name,
+                        Url = webhook.Url,
+                        StatusCode = statusCode,
+                        Success = true,
+                    }
+                );
             }
             else
             {
-                AddLogEntry(new DeliveryLogEntry
-                {
-                    WebhookName = webhook.Name,
-                    Url = webhook.Url,
-                    StatusCode = statusCode,
-                    Error = $"HTTP {statusCode}",
-                    Success = false
-                });
+                AddLogEntry(
+                    new DeliveryLogEntry
+                    {
+                        WebhookName = webhook.Name,
+                        Url = webhook.Url,
+                        StatusCode = statusCode,
+                        Error = $"HTTP {statusCode}",
+                        Success = false,
+                    }
+                );
 
                 if (retryOnFailure)
                 {
@@ -207,13 +219,15 @@ public sealed class WebhookService
         }
         catch (Exception ex)
         {
-            AddLogEntry(new DeliveryLogEntry
-            {
-                WebhookName = webhook.Name,
-                Url = webhook.Url,
-                Error = ex.Message,
-                Success = false
-            });
+            AddLogEntry(
+                new DeliveryLogEntry
+                {
+                    WebhookName = webhook.Name,
+                    Url = webhook.Url,
+                    Error = ex.Message,
+                    Success = false,
+                }
+            );
 
             if (retryOnFailure)
             {
@@ -251,14 +265,20 @@ public sealed class WebhookService
         }
         catch (Exception ex)
         {
-            _host.Log(PluginLogLevel.Warning, $"Failed to save webhook configuration: {ex.Message}");
+            _host.Log(
+                PluginLogLevel.Warning,
+                $"Failed to save webhook configuration: {ex.Message}"
+            );
         }
     }
 
     public void Dispose() => _httpClient.Dispose();
 }
 
-public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSettingsProvider, IPluginDataLocationAware
+public sealed class WebhookPlugin
+    : ITypeWhisperPlugin,
+        IPluginCollectionSettingsProvider,
+        IPluginDataLocationAware
 {
     private IDisposable? _subscription;
     private IPluginHostServices? _host;
@@ -274,7 +294,9 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
     {
         _host = host;
         Service = new WebhookService(host);
-        _subscription = host.EventBus.Subscribe<TranscriptionCompletedEvent>(OnTranscriptionCompleted);
+        _subscription = host.EventBus.Subscribe<TranscriptionCompletedEvent>(
+            OnTranscriptionCompleted
+        );
         return Task.CompletedTask;
     }
 
@@ -287,8 +309,8 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
 
     public IPluginHostServices? Host => _host;
 
-    private Task OnTranscriptionCompleted(TranscriptionCompletedEvent evt)
-        => Service?.SendWebhooksAsync(evt) ?? Task.CompletedTask;
+    private Task OnTranscriptionCompleted(TranscriptionCompletedEvent evt) =>
+        Service?.SendWebhooksAsync(evt) ?? Task.CompletedTask;
 
     public void Dispose()
     {
@@ -296,39 +318,66 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
         Service?.Dispose();
     }
 
-    public void SetDataDirectory(string pluginDataDirectory) => _dataDirectory = pluginDataDirectory;
+    public void SetDataDirectory(string pluginDataDirectory) =>
+        _dataDirectory = pluginDataDirectory;
 
-    private string ResolveDataDir()
-        => _dataDirectory
-           ?? throw new InvalidOperationException("Webhook plugin data directory has not been set.");
+    private string ResolveDataDir() =>
+        _dataDirectory
+        ?? throw new InvalidOperationException("Webhook plugin data directory has not been set.");
 
     public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
-    [
-        new PluginCollectionDefinition(
-            Key: "webhooks",
-            Label: "Webhooks",
-            Description: "HTTP endpoints notified when a transcription completes.",
-            ItemFields:
-            [
-                new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
-                new PluginSettingDefinition("url", "URL",
-                    Placeholder: "https://example.com/hook", Kind: PluginSettingKind.Text),
-                new PluginSettingDefinition("method", "Method",
-                    Options: [new PluginSettingOption("POST", "POST"), new PluginSettingOption("PUT", "PUT")],
-                    Kind: PluginSettingKind.Dropdown),
-                new PluginSettingDefinition("headers", "Headers",
-                    Description: "One Name: Value per line.", Kind: PluginSettingKind.Multiline),
-                new PluginSettingDefinition("profiles", "Profile filter",
-                    Description: "One profile name per line; blank = all profiles.",
-                    Kind: PluginSettingKind.Multiline),
-                new PluginSettingDefinition("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
-                new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text)
-            ],
-            ItemLabelFieldKey: "name",
-            AddButtonLabel: "Add webhook")
-    ];
+        [
+            new PluginCollectionDefinition(
+                Key: "webhooks",
+                Label: "Webhooks",
+                Description: "HTTP endpoints notified when a transcription completes.",
+                ItemFields:
+                [
+                    new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
+                    new PluginSettingDefinition(
+                        "url",
+                        "URL",
+                        Placeholder: "https://example.com/hook",
+                        Kind: PluginSettingKind.Text
+                    ),
+                    new PluginSettingDefinition(
+                        "method",
+                        "Method",
+                        Options:
+                        [
+                            new PluginSettingOption("POST", "POST"),
+                            new PluginSettingOption("PUT", "PUT"),
+                        ],
+                        Kind: PluginSettingKind.Dropdown
+                    ),
+                    new PluginSettingDefinition(
+                        "headers",
+                        "Headers",
+                        Description: "One Name: Value per line.",
+                        Kind: PluginSettingKind.Multiline
+                    ),
+                    new PluginSettingDefinition(
+                        "profiles",
+                        "Profile filter",
+                        Description: "One profile name per line; blank = all profiles.",
+                        Kind: PluginSettingKind.Multiline
+                    ),
+                    new PluginSettingDefinition(
+                        "enabled",
+                        "Enabled",
+                        Kind: PluginSettingKind.Boolean
+                    ),
+                    new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
+                ],
+                ItemLabelFieldKey: "name",
+                AddButtonLabel: "Add webhook"
+            ),
+        ];
 
-    public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(string collectionKey, CancellationToken ct = default)
+    public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
+        string collectionKey,
+        CancellationToken ct = default
+    )
     {
         if (collectionKey != "webhooks")
             return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
@@ -336,26 +385,33 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
         var source = Service?.Webhooks.AsEnumerable() ?? new WebhookStore(ResolveDataDir()).Load();
 
         IReadOnlyList<PluginCollectionItem> items = source
-            .Select(c => new PluginCollectionItem(new Dictionary<string, string?>
-            {
-                ["name"] = c.Name,
-                ["url"] = c.Url,
-                ["method"] = c.HttpMethod,
-                ["headers"] = SerializeHeaders(c.Headers),
-                ["profiles"] = SerializeProfiles(c.ProfileFilter),
-                ["enabled"] = c.IsEnabled ? "true" : "false",
-                ["__id"] = c.Id.ToString("D")
-            }))
+            .Select(c => new PluginCollectionItem(
+                new Dictionary<string, string?>
+                {
+                    ["name"] = c.Name,
+                    ["url"] = c.Url,
+                    ["method"] = c.HttpMethod,
+                    ["headers"] = SerializeHeaders(c.Headers),
+                    ["profiles"] = SerializeProfiles(c.ProfileFilter),
+                    ["enabled"] = c.IsEnabled ? "true" : "false",
+                    ["__id"] = c.Id.ToString("D"),
+                }
+            ))
             .ToList();
 
         return Task.FromResult(items);
     }
 
     public Task<PluginSettingsValidationResult> SetItemsAsync(
-        string collectionKey, IReadOnlyList<PluginCollectionItem> items, CancellationToken ct = default)
+        string collectionKey,
+        IReadOnlyList<PluginCollectionItem> items,
+        CancellationToken ct = default
+    )
     {
         if (collectionKey != "webhooks")
-            return Task.FromResult(new PluginSettingsValidationResult(false, "Unknown collection."));
+            return Task.FromResult(
+                new PluginSettingsValidationResult(false, "Unknown collection.")
+            );
 
         var configs = new List<WebhookConfig>(items.Count);
 
@@ -368,14 +424,18 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
                 return Fail(label, "name is required.");
 
             var url = (Get(item, "url") ?? "").Trim();
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUrl)
+            if (
+                !Uri.TryCreate(url, UriKind.Absolute, out var parsedUrl)
                 || (parsedUrl.Scheme != Uri.UriSchemeHttp && parsedUrl.Scheme != Uri.UriSchemeHttps)
-                || string.IsNullOrEmpty(parsedUrl.Host))
+                || string.IsNullOrEmpty(parsedUrl.Host)
+            )
                 return Fail(label, "URL must be a valid absolute http:// or https:// URL.");
 
             var rawMethod = (Get(item, "method") ?? "").Trim();
-            if (!rawMethod.Equals("POST", StringComparison.OrdinalIgnoreCase)
-                && !rawMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase))
+            if (
+                !rawMethod.Equals("POST", StringComparison.OrdinalIgnoreCase)
+                && !rawMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase)
+            )
                 return Fail(label, "method must be POST or PUT.");
             var method = rawMethod.ToUpperInvariant();
 
@@ -387,16 +447,18 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
 
             var id = Guid.TryParse(Get(item, "__id"), out var parsedId) ? parsedId : Guid.NewGuid();
 
-            configs.Add(new WebhookConfig
-            {
-                Id = id,
-                Name = name,
-                Url = url,
-                HttpMethod = method,
-                Headers = headers,
-                ProfileFilter = ParseProfiles(Get(item, "profiles") ?? ""),
-                IsEnabled = enabled
-            });
+            configs.Add(
+                new WebhookConfig
+                {
+                    Id = id,
+                    Name = name,
+                    Url = url,
+                    HttpMethod = method,
+                    Headers = headers,
+                    ProfileFilter = ParseProfiles(Get(item, "profiles") ?? ""),
+                    IsEnabled = enabled,
+                }
+            );
         }
 
         if (Service is not null)
@@ -414,19 +476,25 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
             }
             catch (Exception ex)
             {
-                return Task.FromResult(new PluginSettingsValidationResult(
-                    false, $"Failed to save settings: {ex.Message}"));
+                return Task.FromResult(
+                    new PluginSettingsValidationResult(
+                        false,
+                        $"Failed to save settings: {ex.Message}"
+                    )
+                );
             }
         }
 
         return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
 
-        static Task<PluginSettingsValidationResult> Fail(string label, string reason)
-            => Task.FromResult(new PluginSettingsValidationResult(false, $"Webhook '{label}': {reason}"));
+        static Task<PluginSettingsValidationResult> Fail(string label, string reason) =>
+            Task.FromResult(
+                new PluginSettingsValidationResult(false, $"Webhook '{label}': {reason}")
+            );
     }
 
-    private static string? Get(PluginCollectionItem item, string key)
-        => item.Values.TryGetValue(key, out var value) ? value : null;
+    private static string? Get(PluginCollectionItem item, string key) =>
+        item.Values.TryGetValue(key, out var value) ? value : null;
 
     private static bool TryGetBool(PluginCollectionItem item, string key, out bool value)
     {
@@ -438,14 +506,18 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
     }
 
     /// <summary>Serializes headers to one <c>Name: Value</c> line each.</summary>
-    internal static string SerializeHeaders(IReadOnlyDictionary<string, string> headers)
-        => string.Join("\n", headers.Select(h => $"{h.Key}: {h.Value}"));
+    internal static string SerializeHeaders(IReadOnlyDictionary<string, string> headers) =>
+        string.Join("\n", headers.Select(h => $"{h.Key}: {h.Value}"));
 
     /// <summary>
     /// Parses multiline header text. Each non-blank line is split on the first
     /// <c>:</c> only. Returns false with an error message when a line is malformed.
     /// </summary>
-    internal static bool TryParseHeaders(string? text, out Dictionary<string, string> headers, out string error)
+    internal static bool TryParseHeaders(
+        string? text,
+        out Dictionary<string, string> headers,
+        out string error
+    )
     {
         headers = [];
         error = "";
@@ -456,7 +528,8 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
         foreach (var rawLine in text.Split('\n'))
         {
             var line = rawLine.Trim();
-            if (line.Length == 0) continue;
+            if (line.Length == 0)
+                continue;
 
             var colon = line.IndexOf(':');
             if (colon < 0)
@@ -479,8 +552,8 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
     }
 
     /// <summary>Serializes the profile filter to one profile name per line.</summary>
-    internal static string SerializeProfiles(IEnumerable<string> profiles)
-        => string.Join("\n", profiles);
+    internal static string SerializeProfiles(IEnumerable<string> profiles) =>
+        string.Join("\n", profiles);
 
     /// <summary>Parses multiline profile text; trims each entry and skips blank lines.</summary>
     internal static List<string> ParseProfiles(string? text)
@@ -488,9 +561,6 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, IPluginCollectionSetting
         if (string.IsNullOrWhiteSpace(text))
             return [];
 
-        return text.Split('\n')
-            .Select(l => l.Trim())
-            .Where(l => l.Length > 0)
-            .ToList();
+        return text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
     }
 }

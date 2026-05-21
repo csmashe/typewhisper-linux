@@ -1,4 +1,3 @@
-using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
@@ -13,9 +12,13 @@ public sealed class SpeechFeedbackServiceTests
     public void AvailableProviders_includes_system_and_plugin_tts()
     {
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
-        var plugin = new FakeTtsProvider("cloud", "Cloud Voice", configured: true);
+        var plugin = new FakeTtsProvider("cloud", "Cloud Voice", true);
         var manager = TestPluginManagerFactory.Create(ttsProviders: [plugin]);
-        using var sut = new SpeechFeedbackService(settings.Object, manager, new FakeTtsProvider("linux-system", "Linux system", configured: true));
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            new FakeTtsProvider("linux-system", "Linux system", true)
+        );
 
         var providers = sut.AvailableProviders.Select(provider => provider.Id).ToArray();
 
@@ -27,7 +30,7 @@ public sealed class SpeechFeedbackServiceTests
     {
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
         var manager = TestPluginManagerFactory.Create();
-        var systemProvider = new FakeTtsProvider("linux-system", "Linux system", configured: true);
+        var systemProvider = new FakeTtsProvider("linux-system", "Linux system", true);
         using var sut = new SpeechFeedbackService(settings.Object, manager, systemProvider);
 
         sut.SelectVoice("linux-system", SpeechFeedbackService.DefaultVoiceOptionId);
@@ -38,18 +41,22 @@ public sealed class SpeechFeedbackServiceTests
     [Fact]
     public void EffectiveProvider_falls_back_to_system_when_selected_plugin_is_not_configured()
     {
-        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings
-        {
-            SpokenFeedbackProviderId = "cloud"
-        });
-        var plugin = new FakeTtsProvider("cloud", "Cloud Voice", configured: false);
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackProviderId = "cloud" }
+        );
+        var plugin = new FakeTtsProvider("cloud", "Cloud Voice", false);
         var manager = TestPluginManagerFactory.Create(ttsProviders: [plugin]);
-        using var sut = new SpeechFeedbackService(settings.Object, manager, new FakeTtsProvider("linux-system", "Linux system", configured: true));
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            new FakeTtsProvider("linux-system", "Linux system", true)
+        );
 
         Assert.Equal("linux-system", sut.EffectiveProviderId);
     }
 
-    private sealed class FakeTtsProvider(string providerId, string displayName, bool configured) : ITtsProviderPlugin
+    private sealed class FakeTtsProvider(string providerId, string displayName, bool configured)
+        : ITtsProviderPlugin
     {
         public string PluginId => $"plugin.{providerId}";
         public string PluginName => displayName;
@@ -60,11 +67,29 @@ public sealed class SpeechFeedbackServiceTests
         public IReadOnlyList<PluginVoiceInfo> AvailableVoices { get; } = [new("voice", "Voice")];
         public string? SelectedVoiceId { get; private set; }
 
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
-        public Task DeactivateAsync() => Task.CompletedTask;
-        public void SelectVoice(string? voiceId) => SelectedVoiceId = voiceId;
-        public Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct) =>
-            Task.FromResult<ITtsPlaybackSession>(InactiveSession.Instance);
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public void SelectVoice(string? voiceId)
+        {
+            SelectedVoiceId = voiceId;
+        }
+
+        public Task<ITtsPlaybackSession> SpeakAsync(
+            TtsSpeakRequest request,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult<ITtsPlaybackSession>(InactiveSession.Instance);
+        }
+
         public void Dispose() { }
     }
 
@@ -72,11 +97,13 @@ public sealed class SpeechFeedbackServiceTests
     {
         public static InactiveSession Instance { get; } = new();
         public bool IsActive => false;
+
         public event EventHandler? Completed
         {
             add { value?.Invoke(this, EventArgs.Empty); }
             remove { }
         }
+
         public void Stop() { }
     }
 }

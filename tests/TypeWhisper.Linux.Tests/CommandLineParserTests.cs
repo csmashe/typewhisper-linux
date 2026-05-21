@@ -8,7 +8,7 @@ public sealed class CommandLineParserTests
     [Fact]
     public void Empty_args_is_bare_toggle()
     {
-        var action = CommandLineParser.Parse(System.Array.Empty<string>());
+        var action = CommandLineParser.Parse(Array.Empty<string>());
         Assert.Equal(CliActionKind.BareToggle, action.Kind);
         Assert.False(action.StartMinimized);
     }

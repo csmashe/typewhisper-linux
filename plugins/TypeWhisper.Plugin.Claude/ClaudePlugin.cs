@@ -10,6 +10,7 @@ namespace TypeWhisper.Plugin.Claude;
 public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.anthropic.com";
+
     // Anthropic requires an anthropic-version header on every request; this is
     // the stable version that covers the Messages API used here.
     private const string AnthropicVersion = "2023-06-01";
@@ -44,7 +45,12 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         new PluginModelInfo("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("API key not configured");
@@ -54,16 +60,13 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
             model,
             max_tokens = 2048,
             system = systemPrompt,
-            messages = new[]
-            {
-                new { role = "user", content = userText }
-            }
+            messages = new[] { new { role = "user", content = userText } },
         };
 
-        var json = JsonSerializer.Serialize(requestBody, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        });
+        var json = JsonSerializer.Serialize(
+            requestBody,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
+        );
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/messages");
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -75,9 +78,13 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
         if (!response.IsSuccessStatusCode)
         {
-            _host?.Log(PluginLogLevel.Error, $"Anthropic API error {response.StatusCode}: {responseBody}");
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Anthropic API error {response.StatusCode}: {responseBody}"
+            );
             throw new HttpRequestException(
-                $"Anthropic API returned {(int)response.StatusCode}: {responseBody}");
+                $"Anthropic API returned {(int)response.StatusCode}: {responseBody}"
+            );
         }
 
         using var doc = JsonDocument.Parse(responseBody);
@@ -118,19 +125,24 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "sk-ant-...",
-            Description: "Required for Claude LLM requests.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "sk-ant-...",
+                Description: "Required for Claude LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;
@@ -142,12 +154,14 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
             return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(false, "Enter an API key first."));
+                new PluginSettingsValidationResult(false, "Enter an API key first.")
+            );
 
         var valid = ValidateApiKeyFormat(_apiKey);
         return Task.FromResult<PluginSettingsValidationResult?>(
             valid
                 ? new PluginSettingsValidationResult(true, "API key format looks valid.")
-                : new PluginSettingsValidationResult(false, "API key format is invalid."));
+                : new PluginSettingsValidationResult(false, "API key format is invalid.")
+        );
     }
 }

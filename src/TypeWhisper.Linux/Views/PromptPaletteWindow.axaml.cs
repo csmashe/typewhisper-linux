@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Views;
@@ -10,8 +11,6 @@ public partial class PromptPaletteWindow : Window
     private List<PromptAction> _filteredActions = [];
     private TaskCompletionSource<PromptAction?>? _resultSource;
 
-    public string SourceText { get; set; } = "";
-
     public PromptPaletteWindow()
     {
         InitializeComponent();
@@ -19,6 +18,8 @@ public partial class PromptPaletteWindow : Window
         Deactivated += OnDeactivated;
         Closed += OnClosed;
     }
+
+    public string SourceText { get; set; } = "";
 
     public void SetActions(IReadOnlyList<PromptAction> actions)
     {
@@ -37,9 +38,8 @@ public partial class PromptPaletteWindow : Window
     {
         if (!string.IsNullOrWhiteSpace(SourceText))
         {
-            SourcePreviewText.Text = SourceText.Length > 120
-                ? SourceText[..120] + "..."
-                : SourceText;
+            SourcePreviewText.Text =
+                SourceText.Length > 120 ? SourceText[..120] + "..." : SourceText;
             SourcePreviewBorder.IsVisible = true;
         }
 
@@ -51,7 +51,9 @@ public partial class PromptPaletteWindow : Window
     {
         // Dismiss without a selection when the user clicks away.
         if (_resultSource?.Task.IsCompleted == false)
+        {
             Complete(null);
+        }
     }
 
     private void OnClosed(object? sender, EventArgs e)
@@ -72,18 +74,32 @@ public partial class PromptPaletteWindow : Window
         {
             case Key.Down:
                 if (ActionListBox.SelectedIndex < _filteredActions.Count - 1)
+                {
                     ActionListBox.SelectedIndex++;
+                }
                 else if (ActionListBox.SelectedIndex == -1 && _filteredActions.Count > 0)
+                {
                     ActionListBox.SelectedIndex = 0;
+                }
+
                 if (ActionListBox.SelectedItem is not null)
+                {
                     ActionListBox.ScrollIntoView(ActionListBox.SelectedItem);
+                }
+
                 e.Handled = true;
                 break;
             case Key.Up:
                 if (ActionListBox.SelectedIndex > 0)
+                {
                     ActionListBox.SelectedIndex--;
+                }
+
                 if (ActionListBox.SelectedItem is not null)
+                {
                     ActionListBox.ScrollIntoView(ActionListBox.SelectedItem);
+                }
+
                 e.Handled = true;
                 break;
             case Key.Enter:
@@ -109,12 +125,12 @@ public partial class PromptPaletteWindow : Window
         Complete(ActionListBox.SelectedItem as PromptAction);
     }
 
-    private void CancelButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void CancelButton_OnClick(object? sender, RoutedEventArgs e)
     {
         Complete(null);
     }
 
-    private void RunButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void RunButton_OnClick(object? sender, RoutedEventArgs e)
     {
         Complete(ActionListBox.SelectedItem as PromptAction);
     }
@@ -124,8 +140,10 @@ public partial class PromptPaletteWindow : Window
         _filteredActions = string.IsNullOrWhiteSpace(query)
             ? _allActions.ToList()
             : _allActions
-                .Where(action => action.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                              || action.SystemPrompt.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .Where(action =>
+                    action.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                    || action.SystemPrompt.Contains(query, StringComparison.OrdinalIgnoreCase)
+                )
                 .ToList();
 
         ActionListBox.ItemsSource = _filteredActions;
@@ -138,14 +156,16 @@ public partial class PromptPaletteWindow : Window
         // TrySetResult returns false if the result was already set (e.g. by
         // OnClosed), so only close the window on the first successful call.
         if (_resultSource?.TrySetResult(action) != true)
+        {
             return;
+        }
 
         Close();
     }
 
     /// <summary>
-    /// Displays a status message and locks the UI while an action runs.
-    /// Called by the host after picking an action if it needs to show progress.
+    ///     Displays a status message and locks the UI while an action runs.
+    ///     Called by the host after picking an action if it needs to show progress.
     /// </summary>
     public void ShowStatus(string text)
     {

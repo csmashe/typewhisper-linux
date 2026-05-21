@@ -1,20 +1,22 @@
-using System.Net.Http;
 using System.Text.Json;
 
 namespace TypeWhisper.PluginSDK.Helpers;
 
 /// <summary>
-/// Shared HTTP error handling for OpenAI-compatible API calls.
+///     Shared HTTP error handling for OpenAI-compatible API calls.
 /// </summary>
 public static class OpenAiApiHelper
 {
     /// <summary>
-    /// Sends an HTTP request and throws <see cref="InvalidOperationException"/> for
-    /// network failures, timeouts, and non-success HTTP status codes, converting the
-    /// raw error body into a human-readable message where possible.
+    ///     Sends an HTTP request and throws <see cref="InvalidOperationException" /> for
+    ///     network failures, timeouts, and non-success HTTP status codes, converting the
+    ///     raw error body into a human-readable message where possible.
     /// </summary>
     public static async Task<HttpResponseMessage> SendWithErrorHandlingAsync(
-        HttpClient httpClient, HttpRequestMessage request, CancellationToken ct)
+        HttpClient httpClient,
+        HttpRequestMessage request,
+        CancellationToken ct
+    )
     {
         HttpResponseMessage response;
         try
@@ -47,8 +49,8 @@ public static class OpenAiApiHelper
     }
 
     /// <summary>
-    /// Extracts a human-readable error message from an OpenAI-style error JSON body.
-    /// Falls back to truncating the raw body if parsing fails.
+    ///     Extracts a human-readable error message from an OpenAI-style error JSON body.
+    ///     Falls back to truncating the raw body if parsing fails.
     /// </summary>
     public static string ExtractErrorMessage(string errorBody)
     {
@@ -57,10 +59,18 @@ public static class OpenAiApiHelper
             using var doc = JsonDocument.Parse(errorBody);
             if (doc.RootElement.TryGetProperty("error", out var errorEl))
             {
-                if (errorEl.ValueKind == JsonValueKind.Object && errorEl.TryGetProperty("message", out var msgEl))
+                if (
+                    errorEl.ValueKind == JsonValueKind.Object
+                    && errorEl.TryGetProperty("message", out var msgEl)
+                )
+                {
                     return msgEl.GetString() ?? errorBody;
+                }
+
                 if (errorEl.ValueKind == JsonValueKind.String)
+                {
                     return errorEl.GetString() ?? errorBody;
+                }
             }
         }
         catch

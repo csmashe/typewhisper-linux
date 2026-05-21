@@ -7,12 +7,12 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class LinuxKeyMapTests
 {
     [Theory]
-    [InlineData(57, KeyCode.VcSpace)]      // KEY_SPACE
-    [InlineData(1, KeyCode.VcEscape)]      // KEY_ESC
-    [InlineData(28, KeyCode.VcEnter)]      // KEY_ENTER
-    [InlineData(15, KeyCode.VcTab)]        // KEY_TAB
-    [InlineData(30, KeyCode.VcA)]          // KEY_A
-    [InlineData(50, KeyCode.VcM)]          // KEY_M
+    [InlineData(57, KeyCode.VcSpace)] // KEY_SPACE
+    [InlineData(1, KeyCode.VcEscape)] // KEY_ESC
+    [InlineData(28, KeyCode.VcEnter)] // KEY_ENTER
+    [InlineData(15, KeyCode.VcTab)] // KEY_TAB
+    [InlineData(30, KeyCode.VcA)] // KEY_A
+    [InlineData(50, KeyCode.VcM)] // KEY_M
     [InlineData(59, KeyCode.VcF1)]
     [InlineData(88, KeyCode.VcF12)]
     [InlineData(2, KeyCode.Vc1)]

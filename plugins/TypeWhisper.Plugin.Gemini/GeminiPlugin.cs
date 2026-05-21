@@ -46,13 +46,25 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         new PluginModelInfo("gemma-4-4b-it", "Gemma 4 4B"),
     ];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsAvailable)
             throw new InvalidOperationException("API key not configured");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
 
     internal string? ApiKey => _apiKey;
@@ -93,19 +105,24 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "AIza...",
-            Description: "Required for Gemini LLM requests.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "AIza...",
+                Description: "Required for Gemini LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;

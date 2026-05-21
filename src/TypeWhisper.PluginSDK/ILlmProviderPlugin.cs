@@ -3,7 +3,7 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Plugin that provides LLM chat-completion capabilities (e.g. for translation, course correction).
+///     Plugin that provides LLM chat-completion capabilities (e.g. for translation, course correction).
 /// </summary>
 public interface ILlmProviderPlugin : ITypeWhisperPlugin
 {
@@ -17,5 +17,10 @@ public interface ILlmProviderPlugin : ITypeWhisperPlugin
     IReadOnlyList<PluginModelInfo> SupportedModels { get; }
 
     /// <summary>Sends a chat completion request and returns the response text.</summary>
-    Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct);
+    Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    );
 }
