@@ -80,6 +80,7 @@ public sealed class ScriptService
 {
     private readonly IPluginHostServices _host;
     private readonly ScriptStore _store;
+    private bool _loadSucceeded;
 
     public ObservableCollection<ScriptEntry> Scripts { get; } = [];
 
@@ -285,15 +286,20 @@ public sealed class ScriptService
 
     private void Load()
     {
+        List<ScriptEntry> loaded;
         try
         {
-            foreach (var script in _store.Load())
-                Scripts.Add(NormalizeEntry(script));
+            loaded = _store.Load();
         }
         catch (Exception ex)
         {
             _host.Log(PluginLogLevel.Warning, $"Failed to load script configuration: {ex.Message}");
+            return;
         }
+
+        foreach (var script in loaded)
+            Scripts.Add(NormalizeEntry(script));
+        _loadSucceeded = true;
     }
 
     /// <summary>
@@ -312,6 +318,17 @@ public sealed class ScriptService
 
     public void Save()
     {
+        if (!_loadSucceeded)
+        {
+            // Refuse to write: the on-disk file failed to load and may still
+            // contain valid scripts that an empty/in-memory state would clobber.
+            _host.Log(
+                PluginLogLevel.Warning,
+                "Refusing to save script configuration because the existing file could not be loaded."
+            );
+            return;
+        }
+
         try
         {
             _store.Save(Scripts);

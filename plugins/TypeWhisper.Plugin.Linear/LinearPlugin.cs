@@ -306,7 +306,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         }
 
         var responseJson = await response.Content.ReadAsStringAsync(ct);
-        var doc = JsonDocument.Parse(responseJson);
+        using var doc = JsonDocument.Parse(responseJson);
 
         if (doc.RootElement.TryGetProperty("errors", out var errors))
         {
@@ -329,7 +329,8 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             return null;
         }
 
-        return doc.RootElement;
+        // Clone so the returned element survives the JsonDocument's pooled-buffer disposal.
+        return doc.RootElement.Clone();
     }
 
     private static string ExtractTitle(string input)

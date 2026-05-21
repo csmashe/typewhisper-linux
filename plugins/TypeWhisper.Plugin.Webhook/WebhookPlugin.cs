@@ -269,6 +269,7 @@ public sealed class WebhookService
                 PluginLogLevel.Warning,
                 $"Failed to save webhook configuration: {ex.Message}"
             );
+            throw;
         }
     }
 
@@ -480,28 +481,21 @@ public sealed class WebhookPlugin
             );
         }
 
-        if (Service is not null)
+        try
         {
-            Service.ReplaceAll(configs);
-        }
-        else
-        {
-            // No active service to absorb (and log) save errors, so a failed
-            // write here would escape SetItemsAsync. Convert it into a
-            // validation failure the settings UI can surface.
-            try
-            {
+            if (Service is not null)
+                Service.ReplaceAll(configs);
+            else
                 new WebhookStore(ResolveDataDir()).Save(configs);
-            }
-            catch (Exception ex)
-            {
-                return Task.FromResult(
-                    new PluginSettingsValidationResult(
-                        false,
-                        $"Failed to save settings: {ex.Message}"
-                    )
-                );
-            }
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(
+                new PluginSettingsValidationResult(
+                    false,
+                    $"Failed to save settings: {ex.Message}"
+                )
+            );
         }
 
         return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));

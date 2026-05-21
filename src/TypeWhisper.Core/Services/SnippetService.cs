@@ -392,7 +392,12 @@ public sealed partial class SnippetService : ISnippetService
             var json = JsonSerializer.Serialize(_cache, SnippetJsonContext.Default.ListSnippet);
             File.WriteAllText(_filePath, json);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[SnippetService] Failed to save snippets to {_filePath}: {ex}"
+            );
+        }
     }
 
     private static void PreserveBrokenFile(string path)
