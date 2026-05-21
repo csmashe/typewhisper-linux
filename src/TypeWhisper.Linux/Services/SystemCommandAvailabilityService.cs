@@ -9,7 +9,7 @@ public sealed class SystemCommandAvailabilityService
     private const int RtldNow = 2;
     private const int RtldGlobal = 0x100;
 
-    private static readonly string[] CudaLibraryPathCandidates =
+    private static readonly string[] s_cudaLibraryPathCandidates =
     [
         "/usr/local/cuda/lib64",
         "/usr/local/cuda/targets/x86_64-linux/lib",
@@ -35,8 +35,8 @@ public sealed class SystemCommandAvailabilityService
         "/usr/local/cuda-12.0/targets/x86_64-linux/lib"
     ];
 
-    private static readonly object CudaPreloadLock = new();
-    private static readonly List<IntPtr> CudaPreloadHandles = [];
+    private static readonly object s_cudaPreloadLock = new();
+    private static readonly List<IntPtr> s_cudaPreloadHandles = [];
 
     private LinuxCapabilitySnapshot _snapshot;
 
@@ -225,7 +225,7 @@ public sealed class SystemCommandAvailabilityService
 
     public static string? FindCuda12RuntimeDirectory()
     {
-        foreach (var path in CudaLibraryPathCandidates)
+        foreach (var path in s_cudaLibraryPathCandidates)
         {
             try
             {
@@ -264,9 +264,9 @@ public sealed class SystemCommandAvailabilityService
         // dlopen with RTLD_GLOBAL pins the CUDA libs into the process's
         // global symbol table so the native whisper/sherpa libraries can
         // find them even when they weren't in LD_LIBRARY_PATH at startup.
-        lock (CudaPreloadLock)
+        lock (s_cudaPreloadLock)
         {
-            if (CudaPreloadHandles.Count > 0)
+            if (s_cudaPreloadHandles.Count > 0)
             {
                 message = $"CUDA 12 runtime libraries were preloaded from {directory}.";
                 return true;
@@ -284,7 +284,7 @@ public sealed class SystemCommandAvailabilityService
                     return false;
                 }
 
-                CudaPreloadHandles.Add(handle);
+                s_cudaPreloadHandles.Add(handle);
             }
         }
 

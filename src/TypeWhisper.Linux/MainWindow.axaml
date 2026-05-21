@@ -21,7 +21,7 @@
              which cannot resolve DataType-only templates in a ContentControl
              at design time. The actual runtime binding lives in the inline
              DataTemplates on the ContentControl below. -->
-        <DataTemplate x:Key="SectionTemplate_Dashboard" DataType="vms:DashboardSectionViewModel">
+        <DataTemplate x:Key="SectionTemplateDashboard" DataType="vms:DashboardSectionViewModel">
             <sections:DashboardSection />
         </DataTemplate>
     </Window.Resources>
@@ -60,7 +60,7 @@
                                            IsVisible="{Binding IsHeader}" />
 
                                 <Button IsVisible="{Binding !IsHeader}"
-                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).NavigateToItemCommand}"
+                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).NavigateToItemCommand, FallbackValue={x:Null}}"
                                         CommandParameter="{Binding}"
                                         Background="Transparent"
                                         BorderThickness="0"

@@ -4,7 +4,7 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class AudioFileService
 {
-    private static readonly HashSet<string> SupportedExtensions = new(
+    private static readonly HashSet<string> s_supportedExtensions = new(
         StringComparer.OrdinalIgnoreCase
     )
     {
@@ -33,7 +33,7 @@ public sealed class AudioFileService
     public static bool IsSupported(string filePath)
     {
         var ext = Path.GetExtension(filePath);
-        return SupportedExtensions.Contains(ext);
+        return s_supportedExtensions.Contains(ext);
     }
 
     public async Task<byte[]> LoadAudioAsWavAsync(
@@ -57,20 +57,18 @@ public sealed class AudioFileService
         }
 
         // Transcode to mono 16 kHz PCM WAV on stdout: -vn drops any video
-        // stream, -ac 1 and -ar 16000 normalise to the format whisper.cpp /
+        // stream, -ac 1 and -ar 16000 normalize to the format whisper.cpp /
         // SherpaOnnx expects, and pipe:1 avoids a temp file on disk.
-        using var process = new Process
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo(
+            "ffmpeg",
+            $"-v error -i \"{filePath}\" -vn -ac 1 -ar 16000 -f wav pipe:1"
+        )
         {
-            StartInfo = new ProcessStartInfo(
-                "ffmpeg",
-                $"-v error -i \"{filePath}\" -vn -ac 1 -ar 16000 -f wav pipe:1"
-            )
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
         };
 
         process.Start();

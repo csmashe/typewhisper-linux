@@ -27,7 +27,7 @@ public sealed class MemoryService
     // on every short dictation. 30 s is long enough to batch conversational
     // speech but short enough that a single long session still gets facts
     // extracted in a timely manner.
-    private static readonly TimeSpan Cooldown = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan s_cooldown = TimeSpan.FromSeconds(30);
 
     private readonly PluginManager _pluginManager;
     private DateTime _lastExtraction = DateTime.MinValue;
@@ -44,7 +44,7 @@ public sealed class MemoryService
             return;
         }
 
-        if (DateTime.UtcNow - _lastExtraction < Cooldown)
+        if (DateTime.UtcNow - _lastExtraction < s_cooldown)
         {
             return;
         }

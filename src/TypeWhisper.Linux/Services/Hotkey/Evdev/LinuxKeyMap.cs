@@ -14,27 +14,27 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 internal static class LinuxKeyMap
 {
     // Modifier KEY_* codes (input-event-codes.h)
-    public const int KEY_LEFTCTRL = 29;
-    public const int KEY_LEFTSHIFT = 42;
-    public const int KEY_RIGHTSHIFT = 54;
-    public const int KEY_LEFTALT = 56;
-    public const int KEY_RIGHTCTRL = 97;
-    public const int KEY_RIGHTALT = 100;
-    public const int KEY_LEFTMETA = 125;
-    public const int KEY_RIGHTMETA = 126;
+    public const int KeyLeftctrl = 29;
+    public const int KeyLeftshift = 42;
+    public const int KeyRightshift = 54;
+    public const int KeyLeftalt = 56;
+    public const int KeyRightctrl = 97;
+    public const int KeyRightalt = 100;
+    public const int KeyLeftmeta = 125;
+    public const int KeyRightmeta = 126;
 
     public static ModifierMask ToModifier(int linuxCode)
     {
         return linuxCode switch
         {
-            KEY_LEFTCTRL => ModifierMask.LeftCtrl,
-            KEY_RIGHTCTRL => ModifierMask.RightCtrl,
-            KEY_LEFTSHIFT => ModifierMask.LeftShift,
-            KEY_RIGHTSHIFT => ModifierMask.RightShift,
-            KEY_LEFTALT => ModifierMask.LeftAlt,
-            KEY_RIGHTALT => ModifierMask.RightAlt,
-            KEY_LEFTMETA => ModifierMask.LeftMeta,
-            KEY_RIGHTMETA => ModifierMask.RightMeta,
+            KeyLeftctrl => ModifierMask.LeftCtrl,
+            KeyRightctrl => ModifierMask.RightCtrl,
+            KeyLeftshift => ModifierMask.LeftShift,
+            KeyRightshift => ModifierMask.RightShift,
+            KeyLeftalt => ModifierMask.LeftAlt,
+            KeyRightalt => ModifierMask.RightAlt,
+            KeyLeftmeta => ModifierMask.LeftMeta,
+            KeyRightmeta => ModifierMask.RightMeta,
             _ => ModifierMask.None
         };
     }
@@ -133,14 +133,14 @@ internal static class LinuxKeyMap
 
             // Modifiers — also mapped so a chord *whose key is the modifier*
             // (e.g. user binds Right Ctrl alone) still resolves.
-            KEY_LEFTCTRL => KeyCode.VcLeftControl,
-            KEY_RIGHTCTRL => KeyCode.VcRightControl,
-            KEY_LEFTSHIFT => KeyCode.VcLeftShift,
-            KEY_RIGHTSHIFT => KeyCode.VcRightShift,
-            KEY_LEFTALT => KeyCode.VcLeftAlt,
-            KEY_RIGHTALT => KeyCode.VcRightAlt,
-            KEY_LEFTMETA => KeyCode.VcLeftMeta,
-            KEY_RIGHTMETA => KeyCode.VcRightMeta,
+            KeyLeftctrl => KeyCode.VcLeftControl,
+            KeyRightctrl => KeyCode.VcRightControl,
+            KeyLeftshift => KeyCode.VcLeftShift,
+            KeyRightshift => KeyCode.VcRightShift,
+            KeyLeftalt => KeyCode.VcLeftAlt,
+            KeyRightalt => KeyCode.VcRightAlt,
+            KeyLeftmeta => KeyCode.VcLeftMeta,
+            KeyRightmeta => KeyCode.VcRightMeta,
 
             _ => null
         };

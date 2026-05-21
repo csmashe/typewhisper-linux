@@ -382,7 +382,26 @@ public sealed class WebhookPlugin
         if (collectionKey != "webhooks")
             return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
 
-        var source = Service?.Webhooks.AsEnumerable() ?? new WebhookStore(ResolveDataDir()).Load();
+        // When the plugin hasn't been activated yet we fall back to loading
+        // straight from disk. The store's Load propagates I/O / JSON errors —
+        // catch them here so settings retrieval doesn't break on a corrupt file.
+        IEnumerable<WebhookConfig> source;
+        if (Service is not null)
+        {
+            source = Service.Webhooks.AsEnumerable();
+        }
+        else
+        {
+            try
+            {
+                source = new WebhookStore(ResolveDataDir()).Load();
+            }
+            catch (Exception ex)
+            {
+                _host?.Log(PluginLogLevel.Warning, $"Failed to load webhooks: {ex.Message}");
+                source = [];
+            }
+        }
 
         IReadOnlyList<PluginCollectionItem> items = source
             .Select(c => new PluginCollectionItem(

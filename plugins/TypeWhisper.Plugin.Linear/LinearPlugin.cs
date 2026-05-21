@@ -310,11 +310,21 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
         if (doc.RootElement.TryGetProperty("errors", out var errors))
         {
-            var errorMsg = errors
-                .EnumerateArray()
-                .FirstOrDefault()
-                .GetProperty("message")
-                .GetString();
+            // GraphQL error arrays should contain { "message": "..." } objects, but
+            // be defensive: a missing/empty array or unexpected shape must not throw
+            // and hide the original failure.
+            string? errorMsg = null;
+            var firstError = errors.ValueKind == JsonValueKind.Array
+                ? errors.EnumerateArray().FirstOrDefault()
+                : default;
+
+            if (firstError.ValueKind == JsonValueKind.Object
+                && firstError.TryGetProperty("message", out var msgProp))
+            {
+                errorMsg = msgProp.GetString();
+            }
+
+            errorMsg ??= errors.GetRawText();
             _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
             return null;
         }

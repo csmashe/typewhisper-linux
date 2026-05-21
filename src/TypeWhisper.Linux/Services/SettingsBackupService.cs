@@ -10,16 +10,16 @@ public sealed class SettingsBackupService
 {
     private const string ManifestEntryName = "typewhisper-backup.json";
 
-    private static readonly string[] RootFiles =
+    private static readonly string[] s_rootFiles =
     [
         "settings.json",
         "settings.json.bak",
         "linux-preferences.json"
     ];
 
-    private static readonly string[] BackupDirectoryRoots = ["Data", "PluginData"];
+    private static readonly string[] s_backupDirectoryRoots = ["Data", "PluginData"];
 
-    private static readonly string[] RestoreDirectoryRoots = ["Data", "PluginData", "Plugins"];
+    private static readonly string[] s_restoreDirectoryRoots = ["Data", "PluginData", "Plugins"];
 
     private readonly string _basePath;
 
@@ -76,13 +76,13 @@ public sealed class SettingsBackupService
                 );
             }
 
-            foreach (var relativeFile in RootFiles)
+            foreach (var relativeFile in s_rootFiles)
             {
                 var path = Path.Combine(_basePath, relativeFile);
                 AddFileIfExists(archive, path, relativeFile, ref fileCount, ref bytes);
             }
 
-            foreach (var root in BackupDirectoryRoots)
+            foreach (var root in s_backupDirectoryRoots)
             {
                 var rootPath = Path.Combine(_basePath, root);
                 if (!Directory.Exists(rootPath))
@@ -156,7 +156,7 @@ public sealed class SettingsBackupService
 
             Directory.CreateDirectory(_basePath);
 
-            foreach (var relativeFile in RootFiles)
+            foreach (var relativeFile in s_rootFiles)
             {
                 var restoredPath = Path.Combine(tempDir, relativeFile);
                 if (!File.Exists(restoredPath))
@@ -169,7 +169,7 @@ public sealed class SettingsBackupService
                 File.Copy(restoredPath, targetPath, true);
             }
 
-            foreach (var root in RestoreDirectoryRoots)
+            foreach (var root in s_restoreDirectoryRoots)
             {
                 var restoredRoot = Path.Combine(tempDir, root);
                 if (!Directory.Exists(restoredRoot))
@@ -268,12 +268,12 @@ public sealed class SettingsBackupService
     private static bool IsAllowedEntry(string entryName)
     {
         var normalized = NormalizeEntryName(entryName);
-        if (RootFiles.Contains(normalized, StringComparer.Ordinal))
+        if (s_rootFiles.Contains(normalized, StringComparer.Ordinal))
         {
             return true;
         }
 
-        return RestoreDirectoryRoots.Any(root =>
+        return s_restoreDirectoryRoots.Any(root =>
             normalized.StartsWith(root + "/", StringComparison.Ordinal)
         );
     }

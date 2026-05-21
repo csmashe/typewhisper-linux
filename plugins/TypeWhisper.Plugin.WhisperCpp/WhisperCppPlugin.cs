@@ -228,6 +228,19 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         if (_computeBackend == normalized)
             return;
 
+        // RuntimeLibraryOrder is consulted once when the native library first
+        // loads (see EnsureRuntimeLibraryOrderInitialized). Once that has run,
+        // further backend swaps would desync the managed factory's UseGpu flag
+        // from the actual loaded native runtime, so refuse the change.
+        if (_runtimeLibraryOrderInitialized)
+        {
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Cannot switch compute backend to '{normalized}' after the native runtime has loaded ({_computeBackend}). Restart the app to change backends."
+            );
+            return;
+        }
+
         _computeBackend = normalized;
         if (_factory is not null)
         {

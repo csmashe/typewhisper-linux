@@ -81,11 +81,21 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         return Task.CompletedTask;
     }
 
-    public Task DeactivateAsync()
+    public async Task DeactivateAsync()
     {
-        UnloadModel();
+        // Acquire _inferenceLock so we can't dispose _context/_weights while
+        // ProcessAsync is mid-inference. Mirrors the unload path in
+        // SetSettingValueAsync and LoadModelAsync.
+        await _inferenceLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            UnloadModel();
+        }
+        finally
+        {
+            _inferenceLock.Release();
+        }
         _host = null;
-        return Task.CompletedTask;
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>

@@ -16,7 +16,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         "You are a professional translator. Translate the given text accurately and naturally. "
         + "Output ONLY the translation, nothing else. Do not add explanations, notes, or formatting.";
 
-    private static int _onnxResolverRegistered;
+    private static int s_onnxResolverRegistered;
     private readonly SemaphoreSlim _downloadSemaphore = new(1, 1);
     private readonly HttpClient _httpClient = new();
     private readonly Dictionary<string, LoadedTranslationModel> _loadedModels = new();
@@ -351,7 +351,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
     private static void RegisterOnnxRuntimeResolver()
     {
-        if (Interlocked.Exchange(ref _onnxResolverRegistered, 1) == 1)
+        if (Interlocked.Exchange(ref s_onnxResolverRegistered, 1) == 1)
         {
             return;
         }

@@ -22,10 +22,10 @@ public sealed class AudioRecordingService : IDisposable
     private const float AgcMaxGain = 20f;
     private const float AgcMinGain = 1f;
     public const float SpeechEnergyThreshold = 0.01f;
-    private static readonly TimeSpan StopDrainDuration = TimeSpan.FromMilliseconds(120);
+    private static readonly TimeSpan s_stopDrainDuration = TimeSpan.FromMilliseconds(120);
 
-    private static int _paInitCount;
-    private static readonly object _paInitLock = new();
+    private static int s_paInitCount;
+    private static readonly object s_paInitLock = new();
 
     private readonly List<float[]> _sampleChunks = [];
     private readonly object _sampleLock = new();
@@ -64,11 +64,11 @@ public sealed class AudioRecordingService : IDisposable
         StopAndDisposeInputStream();
         UpdateLevel(0f);
 
-        lock (_paInitLock)
+        lock (s_paInitLock)
         {
-            if (_paInitCount > 0)
+            if (s_paInitCount > 0)
             {
-                _paInitCount = 0;
+                s_paInitCount = 0;
                 try
                 {
                     PortAudio.Terminate();
@@ -159,7 +159,7 @@ public sealed class AudioRecordingService : IDisposable
 
         try
         {
-            await Task.Delay(StopDrainDuration, cancellationToken);
+            await Task.Delay(s_stopDrainDuration, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -641,12 +641,12 @@ public sealed class AudioRecordingService : IDisposable
     // every enumeration and Dispose would never terminate PortAudio.
     private static void EnsurePortAudioInitialized()
     {
-        lock (_paInitLock)
+        lock (s_paInitLock)
         {
-            if (_paInitCount == 0)
+            if (s_paInitCount == 0)
             {
                 PortAudio.Initialize();
-                _paInitCount = 1;
+                s_paInitCount = 1;
             }
         }
     }

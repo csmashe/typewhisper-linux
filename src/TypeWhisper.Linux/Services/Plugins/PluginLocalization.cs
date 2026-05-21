@@ -14,7 +14,7 @@ public sealed class PluginLocalization : IPluginLocalization
     private const string FallbackLanguage = "en";
     private const string LocalizationFolder = "Localization";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
@@ -45,7 +45,7 @@ public sealed class PluginLocalization : IPluginLocalization
                     var json = File.ReadAllText(file);
                     var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(
                         json,
-                        JsonOptions
+                        s_jsonOptions
                     );
                     if (dict is not null)
                     {

@@ -177,7 +177,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
                     async (text, ct) =>
                     {
                         var sourceLang = detectedLang ?? effectiveLang ?? "auto";
-                        if (sourceLang == targetLang)
+                        if (string.Equals(sourceLang, targetLang, StringComparison.OrdinalIgnoreCase))
                         {
                             return text;
                         }

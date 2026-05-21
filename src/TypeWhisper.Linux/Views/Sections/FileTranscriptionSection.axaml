@@ -217,11 +217,11 @@
                                                     Click="OnExportItemVtt"
                                                     IsVisible="{Binding CanExportSubtitles}" />
                                             <Button Content="Cancel"
-                                                    Command="{Binding $parent[UserControl].DataContext.CancelItemCommand}"
+                                                    Command="{Binding $parent[UserControl].((vm:FileTranscriptionSectionViewModel)DataContext).CancelItemCommand, FallbackValue={x:Null}}"
                                                     CommandParameter="{Binding}"
                                                     IsVisible="{Binding CanCancel}" />
                                             <Button Content="Remove"
-                                                    Command="{Binding $parent[UserControl].DataContext.RemoveItemCommand}"
+                                                    Command="{Binding $parent[UserControl].((vm:FileTranscriptionSectionViewModel)DataContext).RemoveItemCommand, FallbackValue={x:Null}}"
                                                     CommandParameter="{Binding}"
                                                     IsVisible="{Binding !IsProcessing}" />
                                         </StackPanel>
@@ -319,7 +319,8 @@
                             <TextBox Grid.Column="0"
                                      Text="{Binding WatchFolderPath}"
                                      PlaceholderText="Folder to watch" />
-                            <Button Grid.Column="1"
+                            <Button Grid.Row="0"
+                                    Grid.Column="1"
                                     Content="Choose..."
                                     Click="OnSelectWatchFolder" />
 
@@ -347,10 +348,12 @@
                                      PlaceholderText="Language" />
 
                             <CheckBox Grid.Row="3"
+                                      Grid.Column="0"
                                       Grid.ColumnSpan="2"
                                       Content="Start watching automatically when TypeWhisper opens"
                                       IsChecked="{Binding WatchFolderAutoStart}" />
                             <CheckBox Grid.Row="4"
+                                      Grid.Column="0"
                                       Grid.ColumnSpan="2"
                                       Content="Delete source files after successful transcription"
                                       IsChecked="{Binding WatchFolderDeleteSource}" />

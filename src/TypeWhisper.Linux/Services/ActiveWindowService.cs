@@ -21,12 +21,12 @@ public sealed class ActiveWindowService : IActiveWindowService
     private const int AtSpiStateEditable = 18;
     private const int AtSpiRoleEditBar = 77;
     private const int AtSpiRoleEntry = 79;
-    private static readonly TimeSpan ProviderSyncBudget = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan s_providerSyncBudget = TimeSpan.FromMilliseconds(150);
 
-    private static readonly bool IsXdotoolAvailable = CheckXdotoolAvailable();
-    private static readonly bool IsXclipAvailable = CheckCommandAvailable("xclip", "-version");
+    private static readonly bool s_isXdotoolAvailable = CheckXdotoolAvailable();
+    private static readonly bool s_isXclipAvailable = CheckCommandAvailable("xclip", "-version");
 
-    private static readonly HashSet<string> BrowserProcessNames = new(
+    private static readonly HashSet<string> s_browserProcessNames = new(
         StringComparer.OrdinalIgnoreCase
     )
     {
@@ -43,7 +43,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         "zen-bin"
     };
 
-    private static readonly string[] BrowserAppNameHints =
+    private static readonly string[] s_browserAppNameHints =
     [
         "google chrome",
         "chrome",
@@ -110,8 +110,8 @@ public sealed class ActiveWindowService : IActiveWindowService
 
         if (
             !allowInteractiveCapture
-            || !IsXclipAvailable
-            || !IsXdotoolAvailable
+            || !s_isXclipAvailable
+            || !s_isXdotoolAvailable
             || !IsSupportedBrowserWindow(processName, title)
         )
         {
@@ -188,7 +188,7 @@ public sealed class ActiveWindowService : IActiveWindowService
                 // all early-return null. We still link the caller token
                 // so external cancellation (e.g. shutdown) propagates.
                 using var perProviderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                perProviderCts.CancelAfter(ProviderSyncBudget);
+                perProviderCts.CancelAfter(s_providerSyncBudget);
                 var snapshot = await provider
                     .TryGetActiveWindowAsync(perProviderCts.Token)
                     .ConfigureAwait(false);
@@ -215,7 +215,7 @@ public sealed class ActiveWindowService : IActiveWindowService
                 continue;
             }
 
-            using var cts = new CancellationTokenSource(ProviderSyncBudget);
+            using var cts = new CancellationTokenSource(s_providerSyncBudget);
             try
             {
                 var snapshot = provider.TryGetActiveWindowAsync(cts.Token).GetAwaiter().GetResult();
@@ -235,7 +235,7 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     public string? GetActiveWindowId()
     {
-        if (!IsXdotoolAvailable)
+        if (!s_isXdotoolAvailable)
         {
             return null;
         }
@@ -246,7 +246,7 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     public bool TryActivateWindow(string? windowId)
     {
-        if (string.IsNullOrWhiteSpace(windowId) || !IsXdotoolAvailable)
+        if (string.IsNullOrWhiteSpace(windowId) || !s_isXdotoolAvailable)
         {
             return false;
         }
@@ -328,7 +328,7 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     internal static bool IsSupportedBrowserProcess(string? processName)
     {
-        return !string.IsNullOrWhiteSpace(processName) && BrowserProcessNames.Contains(processName);
+        return !string.IsNullOrWhiteSpace(processName) && s_browserProcessNames.Contains(processName);
     }
 
     internal static bool IsSupportedBrowserWindow(string? processName, string? title)
@@ -387,7 +387,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             return true;
         }
 
-        return BrowserAppNameHints.Any(hint =>
+        return s_browserAppNameHints.Any(hint =>
             identity.Contains(hint, StringComparison.OrdinalIgnoreCase)
         );
     }

@@ -43,14 +43,14 @@ public sealed class AtSpiUrlExtractor
     // headroom even on a busy system. The orchestrator's deferred-URL
     // timeout (4s) is strictly larger so the await never beats the
     // walker to the punch.
-    private static readonly TimeSpan WalkBudget = TimeSpan.FromMilliseconds(2500);
-    private static readonly bool IsBusctlAvailable = CheckCommandAvailable("busctl", "--version");
+    private static readonly TimeSpan s_walkBudget = TimeSpan.FromMilliseconds(2500);
+    private static readonly bool s_isBusctlAvailable = CheckCommandAvailable("busctl", "--version");
 
     // gdbus has no --version flag (exits 1 with "Unknown command"). Probe
     // with `help`, which exits 0 and proves the binary is runnable.
-    private static readonly bool IsGdbusAvailable = CheckCommandAvailable("gdbus", "help");
+    private static readonly bool s_isGdbusAvailable = CheckCommandAvailable("gdbus", "help");
 
-    private static readonly HashSet<string> SupportedBrowserProcessNames = new(
+    private static readonly HashSet<string> s_supportedBrowserProcessNames = new(
         StringComparer.OrdinalIgnoreCase
     )
     {
@@ -69,7 +69,7 @@ public sealed class AtSpiUrlExtractor
         "zen-bin"
     };
 
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan s_cacheTtl = TimeSpan.FromSeconds(10);
 
     // Diagnostic logging is normally off so the Error Log isn't polluted
     // by per-window walk summaries. Flip to true when debugging URL
@@ -79,7 +79,7 @@ public sealed class AtSpiUrlExtractor
     // plumbing stays compiled in either way so re-enabling is one edit.
     // Kept as static readonly (not const) so the C# compiler doesn't
     // flag the rest of LogOnce as unreachable code.
-    private static readonly bool DiagnosticLoggingEnabled = false;
+    private static readonly bool s_diagnosticLoggingEnabled = false;
 
     private readonly object _cacheLock = new();
     private readonly IErrorLogService? _errorLog;
@@ -107,7 +107,7 @@ public sealed class AtSpiUrlExtractor
 
         if (
             string.IsNullOrWhiteSpace(processHint)
-            || !SupportedBrowserProcessNames.Contains(processHint)
+            || !s_supportedBrowserProcessNames.Contains(processHint)
         )
         {
             return null;
@@ -133,14 +133,14 @@ public sealed class AtSpiUrlExtractor
                     StringComparison.OrdinalIgnoreCase
                 )
                 && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
-                && DateTime.UtcNow - _cachedUrlAt < CacheTtl
+                && DateTime.UtcNow - _cachedUrlAt < s_cacheTtl
             )
             {
                 return _cachedUrl;
             }
         }
 
-        if (!IsBusctlAvailable || !IsGdbusAvailable)
+        if (!s_isBusctlAvailable || !s_isGdbusAvailable)
         {
             LogOnce(
                 processHint,
@@ -161,7 +161,7 @@ public sealed class AtSpiUrlExtractor
             return null;
         }
 
-        using var cts = new CancellationTokenSource(WalkBudget);
+        using var cts = new CancellationTokenSource(s_walkBudget);
         var stats = new WalkStats();
         var url = WalkForUrl(address, processHint, cts.Token, stats);
 
@@ -192,7 +192,7 @@ public sealed class AtSpiUrlExtractor
 
     private void LogOnce(string processHint, string? title, string message)
     {
-        if (!DiagnosticLoggingEnabled)
+        if (!s_diagnosticLoggingEnabled)
         {
             return;
         }

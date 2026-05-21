@@ -49,7 +49,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
     private const string UserJsOwnershipMarker = "// Set by TypeWhisper";
 
-    private static readonly string[] ChromiumLauncherNames =
+    private static readonly string[] s_chromiumLauncherNames =
     [
         "google-chrome.desktop",
         "chromium.desktop",
@@ -60,7 +60,7 @@ public sealed class BrowserAccessibilitySetupHelper
         "opera.desktop"
     ];
 
-    private static readonly string[] FirefoxLauncherNames =
+    private static readonly string[] s_firefoxLauncherNames =
     [
         "firefox.desktop",
         "org.mozilla.firefox.desktop",
@@ -72,7 +72,7 @@ public sealed class BrowserAccessibilitySetupHelper
         "io.github.zen_browser.zen.desktop"
     ];
 
-    private static readonly string[] SystemLauncherDirectories =
+    private static readonly string[] s_systemLauncherDirectories =
     [
         "/usr/share/applications",
         "/var/lib/flatpak/exports/share/applications"
@@ -102,10 +102,10 @@ public sealed class BrowserAccessibilitySetupHelper
         // --force-renderer-accessibility. This matches the Status
         // record's contract that IsFullyConfigured implies the
         // integration actually works for every supported browser.
-        var firefoxLauncherPresent = AllInstalledLaunchersOwned(FirefoxLauncherNames);
-        var chromiumLauncherPresent = AllInstalledLaunchersOwned(ChromiumLauncherNames);
-        var firefoxInstalled = HasInstalledLauncher(FirefoxLauncherNames);
-        var chromiumInstalled = HasInstalledLauncher(ChromiumLauncherNames);
+        var firefoxLauncherPresent = AllInstalledLaunchersOwned(s_firefoxLauncherNames);
+        var chromiumLauncherPresent = AllInstalledLaunchersOwned(s_chromiumLauncherNames);
+        var firefoxInstalled = HasInstalledLauncher(s_firefoxLauncherNames);
+        var chromiumInstalled = HasInstalledLauncher(s_chromiumLauncherNames);
         var firefoxProfiles = EnumerateFirefoxProfileDirs().ToList();
         var firefoxProfileFound = firefoxProfiles.Count > 0;
         // ALL profiles need the override — the setup path writes to every
@@ -312,10 +312,10 @@ public sealed class BrowserAccessibilitySetupHelper
         {
             WriteEnvFile();
             var chromiumPatched = PatchLaunchers(
-                ChromiumLauncherNames,
+                s_chromiumLauncherNames,
                 AddAccessibilityFlagToExecLines
             );
-            var firefoxPatched = PatchLaunchers(FirefoxLauncherNames, PrependEnvWrapperToExecLines);
+            var firefoxPatched = PatchLaunchers(s_firefoxLauncherNames, PrependEnvWrapperToExecLines);
             var firefoxPrefResult = ForceEnableFirefoxAccessibility();
 
             var detail = new StringBuilder();
@@ -501,12 +501,12 @@ public sealed class BrowserAccessibilitySetupHelper
             return true;
         }
 
-        if (HasOwnedLauncher(FirefoxLauncherNames))
+        if (HasOwnedLauncher(s_firefoxLauncherNames))
         {
             return true;
         }
 
-        if (HasOwnedLauncher(ChromiumLauncherNames))
+        if (HasOwnedLauncher(s_chromiumLauncherNames))
         {
             return true;
         }
@@ -571,7 +571,7 @@ public sealed class BrowserAccessibilitySetupHelper
             yield break;
         }
 
-        foreach (var name in FirefoxLauncherNames.Concat(ChromiumLauncherNames))
+        foreach (var name in s_firefoxLauncherNames.Concat(s_chromiumLauncherNames))
         {
             var path = Path.Combine(dir, name);
             if (File.Exists(path) && FileStartsWithOwnershipMarker(path))
@@ -875,7 +875,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
     private static string? FindSystemLauncher(string name)
     {
-        foreach (var dir in SystemLauncherDirectories)
+        foreach (var dir in s_systemLauncherDirectories)
         {
             var candidate = Path.Combine(dir, name);
             if (File.Exists(candidate))
@@ -1002,7 +1002,10 @@ public sealed class BrowserAccessibilitySetupHelper
                     {
                         File.Delete(backupPath);
                     }
-                    catch { }
+                    catch
+                    {
+                        //nada
+                    }
 
                     removed.Add(name + " (restored)");
                 }
@@ -1028,7 +1031,10 @@ public sealed class BrowserAccessibilitySetupHelper
                 Directory.Delete(backupDir);
             }
         }
-        catch { }
+        catch
+        {
+            //nada
+        }
 
         return removed;
     }

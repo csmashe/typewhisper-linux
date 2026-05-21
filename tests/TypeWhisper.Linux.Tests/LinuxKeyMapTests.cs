@@ -29,14 +29,14 @@ public sealed class LinuxKeyMapTests
     }
 
     [Theory]
-    [InlineData(LinuxKeyMap.KEY_LEFTCTRL, ModifierMask.LeftCtrl)]
-    [InlineData(LinuxKeyMap.KEY_RIGHTCTRL, ModifierMask.RightCtrl)]
-    [InlineData(LinuxKeyMap.KEY_LEFTSHIFT, ModifierMask.LeftShift)]
-    [InlineData(LinuxKeyMap.KEY_RIGHTSHIFT, ModifierMask.RightShift)]
-    [InlineData(LinuxKeyMap.KEY_LEFTALT, ModifierMask.LeftAlt)]
-    [InlineData(LinuxKeyMap.KEY_RIGHTALT, ModifierMask.RightAlt)]
-    [InlineData(LinuxKeyMap.KEY_LEFTMETA, ModifierMask.LeftMeta)]
-    [InlineData(LinuxKeyMap.KEY_RIGHTMETA, ModifierMask.RightMeta)]
+    [InlineData(LinuxKeyMap.KeyLeftctrl, ModifierMask.LeftCtrl)]
+    [InlineData(LinuxKeyMap.KeyRightctrl, ModifierMask.RightCtrl)]
+    [InlineData(LinuxKeyMap.KeyLeftshift, ModifierMask.LeftShift)]
+    [InlineData(LinuxKeyMap.KeyRightshift, ModifierMask.RightShift)]
+    [InlineData(LinuxKeyMap.KeyLeftalt, ModifierMask.LeftAlt)]
+    [InlineData(LinuxKeyMap.KeyRightalt, ModifierMask.RightAlt)]
+    [InlineData(LinuxKeyMap.KeyLeftmeta, ModifierMask.LeftMeta)]
+    [InlineData(LinuxKeyMap.KeyRightmeta, ModifierMask.RightMeta)]
     public void ToModifier_MapsAllEightModifierKeys(int linuxCode, ModifierMask expected)
     {
         Assert.Equal(expected, LinuxKeyMap.ToModifier(linuxCode));

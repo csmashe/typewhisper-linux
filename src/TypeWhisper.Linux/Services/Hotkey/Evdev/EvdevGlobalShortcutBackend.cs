@@ -20,7 +20,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     // Belt-and-suspenders rescan: FileSystemWatcher can miss events under
     // high I/O load. 30 s is short enough to catch a USB keyboard plugged in
     // after a busy window without hammering the kernel with constant ioctls.
-    private static readonly TimeSpan RescanInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan s_rescanInterval = TimeSpan.FromSeconds(30);
 
     private readonly ShortcutDispatcher _dispatcher = new();
     private readonly object _lock = new();
@@ -292,7 +292,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             {
                 try
                 {
-                    await Task.Delay(RescanInterval, ct).ConfigureAwait(false);
+                    await Task.Delay(s_rescanInterval, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {

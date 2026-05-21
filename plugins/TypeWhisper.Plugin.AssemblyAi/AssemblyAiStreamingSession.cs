@@ -128,13 +128,22 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
 
         if (_ws.State == WebSocketState.Open)
         {
+            // Cap the graceful close handshake; a wedged remote could otherwise
+            // hang DisposeAsync indefinitely. On timeout or any failure, abort
+            // the socket so cleanup can proceed.
+            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             try
             {
                 await _ws.CloseAsync(
                     WebSocketCloseStatus.NormalClosure,
                     null,
-                    CancellationToken.None
+                    closeCts.Token
                 );
+            }
+            catch (Exception ex)
+                when (ex is OperationCanceledException or WebSocketException)
+            {
+                try { _ws.Abort(); } catch { /* best effort */ }
             }
             catch
             { /* best effort */

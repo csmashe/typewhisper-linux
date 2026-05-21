@@ -17,16 +17,16 @@ public sealed class PluginRegistryService
     // with the Linux client. SupportedPluginIds below filters it down to the
     // Linux-compatible subset.
     private const string RegistryUrl = "https://typewhisper.github.io/typewhisper-win/plugins.json";
-    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
+    private static readonly TimeSpan s_cacheDuration = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan s_updateCheckInterval = TimeSpan.FromHours(24);
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
     // Keep Linux on the set already proven by the old bundled-plugin path.
-    private static readonly HashSet<string> SupportedPluginIds = new(
+    private static readonly HashSet<string> s_supportedPluginIds = new(
         StringComparer.OrdinalIgnoreCase
     )
     {
@@ -86,7 +86,7 @@ public sealed class PluginRegistryService
         CancellationToken ct = default
     )
     {
-        if (_cachedRegistry is not null && DateTime.UtcNow - _cacheTimestamp < CacheDuration)
+        if (_cachedRegistry is not null && DateTime.UtcNow - _cacheTimestamp < s_cacheDuration)
         {
             return _cachedRegistry;
         }
@@ -95,11 +95,11 @@ public sealed class PluginRegistryService
         {
             var json = await _httpClient.GetStringAsync(RegistryUrl, ct);
             var allPlugins =
-                JsonSerializer.Deserialize<List<RegistryPlugin>>(json, JsonOptions) ?? [];
+                JsonSerializer.Deserialize<List<RegistryPlugin>>(json, s_jsonOptions) ?? [];
 
             var hostVersion = GetHostVersion();
             _cachedRegistry = allPlugins
-                .Where(p => SupportedPluginIds.Contains(p.Id))
+                .Where(p => s_supportedPluginIds.Contains(p.Id))
                 .Where(p => IsCompatible(p.MinHostVersion, hostVersion))
                 .ToList();
             _cacheTimestamp = DateTime.UtcNow;
@@ -255,7 +255,7 @@ public sealed class PluginRegistryService
     /// </summary>
     public async Task CheckForUpdatesAsync(CancellationToken ct = default)
     {
-        if (DateTime.UtcNow - _lastUpdateCheck < UpdateCheckInterval)
+        if (DateTime.UtcNow - _lastUpdateCheck < s_updateCheckInterval)
         {
             return;
         }

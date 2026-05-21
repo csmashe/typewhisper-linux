@@ -55,13 +55,13 @@ public sealed record TextInsertionRequest(
 public sealed class TextInsertionService
 {
     private const int PasteAttemptCount = 3;
-    private static readonly TimeSpan FocusDelay = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan ClipboardRestoreDelayDefault = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan s_focusDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan s_clipboardRestoreDelayDefault = TimeSpan.FromMilliseconds(200);
 
     // KDE Plasma's Klipper races us when restoring the clipboard — the
     // ~600 ms delay matches what OpenWhispr landed after the same race.
-    private static readonly TimeSpan ClipboardRestoreDelayKde = TimeSpan.FromMilliseconds(600);
-    private static readonly TimeSpan PasteRetryDelay = TimeSpan.FromMilliseconds(75);
+    private static readonly TimeSpan s_clipboardRestoreDelayKde = TimeSpan.FromMilliseconds(600);
+    private static readonly TimeSpan s_pasteRetryDelay = TimeSpan.FromMilliseconds(75);
     private readonly IErrorLogService? _errorLog;
 
     private readonly ITextInsertionPlatform _platform;
@@ -275,24 +275,24 @@ public sealed class TextInsertionService
     {
         if (string.IsNullOrWhiteSpace(targetWindowId))
         {
-            await _platform.DelayAsync(FocusDelay);
+            await _platform.DelayAsync(s_focusDelay);
             return true;
         }
 
         if (_platform.GetActiveWindowId() == targetWindowId)
         {
-            await _platform.DelayAsync(FocusDelay);
+            await _platform.DelayAsync(s_focusDelay);
             return true;
         }
 
         var focusRequested = await _platform.ActivateWindowAsync(targetWindowId);
-        await _platform.DelayAsync(FocusDelay);
+        await _platform.DelayAsync(s_focusDelay);
         return focusRequested || _platform.GetActiveWindowId() == targetWindowId;
     }
 
     private async Task RestorePreviousClipboardAsync(string? previousClipboard)
     {
-        var delay = _platform.IsKdePlasma ? ClipboardRestoreDelayKde : ClipboardRestoreDelayDefault;
+        var delay = _platform.IsKdePlasma ? s_clipboardRestoreDelayKde : s_clipboardRestoreDelayDefault;
         await _platform.DelayAsync(delay);
         if (previousClipboard is null)
         {
@@ -336,7 +336,7 @@ public sealed class TextInsertionService
 
             if (attempt < PasteAttemptCount)
             {
-                await _platform.DelayAsync(PasteRetryDelay);
+                await _platform.DelayAsync(s_pasteRetryDelay);
             }
         }
 

@@ -399,7 +399,6 @@ public sealed class DictationOrchestrator : IDisposable
 
     public async Task StartAsync()
     {
-        Task? recordingSnapshotTask = null;
         if (!await _toggleGate.WaitAsync(0))
         {
             return;
@@ -510,7 +509,7 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingProfile = null;
             }
 
-            recordingSnapshotTask = Task.Run(async () =>
+            var recordingSnapshotTask = Task.Run(async () =>
             {
                 ActiveWindowSnapshot? initialSnap = null;
                 string? appProcess = null;

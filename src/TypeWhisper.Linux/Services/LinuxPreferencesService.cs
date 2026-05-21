@@ -26,7 +26,7 @@ public sealed record LinuxPreferences
 
 public sealed class LinuxPreferencesService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true
@@ -52,7 +52,7 @@ public sealed class LinuxPreferencesService
             {
                 var json = File.ReadAllText(_path);
                 Current =
-                    JsonSerializer.Deserialize<LinuxPreferences>(json, JsonOptions)
+                    JsonSerializer.Deserialize<LinuxPreferences>(json, s_jsonOptions)
                     ?? LinuxPreferences.Default;
             }
             catch (Exception ex)
@@ -71,7 +71,7 @@ public sealed class LinuxPreferencesService
         try
         {
             Directory.CreateDirectory(TypeWhisperEnvironment.BasePath);
-            File.WriteAllText(_path, JsonSerializer.Serialize(next, JsonOptions));
+            File.WriteAllText(_path, JsonSerializer.Serialize(next, s_jsonOptions));
             Changed?.Invoke(next);
         }
         catch (Exception ex)

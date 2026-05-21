@@ -16,7 +16,7 @@ public sealed class PluginHostServices : IPluginHostServices
 {
     private const string SecretPrefix = "secret:";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true
@@ -134,7 +134,7 @@ public sealed class PluginHostServices : IPluginHostServices
 
             try
             {
-                return element.Deserialize<T>(JsonOptions);
+                return element.Deserialize<T>(s_jsonOptions);
             }
             catch (JsonException ex)
             {
@@ -151,7 +151,7 @@ public sealed class PluginHostServices : IPluginHostServices
         lock (_settingsLock)
         {
             var settings = LoadSettings();
-            settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
             SaveSettings(settings);
         }
     }
@@ -178,7 +178,7 @@ public sealed class PluginHostServices : IPluginHostServices
                     _settingsCache =
                         JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
                             json,
-                            JsonOptions
+                            s_jsonOptions
                         ) ?? [];
                 }
                 catch (Exception ex)
@@ -201,7 +201,7 @@ public sealed class PluginHostServices : IPluginHostServices
         try
         {
             Directory.CreateDirectory(_pluginDataDirectory);
-            var json = JsonSerializer.Serialize(settings, JsonOptions);
+            var json = JsonSerializer.Serialize(settings, s_jsonOptions);
             // Non-atomic write: a crash mid-write could corrupt the file.
             // Plugin settings are small and infrequently written so the
             // trade-off is acceptable; a future hardening pass could swap

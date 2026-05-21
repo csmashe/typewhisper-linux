@@ -20,7 +20,7 @@ public static class ApiKeyProtection
     private const int NonceSize = 12;
     private const int TagSize = 16;
     private const int LegacyIvSize = 16;
-    private static readonly byte[] Entropy = "TypeWhisper.ApiKey.v1.linux"u8.ToArray();
+    private static readonly byte[] s_entropy = "TypeWhisper.ApiKey.v1.linux"u8.ToArray();
 
     public static string Encrypt(string plainText)
     {
@@ -94,7 +94,7 @@ public static class ApiKeyProtection
         var home = Environment.GetEnvironmentVariable("HOME") ?? "/";
         var user = Environment.UserName;
         var material = Encoding.UTF8.GetBytes($"{user}:{home}");
-        return Rfc2898DeriveBytes.Pbkdf2(material, Entropy, 10_000, HashAlgorithmName.SHA256, 32);
+        return Rfc2898DeriveBytes.Pbkdf2(material, s_entropy, 10_000, HashAlgorithmName.SHA256, 32);
     }
 
     private static bool TryDecryptAesGcm(byte[] combined, out string decryptedText)

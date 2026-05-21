@@ -146,7 +146,7 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
                 }
 
                 var evt = MemoryMarshal.Read<InputEvent>(buf);
-                if (evt.Type != InputEvent.EV_KEY)
+                if (evt.Type != InputEvent.EvKey)
                 {
                     continue;
                 }

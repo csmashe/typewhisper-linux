@@ -17,8 +17,8 @@ internal struct InputEvent
     public int Value;
 
     public static readonly int SizeBytes = Marshal.SizeOf<InputEvent>();
-    public const ushort EV_SYN = 0;
-    public const ushort EV_KEY = 1;
+    public const ushort EvSyn = 0;
+    public const ushort EvKey = 1;
     public const int Released = 0;
     public const int Pressed = 1;
     public const int Repeated = 2;

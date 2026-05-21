@@ -64,14 +64,17 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         if (key != "api-key")
             return;
 
-        _apiKey = string.IsNullOrWhiteSpace(value) ? null : value;
+        // Normalize once and reuse so whitespace-padded keys aren't stored or
+        // treated as "configured" in memory, persistence, or validation.
+        var trimmed = value?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
 
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(value))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", value);
+                await _host.StoreSecretAsync("api-key", trimmed);
         }
     }
 

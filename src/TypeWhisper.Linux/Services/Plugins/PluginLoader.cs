@@ -25,7 +25,7 @@ public sealed class PluginAssemblyLoadContext : AssemblyLoadContext
 {
     // Shared managed contracts must resolve to the host's copy so type identity
     // (e.g. ITypeWhisperPlugin) is preserved across host/plugin boundaries.
-    private static readonly string[] SharedContractAssemblies = ["TypeWhisper.PluginSDK"];
+    private static readonly string[] s_sharedContractAssemblies = ["TypeWhisper.PluginSDK"];
 
     private readonly AssemblyDependencyResolver _resolver;
 
@@ -40,7 +40,7 @@ public sealed class PluginAssemblyLoadContext : AssemblyLoadContext
         if (
             assemblyName.Name is { } name
             && Array.Exists(
-                SharedContractAssemblies,
+                s_sharedContractAssemblies,
                 s => string.Equals(s, name, StringComparison.Ordinal)
             )
         )
@@ -69,7 +69,7 @@ public sealed class PluginAssemblyLoadContext : AssemblyLoadContext
 /// </summary>
 public sealed class PluginLoader
 {
-    private static readonly JsonSerializerOptions ManifestJsonOptions = new()
+    private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
@@ -129,7 +129,7 @@ public sealed class PluginLoader
         var manifestJson = File.ReadAllText(manifestPath);
         var manifest = JsonSerializer.Deserialize<PluginManifest>(
             manifestJson,
-            ManifestJsonOptions
+            s_manifestJsonOptions
         );
         if (manifest is null)
         {

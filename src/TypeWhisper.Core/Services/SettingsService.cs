@@ -68,8 +68,6 @@ public sealed class SettingsService : ISettingsService
 
     public void Save(AppSettings settings)
     {
-        Current = settings;
-
         var directory = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(directory))
         {
@@ -94,6 +92,9 @@ public sealed class SettingsService : ISettingsService
         File.WriteAllText(TempPath, json);
         File.Move(TempPath, _filePath, true);
 
+        // Only advance in-memory state after disk persistence succeeds, so an
+        // I/O failure doesn't leave Current ahead of what reload sees.
+        Current = settings;
         SettingsChanged?.Invoke(settings);
     }
 

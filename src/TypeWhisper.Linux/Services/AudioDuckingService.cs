@@ -13,7 +13,7 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class AudioDuckingService : IAudioDuckingService
 {
-    private static readonly Regex VolumePercentRegex = new(@"(\d+)%", RegexOptions.Compiled);
+    private static readonly Regex s_volumePercentRegex = new(@"(\d+)%", RegexOptions.Compiled);
 
     private readonly Dictionary<string, string> _savedVolumes = new(StringComparer.Ordinal);
     private bool _isDucked;
@@ -104,7 +104,7 @@ public sealed class AudioDuckingService : IAudioDuckingService
             return null;
         }
 
-        var match = VolumePercentRegex.Match(output);
+        var match = s_volumePercentRegex.Match(output);
         return match.Success ? match.Groups[1].Value + "%" : null;
     }
 

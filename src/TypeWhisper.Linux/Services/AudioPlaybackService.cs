@@ -14,8 +14,8 @@ public sealed class AudioPlaybackService : IDisposable
     private const int Channels = 1;
     private const uint FramesPerBuffer = 512;
 
-    private static int _paInitCount;
-    private static readonly object _paInitLock = new();
+    private static int s_paInitCount;
+    private static readonly object s_paInitLock = new();
 
     private readonly object _gate = new();
     private int _position;
@@ -327,27 +327,27 @@ public sealed class AudioPlaybackService : IDisposable
         // Reference-counted to match AudioRecordingService's pattern: both
         // services share the process-global PortAudio library and each
         // Initialize() call must be balanced by a Terminate().
-        lock (_paInitLock)
+        lock (s_paInitLock)
         {
-            if (_paInitCount == 0)
+            if (s_paInitCount == 0)
             {
                 PortAudio.Initialize();
             }
 
-            _paInitCount++;
+            s_paInitCount++;
         }
     }
 
     private static void EnsurePortAudioTerminated()
     {
-        lock (_paInitLock)
+        lock (s_paInitLock)
         {
-            if (_paInitCount <= 0)
+            if (s_paInitCount <= 0)
             {
                 return;
             }
 
-            if (--_paInitCount == 0)
+            if (--s_paInitCount == 0)
             {
                 PortAudio.Terminate();
             }

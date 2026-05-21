@@ -64,6 +64,12 @@ public sealed class ErrorLogService : IErrorLogService
 
     public string ExportDiagnostics()
     {
+        List<ErrorLogEntry> snapshot;
+        lock (_lock)
+        {
+            snapshot = [.. _entries];
+        }
+
         var report = new
         {
             exported_at = DateTime.UtcNow.ToString("o"),
@@ -76,8 +82,8 @@ public sealed class ErrorLogService : IErrorLogService
                 locale = CultureInfo.CurrentCulture.Name,
                 timezone = TimeZoneInfo.Local.Id
             },
-            error_count = _entries.Count,
-            errors = _entries.Select(e => new
+            error_count = snapshot.Count,
+            errors = snapshot.Select(e => new
             {
                 timestamp = e.Timestamp.ToString("o"),
                 category = e.Category,

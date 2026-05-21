@@ -25,9 +25,9 @@ internal static class SocketPathResolver
     // only the owner uid.
     private const int StatxBufSize = 256;
     private const int StatxUidOffset = 20;
-    private const int AT_FDCWD = -100;
-    private const int AT_SYMLINK_NOFOLLOW = 0x100;
-    private const uint STATX_UID = 0x00000008;
+    private const int AtFdcwd = -100;
+    private const int AtSymlinkNofollow = 0x100;
+    private const uint StatxUid = 0x00000008;
 
     /// <summary>
     ///     Resolves the control-socket path, creating any missing parent
@@ -164,7 +164,7 @@ internal static class SocketPathResolver
                 Marshal.WriteByte(buffer, i, 0);
             }
 
-            var rc = statx(AT_FDCWD, path, AT_SYMLINK_NOFOLLOW, STATX_UID, buffer);
+            var rc = statx(AtFdcwd, path, AtSymlinkNofollow, StatxUid, buffer);
             if (rc != 0)
             {
                 Trace.WriteLine($"[SocketPathResolver] statx({path}) returned {rc}.");

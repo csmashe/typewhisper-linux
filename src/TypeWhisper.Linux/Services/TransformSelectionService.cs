@@ -7,7 +7,7 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class TransformSelectionService
 {
-    private static readonly TimeSpan ProcessingTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan s_processingTimeout = TimeSpan.FromSeconds(90);
     private readonly ActiveWindowService _activeWindow;
     private readonly AudioRecordingService _audio;
     private readonly SystemCommandAvailabilityService _commands;
@@ -191,7 +191,7 @@ public sealed class TransformSelectionService
 
         try
         {
-            using var cts = new CancellationTokenSource(ProcessingTimeout);
+            using var cts = new CancellationTokenSource(s_processingTimeout);
             ModelManagerService.TranscriptionLease lease;
             try
             {

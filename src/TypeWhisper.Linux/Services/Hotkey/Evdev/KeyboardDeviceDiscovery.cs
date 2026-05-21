@@ -90,7 +90,7 @@ internal static class KeyboardDeviceDiscovery
             var handle = stream.SafeFileHandle;
 
             var keyBits = new byte[KeyBitmapBytes];
-            if (ioctl(handle, EviocgBit(InputEvent.EV_KEY, KeyBitmapBytes), keyBits) < 0)
+            if (ioctl(handle, EviocgBit(InputEvent.EvKey, KeyBitmapBytes), keyBits) < 0)
             {
                 return false;
             }

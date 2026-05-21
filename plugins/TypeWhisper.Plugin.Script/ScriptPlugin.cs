@@ -16,7 +16,7 @@ public sealed record ScriptEntry
     public string Command { get; init; } = "";
 
     /// <summary>
-    /// Shell to run the command with. When empty, the OS-default shell is used.
+    /// Shell to run the command with. When empty, bash is used.
     /// Supported values: "bash", "sh", and "pwsh".
     /// </summary>
     public string Shell { get; init; } = "";
@@ -288,13 +288,27 @@ public sealed class ScriptService
         try
         {
             foreach (var script in _store.Load())
-                Scripts.Add(script);
+                Scripts.Add(NormalizeEntry(script));
         }
         catch (Exception ex)
         {
             _host.Log(PluginLogLevel.Warning, $"Failed to load script configuration: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Maps legacy shell aliases (e.g. "powershell") to their canonical form
+    /// ("pwsh"). Applied on load so older saved entries round-trip without the
+    /// SetItemsAsync validator rejecting them.
+    /// </summary>
+    internal static string NormalizeShellValue(string? shell)
+    {
+        var trimmed = (shell ?? "").Trim().ToLowerInvariant();
+        return trimmed == "powershell" ? "pwsh" : trimmed;
+    }
+
+    private static ScriptEntry NormalizeEntry(ScriptEntry entry) =>
+        entry.Shell == NormalizeShellValue(entry.Shell) ? entry : entry with { Shell = NormalizeShellValue(entry.Shell) };
 
     public void Save()
     {
@@ -411,7 +425,9 @@ public sealed class ScriptPlugin
                 {
                     ["name"] = s.Name,
                     ["command"] = s.Command,
-                    ["shell"] = s.Shell,
+                    // Surface legacy "powershell" values as "pwsh" so the
+                    // dropdown matches the canonical option.
+                    ["shell"] = ScriptService.NormalizeShellValue(s.Shell),
                     ["enabled"] = s.IsEnabled ? "true" : "false",
                     ["__id"] = s.Id.ToString("D"),
                 }
@@ -460,7 +476,7 @@ public sealed class ScriptPlugin
                     )
                 );
 
-            var shell = (rawShell ?? "").Trim().ToLowerInvariant();
+            var shell = ScriptService.NormalizeShellValue(rawShell);
             if (Array.IndexOf(s_allowedShells, shell) < 0)
                 return Task.FromResult(
                     new PluginSettingsValidationResult(

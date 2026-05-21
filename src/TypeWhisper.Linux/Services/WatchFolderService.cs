@@ -7,7 +7,7 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class WatchFolderService : IDisposable
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -547,7 +547,7 @@ public sealed class WatchFolderService : IDisposable
             }
 
             var json = File.ReadAllText(_processedFingerprintsPath);
-            var loaded = JsonSerializer.Deserialize<HashSet<string>>(json, JsonOptions);
+            var loaded = JsonSerializer.Deserialize<HashSet<string>>(json, s_jsonOptions);
             if (loaded is null)
             {
                 return;
@@ -569,7 +569,7 @@ public sealed class WatchFolderService : IDisposable
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_processedFingerprintsPath)!);
-            var json = JsonSerializer.Serialize(_processedFingerprints, JsonOptions);
+            var json = JsonSerializer.Serialize(_processedFingerprints, s_jsonOptions);
             File.WriteAllText(_processedFingerprintsPath, json);
         }
         catch (Exception ex) when (IsExpectedPersistenceException(ex))
@@ -590,7 +590,7 @@ public sealed class WatchFolderService : IDisposable
             var json = File.ReadAllText(_historyPath);
             var loaded = JsonSerializer.Deserialize<List<WatchFolderHistoryItem>>(
                 json,
-                JsonOptions
+                s_jsonOptions
             );
             if (loaded is null)
             {
@@ -617,7 +617,7 @@ public sealed class WatchFolderService : IDisposable
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(_historyPath)!);
-            var json = JsonSerializer.Serialize(snapshot, JsonOptions);
+            var json = JsonSerializer.Serialize(snapshot, s_jsonOptions);
             File.WriteAllText(_historyPath, json);
         }
         catch (Exception ex) when (IsExpectedPersistenceException(ex))

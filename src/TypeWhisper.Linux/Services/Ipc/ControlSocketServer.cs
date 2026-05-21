@@ -37,7 +37,7 @@ internal sealed class ControlSocketServer : IDisposable
     // treating that arrival pattern as a tap: stop the start as soon as it
     // settles. 100 ms covers normal tap latencies (~30-70 ms key down→up)
     // with margin without smearing into intentional very-short PTT holds.
-    private static readonly TimeSpan StartStopRaceWindow = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan s_startStopRaceWindow = TimeSpan.FromMilliseconds(100);
     private readonly HotkeyService? _hotkey;
 
     private readonly DictationOrchestrator _orchestrator;
@@ -486,7 +486,7 @@ internal sealed class ControlSocketServer : IDisposable
         // with no matching stop.
         var startTicks = Interlocked.Read(ref _lastStartTicks);
         var elapsed = DateTime.UtcNow - new DateTime(startTicks, DateTimeKind.Utc);
-        if (elapsed < StartStopRaceWindow)
+        if (elapsed < s_startStopRaceWindow)
         {
             var pendingStart = _lastStartTask;
             if (pendingStart is not null && !pendingStart.IsCompleted)

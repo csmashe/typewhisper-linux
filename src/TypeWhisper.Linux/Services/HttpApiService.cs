@@ -17,7 +17,7 @@ public sealed class HttpApiService : IDisposable
         "Authorization, Content-Type, X-Language, X-Language-Hints, X-Task, X-Target-Language, "
         + "X-Response-Format, X-Prompt, X-Engine, X-Model";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         PropertyNameCaseInsensitive = true,
@@ -683,7 +683,7 @@ public sealed class HttpApiService : IDisposable
         {
             payload = JsonSerializer.Deserialize<DictionaryTermsRequest>(
                 apiRequest.Body,
-                JsonOptions
+                s_jsonOptions
             );
         }
         catch (JsonException)
@@ -792,7 +792,7 @@ public sealed class HttpApiService : IDisposable
 
     private static string Serialize<T>(T value)
     {
-        return JsonSerializer.Serialize(value, JsonOptions);
+        return JsonSerializer.Serialize(value, s_jsonOptions);
     }
 
     private static string SanitizeExtension(string extension)
