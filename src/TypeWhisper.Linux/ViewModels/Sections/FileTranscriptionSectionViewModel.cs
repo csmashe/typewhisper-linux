@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+// ReSharper disable UnusedParameterInPartialMethod
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -113,9 +114,6 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     }
 
     public ObservableCollection<FileTranscriptionQueueItemViewModel> Items { get; } = [];
-
-    public ObservableCollection<WatchFolderOutputFormatOption> WatchFolderOutputFormatOptions { get; } =
-        [new("md", "Markdown"), new("txt", "Text"), new("srt", "SRT"), new("vtt", "WebVTT")];
 
     public ObservableCollection<WatchFolderHistoryItem> WatchFolderHistory { get; } = [];
 
@@ -248,7 +246,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         try
         {
             while (
-                Items.FirstOrDefault(item => item.Status == FileTranscriptionQueueItemStatus.Queued)
+                Items.FirstOrDefault(i => i.Status == FileTranscriptionQueueItemStatus.Queued)
                 is { } item
             )
             {
@@ -663,5 +661,3 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         return string.IsNullOrWhiteSpace(cleaned) || cleaned == DefaultSelectionId ? null : cleaned;
     }
 }
-
-public sealed record WatchFolderOutputFormatOption(string Id, string DisplayName);

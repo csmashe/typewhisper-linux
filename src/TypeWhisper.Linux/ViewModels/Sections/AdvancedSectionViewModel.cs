@@ -139,7 +139,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
     public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
     public bool ShowSpokenFeedbackUnavailableReason => !CanUseSpokenFeedback;
 
-    public string SpokenFeedbackUnavailableReason =>
+    private string SpokenFeedbackUnavailableReason =>
         "Unavailable: install espeak-ng, espeak, or speech-dispatcher.";
 
     public string SpokenFeedbackHint =>
@@ -153,7 +153,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     public bool ShowMemoryUnavailableReason => !CanUseMemory;
 
-    public string MemoryUnavailableReason =>
+    private string MemoryUnavailableReason =>
         "Unavailable: enable a memory storage plugin and configure an LLM provider.";
 
     public string MemoryHint =>

@@ -35,8 +35,6 @@ public sealed class WatchFolderService : IDisposable
     private CancellationTokenSource? _cts;
     private bool _disposed;
     private WatchFolderOptions? _options;
-    private Task? _processingTask;
-    private Task? _rescanTask;
 
     private Func<
         WatchFolderTranscriptionRequest,
@@ -128,10 +126,10 @@ public sealed class WatchFolderService : IDisposable
         _watcher.Renamed += OnFileRenamed;
 
         ScanFolder(options.WatchPath);
-        _processingTask = Task.Run(() => ProcessQueueAsync(_cts.Token));
+        Task.Run(() => ProcessQueueAsync(_cts.Token));
         // Periodic rescan catches files dropped while the watcher buffer was
         // full (the OS drops events when the internal buffer overflows).
-        _rescanTask = Task.Run(() => RescanLoopAsync(options.WatchPath, _cts.Token));
+        Task.Run(() => RescanLoopAsync(options.WatchPath, _cts.Token));
         OnStateChanged();
     }
 
@@ -142,8 +140,6 @@ public sealed class WatchFolderService : IDisposable
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
-        _processingTask = null;
-        _rescanTask = null;
         _transcribeHandler = null;
         _options = null;
         WatchPath = null;
@@ -478,7 +474,7 @@ public sealed class WatchFolderService : IDisposable
             try
             {
                 var info = new FileInfo(path);
-                using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None);
+                await using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None);
                 var currentLength = info.Length;
                 var currentWrite = info.LastWriteTimeUtc;
 

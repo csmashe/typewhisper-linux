@@ -126,7 +126,12 @@ public static class Program
                     // Avalonia's X11 IBus integration can log noisy DBus errors
                     // when IBus destroys an input context before Avalonia releases it.
                     // Set TYPEWHISPER_DISABLE_IME=1 to disable IME composition.
-                    EnableIme = !IsImeDisabled()
+                    EnableIme = !IsImeDisabled(),
+                    // Skip GLX: Avalonia's GlxContext.RestoreContext.Dispose throws
+                    // SynchronizationLockException on every frame under Mesa/XWayland,
+                    // breaking the render loop. EGL works on both X11 and XWayland;
+                    // Software is a guaranteed fallback.
+                    RenderingMode = new[] { X11RenderingMode.Egl, X11RenderingMode.Software }
                 }
             )
 #if DEBUG

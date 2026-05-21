@@ -5,12 +5,14 @@ using System.Collections.ObjectModel;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+// ReSharper disable SuspiciousTypeConversion.Global
+// ReSharper disable UnusedParameterInPartialMethod
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class PluginsSectionViewModel : ObservableObject
 {
-    private static readonly HashSet<string> KnownLocalPluginIds =
+    private static readonly HashSet<string> s_knownLocalPluginIds =
     [
         "com.typewhisper.whisper-cpp",
         "com.typewhisper.sherpa-onnx",
@@ -20,7 +22,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.webhook"
     ];
 
-    private static readonly HashSet<string> KnownCloudPluginIds =
+    private static readonly HashSet<string> s_knownCloudPluginIds =
     [
         "com.typewhisper.assemblyai",
         "com.typewhisper.cerebras",
@@ -43,7 +45,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.voxtral"
     ];
 
-    private static readonly HashSet<string> TranscriptionPluginIds =
+    private static readonly HashSet<string> s_transcriptionPluginIds =
     [
         "com.typewhisper.assemblyai",
         "com.typewhisper.cloudflare-asr",
@@ -60,7 +62,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.whisper-cpp"
     ];
 
-    private static readonly HashSet<string> LlmPluginIds =
+    private static readonly HashSet<string> s_llmPluginIds =
     [
         "com.typewhisper.cerebras",
         "com.typewhisper.claude",
@@ -73,7 +75,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.openrouter"
     ];
 
-    private static readonly HashSet<string> ActionPluginIds =
+    private static readonly HashSet<string> s_actionPluginIds =
     [
         "com.typewhisper.linear",
         "com.typewhisper.obsidian",
@@ -81,13 +83,13 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.webhook"
     ];
 
-    private static readonly HashSet<string> MemoryPluginIds =
+    private static readonly HashSet<string> s_memoryPluginIds =
     [
         "com.typewhisper.file-memory",
         "com.typewhisper.openai-vector-memory"
     ];
 
-    private static readonly HashSet<string> UtilityPluginIds =
+    private static readonly HashSet<string> s_utilityPluginIds =
     [
         "com.typewhisper.openai-compatible"
     ];
@@ -133,7 +135,6 @@ public partial class PluginsSectionViewModel : ObservableObject
                     p.Manifest.Id,
                     p.Manifest.Name,
                     p.Manifest.Version,
-                    p.Manifest.Author ?? "",
                     p.Manifest.Description ?? "",
                     InferCategory(p.Manifest),
                     InferIsLocal(p.Manifest),
@@ -360,12 +361,12 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         var id = manifest.Id.Trim().ToLowerInvariant();
-        if (KnownLocalPluginIds.Contains(id))
+        if (s_knownLocalPluginIds.Contains(id))
         {
             return true;
         }
 
-        if (KnownCloudPluginIds.Contains(id))
+        if (s_knownCloudPluginIds.Contains(id))
         {
             return false;
         }
@@ -399,27 +400,27 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         var id = manifest.Id.Trim().ToLowerInvariant();
-        if (TranscriptionPluginIds.Contains(id))
+        if (s_transcriptionPluginIds.Contains(id))
         {
             return "transcription";
         }
 
-        if (LlmPluginIds.Contains(id))
+        if (s_llmPluginIds.Contains(id))
         {
             return "llm";
         }
 
-        if (ActionPluginIds.Contains(id))
+        if (s_actionPluginIds.Contains(id))
         {
             return "action";
         }
 
-        if (MemoryPluginIds.Contains(id))
+        if (s_memoryPluginIds.Contains(id))
         {
             return "memory";
         }
 
-        if (UtilityPluginIds.Contains(id))
+        if (s_utilityPluginIds.Contains(id))
         {
             return "utility";
         }
@@ -498,7 +499,6 @@ public partial class PluginRow : ObservableObject
         string id,
         string name,
         string version,
-        string author,
         string description,
         string? category,
         bool isLocal,
@@ -510,7 +510,6 @@ public partial class PluginRow : ObservableObject
         Id = id;
         Name = name;
         Version = version;
-        Author = author;
         Description = description;
         IsLocal = isLocal;
         HasExpandableSettings = hasExpandableSettings;
@@ -525,12 +524,11 @@ public partial class PluginRow : ObservableObject
     public string Id { get; }
     public string Name { get; }
     public string Version { get; }
-    public string Author { get; }
     public string Description { get; }
     public string CategoryKey { get; }
     public string CategoryLabel { get; }
     public int CategorySortOrder { get; }
-    public bool IsLocal { get; }
+    private bool IsLocal { get; }
     public string LocationBadge => IsLocal ? "Local" : "Cloud";
     public string StatusBadge => IsEnabled ? "Enabled" : "Disabled";
     public string LocationBadgeBackground => IsLocal ? "#1B2F24" : "#1A3453";
@@ -603,7 +601,6 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         Description = description;
         Placeholder = placeholder;
         Options = options;
-        IsSecret = isSecret;
         Kind = ResolveKind(kind, options, isSecret);
         _value = value;
         _selectedOption = Options.FirstOrDefault(o => o.Value == value) ?? Options.FirstOrDefault();
@@ -621,8 +618,7 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
     public string Placeholder { get; }
     public IReadOnlyList<PluginSettingOption> Options { get; }
-    public bool HasOptions => Options.Count > 0;
-    public bool IsSecret { get; }
+    private bool HasOptions => Options.Count > 0;
     public PluginSettingKind Kind { get; }
 
     public bool IsTextKind => Kind == PluginSettingKind.Text;

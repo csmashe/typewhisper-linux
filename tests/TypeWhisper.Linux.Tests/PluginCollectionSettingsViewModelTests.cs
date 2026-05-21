@@ -298,7 +298,6 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             "P",
             "1",
             "",
-            "",
             "utility",
             true,
             true,

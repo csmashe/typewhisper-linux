@@ -198,7 +198,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
                     p.Manifest.Id,
                     p.Manifest.Name,
                     p.Manifest.Version,
-                    p.Manifest.Author ?? "",
                     p.Manifest.Description ?? "",
                     p.Manifest.Category,
                     p.Manifest.IsLocal,

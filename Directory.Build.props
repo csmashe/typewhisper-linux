@@ -1,6 +1,6 @@
 <Project>
     <PropertyGroup>
-        <Version Condition="'$(Version)' == ''">0.0.1-dev</Version>
+        <Version Condition="'$(Version)' == ''">1.2.0</Version>
         <Company>TypeWhisper</Company>
         <Product>TypeWhisper</Product>
         <Copyright>Copyright © 2026 TypeWhisper</Copyright>

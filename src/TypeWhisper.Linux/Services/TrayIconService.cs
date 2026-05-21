@@ -74,7 +74,7 @@ public sealed class TrayIconService : IDisposable
 
             if (Application.Current is { } app)
             {
-                _trayIcons = new TrayIcons { _trayIcon };
+                _trayIcons = [_trayIcon];
                 TrayIcon.SetIcons(app, _trayIcons);
                 IsTrayAvailable = hostPresent;
             }
@@ -109,8 +109,7 @@ public sealed class TrayIconService : IDisposable
         var result = _runner
             .RunAsync(
                 "gdbus",
-                new[]
-                {
+                [
                     "call",
                     "--session",
                     "--dest",
@@ -121,7 +120,7 @@ public sealed class TrayIconService : IDisposable
                     "org.freedesktop.DBus.Properties.Get",
                     "org.kde.StatusNotifierWatcher",
                     "IsStatusNotifierHostRegistered"
-                },
+                ],
                 timeout: TimeSpan.FromSeconds(2)
             )
             .GetAwaiter()

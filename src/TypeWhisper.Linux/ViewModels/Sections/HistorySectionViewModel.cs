@@ -7,6 +7,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+// ReSharper disable UnusedParameterInPartialMethod
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -571,6 +572,6 @@ public partial class CorrectionSuggestionRow : ObservableObject
         Confidence = suggestion.Confidence;
     }
 
-    public double Confidence { get; }
+    private double Confidence { get; }
     public string ConfidenceLabel => Confidence > 0 ? $"{Confidence:P0}" : "";
 }
