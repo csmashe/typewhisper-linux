@@ -823,6 +823,7 @@ public sealed class DictationOrchestrator : IDisposable
                         FeedbackIsError = false,
                         IsRecording = false,
                         StatusText = "Canceled",
+                        PartialText = null,
                         SessionStartedAtUtc = null
                     }
                 );
