@@ -45,6 +45,7 @@ declare -A PLUGINS=(
   ["com.typewhisper.supertonic-tts"]="TypeWhisper.Plugin.SupertonicTts"
   ["com.typewhisper.assemblyai"]="TypeWhisper.Plugin.AssemblyAi"
   ["com.typewhisper.deepgram"]="TypeWhisper.Plugin.Deepgram"
+  ["com.typewhisper.smallest-ai"]="TypeWhisper.Plugin.SmallestAi"
   ["com.typewhisper.elevenlabs"]="TypeWhisper.Plugin.ElevenLabs"
   ["com.typewhisper.cloudflare-asr"]="TypeWhisper.Plugin.CloudflareAsr"
   ["com.typewhisper.gladia"]="TypeWhisper.Plugin.Gladia"
