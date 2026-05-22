@@ -42,6 +42,7 @@ declare -A PLUGINS=(
   ["com.typewhisper.fireworks"]="TypeWhisper.Plugin.Fireworks"
   ["com.typewhisper.groq"]="TypeWhisper.Plugin.Groq"
   ["com.typewhisper.xai"]="TypeWhisper.Plugin.Xai"
+  ["com.typewhisper.supertonic-tts"]="TypeWhisper.Plugin.SupertonicTts"
   ["com.typewhisper.assemblyai"]="TypeWhisper.Plugin.AssemblyAi"
   ["com.typewhisper.deepgram"]="TypeWhisper.Plugin.Deepgram"
   ["com.typewhisper.elevenlabs"]="TypeWhisper.Plugin.ElevenLabs"
