@@ -168,7 +168,7 @@
                                                         Padding="16,14"
                                                         Margin="0,0,0,12">
                                                     <StackPanel Spacing="12">
-                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto"
+                                                        <Grid ColumnDefinitions="Auto,*,Auto,28"
                                                               ColumnSpacing="14">
                                                             <Border Width="40"
                                                                     Height="40"

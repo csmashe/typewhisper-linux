@@ -541,6 +541,7 @@ public partial class PluginRow : ObservableObject
     public string Monogram =>
         string.Concat(
             Name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Where(part => char.IsLetterOrDigit(part[0]))
                 .Take(2)
                 .Select(part => char.ToUpperInvariant(part[0]))
         );
