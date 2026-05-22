@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -15,8 +16,19 @@ internal static class LinuxDictationFinalTextPolicy
     // pathological transcript can never spin indefinitely.
     private const int MaximumRepeatReductionPasses = 8;
 
+    private static readonly Regex AutomaticEllipsisRegex =
+        new(@"\s*(?:\.{3,}|…)\s*", RegexOptions.CultureInvariant);
+
     public static string SelectRawText(string? finalText) =>
-        ReduceAdjacentRepeatedPhrases(finalText?.Trim() ?? "");
+        NormalizeDictationArtifacts(finalText?.Trim() ?? "");
+
+    private static string NormalizeDictationArtifacts(string text) =>
+        RemoveAutomaticEllipses(ReduceAdjacentRepeatedPhrases(text));
+
+    private static string RemoveAutomaticEllipses(string text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? ""
+            : AutomaticEllipsisRegex.Replace(text, " ").Trim();
 
     private static string ReduceAdjacentRepeatedPhrases(string text)
     {
