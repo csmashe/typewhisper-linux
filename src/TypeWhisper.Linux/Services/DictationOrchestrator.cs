@@ -871,7 +871,8 @@ public sealed class DictationOrchestrator : IDisposable
                         FeedbackText = "Too short",
                         FeedbackIsError = true,
                         IsRecording = false,
-                        StatusText = "Too short"
+                        StatusText = "Too short",
+                        PartialText = null
                     }
                 );
                 StatusMessage?.Invoke(this, "Too short");
@@ -888,7 +889,8 @@ public sealed class DictationOrchestrator : IDisposable
                         FeedbackText = "No speech detected",
                         FeedbackIsError = true,
                         IsRecording = false,
-                        StatusText = "No speech detected"
+                        StatusText = "No speech detected",
+                        PartialText = null
                     }
                 );
                 StatusMessage?.Invoke(this, "No speech detected");
