@@ -1048,7 +1048,7 @@ public sealed class DictationOrchestrator : IDisposable
                 await leaseScope.DisposeAsync();
             }
 
-            var rawText = result?.Text?.Trim();
+            var rawText = LinuxDictationFinalTextPolicy.SelectRawText(result?.Text);
             if (string.IsNullOrEmpty(rawText))
             {
                 ReportStatus(context, "Transcription returned no text.");
