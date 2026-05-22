@@ -556,7 +556,16 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ComputeBackendHint));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
 
-        if (SelectedModel is { } selected && _models.IsDownloaded(selected.ModelId))
+        // A compute-backend change only binds at a model's first load: whisper.cpp
+        // (the sole CUDA-capable engine) fixes whisper.net's process-global runtime
+        // library on first load and cannot rebind it. If a local model is already
+        // loaded, reloading here would silently keep the old runtime while the load
+        // falsely reports "ready" — so tell the user a restart is needed instead.
+        if (_models.ActiveTranscriptionPlugin is { SupportsModelDownload: true })
+        {
+            StatusText = "Compute backend changed. Restart TypeWhisper for it to take effect.";
+        }
+        else if (SelectedModel is { } selected && _models.IsDownloaded(selected.ModelId))
         {
             _ = DownloadAndLoadSelectedModelAsync(selected);
         }
