@@ -68,7 +68,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
 
         Assert.Equal(
-            $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            $"processed:Default Provider:model-a:{PromptProcessingService.FrameInputAsData("hello")}",
             result
         );
     }
@@ -116,7 +116,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
 
         Assert.Equal(
-            $"processed:Override Provider:model-b:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            $"processed:Override Provider:model-b:{PromptProcessingService.FrameInputAsData("hello")}",
             result
         );
     }
@@ -149,19 +149,12 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
 
         Assert.Equal(
-            $"processed:First Provider:model-z:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            $"processed:First Provider:model-z:{PromptProcessingService.FrameInputAsData("hello")}",
             result
         );
     }
 
-    [Fact]
-    public void FormatPromptActionInput_LabelsInputText()
-    {
-        var result = PromptProcessingService.FormatPromptActionInput("Ryan, this is a test.");
-
-        Assert.Contains("Text to process:", result);
-        Assert.Contains("Ryan, this is a test.", result);
-    }
+    // Framing behavior (FrameInputAsData) is covered by PromptProcessingInputFramingTests.
 
     private static Mock<ISettingsService> CreateSettings(AppSettings current)
     {
