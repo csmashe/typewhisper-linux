@@ -97,6 +97,12 @@ public static class PostProcessingStepNames
     public const string VocabularyBoosting = "VocabularyBoosting";
     public const string Dictionary = "Dictionary";
     public const string Translation = "Translation";
+
+    /// <summary>
+    ///     Prefix of the synthesized step name for plugin post-processors, which
+    ///     are reported as <c>Plugin(&lt;priority&gt;)</c>.
+    /// </summary>
+    public const string PluginPrefix = "Plugin(";
 }
 
 public sealed record PostProcessingStepResult(

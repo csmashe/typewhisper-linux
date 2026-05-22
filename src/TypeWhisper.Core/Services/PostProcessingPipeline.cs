@@ -98,7 +98,13 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             foreach (var processor in processors)
             {
                 var p = processor;
-                steps.Add((p.Priority, $"Plugin({p.Priority})", p.ProcessAsync));
+                steps.Add(
+                    (
+                        p.Priority,
+                        $"{PostProcessingStepNames.PluginPrefix}{p.Priority})",
+                        p.ProcessAsync
+                    )
+                );
             }
         }
 

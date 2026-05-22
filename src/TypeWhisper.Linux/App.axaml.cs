@@ -472,22 +472,11 @@ public class App : Application
         var pluginManager = services.GetRequiredService<PluginManager>();
         await pluginManager.InitializeAsync();
 
-        var pluginRegistry = services.GetRequiredService<PluginRegistryService>();
-        _ = pluginRegistry
-            .FirstRunAutoInstallAsync()
-            .ContinueWith(_ => pluginRegistry.CheckForUpdatesAsync(), TaskScheduler.Default)
-            .ContinueWith(
-                t =>
-                {
-                    if (t.IsFaulted)
-                    {
-                        Debug.WriteLine(
-                            $"[App] Plugin registry check failed: {t.Exception?.Message}"
-                        );
-                    }
-                },
-                TaskScheduler.Default
-            );
+        // The remote plugin registry (PluginRegistryService) targets the
+        // upstream Windows registry, which serves Windows-built plugin
+        // artifacts. The Linux fork ships its own rewritten plugins via
+        // BundledPluginDeployer above, so the registry's first-run
+        // auto-install and update check are intentionally not run here.
 
         var historyRetention = services.GetRequiredService<HistoryRetentionCoordinator>();
         historyRetention.Initialize();

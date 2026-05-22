@@ -55,6 +55,112 @@ public sealed class SpeechFeedbackServiceTests
         Assert.Equal("linux-system", sut.EffectiveProviderId);
     }
 
+    [Fact]
+    public async Task SpeakAutomaticTranscription_substitutes_configured_language_when_request_has_none()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings
+            {
+                Language = "de",
+                SpokenFeedbackEnabled = true,
+                SpokenFeedbackProviderId = "cloud"
+            }
+        );
+        var plugin = new FakeTtsProvider("cloud", "Cloud Voice", true);
+        var manager = TestPluginManagerFactory.Create(ttsProviders: [plugin]);
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            new FakeTtsProvider("linux-system", "Linux system", true)
+        );
+
+        sut.SpeakAutomaticTranscription("Hallo Welt");
+
+        await WaitUntilAsync(() => plugin.Requests.Count > 0);
+
+        var request = Assert.Single(plugin.Requests);
+        Assert.Equal("de", request.Language);
+        Assert.Equal(TtsPurpose.Transcription, request.Purpose);
+    }
+
+    [Fact]
+    public async Task SpeakAutomaticTranscription_keeps_explicit_request_language()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings
+            {
+                Language = "de",
+                SpokenFeedbackEnabled = true,
+                SpokenFeedbackProviderId = "cloud"
+            }
+        );
+        var plugin = new FakeTtsProvider("cloud", "Cloud Voice", true);
+        var manager = TestPluginManagerFactory.Create(ttsProviders: [plugin]);
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            new FakeTtsProvider("linux-system", "Linux system", true)
+        );
+
+        sut.SpeakAutomaticTranscription("Hallo Welt", "fr");
+
+        await WaitUntilAsync(() => plugin.Requests.Count > 0);
+
+        var request = Assert.Single(plugin.Requests);
+        Assert.Equal("fr", request.Language);
+    }
+
+    [Fact]
+    public async Task SpeakAutomaticTranscription_skips_configured_language_fallback_when_disabled()
+    {
+        // Callers that have already resolved the readback language opt out of
+        // the configured-language fallback; a null language must stay null.
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings
+            {
+                Language = "de",
+                SpokenFeedbackEnabled = true,
+                SpokenFeedbackProviderId = "cloud"
+            }
+        );
+        var plugin = new FakeTtsProvider("cloud", "Cloud Voice", true);
+        var manager = TestPluginManagerFactory.Create(ttsProviders: [plugin]);
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            new FakeTtsProvider("linux-system", "Linux system", true)
+        );
+
+        sut.SpeakAutomaticTranscription(
+            "Hallo Welt",
+            language: null,
+            useConfiguredLanguageFallback: false
+        );
+
+        await WaitUntilAsync(() => plugin.Requests.Count > 0);
+
+        var request = Assert.Single(plugin.Requests);
+        Assert.Null(request.Language);
+        Assert.Equal(TtsPurpose.Transcription, request.Purpose);
+    }
+
+    // The service speaks on a fire-and-forget background task, so poll until
+    // the captured request is observable rather than asserting synchronously.
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(20);
+        }
+
+        Assert.True(condition(), "Condition was not met within the timeout.");
+    }
+
     private sealed class FakeTtsProvider(string providerId, string displayName, bool configured)
         : ITtsProviderPlugin
     {
@@ -66,6 +172,7 @@ public sealed class SpeechFeedbackServiceTests
         public bool IsConfigured => configured;
         public IReadOnlyList<PluginVoiceInfo> AvailableVoices { get; } = [new("voice", "Voice")];
         public string? SelectedVoiceId { get; private set; }
+        public List<TtsSpeakRequest> Requests { get; } = [];
 
         public Task ActivateAsync(IPluginHostServices host)
         {
@@ -87,6 +194,7 @@ public sealed class SpeechFeedbackServiceTests
             CancellationToken ct
         )
         {
+            Requests.Add(request);
             return Task.FromResult<ITtsPlaybackSession>(InactiveSession.Instance);
         }
 
