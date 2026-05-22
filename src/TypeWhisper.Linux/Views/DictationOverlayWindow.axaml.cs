@@ -38,12 +38,31 @@ public partial class DictationOverlayWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(DictationOverlayViewModel.HasVisibleContent))
+        if (e.PropertyName == nameof(DictationOverlayViewModel.HasVisibleContent))
         {
-            return;
+            Dispatcher.UIThread.Post(UpdateWindowVisibility);
         }
-
-        Dispatcher.UIThread.Post(UpdateWindowVisibility);
+        else if (e.PropertyName == nameof(DictationOverlayViewModel.PartialText))
+        {
+            // Keep the newest recognized text in view as the live preview
+            // grows. Deferred to Background priority so the scroll runs
+            // after layout has measured the updated text, matching the
+            // after-layout pattern used for PositionOverlay above.
+            var partialText = _viewModel?.PartialText;
+            Dispatcher.UIThread.Post(
+                () =>
+                {
+                    if (string.IsNullOrWhiteSpace(partialText))
+                    {
+                        PartialPreviewScrollViewer?.ScrollToHome();
+                    }
+                    else
+                    {
+                        PartialPreviewScrollViewer?.ScrollToEnd();
+                    }
+                },
+                DispatcherPriority.Background);
+        }
     }
 
     public void Initialize()

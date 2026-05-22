@@ -68,12 +68,17 @@
                                IsVisible="{Binding ShowRightText}" />
                 </Grid>
 
-                <TextBlock Text="{Binding PartialText}"
-                           TextWrapping="Wrap"
-                           MaxWidth="420"
-                           FontSize="12"
-                           Foreground="#E6FFFFFF"
-                           IsVisible="{Binding PartialText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <ScrollViewer x:Name="PartialPreviewScrollViewer"
+                              MaxHeight="120"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              IsVisible="{Binding PartialText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Text="{Binding PartialText}"
+                               TextWrapping="Wrap"
+                               MaxWidth="420"
+                               FontSize="12"
+                               Foreground="#E6FFFFFF" />
+                </ScrollViewer>
             </StackPanel>
         </Border>
 
