@@ -58,6 +58,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private string? _lastTranscription;
 
     [ObservableProperty]
+    private bool _liveTranscriptionEnabled;
+
+    [ObservableProperty]
     private string _microphoneStatus = "";
 
     [ObservableProperty]
@@ -73,6 +76,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private TextInsertionStrategy _newInsertionStrategy = TextInsertionStrategy.Auto;
+
+    [ObservableProperty]
+    private bool _onlineAsrBatchLiveTranscriptionEnabled;
 
     [ObservableProperty]
     private bool _pauseMediaDuringRecording;
@@ -431,6 +437,8 @@ public partial class DictationSectionViewModel : ObservableObject
         ComputeBackend = NormalizeComputeBackend(settings.ComputeBackend);
         AutoPaste = settings.AutoPaste;
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
+        LiveTranscriptionEnabled = settings.LiveTranscriptionEnabled;
+        OnlineAsrBatchLiveTranscriptionEnabled = settings.OnlineAsrBatchLiveTranscriptionEnabled;
         RefreshAppInsertionStrategies(settings.AppInsertionStrategies);
         WhisperModeEnabled = settings.WhisperModeEnabled;
         SoundFeedbackEnabled = settings.SoundFeedbackEnabled && CanUseSoundFeedback;
@@ -805,6 +813,16 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnAutoAddDictionaryCorrectionsChanged(bool value)
     {
         _settings.Save(_settings.Current with { AutoAddDictionaryCorrections = value });
+    }
+
+    partial void OnLiveTranscriptionEnabledChanged(bool value)
+    {
+        _settings.Save(_settings.Current with { LiveTranscriptionEnabled = value });
+    }
+
+    partial void OnOnlineAsrBatchLiveTranscriptionEnabledChanged(bool value)
+    {
+        _settings.Save(_settings.Current with { OnlineAsrBatchLiveTranscriptionEnabled = value });
     }
 
     [RelayCommand]

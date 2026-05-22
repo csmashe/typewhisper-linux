@@ -2093,7 +2093,18 @@ public sealed class DictationOrchestrator : IDisposable
                             partialModelId,
                             ct
                         );
-                        if (lease is not null)
+                        // Local engines poll cheaply; online batch providers
+                        // re-upload the whole growing buffer each poll, so they
+                        // stay off unless the user opts in. The lease still
+                        // disposes either way, and the loop keeps running for
+                        // silence auto-stop when live preview is gated off.
+                        if (
+                            lease is not null
+                            && LinuxLiveTranscriptionStartupPolicy.Select(
+                                _settings.Current,
+                                lease.Plugin
+                            ) == LiveTranscriptionMode.Polling
+                        )
                         {
                             await PollPartialTranscriptOnceAsync(
                                 lease.Plugin,

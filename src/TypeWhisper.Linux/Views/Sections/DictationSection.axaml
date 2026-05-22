@@ -241,7 +241,7 @@
             <TextBlock Text="Settings"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
@@ -426,6 +426,47 @@
                                      Width="120"
                                      Text="{Binding SilenceAutoStopSeconds}"
                                      HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="17"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="18"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Live transcription preview"
+                                           Classes="row-label" />
+                                <TextBlock
+                                    Text="Show partial text in the recording overlay while you speak."
+                                    FontSize="11"
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding LiveTranscriptionEnabled}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="19"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="20"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Online batch live preview"
+                                           Classes="row-label" />
+                                <TextBlock
+                                    Text="Also run repeated online transcription calls while recording for providers without real-time streaming."
+                                    FontSize="11"
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding OnlineAsrBatchLiveTranscriptionEnabled}"
+                                          IsEnabled="{Binding LiveTranscriptionEnabled}"
+                                          HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
                 </Grid>
