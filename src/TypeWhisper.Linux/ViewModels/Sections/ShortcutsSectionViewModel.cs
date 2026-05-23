@@ -345,20 +345,21 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         var trigger = string.IsNullOrWhiteSpace(_settings.Current.ToggleHotkey)
             ? "Ctrl+Shift+Space"
             : _settings.Current.ToggleHotkey;
+        var gui = ResolveGuiCommand();
         if (writer.SupportsPushToTalk)
         {
             return new DeShortcutSpec(
                 DictationShortcutId,
                 DictationDisplayName,
                 trigger,
-                "typewhisper record start",
-                "typewhisper record stop",
+                $"{gui} record start",
+                $"{gui} record stop",
                 // Cancel mirrors the trigger but swaps Space → Escape.
                 // It only fires when the user has configured a cancel
                 // accelerator; we synthesize a reasonable default for
                 // them rather than asking up-front.
                 SwapKeyForCancel(trigger),
-                "typewhisper record cancel"
+                $"{gui} record cancel"
             );
         }
 
@@ -366,11 +367,39 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             DictationShortcutId,
             DictationDisplayName,
             trigger,
-            "typewhisper",
+            gui,
             null,
             null,
             null
         );
+    }
+
+    /// <summary>
+    ///     The command the auto-installed shortcut should invoke. We resolve
+    ///     to the GUI's own apphost path rather than bare <c>typewhisper</c>
+    ///     because <c>CliInstallService</c> installs the separate
+    ///     <c>TypeWhisper.Cli</c> executable under the same name; when that
+    ///     CLI shadows the GUI on PATH the bare command resolves to a binary
+    ///     that doesn't implement <c>record start/stop/cancel</c> and the
+    ///     shortcut fails with "unknown record verb" instead of toggling
+    ///     dictation. We only trust <see cref="Environment.ProcessPath" />
+    ///     when it actually points at the apphost — a <c>dotnet run</c> /
+    ///     IDE launch reports the dotnet host instead, and emitting
+    ///     <c>/usr/bin/dotnet record start</c> would also fail. In that
+    ///     source-run case we fall back to the bare <c>typewhisper</c> name,
+    ///     which is fine because dev runs don't usually install the CLI
+    ///     side-by-side with the GUI.
+    /// </summary>
+    private static string ResolveGuiCommand()
+    {
+        var path = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(path)
+            && string.Equals(Path.GetFileName(path), "typewhisper", StringComparison.Ordinal))
+        {
+            return path.Contains(' ', StringComparison.Ordinal) ? $"\"{path}\"" : path;
+        }
+
+        return "typewhisper";
     }
 
     private static string SwapKeyForCancel(string trigger)
