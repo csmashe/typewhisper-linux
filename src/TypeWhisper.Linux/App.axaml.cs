@@ -150,6 +150,14 @@ public class App : Application
             // "Ctrl+Shift+F9" that the user never chose.
             var hotkey = services.GetRequiredService<HotkeyService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
+            var promptActions = services.GetRequiredService<IPromptActionService>();
+            hotkey.SetPromptActionHotkeys(
+                HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
+            );
+            promptActions.ActionsChanged += () =>
+                hotkey.SetPromptActionHotkeys(
+                    HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
+                );
             var lastApplied = hotkey.CurrentHotkeyString;
             var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
             var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
@@ -212,6 +220,8 @@ public class App : Application
 
             var promptPalette = services.GetRequiredService<PromptPaletteService>();
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
+            hotkey.PromptActionHotkeyTriggered += (_, actionId) =>
+                _ = promptPalette.ExecuteActionDirectAsync(actionId);
 
             var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
             recentTranscriptions.FeedbackRequested += (message, isError) =>

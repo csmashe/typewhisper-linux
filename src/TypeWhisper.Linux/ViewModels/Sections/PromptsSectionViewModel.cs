@@ -32,6 +32,12 @@ public partial class PromptsSectionViewModel : ObservableObject
     private string? _editTargetActionPluginId;
 
     [ObservableProperty]
+    private string? _editHotkeyKey;
+
+    [ObservableProperty]
+    private bool _editIsManualOnly;
+
+    [ObservableProperty]
     private bool _isCreatingNew;
 
     // Prevents SelectedEditProvider's setter from persisting the provider
@@ -142,6 +148,8 @@ public partial class PromptsSectionViewModel : ObservableObject
         EditIcon = value.Icon;
         EditProviderOverride = value.ProviderOverride;
         EditTargetActionPluginId = value.TargetActionPluginId;
+        EditHotkeyKey = value.HotkeyKey;
+        EditIsManualOnly = value.IsManualOnly;
         NotifyStateChanged();
     }
 
@@ -157,6 +165,8 @@ public partial class PromptsSectionViewModel : ObservableObject
         EditIcon = "\u2728";
         EditProviderOverride = null;
         EditTargetActionPluginId = null;
+        EditHotkeyKey = null;
+        EditIsManualOnly = false;
         NotifyStateChanged();
     }
 
@@ -178,6 +188,8 @@ public partial class PromptsSectionViewModel : ObservableObject
                 Icon = EditIcon,
                 ProviderOverride = EditProviderOverride,
                 TargetActionPluginId = EditTargetActionPluginId,
+                HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
+                IsManualOnly = EditIsManualOnly,
                 IsEnabled = true,
                 SortOrder = _prompts.Actions.Count
             };
@@ -206,7 +218,9 @@ public partial class PromptsSectionViewModel : ObservableObject
                 SystemPrompt = EditSystemPrompt.Trim(),
                 Icon = EditIcon,
                 ProviderOverride = EditProviderOverride,
-                TargetActionPluginId = EditTargetActionPluginId
+                TargetActionPluginId = EditTargetActionPluginId,
+                HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
+                IsManualOnly = EditIsManualOnly
             }
         );
         RefreshActions();
@@ -452,6 +466,13 @@ public partial class PromptsSectionViewModel : ObservableObject
         EditIcon = "\u2728";
         EditProviderOverride = null;
         EditTargetActionPluginId = null;
+        EditHotkeyKey = null;
+        EditIsManualOnly = false;
+    }
+
+    private static string? NormalizeOptionalString(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private void NotifyStateChanged()

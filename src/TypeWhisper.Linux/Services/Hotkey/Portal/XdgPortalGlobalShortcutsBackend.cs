@@ -118,6 +118,12 @@ public sealed class XdgPortalGlobalShortcutsBackend : IGlobalShortcutBackend
         remove { }
     }
 
+    public event EventHandler<string>? PromptActionRequested
+    {
+        add { }
+        remove { }
+    }
+
     public event EventHandler<string>? Failed
     {
         add { }

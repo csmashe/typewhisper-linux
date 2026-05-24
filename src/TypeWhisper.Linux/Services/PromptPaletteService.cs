@@ -80,6 +80,32 @@ public sealed class PromptPaletteService
         await ExecuteActionAsync(selectedAction, capturedText);
     }
 
+    /// <summary>
+    ///     Direct-hotkey entry point (B12): looks up the action by ID, captures
+    ///     the current selection, runs the action against it. No palette is
+    ///     opened. Manual-only actions are intentionally NOT filtered here —
+    ///     that's the whole point of the B13 flag (hide from auto pipeline,
+    ///     keep direct-hotkey + palette execution). Disabled actions are
+    ///     filtered by <see cref="IPromptActionService.EnabledActions" /> so a
+    ///     stale hotkey on a disabled action is a no-op.
+    /// </summary>
+    public async Task ExecuteActionDirectAsync(string actionId)
+    {
+        var action = _promptActions.EnabledActions.FirstOrDefault(a => a.Id == actionId);
+        if (action is null)
+        {
+            return;
+        }
+
+        var captured = await _textInsertion.CaptureSelectedTextAsync();
+        if (string.IsNullOrWhiteSpace(captured))
+        {
+            return;
+        }
+
+        await ExecuteActionAsync(action, captured);
+    }
+
     private async Task ExecuteActionAsync(PromptAction action, string capturedText)
     {
         if (!_processing.IsAnyProviderAvailable)

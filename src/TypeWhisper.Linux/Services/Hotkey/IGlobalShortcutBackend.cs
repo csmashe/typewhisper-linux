@@ -37,5 +37,6 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     event EventHandler? RecentTranscriptionsRequested;
     event EventHandler? CopyLastTranscriptionRequested;
     event EventHandler? CancelRequested;
+    event EventHandler<string>? PromptActionRequested;
     event EventHandler<string>? Failed;
 }

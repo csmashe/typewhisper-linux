@@ -1390,13 +1390,30 @@ public sealed class DictationOrchestrator : IDisposable
 
     private PromptAction? ResolvePromptAction(RecordingContext context)
     {
-        var promptActionId = context.Profile?.PromptActionId;
+        return ResolveAutoPromptAction(context.Profile?.PromptActionId, _promptActions.EnabledActions);
+    }
+
+    /// <summary>
+    ///     Auto-pipeline lookup used by <c>ResolvePromptAction</c> (B13).
+    ///     Returns the enabled action whose ID matches <paramref name="promptActionId" />
+    ///     and which is not marked manual-only. Manual-only actions are
+    ///     intentionally hidden from this path so they only fire from the
+    ///     palette or the per-action hotkey (B12), not from a Profile
+    ///     binding. Exposed internally so the filter is unit-testable.
+    /// </summary>
+    internal static PromptAction? ResolveAutoPromptAction(
+        string? promptActionId,
+        IReadOnlyList<PromptAction> enabledActions
+    )
+    {
         if (string.IsNullOrWhiteSpace(promptActionId))
         {
             return null;
         }
 
-        return _promptActions.EnabledActions.FirstOrDefault(action => action.Id == promptActionId);
+        return enabledActions.FirstOrDefault(action =>
+            action.Id == promptActionId && !action.IsManualOnly
+        );
     }
 
     private async Task<string> RunPromptActionAsync(

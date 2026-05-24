@@ -13,7 +13,8 @@ internal enum ShortcutMatchKind
     RecentTranscriptions,
     CopyLastTranscription,
     TransformSelection,
-    Cancel
+    Cancel,
+    PromptAction
 }
 
 /// <summary>
@@ -31,6 +32,25 @@ internal static class ShortcutMatcher
         GlobalShortcutSet set
     )
     {
+        return Match(key, pressedMods, set, out _);
+    }
+
+    /// <summary>
+    ///     Match overload that additionally returns the
+    ///     <c>PromptAction.Id</c> when the chord resolves to a configured
+    ///     direct-execution prompt-action hotkey (B12). The dispatcher uses
+    ///     this overload so it can route the press to the action lookup;
+    ///     legacy callers can keep using the simpler signature above.
+    /// </summary>
+    public static ShortcutMatchKind Match(
+        KeyCode key,
+        ModifierMask pressedMods,
+        GlobalShortcutSet set,
+        out string? promptActionId
+    )
+    {
+        promptActionId = null;
+
         // Order matters: cancel takes priority so an active dictation can be
         // discarded even if the cancel key collides with another binding —
         // the caller still gets to decide whether to honor it.
@@ -73,6 +93,20 @@ internal static class ShortcutMatcher
             return ShortcutMatchKind.PromptPalette;
         }
 
+        // Direct-hotkey prompt-action lookup sits between PromptPalette and
+        // Dictation so a Profile-bound Dictation chord can't shadow a
+        // user-configured per-action hotkey. The HotkeyService de-duplicates
+        // entries before the snapshot is pushed, so a linear scan is fine
+        // here (typical N is < 10).
+        foreach (var entry in set.PromptActionHotkeys)
+        {
+            if (key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
+            {
+                promptActionId = entry.ActionId;
+                return ShortcutMatchKind.PromptAction;
+            }
+        }
+
         if (key == set.DictationKey && ModifiersMatch(pressedMods, set.DictationModifiers))
         {
             return ShortcutMatchKind.Dictation;
@@ -100,26 +134,41 @@ internal static class ShortcutMatcher
     {
         var pressedMods = set.CancelModifiers;
         var key = set.CancelKey;
-        return Matches(key, pressedMods, set.DictationKey, set.DictationModifiers)
-               || Matches(key, pressedMods, set.PromptPaletteKey, set.PromptPaletteModifiers)
-               || Matches(
-                   key,
-                   pressedMods,
-                   set.RecentTranscriptionsKey,
-                   set.RecentTranscriptionsModifiers
-               )
-               || Matches(
-                   key,
-                   pressedMods,
-                   set.CopyLastTranscriptionKey,
-                   set.CopyLastTranscriptionModifiers
-               )
-               || Matches(
-                   key,
-                   pressedMods,
-                   set.TransformSelectionKey,
-                   set.TransformSelectionModifiers
-               );
+        if (
+            Matches(key, pressedMods, set.DictationKey, set.DictationModifiers)
+            || Matches(key, pressedMods, set.PromptPaletteKey, set.PromptPaletteModifiers)
+            || Matches(
+                key,
+                pressedMods,
+                set.RecentTranscriptionsKey,
+                set.RecentTranscriptionsModifiers
+            )
+            || Matches(
+                key,
+                pressedMods,
+                set.CopyLastTranscriptionKey,
+                set.CopyLastTranscriptionModifiers
+            )
+            || Matches(
+                key,
+                pressedMods,
+                set.TransformSelectionKey,
+                set.TransformSelectionModifiers
+            )
+        )
+        {
+            return true;
+        }
+
+        foreach (var entry in set.PromptActionHotkeys)
+        {
+            if (key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

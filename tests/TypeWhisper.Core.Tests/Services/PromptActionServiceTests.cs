@@ -274,4 +274,36 @@ public class PromptActionServiceTests : IDisposable
         Assert.Null(action.TargetActionPluginId);
         Assert.Null(action.HotkeyKey);
     }
+
+    [Fact]
+    public void IsManualOnly_PersistsCorrectly()
+    {
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "Manual",
+                SystemPrompt = "test",
+                IsManualOnly = true
+            }
+        );
+
+        var freshService = new PromptActionService(_filePath);
+        var action = Assert.Single(freshService.Actions);
+        Assert.True(action.IsManualOnly);
+    }
+
+    [Fact]
+    public void IsManualOnly_DefaultsToFalseWhenAbsentFromJson()
+    {
+        // Simulate JSON from a pre-B13 user file: no IsManualOnly key.
+        File.WriteAllText(
+            _filePath,
+            "[{\"Id\":\"1\",\"Name\":\"Legacy\",\"SystemPrompt\":\"old\"}]"
+        );
+
+        var service = new PromptActionService(_filePath);
+        var action = Assert.Single(service.Actions);
+        Assert.False(action.IsManualOnly);
+    }
 }

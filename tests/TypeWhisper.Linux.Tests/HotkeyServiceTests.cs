@@ -1,4 +1,5 @@
 using SharpHook.Native;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey;
 using Xunit;
@@ -109,6 +110,205 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public async Task SetPromptActionHotkeys_RaisesPromptActionHotkeyTriggeredWithActionId()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("alpha", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        string? observed = null;
+        hotkey.PromptActionHotkeyTriggered += (_, id) => observed = id;
+
+        backend.RaisePromptAction("alpha");
+
+        Assert.Equal("alpha", observed);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_DropsEntryCollidingWithDictation()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        // Default dictation hotkey is Ctrl+Shift+Space — the collision check
+        // must reject a prompt-action entry that names the same chord.
+        hotkey.SetPromptActionHotkeys(
+            [
+                new PromptActionHotkey(
+                    "collides",
+                    KeyCode.VcSpace,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftShift
+                ),
+                new PromptActionHotkey(
+                    "keeper",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                )
+            ]
+        );
+
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        Assert.Equal("keeper", kept.ActionId);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_KeepsFirstDuplicateAndDropsSecond()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetPromptActionHotkeys(
+            [
+                new PromptActionHotkey(
+                    "first",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                ),
+                new PromptActionHotkey(
+                    "second",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                )
+            ]
+        );
+
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        Assert.Equal("first", kept.ActionId);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_SecondCallReplacesPreviousList()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("old", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("new", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var entry = Assert.Single(snapshot!.PromptActionHotkeys);
+        Assert.Equal("new", entry.ActionId);
+        Assert.Equal(KeyCode.VcT, entry.Key);
+    }
+
+    [Fact]
+    public async Task TrySetHotkeyFromString_RejectsChordAlreadyBoundToPromptAction()
+    {
+        // Symmetry guard: SetPromptActionHotkeys already refuses entries
+        // colliding with fixed bindings; the inverse must hold too, or the
+        // matcher's prompt-action arm silently shadows the fixed binding.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys(
+            [
+                new PromptActionHotkey(
+                    "alpha",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetHotkeyFromString("Ctrl+Alt+R");
+
+        Assert.False(accepted);
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentHotkeyString);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_AcceptsUnchangedListWithoutSelfConflict()
+    {
+        // Regression: ActionsChanged fires on every add/update/delete, so
+        // most calls re-submit the same list. The reconcile must not treat
+        // existing entries as colliding with themselves.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var entries = new[]
+        {
+            new PromptActionHotkey("alpha", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
+            new PromptActionHotkey("beta", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)
+        };
+
+        hotkey.SetPromptActionHotkeys(entries);
+        await backend.WaitUntilSettledAsync();
+        hotkey.SetPromptActionHotkeys(entries);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(2, snapshot!.PromptActionHotkeys.Count);
+    }
+
+    [Fact]
+    public void ParsePromptActionHotkeys_SkipsDisabledOrUnparseableActions()
+    {
+        var parsed = HotkeyService.ParsePromptActionHotkeys(
+            [
+                new PromptAction
+                {
+                    Id = "enabled",
+                    Name = "E",
+                    SystemPrompt = "x",
+                    HotkeyKey = "Ctrl+Alt+R"
+                },
+                new PromptAction
+                {
+                    Id = "disabled",
+                    Name = "D",
+                    SystemPrompt = "x",
+                    IsEnabled = false,
+                    HotkeyKey = "Ctrl+Alt+T"
+                },
+                new PromptAction
+                {
+                    Id = "no-hotkey",
+                    Name = "N",
+                    SystemPrompt = "x"
+                },
+                new PromptAction
+                {
+                    Id = "bad",
+                    Name = "B",
+                    SystemPrompt = "x",
+                    HotkeyKey = "Not+a+real+combo"
+                }
+            ]
+        );
+
+        var entry = Assert.Single(parsed);
+        Assert.Equal("enabled", entry.ActionId);
+        Assert.Equal(KeyCode.VcR, entry.Key);
+    }
+
+    [Fact]
     public async Task PushShortcuts_AppliesUpdatesInOrder()
     {
         // Backend records each set it sees. A burst of TrySet* calls must
@@ -205,10 +405,17 @@ public sealed class HotkeyServiceTests
             remove { }
         }
 
+        public event EventHandler<string>? PromptActionRequested;
+
         public event EventHandler<string>? Failed
         {
             add { }
             remove { }
+        }
+
+        public void RaisePromptAction(string actionId)
+        {
+            PromptActionRequested?.Invoke(this, actionId);
         }
 
         public Task<GlobalShortcutRegistrationResult> RegisterAsync(

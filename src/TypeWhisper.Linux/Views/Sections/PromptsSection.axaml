@@ -155,7 +155,7 @@
             <Border Classes="panel"
                     Padding="18,16"
                     IsVisible="{Binding ShowEditor}">
-                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                       ColumnDefinitions="*,*"
                       ColumnSpacing="12">
                     <TextBlock Grid.ColumnSpan="2"
@@ -213,6 +213,24 @@
                     </StackPanel>
 
                     <StackPanel Grid.Row="4"
+                                Margin="0,14,0,0">
+                        <TextBlock Text="Hotkey"
+                                   Margin="0,0,0,6" />
+                        <TextBox Text="{Binding EditHotkeyKey}"
+                                 PlaceholderText="e.g. Ctrl+Alt+R" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="4"
+                                Grid.Column="1"
+                                Margin="0,14,0,0">
+                        <TextBlock Text="Manual only"
+                                   Margin="0,0,0,6" />
+                        <ToggleSwitch IsChecked="{Binding EditIsManualOnly}"
+                                      OnContent="Hidden from auto post-processing"
+                                      OffContent="Available everywhere" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="5"
                                 Grid.ColumnSpan="2"
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right"

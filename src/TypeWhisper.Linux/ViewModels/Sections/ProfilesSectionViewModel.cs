@@ -792,7 +792,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         foreach (
             var action in _promptActions
-                .Actions.OrderBy(action => action.SortOrder)
+                .Actions.Where(action => !action.IsManualOnly)
+                .OrderBy(action => action.SortOrder)
                 .ThenBy(action => action.Name)
         )
         {

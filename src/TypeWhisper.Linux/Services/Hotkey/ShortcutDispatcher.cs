@@ -26,6 +26,14 @@ internal sealed class ShortcutDispatcher
     private bool _dictationKeyDown;
     private DateTime _dictationKeyDownTime;
     private bool _promptKeyDown;
+    // Per-action key-down dedup, keyed by the physical KeyCode that matched
+    // at press time. Storing the press-time match means release-time cleanup
+    // is independent of the current shortcut set — if the user edits or
+    // removes the bound action between press and release, the release of
+    // the physical key still clears the entry. Without that, a hold + edit
+    // cycle would strand the action ID in the dedup set and silently
+    // suppress all future presses of that action.
+    private readonly Dictionary<KeyCode, string> _promptActionKeyDown = new();
     private bool _recentKeyDown;
 
     private GlobalShortcutSet? _shortcuts;
@@ -39,6 +47,7 @@ internal sealed class ShortcutDispatcher
     public event Action? RecentTranscriptionsRequested;
     public event Action? CopyLastTranscriptionRequested;
     public event Action? CancelRequested;
+    public event Action<string>? PromptActionRequested;
 
     public void UpdateShortcuts(GlobalShortcutSet shortcuts)
     {
@@ -74,7 +83,7 @@ internal sealed class ShortcutDispatcher
 
     private void HandlePress(KeyCode key, ModifierMask mods, GlobalShortcutSet set)
     {
-        var match = ShortcutMatcher.Match(key, mods, set);
+        var match = ShortcutMatcher.Match(key, mods, set, out var promptActionId);
 
         // Cancel: only fires while a dictation is active and only when it
         // doesn't collide with another binding — otherwise we fall through
@@ -99,11 +108,34 @@ internal sealed class ShortcutDispatcher
 
             // Cancel collides with a configured binding — re-match without
             // cancel so that other binding can fire.
-            match = ShortcutMatcher.Match(key, mods, set with { CancelKey = KeyCode.VcUndefined });
+            match = ShortcutMatcher.Match(
+                key,
+                mods,
+                set with { CancelKey = KeyCode.VcUndefined },
+                out promptActionId
+            );
         }
 
         switch (match)
         {
+            case ShortcutMatchKind.PromptAction:
+                if (promptActionId is null)
+                {
+                    return;
+                }
+
+                lock (_lock)
+                {
+                    if (_promptActionKeyDown.ContainsKey(key))
+                    {
+                        return;
+                    }
+
+                    _promptActionKeyDown[key] = promptActionId;
+                }
+
+                RaisePromptAction(promptActionId);
+                return;
             case ShortcutMatchKind.RecentTranscriptions:
                 if (!TryClaimKeyDown(ref _recentKeyDown))
                 {
@@ -213,6 +245,13 @@ internal sealed class ShortcutDispatcher
             {
                 _cancelKeyDown = false;
             }
+
+            // Clear the press-time entry without consulting the current
+            // shortcut set — if the action was edited/removed mid-hold,
+            // set.PromptActionHotkeys may no longer reference this key,
+            // but our own dictionary still remembers the press and must
+            // release it to keep dedup honest for the next press.
+            _promptActionKeyDown.Remove(key);
         }
 
         if (key != set.DictationKey)
@@ -279,6 +318,26 @@ internal sealed class ShortcutDispatcher
         catch (Exception ex)
         {
             Trace.WriteLine($"[ShortcutDispatcher] {name} handler threw: {ex.Message}");
+        }
+    }
+
+    private void RaisePromptAction(string actionId)
+    {
+        var handler = PromptActionRequested;
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handler(actionId);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[ShortcutDispatcher] {nameof(PromptActionRequested)} handler threw: {ex.Message}"
+            );
         }
     }
 }

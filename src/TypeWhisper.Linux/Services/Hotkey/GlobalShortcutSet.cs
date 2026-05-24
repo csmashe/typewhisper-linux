@@ -23,5 +23,51 @@ public sealed record GlobalShortcutSet(
     KeyCode CancelKey,
     ModifierMask CancelModifiers,
     RecordingMode Mode,
-    bool IsCancelEnabled
-);
+    bool IsCancelEnabled,
+    IReadOnlyList<PromptActionHotkey> PromptActionHotkeys
+)
+{
+    public GlobalShortcutSet(
+        KeyCode dictationKey,
+        ModifierMask dictationModifiers,
+        KeyCode? promptPaletteKey,
+        ModifierMask promptPaletteModifiers,
+        KeyCode? recentTranscriptionsKey,
+        ModifierMask recentTranscriptionsModifiers,
+        KeyCode? copyLastTranscriptionKey,
+        ModifierMask copyLastTranscriptionModifiers,
+        KeyCode? transformSelectionKey,
+        ModifierMask transformSelectionModifiers,
+        KeyCode cancelKey,
+        ModifierMask cancelModifiers,
+        RecordingMode mode,
+        bool isCancelEnabled
+    )
+        : this(
+            dictationKey,
+            dictationModifiers,
+            promptPaletteKey,
+            promptPaletteModifiers,
+            recentTranscriptionsKey,
+            recentTranscriptionsModifiers,
+            copyLastTranscriptionKey,
+            copyLastTranscriptionModifiers,
+            transformSelectionKey,
+            transformSelectionModifiers,
+            cancelKey,
+            cancelModifiers,
+            mode,
+            isCancelEnabled,
+            Array.Empty<PromptActionHotkey>()
+        )
+    {
+    }
+}
+
+/// <summary>
+///     A prompt action bound to a direct-execution hotkey (B12). Pressing the
+///     chord captures the current selection and runs the action against it,
+///     bypassing the palette UI. <see cref="ActionId" /> is the
+///     <c>PromptAction.Id</c> the matched chord should execute.
+/// </summary>
+public sealed record PromptActionHotkey(string ActionId, KeyCode Key, ModifierMask Modifiers);

@@ -46,8 +46,16 @@ public sealed class HotkeyService : IDisposable
     private EventHandler? _onDictationStopRequested;
     private EventHandler? _onDictationToggleRequested;
     private EventHandler? _onPromptPaletteRequested;
+    private EventHandler<string>? _onPromptActionRequested;
     private EventHandler? _onRecentTranscriptionsRequested;
     private EventHandler? _onTransformSelectionRequested;
+
+    // Direct-execution prompt action hotkeys (B12). The list is rebuilt
+    // wholesale by SetPromptActionHotkeys; the snapshot pushed to the
+    // backend captures it by reference, so mutations after push are not
+    // observed by the running matcher.
+    private IReadOnlyList<PromptActionHotkey> _promptActionHotkeys =
+        Array.Empty<PromptActionHotkey>();
 
     // Serializes backend updates so a burst of TrySet*/Mode= calls can't apply
     // out of order and leave the backend listening for stale bindings.
@@ -190,6 +198,7 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? CopyLastTranscriptionRequested;
     public event EventHandler? TransformSelectionRequested;
     public event EventHandler? CancelRequested;
+    public event EventHandler<string>? PromptActionHotkeyTriggered;
     public event EventHandler<string>? HookFailed;
 
     /// <summary>
@@ -263,6 +272,8 @@ public sealed class HotkeyService : IDisposable
             _onTransformSelectionRequested = (_, _) =>
                 TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
             _onCancelRequested = (_, _) => CancelRequested?.Invoke(this, EventArgs.Empty);
+            _onPromptActionRequested = (_, actionId) =>
+                PromptActionHotkeyTriggered?.Invoke(this, actionId);
             _onBackendFailed = (_, message) => HookFailed?.Invoke(this, message);
             backend.DictationToggleRequested += _onDictationToggleRequested;
             backend.DictationStartRequested += _onDictationStartRequested;
@@ -272,6 +283,7 @@ public sealed class HotkeyService : IDisposable
             backend.CopyLastTranscriptionRequested += _onCopyLastTranscriptionRequested;
             backend.TransformSelectionRequested += _onTransformSelectionRequested;
             backend.CancelRequested += _onCancelRequested;
+            backend.PromptActionRequested += _onPromptActionRequested;
             backend.Failed += _onBackendFailed;
             _backend = backend;
         }
@@ -326,6 +338,11 @@ public sealed class HotkeyService : IDisposable
             backend.CancelRequested -= _onCancelRequested;
         }
 
+        if (_onPromptActionRequested is not null)
+        {
+            backend.PromptActionRequested -= _onPromptActionRequested;
+        }
+
         if (_onBackendFailed is not null)
         {
             backend.Failed -= _onBackendFailed;
@@ -339,6 +356,7 @@ public sealed class HotkeyService : IDisposable
         _onCopyLastTranscriptionRequested = null;
         _onTransformSelectionRequested = null;
         _onCancelRequested = null;
+        _onPromptActionRequested = null;
         _onBackendFailed = null;
     }
 
@@ -539,8 +557,105 @@ public sealed class HotkeyService : IDisposable
             _cancelKey,
             _cancelModifiers,
             _mode,
-            _cancelShortcutEnabled
+            _cancelShortcutEnabled,
+            _promptActionHotkeys
         );
+    }
+
+    /// <summary>
+    ///     Replaces the dynamic per-action hotkey list atomically. Entries that
+    ///     collide with an existing fixed binding (Dictation, PromptPalette,
+    ///     RecentTranscriptions, CopyLastTranscription, TransformSelection) or
+    ///     with an earlier accepted prompt-action entry are dropped with a
+    ///     <see cref="Trace.WriteLine" />, matching the silent-rejection style
+    ///     of <c>TrySet*HotkeyFromString</c>. Pushes a fresh snapshot to the
+    ///     backend so the matcher sees the new list immediately.
+    /// </summary>
+    public void SetPromptActionHotkeys(IReadOnlyList<PromptActionHotkey> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        // Clear the previous list before reconciling so GetBoundHotkeys()
+        // doesn't report the same chord as already-bound when an unchanged
+        // entry is re-submitted (the common case — ActionsChanged fires on
+        // every add/update/delete and reuses most existing entries). Intra-
+        // batch deduplication is handled by the `accepted.Any(...)` check
+        // below.
+        _promptActionHotkeys = Array.Empty<PromptActionHotkey>();
+
+        var accepted = new List<PromptActionHotkey>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.ActionId))
+            {
+                Trace.WriteLine(
+                    "[HotkeyService] Refusing prompt-action hotkey with empty action id."
+                );
+                continue;
+            }
+
+            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with another shortcut."
+                );
+                continue;
+            }
+
+            if (
+                accepted.Any(prior =>
+                    prior.Key == entry.Key
+                    && ShortcutMatcher.ModifiersMatch(prior.Modifiers, entry.Modifiers)
+                )
+            )
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that duplicates an earlier entry."
+                );
+                continue;
+            }
+
+            accepted.Add(entry);
+        }
+
+        _promptActionHotkeys = accepted;
+        PushShortcutsIfRunning();
+    }
+
+    /// <summary>
+    ///     Translates the JSON-stored <see cref="PromptAction.HotkeyKey" />
+    ///     strings into parsed <see cref="PromptActionHotkey" /> entries.
+    ///     Actions with a missing or unparseable hotkey are silently skipped
+    ///     (matches the <c>TrySet*HotkeyFromString</c> rejection pattern); the
+    ///     caller decides what to do with the resulting list (typically pass
+    ///     it to <see cref="SetPromptActionHotkeys" />).
+    /// </summary>
+    public static IReadOnlyList<PromptActionHotkey> ParsePromptActionHotkeys(
+        IEnumerable<PromptAction> actions
+    )
+    {
+        ArgumentNullException.ThrowIfNull(actions);
+
+        var result = new List<PromptActionHotkey>();
+        foreach (var action in actions)
+        {
+            if (!action.IsEnabled || string.IsNullOrWhiteSpace(action.HotkeyKey))
+            {
+                continue;
+            }
+
+            if (!TryParseHotkey(action.HotkeyKey, out var key, out var modifiers) || key is null)
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Unparseable prompt-action hotkey for '{action.Id}': '{action.HotkeyKey}'."
+                );
+                continue;
+            }
+
+            result.Add(new PromptActionHotkey(action.Id, key.Value, modifiers));
+        }
+
+        return result;
     }
 
     private void PushShortcutsIfRunning()
@@ -606,7 +721,13 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        return key == otherKey.Value && modifiers == otherModifiers;
+        // Use ShortcutMatcher.ModifiersMatch so collision detection treats
+        // LeftCtrl/RightCtrl (and Shift/Alt/Meta variants) as equivalent —
+        // otherwise a chord like RightCtrl+Space could slip past the check
+        // and collide with a LeftCtrl+Space binding at runtime, since the
+        // dispatcher uses ModifiersMatch when resolving presses.
+        return key == otherKey.Value
+               && ShortcutMatcher.ModifiersMatch(modifiers, otherModifiers);
     }
 
     private IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> GetBoundHotkeys(
@@ -636,6 +757,19 @@ public sealed class HotkeyService : IDisposable
         if (exclude != HotkeyBinding.TransformSelection)
         {
             yield return (_transformSelectionKey, _transformSelectionModifiers);
+        }
+
+        // Dynamic per-action prompt-action bindings (B12). Including them
+        // here makes the collision check symmetric: TrySet*HotkeyFromString
+        // rejects a fixed-binding change that would shadow an existing
+        // prompt-action chord, mirroring SetPromptActionHotkeys' rejection
+        // of a new entry that collides with a fixed binding. The
+        // PromptAction enum value is intentionally absent — SetPromptActionHotkeys
+        // clears _promptActionHotkeys before its reconcile loop, so this
+        // method never has to exclude a "current prompt action" entry.
+        foreach (var entry in _promptActionHotkeys)
+        {
+            yield return (entry.Key, entry.Modifiers);
         }
     }
 
