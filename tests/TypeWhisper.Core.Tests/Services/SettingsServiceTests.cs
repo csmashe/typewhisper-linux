@@ -49,6 +49,7 @@ public class SettingsServiceTests : IDisposable
             OverlayCustomLeft = 123.5,
             OverlayCustomTop = 87.25,
             SelectedIndustryPresetId = "real-estate",
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
                 ["kitty"] = TextInsertionStrategy.DirectTyping,
@@ -68,6 +69,10 @@ public class SettingsServiceTests : IDisposable
         Assert.Equal(123.5, sut2.Current.OverlayCustomLeft);
         Assert.Equal(87.25, sut2.Current.OverlayCustomTop);
         Assert.Equal("real-estate", sut2.Current.SelectedIndustryPresetId);
+        Assert.Equal(
+            AppSettings.LocalModelAccelerationNvidiaCuda,
+            sut2.Current.LocalModelAcceleration
+        );
         Assert.Equal(
             TextInsertionStrategy.DirectTyping,
             sut2.Current.AppInsertionStrategies["kitty"]
@@ -241,5 +246,112 @@ public class SettingsServiceTests : IDisposable
         var loaded = new SettingsService(_filePath);
 
         Assert.Equal(HistoryRetentionMode.UntilAppCloses, loaded.Current.HistoryRetentionMode);
+    }
+
+    [Fact]
+    public void Load_LegacyComputeBackendCuda_MigratesToNvidiaCuda()
+    {
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "language": "en",
+              "computeBackend": "cuda"
+            }
+            """
+        );
+
+        var sut = new SettingsService(_filePath);
+
+        Assert.Equal(
+            AppSettings.LocalModelAccelerationNvidiaCuda,
+            sut.Current.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public void Load_LegacyComputeBackendCpu_MigratesToCpu()
+    {
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "language": "en",
+              "computeBackend": "cpu"
+            }
+            """
+        );
+
+        var sut = new SettingsService(_filePath);
+
+        Assert.Equal(
+            AppSettings.LocalModelAccelerationCpu,
+            sut.Current.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public void Load_LegacyComputeBackendUnset_DefaultsToCpu()
+    {
+        // Older fork builds defaulted ComputeBackend to "cpu". When the legacy
+        // field is present but empty/missing-value, preserve that default by
+        // mapping to LocalModelAccelerationCpu rather than Auto.
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "language": "en",
+              "computeBackend": ""
+            }
+            """
+        );
+
+        var sut = new SettingsService(_filePath);
+
+        Assert.Equal(
+            AppSettings.LocalModelAccelerationCpu,
+            sut.Current.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public void Load_UnknownLocalModelAcceleration_FallsBackToAuto()
+    {
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "language": "en",
+              "localModelAcceleration": "directml"
+            }
+            """
+        );
+
+        var sut = new SettingsService(_filePath);
+
+        Assert.Equal(
+            AppSettings.LocalModelAccelerationAuto,
+            sut.Current.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public void Load_BothLegacyAndNewFields_PrefersNewField()
+    {
+        // Migration only runs when localModelAcceleration is absent. When both
+        // exist, the new field wins — guarantees a one-shot migration that
+        // doesn't keep overwriting an explicit user choice.
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "language": "en",
+              "computeBackend": "cuda",
+              "localModelAcceleration": "cpu"
+            }
+            """
+        );
+
+        var sut = new SettingsService(_filePath);
+
+        Assert.Equal(
+            AppSettings.LocalModelAccelerationCpu,
+            sut.Current.LocalModelAcceleration);
     }
 }

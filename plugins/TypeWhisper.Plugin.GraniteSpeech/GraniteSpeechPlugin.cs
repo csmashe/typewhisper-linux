@@ -37,6 +37,10 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
     private int _requestId;
+    private TranscriptionAccelerationPreference _accelerationPreference =
+        TranscriptionAccelerationPreference.Auto;
+    private TranscriptionAccelerationStatus _accelerationStatus =
+        new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
     // ITypeWhisperPlugin
     public string PluginId => "com.typewhisper.granite-speech";
@@ -51,6 +55,13 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
     public bool SupportsTranslation => true;
     public bool SupportsModelDownload => true;
     public IReadOnlyList<string> SupportedLanguages => GraniteSupportedLanguages;
+
+    public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
+        [TranscriptionAccelerationBackend.Cpu];
+
+    public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
+
+    public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
     [
@@ -93,6 +104,32 @@ public sealed class GraniteSpeechPlugin : ITypeWhisperPlugin, ITranscriptionEngi
         _computeBackend = normalized;
         if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
             StopSidecar();
+    }
+
+    public void SetAccelerationPreference(TranscriptionAccelerationPreference preference)
+    {
+        _accelerationPreference = preference;
+        if (preference == TranscriptionAccelerationPreference.NvidiaCuda)
+        {
+            _host?.Log(
+                PluginLogLevel.Warning,
+                "Granite Speech does not support CUDA on Linux; falling back to CPU."
+            );
+            _accelerationStatus = new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Cpu,
+                "Using CPU",
+                "Granite Speech does not support CUDA on Linux; falling back to CPU."
+            );
+        }
+        else
+        {
+            _accelerationStatus = new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Cpu,
+                "Using CPU"
+            );
+        }
+
+        ConfigureComputeBackend("cpu");
     }
 
     public bool IsModelDownloaded(string modelId) =>

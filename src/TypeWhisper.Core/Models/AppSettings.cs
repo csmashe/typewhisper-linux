@@ -4,6 +4,10 @@ public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
 
+    public const string LocalModelAccelerationAuto = "auto";
+    public const string LocalModelAccelerationCpu = "cpu";
+    public const string LocalModelAccelerationNvidiaCuda = "nvidia-cuda";
+
     public const int MinPreviewBubbleAutoHideMilliseconds = 0;
     public const int DefaultPreviewBubbleAutoHideMilliseconds = 1500;
     public const int MaxPreviewBubbleAutoHideMilliseconds = 5000;
@@ -41,7 +45,7 @@ public record AppSettings
 
     // Model
     public string? SelectedModelId { get; init; }
-    public string ComputeBackend { get; init; } = "cpu";
+    public string LocalModelAcceleration { get; init; } = LocalModelAccelerationAuto;
 
     // Manual file transcription
     public string? FileTranscriptionEngineOverride { get; init; }
@@ -138,6 +142,36 @@ public record AppSettings
     public bool WaylandEvdevHotkeysEnabled { get; init; } = true;
 
     public static AppSettings Default => new();
+
+    public static string NormalizeLocalModelAcceleration(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return LocalModelAccelerationAuto;
+        }
+
+        var trimmed = value.Trim();
+        if (string.Equals(trimmed, LocalModelAccelerationAuto, StringComparison.OrdinalIgnoreCase))
+        {
+            return LocalModelAccelerationAuto;
+        }
+
+        if (string.Equals(trimmed, LocalModelAccelerationCpu, StringComparison.OrdinalIgnoreCase))
+        {
+            return LocalModelAccelerationCpu;
+        }
+
+        if (
+            string.Equals(trimmed, LocalModelAccelerationNvidiaCuda, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "cuda", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "nvidia cuda", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return LocalModelAccelerationNvidiaCuda;
+        }
+
+        return LocalModelAccelerationAuto;
+    }
 
     public static int NormalizePreviewBubbleAutoHideMilliseconds(int milliseconds) =>
         Math.Clamp(

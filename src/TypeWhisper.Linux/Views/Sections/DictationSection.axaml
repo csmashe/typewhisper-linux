@@ -112,14 +112,14 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,320,Auto"
                               ColumnSpacing="10">
-                            <TextBlock Text="Compute backend"
+                            <TextBlock Text="Local model acceleration"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
-                                      ItemsSource="{Binding ComputeBackendOptions}"
-                                      SelectedItem="{Binding SelectedComputeBackendOption}"
+                                      ItemsSource="{Binding AccelerationOptions}"
+                                      SelectedItem="{Binding SelectedAccelerationOption}"
                                       HorizontalAlignment="Stretch">
                                 <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:ComputeBackendOption">
+                                    <DataTemplate x:DataType="vm:AccelerationOption">
                                         <TextBlock Text="{Binding DisplayName}" />
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
@@ -136,7 +136,7 @@
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <StackPanel Spacing="6">
-                            <TextBlock Text="{Binding ComputeBackendHint}"
+                            <TextBlock Text="{Binding AccelerationStatusText}"
                                        FontSize="12"
                                        Foreground="#8A9AAE"
                                        TextWrapping="Wrap" />

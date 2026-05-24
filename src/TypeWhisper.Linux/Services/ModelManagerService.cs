@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 using Timer = System.Timers.Timer;
 
 namespace TypeWhisper.Linux.Services;
@@ -15,14 +16,41 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private readonly SemaphoreSlim _modelLock = new(1, 1);
     private readonly Dictionary<string, ModelStatus> _modelStatuses = new();
     private readonly ISettingsService _settings;
+    private readonly SystemCommandAvailabilityService? _commands;
     private string? _activeModelId;
+    private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
     private Timer? _autoUnloadTimer;
     private bool _disposed;
 
-    public ModelManagerService(PluginManager pluginManager, ISettingsService settings)
+    public ModelManagerService(
+        PluginManager pluginManager,
+        ISettingsService settings,
+        SystemCommandAvailabilityService? commands = null)
     {
         PluginManager = pluginManager;
         _settings = settings;
+        _commands = commands;
+        CudaRuntimePreflight = DefaultCudaRuntimePreflight;
+    }
+
+    /// <summary>
+    ///     Test seam for the CUDA-runtime preflight. The default delegate gates the
+    ///     preload behind <see cref="SystemCommandAvailabilityService.HasCudaGpu" />
+    ///     when a commands service was injected, so a system with CUDA runtime
+    ///     libraries but no NVIDIA GPU does not silently load whisper.cpp with
+    ///     <c>UseGpu = true</c>. Returns (success, message).
+    /// </summary>
+    internal Func<(bool Success, string Message)> CudaRuntimePreflight { get; set; }
+
+    private (bool, string) DefaultCudaRuntimePreflight()
+    {
+        if (_commands is { HasCudaGpu: false })
+        {
+            return (false, "No NVIDIA GPU/driver detected.");
+        }
+
+        var ok = SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibraries(out var message);
+        return (ok, message);
     }
 
     public string? ActiveModelId
@@ -115,6 +143,41 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     public static string GetPluginModelId(string pluginId, string modelId)
     {
         return $"plugin:{pluginId}:{modelId}";
+    }
+
+    internal static TranscriptionAccelerationPreference GetAccelerationPreference(string? value)
+    {
+        var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
+        return normalized switch
+        {
+            AppSettings.LocalModelAccelerationNvidiaCuda =>
+                TranscriptionAccelerationPreference.NvidiaCuda,
+            AppSettings.LocalModelAccelerationCpu => TranscriptionAccelerationPreference.Cpu,
+            _ => TranscriptionAccelerationPreference.Auto,
+        };
+    }
+
+    /// <summary>
+    ///     Linux Auto resolver: tries the CUDA 12 preflight and resolves Auto →
+    ///     NvidiaCuda on success, → Cpu on failure. Explicit preferences pass through
+    ///     unchanged. Test seam optionally overrides the preflight.
+    /// </summary>
+    internal static TranscriptionAccelerationPreference ResolveAutoPreference(
+        TranscriptionAccelerationPreference requested,
+        Func<bool>? cudaPreflight = null
+    )
+    {
+        if (requested != TranscriptionAccelerationPreference.Auto)
+        {
+            return requested;
+        }
+
+        var preflight = cudaPreflight
+            ?? (() => SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibraries(out _));
+
+        return preflight()
+            ? TranscriptionAccelerationPreference.NvidiaCuda
+            : TranscriptionAccelerationPreference.Cpu;
     }
 
     public ModelStatus GetStatus(string modelId)
@@ -267,21 +330,54 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
-            if (
-                string.Equals(
-                    _settings.Current.ComputeBackend,
-                    "cuda",
-                    StringComparison.OrdinalIgnoreCase
-                )
-                && !SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibraries(
-                    out var cudaMessage
-                )
-            )
+            var requestedPreference = GetAccelerationPreference(
+                _settings.Current.LocalModelAcceleration
+            );
+            var pluginSupportsCuda = plugin.SupportedAccelerationBackends.Contains(
+                TranscriptionAccelerationBackend.NvidiaCuda
+            );
+
+            // For CPU-only plugins (SherpaOnnx, Granite), skip the preflight + hard-error
+            // path entirely. Their SetAccelerationPreference already handles a CUDA
+            // preference by warning and falling back to CPU, so running the preflight
+            // here would just throw on a CUDA-less host and block a perfectly valid
+            // CPU-only model load. Still resolve Auto → Cpu locally so plugins
+            // never see the unresolved Auto sentinel (SDK contract).
+            TranscriptionAccelerationPreference resolvedPreference;
+            if (pluginSupportsCuda)
             {
-                throw new InvalidOperationException(cudaMessage);
+                resolvedPreference = ResolveAutoPreference(
+                    requestedPreference,
+                    () => CudaRuntimePreflight().Success
+                );
+            }
+            else
+            {
+                resolvedPreference =
+                    requestedPreference == TranscriptionAccelerationPreference.Auto
+                        ? TranscriptionAccelerationPreference.Cpu
+                        : requestedPreference;
             }
 
-            plugin.ConfigureComputeBackend(_settings.Current.ComputeBackend);
+            if (
+                pluginSupportsCuda
+                && resolvedPreference == TranscriptionAccelerationPreference.NvidiaCuda
+            )
+            {
+                var (ok, message) = CudaRuntimePreflight();
+                if (!ok)
+                {
+                    // Explicit NvidiaCuda preserves the hard-error path so the user
+                    // knows when CUDA is broken; Auto already resolved to Cpu above
+                    // if CUDA wasn't visible, so this only fires for the explicit
+                    // case (and for Auto on systems where the preflight returns
+                    // success on the first call but fails on the second — pathological,
+                    // surfaces the error rather than silently misloading).
+                    throw new InvalidOperationException(message);
+                }
+            }
+
+            plugin.SetAccelerationPreference(resolvedPreference);
 
             if (plugin.SupportsModelDownload)
             {
@@ -291,6 +387,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             plugin.SelectModel(pluginModelId);
             SetStatus(modelId, ModelStatus.Ready);
             ActiveModelId = modelId;
+            _activeModelAccelerationPreference = requestedPreference;
         }
         catch (Exception ex)
         {
@@ -358,6 +455,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         _modelStatuses.Remove(modelId);
         OnPropertyChanged(nameof(GetStatus));
         ActiveModelId = null;
+        _activeModelAccelerationPreference = null;
     }
 
     public void ScheduleAutoUnload()
@@ -428,6 +526,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
 
             ActiveModelId = null;
+            _activeModelAccelerationPreference = null;
         }
 
         if (IsPluginModel(modelId))
@@ -478,7 +577,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             return false;
         }
 
-        if (ActiveModelId == targetModelId)
+        var targetPreference = GetAccelerationPreference(
+            _settings.Current.LocalModelAcceleration
+        );
+
+        if (
+            ActiveModelId == targetModelId
+            && _activeModelAccelerationPreference == targetPreference
+        )
         {
             CancelAutoUnload();
             return true;

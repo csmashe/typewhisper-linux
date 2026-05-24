@@ -31,6 +31,35 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void DefaultLocalModelAcceleration_IsAuto()
+    {
+        Assert.Equal(
+            AppSettings.LocalModelAccelerationAuto,
+            AppSettings.Default.LocalModelAcceleration);
+    }
+
+    [Theory]
+    [InlineData(null, "auto")]
+    [InlineData("", "auto")]
+    [InlineData("   ", "auto")]
+    [InlineData("AUTO", "auto")]
+    [InlineData("auto", "auto")]
+    [InlineData("cpu", "cpu")]
+    [InlineData("CPU", "cpu")]
+    [InlineData("nvidia-cuda", "nvidia-cuda")]
+    [InlineData("NVIDIA-CUDA", "nvidia-cuda")]
+    [InlineData("NVIDIA CUDA", "nvidia-cuda")]
+    [InlineData("cuda", "nvidia-cuda")]
+    [InlineData("directml", "auto")]
+    [InlineData("anything-else", "auto")]
+    public void NormalizeLocalModelAcceleration_NormalizesKnownValuesAndFallsBackToAuto(
+        string? input,
+        string expected)
+    {
+        Assert.Equal(expected, AppSettings.NormalizeLocalModelAcceleration(input));
+    }
+
+    [Fact]
     public void DefaultOverlayCustomPosition_IsNull()
     {
         Assert.Null(AppSettings.Default.OverlayCustomLeft);

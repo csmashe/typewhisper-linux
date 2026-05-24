@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
@@ -317,11 +318,39 @@ public sealed class HttpApiService : IDisposable
                     activeModel = _models.ActiveModelId,
                     apiVersion = "1.0",
                     supportsStreaming = plugin?.SupportsStreaming ?? false,
-                    supportsTranslation = plugin?.SupportsTranslation ?? false
+                    supportsTranslation = plugin?.SupportsTranslation ?? false,
+                    acceleration = BuildAccelerationDto(plugin, _settings.Current)
                 }
             )
         );
     }
+
+    internal static object? BuildAccelerationDto(
+        ITranscriptionEnginePlugin? plugin,
+        AppSettings settings
+    )
+    {
+        if (plugin?.AccelerationStatus is not { } status)
+        {
+            return null;
+        }
+
+        return new
+        {
+            preference = AppSettings.NormalizeLocalModelAcceleration(settings.LocalModelAcceleration),
+            activeBackend = FormatAccelerationBackend(status.ActiveBackend),
+            displayText = status.DisplayText,
+            detail = status.Detail,
+            requiresRestart = status.RequiresRestart
+        };
+    }
+
+    private static string FormatAccelerationBackend(TranscriptionAccelerationBackend backend) =>
+        backend switch
+        {
+            TranscriptionAccelerationBackend.NvidiaCuda => "nvidia-cuda",
+            _ => "cpu",
+        };
 
     private (int, string) HandleModels()
     {
