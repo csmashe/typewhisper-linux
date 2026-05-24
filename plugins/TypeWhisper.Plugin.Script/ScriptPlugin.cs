@@ -278,10 +278,25 @@ public sealed class ScriptService
     /// </summary>
     public void ReplaceAll(IEnumerable<ScriptEntry> entries)
     {
+        // Save() throws on persistence failure. Snapshot the existing collection
+        // first so we can restore it on failure; otherwise rejected edits would
+        // stay active in memory while the UI reports the save as failed.
+        var snapshot = Scripts.ToList();
         Scripts.Clear();
         foreach (var entry in entries)
             Scripts.Add(entry);
-        Save();
+
+        try
+        {
+            Save();
+        }
+        catch
+        {
+            Scripts.Clear();
+            foreach (var entry in snapshot)
+                Scripts.Add(entry);
+            throw;
+        }
     }
 
     private void Load()
@@ -326,7 +341,9 @@ public sealed class ScriptService
                 PluginLogLevel.Warning,
                 "Refusing to save script configuration because the existing file could not be loaded."
             );
-            return;
+            throw new InvalidOperationException(
+                "Cannot save script configuration because the existing file could not be loaded."
+            );
         }
 
         try
@@ -336,6 +353,7 @@ public sealed class ScriptService
         catch (Exception ex)
         {
             _host.Log(PluginLogLevel.Warning, $"Failed to save script configuration: {ex.Message}");
+            throw;
         }
     }
 }
@@ -432,9 +450,26 @@ public sealed class ScriptPlugin
         if (!string.Equals(collectionKey, ScriptsCollectionKey, StringComparison.Ordinal))
             return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
 
-        var source = Service is not null
-            ? Service.Scripts.ToList()
-            : new ScriptStore(ResolveDataDir()).Load();
+        List<ScriptEntry> source;
+        if (Service is not null)
+        {
+            source = Service.Scripts.ToList();
+        }
+        else
+        {
+            // ScriptStore.Load surfaces I/O / JSON errors so callers can decide
+            // how to react; for settings retrieval we don't want a corrupt file
+            // to break the screen — log and fall back to an empty list.
+            try
+            {
+                source = new ScriptStore(ResolveDataDir()).Load();
+            }
+            catch (Exception ex)
+            {
+                _host?.Log(PluginLogLevel.Warning, $"Failed to load scripts: {ex.Message}");
+                source = [];
+            }
+        }
 
         var items = source
             .Select(s => new PluginCollectionItem(
@@ -526,10 +561,22 @@ public sealed class ScriptPlugin
             );
         }
 
-        if (Service is not null)
-            Service.ReplaceAll(entries);
-        else
-            new ScriptStore(ResolveDataDir()).Save(entries);
+        try
+        {
+            if (Service is not null)
+                Service.ReplaceAll(entries);
+            else
+                new ScriptStore(ResolveDataDir()).Save(entries);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(
+                new PluginSettingsValidationResult(
+                    false,
+                    $"Failed to save scripts: {ex.Message}"
+                )
+            );
+        }
 
         return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
     }

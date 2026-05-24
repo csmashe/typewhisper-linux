@@ -220,7 +220,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _host?.SetSetting("selectedModel", modelId);
     }
 
-    public void ConfigureComputeBackend(string backend)
+    public async Task ConfigureComputeBackendAsync(string backend)
     {
         var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? "cuda"
@@ -228,7 +228,9 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
         // Hold the same gate used by load/transcribe paths so the backend
         // swap and the factory disposal don't race a concurrent operation.
-        _gate.Wait();
+        // Use WaitAsync to avoid sync-over-async deadlocks if a caller on a
+        // captured SynchronizationContext is awaiting transcription/load.
+        await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
             if (_computeBackend == normalized)

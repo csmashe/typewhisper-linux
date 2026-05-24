@@ -225,6 +225,11 @@ public sealed class ProfileService : IProfileService
 
     private void SaveToDisk()
     {
+        // Write to a sibling temp file and atomically move it over the target.
+        // A crash or power loss mid-write previously truncated _filePath, which
+        // EnsureCacheLoaded would then see as an unparseable file and silently
+        // discard — losing every saved profile.
+        string? tempPath = null;
         try
         {
             var dir = Path.GetDirectoryName(_filePath);
@@ -237,8 +242,32 @@ public sealed class ProfileService : IProfileService
                 _cache,
                 new JsonSerializerOptions { WriteIndented = true }
             );
-            File.WriteAllText(_filePath, json);
+
+            tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            File.WriteAllText(tempPath, json);
+
+            if (File.Exists(_filePath))
+            {
+                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(tempPath, _filePath);
+            }
+
+            tempPath = null;
         }
-        catch { }
+        catch
+        {
+            if (tempPath is not null)
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                        File.Delete(tempPath);
+                }
+                catch { }
+            }
+        }
     }
 }

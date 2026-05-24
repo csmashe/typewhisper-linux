@@ -52,7 +52,6 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.deepgram",
         "com.typewhisper.gladia",
         "com.typewhisper.google-cloud-stt",
-        "com.typewhisper.granite-speech",
         "com.typewhisper.openai",
         "com.typewhisper.qwen3-stt",
         "com.typewhisper.sherpa-onnx",

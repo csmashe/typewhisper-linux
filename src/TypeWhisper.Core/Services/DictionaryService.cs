@@ -127,11 +127,21 @@ public sealed class DictionaryService : IDictionaryService
             {
                 var pattern = Regex.Escape(entry.Original);
                 var options = entry.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
-                // \b word-boundary anchors prevent partial-word replacement (e.g. "React" inside "Reactive").
-                // This may silently skip entries whose Original starts/ends with non-word characters.
+                // \b only anchors between a word char and a non-word char, so a
+                // bare \b on each side silently fails for originals like "C#" or
+                // ".NET" whose ends are non-word. Anchor each side based on what
+                // the original actually starts/ends with: \b on word ends, and a
+                // string/non-word lookaround on symbol ends.
+                var prefix = char.IsLetterOrDigit(entry.Original[0]) || entry.Original[0] == '_'
+                    ? @"\b"
+                    : @"(?<=\W|^)";
+                var lastChar = entry.Original[^1];
+                var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
+                    ? @"\b"
+                    : @"(?=\W|$)";
                 var replaced = Regex.Replace(
                     text,
-                    @"\b" + pattern + @"\b",
+                    prefix + pattern + suffix,
                     entry.Replacement!,
                     options
                 );

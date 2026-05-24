@@ -49,6 +49,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private LLamaWeights? _weights;
     private LLamaContext? _context;
     private string? _loadedModelId;
+    private CancellationTokenSource? _startupCts;
+    private Task? _startupTask;
 
     public string PluginId => "com.typewhisper.gemma-local";
     public string PluginName => "Gemma 4 (Local)";
@@ -60,22 +62,30 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _selectedModelId = host.GetSetting<string>("selectedModel");
         host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
 
-        // Auto-load previously selected model in background (don't block app startup)
+        // Auto-load previously selected model in background (don't block app startup).
+        // Track the task + CTS so DeactivateAsync can cancel and await it instead of
+        // letting it race back to life and recreate _weights/_context after teardown.
         if (!string.IsNullOrEmpty(_selectedModelId) && IsModelDownloaded(_selectedModelId))
         {
             var modelId = _selectedModelId;
-            _ = Task.Run(async () =>
+            _startupCts = new CancellationTokenSource();
+            var startupCt = _startupCts.Token;
+            _startupTask = Task.Run(async () =>
             {
                 try
                 {
-                    await LoadModelAsync(modelId, CancellationToken.None);
+                    await LoadModelAsync(modelId, startupCt);
                     host.Log(PluginLogLevel.Info, $"Auto-loaded model: {modelId}");
+                }
+                catch (OperationCanceledException)
+                {
+                    // Deactivated before startup load completed; nothing to log.
                 }
                 catch (Exception ex)
                 {
                     host.Log(PluginLogLevel.Warning, $"Failed to auto-load model: {ex.Message}");
                 }
-            });
+            }, startupCt);
         }
 
         return Task.CompletedTask;
@@ -83,6 +93,36 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     public async Task DeactivateAsync()
     {
+        // Cancel and wait for the background startup task before tearing down
+        // _context/_weights, so it can't recreate them after we unload.
+        var startupCts = _startupCts;
+        var startupTask = _startupTask;
+        _startupCts = null;
+        _startupTask = null;
+
+        if (startupCts is not null)
+        {
+            try
+            {
+                startupCts.Cancel();
+            }
+            catch (ObjectDisposedException) { }
+        }
+
+        if (startupTask is not null)
+        {
+            try
+            {
+                await startupTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // Startup-task exceptions are already logged via its own catch.
+            }
+        }
+
+        startupCts?.Dispose();
+
         // Acquire _inferenceLock so we can't dispose _context/_weights while
         // ProcessAsync is mid-inference. Mirrors the unload path in
         // SetSettingValueAsync and LoadModelAsync.
@@ -345,8 +385,15 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 // The lock covers the full unload-then-load window so callers can't
                 // observe a torn state (e.g. _weights set but _context still old).
                 await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
+                var loaded = false;
                 try
                 {
+                    // If the user has switched models while we were queued behind the
+                    // lock, abort: a late finish here would overwrite the newer
+                    // selection and leave the wrong model loaded.
+                    if (_selectedModelId is not null && _selectedModelId != modelId)
+                        return;
+
                     UnloadModel();
 
                     var modelParams = new ModelParams(filePath)
@@ -361,14 +408,18 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     _loadedModelId = modelId;
                     _selectedModelId = modelId;
                     _host?.SetSetting("selectedModel", modelId);
+                    loaded = true;
                 }
                 finally
                 {
                     _inferenceLock.Release();
                 }
 
-                _host?.NotifyCapabilitiesChanged();
-                Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
+                if (loaded)
+                {
+                    _host?.NotifyCapabilitiesChanged();
+                    Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
+                }
             },
             ct
         );

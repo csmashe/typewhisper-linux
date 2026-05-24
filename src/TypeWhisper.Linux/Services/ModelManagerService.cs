@@ -281,7 +281,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 throw new InvalidOperationException(cudaMessage);
             }
 
-            plugin.ConfigureComputeBackend(_settings.Current.ComputeBackend);
+            await plugin.ConfigureComputeBackendAsync(_settings.Current.ComputeBackend);
 
             if (plugin.SupportsModelDownload)
             {

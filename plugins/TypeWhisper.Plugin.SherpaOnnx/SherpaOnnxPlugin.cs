@@ -115,17 +115,19 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _selectedModelId = modelId;
     }
 
-    public void ConfigureComputeBackend(string backend)
+    public Task ConfigureComputeBackendAsync(string backend)
     {
         var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? "cuda"
             : "cpu";
         if (_computeBackend == normalized)
-            return;
+            return Task.CompletedTask;
 
         _computeBackend = normalized;
         if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
             UnloadRecognizer();
+
+        return Task.CompletedTask;
     }
 
     public bool IsModelDownloaded(string modelId)

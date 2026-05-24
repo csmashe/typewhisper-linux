@@ -441,7 +441,7 @@ TypeWhisper stores its Linux data under the user-local application data director
 
 The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin categories used by this branch include:
 
-- Transcription engines — bundled examples include `WhisperCpp`, `SherpaOnnx`, `GraniteSpeech`, `Qwen3Stt`, `Voxtral`, plus cloud engines `OpenAi`, `OpenAiCompatible`, `Groq`, `Deepgram`, `AssemblyAi`, `ElevenLabs`, `Speechmatics`, `Soniox`, `Gladia`, `CloudflareAsr`, and `GoogleCloudStt`
+- Transcription engines — bundled examples include `WhisperCpp`, `SherpaOnnx`, `Qwen3Stt`, `Voxtral`, plus cloud engines `OpenAi`, `OpenAiCompatible`, `Groq`, `Deepgram`, `AssemblyAi`, `ElevenLabs`, `Speechmatics`, `Soniox`, `Gladia`, `CloudflareAsr`, and `GoogleCloudStt`
 - LLM providers — `Claude`, `OpenAi`, `OpenAiCompatible`, `OpenRouter`, `Gemini`, `GemmaLocal`, `Groq`, `Cerebras`, `Cohere`, and `Fireworks`
 - Action plugins — `Linear` and `Obsidian`
 - Post-processing plugins — `Script` (run a shell command against the transcription)

@@ -38,7 +38,7 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     void SelectModel(string modelId);
 
     /// <summary>Configures the preferred compute backend. Common values: "cpu", "cuda".</summary>
-    void ConfigureComputeBackend(string backend) { }
+    Task ConfigureComputeBackendAsync(string backend) => Task.CompletedTask;
 
     /// <summary>Transcribes WAV audio data and returns the result.</summary>
     Task<PluginTranscriptionResult> TranscribeAsync(

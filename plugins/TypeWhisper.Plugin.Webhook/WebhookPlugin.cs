@@ -130,10 +130,25 @@ public sealed class WebhookService
     /// <summary>Replaces every stored webhook with the supplied set and persists.</summary>
     public void ReplaceAll(IEnumerable<WebhookConfig> configs)
     {
+        // Save() rethrows on persistence failure. Snapshot the existing
+        // collection first so we can restore it and leave Webhooks in sync
+        // with what's actually on disk if the write fails.
+        var snapshot = Webhooks.ToList();
         Webhooks.Clear();
         foreach (var config in configs)
             Webhooks.Add(config);
-        Save();
+
+        try
+        {
+            Save();
+        }
+        catch
+        {
+            Webhooks.Clear();
+            foreach (var config in snapshot)
+                Webhooks.Add(config);
+            throw;
+        }
     }
 
     public async Task SendWebhooksAsync(TranscriptionCompletedEvent evt)

@@ -176,6 +176,11 @@ public sealed partial class SnippetService : ISnippetService
 
     public int ImportFromJson(string json)
     {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return 0;
+        }
+
         var imported = JsonSerializer.Deserialize(json, SnippetJsonContext.Default.ListSnippet);
         if (imported is null or { Count: 0 })
         {
