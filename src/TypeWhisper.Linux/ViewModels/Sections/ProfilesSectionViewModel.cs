@@ -136,7 +136,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
             Dispatcher.UIThread.Post(RefreshModelOptions);
         _promptActions.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshPromptActionOptions);
         UrlPatternChips.CollectionChanged += (_, _) =>
+        {
             OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
+            OnPropertyChanged(nameof(IsGlobalFallbackProfile));
+        };
+        ProcessNameChips.CollectionChanged += (_, _) =>
+            OnPropertyChanged(nameof(IsGlobalFallbackProfile));
         _failureTracker.OnFailure += (_, e) =>
         {
             if (!e.ShouldShowPersistentBanner)
@@ -210,6 +215,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
         !_browserSetup.IsApplicable()
         || _browserSetup.IsCurrentlyConfigured().IsFullyConfigured
         || UrlPatternChips.Count > 0;
+
+    /// <summary>
+    ///     True when the edited profile has no app matchers and no URL
+    ///     patterns. In that state <see cref="ProfileService.MatchProfile" />'s
+    ///     Global cascade tier picks this profile up for any window that no
+    ///     other Profile matches — making it the de-facto fallback profile.
+    ///     Surfaced as a contextual hint in the editor so users don't have to
+    ///     know the empty-matchers convention.
+    /// </summary>
+    public bool IsGlobalFallbackProfile =>
+        ProcessNameChips.Count == 0 && UrlPatternChips.Count == 0;
 
     public IReadOnlyList<string> LanguageChoices { get; } =
         ["", "auto", "en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];

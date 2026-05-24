@@ -341,9 +341,7 @@ public partial class PromptsSectionViewModel : ObservableObject
         {
             // Build the resolved-model list first so we can use it to decide
             // whether the "Use default provider" placeholder needs an "(auto)"
-            // suffix naming the host's fallback. Adapted from upstream's WPF
-            // WorkflowsViewModel.GetDefaultProviderLabel() — the fork inlines
-            // the same intent into the existing placeholder.
+            // suffix naming the host's fallback.
             var resolvedOptions = new List<ProviderOption>();
             foreach (
                 var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
