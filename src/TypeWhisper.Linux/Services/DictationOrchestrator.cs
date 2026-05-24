@@ -24,7 +24,8 @@ internal sealed record RecordingContext(
     string? AppUrl,
     string? WindowId,
     Profile? Profile,
-    CancellationToken CancelToken
+    CancellationToken CancelToken,
+    string RecoveredPartialPreview
 );
 
 public sealed class DictationOrchestrator : IDisposable
@@ -508,7 +509,7 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 Trace.WriteLine($"[Dictation] Post-start setup failed: {ex}");
                 RollBackStartedRecording();
-                await StopPartialTranscriptionSessionAsync();
+                _ = await StopPartialTranscriptionSessionAsync();
                 throw;
             }
 
@@ -774,7 +775,7 @@ public sealed class DictationOrchestrator : IDisposable
             _cancelRequested = false;
 
             var wav = await _audio.StopRecordingAsync();
-            await StopPartialTranscriptionSessionAsync();
+            var recoveredPartialPreview = await StopPartialTranscriptionSessionAsync();
             await AwaitRecordingSnapshotAsync();
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
@@ -825,7 +826,8 @@ public sealed class DictationOrchestrator : IDisposable
                     _recordingAppUrl,
                     _recordingWindowId,
                     _recordingProfile,
-                    snapshotCts?.Token ?? CancellationToken.None
+                    snapshotCts?.Token ?? CancellationToken.None,
+                    recoveredPartialPreview
                 );
 
                 _recordingAppProcess = null;
@@ -1104,7 +1106,18 @@ public sealed class DictationOrchestrator : IDisposable
                 await leaseScope.DisposeAsync();
             }
 
-            var rawText = LinuxDictationFinalTextPolicy.SelectRawText(result?.Text);
+            var rawText = SelectRawTextWithPreviewFallback(
+                result?.Text,
+                context.RecoveredPartialPreview,
+                out var usedPreviewFallback
+            );
+            if (usedPreviewFallback)
+            {
+                Trace.WriteLine(
+                    "[Dictation] Batch transcription returned empty; "
+                    + $"substituting live-preview fallback ({rawText.Length} chars)."
+                );
+            }
             if (string.IsNullOrEmpty(rawText))
             {
                 ReportStatus(context, "Transcription returned no text.");
@@ -1117,8 +1130,13 @@ public sealed class DictationOrchestrator : IDisposable
                 return;
             }
 
+            // Skip the no-speech guard when the live-preview fallback fired:
+            // the streaming session captured real words during recording, so
+            // the engine's no-speech verdict on the (separate, empty) final
+            // pass is the failure mode the fallback is meant to recover from.
             if (
-                result?.NoSpeechProbability is > 0.8f
+                !usedPreviewFallback
+                && result?.NoSpeechProbability is > 0.8f
                 && !_settings.Current.TranscribeShortQuietClipsAggressively
             )
             {
@@ -1490,6 +1508,37 @@ public sealed class DictationOrchestrator : IDisposable
         return enabledActions.FirstOrDefault(action =>
             action.Id == promptActionId && !action.IsManualOnly
         );
+    }
+
+    /// <summary>
+    ///     Selects the raw text to feed into post-processing. If the batch
+    ///     transcription produced no text but the streaming live preview
+    ///     captured something during the session, fall back to that preview
+    ///     instead of silently dropping the user's words. Mirrors upstream
+    ///     <c>3a43766</c>. Exposed internally so the decision is unit-testable.
+    /// </summary>
+    internal static string SelectRawTextWithPreviewFallback(
+        string? batchText,
+        string recoveredPreview,
+        out bool usedPreviewFallback
+    )
+    {
+        var rawText = LinuxDictationFinalTextPolicy.SelectRawText(batchText);
+        if (!string.IsNullOrEmpty(rawText))
+        {
+            usedPreviewFallback = false;
+            return rawText;
+        }
+
+        var preview = LinuxDictationFinalTextPolicy.SelectRawText(recoveredPreview);
+        if (!string.IsNullOrEmpty(preview))
+        {
+            usedPreviewFallback = true;
+            return preview;
+        }
+
+        usedPreviewFallback = false;
+        return "";
     }
 
     private async Task<string> RunPromptActionAsync(
@@ -2060,7 +2109,7 @@ public sealed class DictationOrchestrator : IDisposable
         );
     }
 
-    private async Task StopPartialTranscriptionSessionAsync()
+    private async Task<string> StopPartialTranscriptionSessionAsync()
     {
         var cts = _partialTranscriptionCts;
         var task = _partialTranscriptionTask;
@@ -2087,7 +2136,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
         }
 
-        _partialTranscriptState.StopSession();
+        return _partialTranscriptState.StopSession();
     }
 
     private async Task AwaitRecordingSnapshotAsync()

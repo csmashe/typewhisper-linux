@@ -1,3 +1,4 @@
+using System.Reflection;
 using TypeWhisper.Linux.Services;
 using Xunit;
 
@@ -78,5 +79,35 @@ public sealed class LinuxStreamingTranscriptStateTests
 
         Assert.True(applied);
         Assert.Equal("the world", display);
+    }
+
+    [Fact]
+    public void StopSession_PrefersDisplayedPreviewWhenItDivergesFromConfirmed()
+    {
+        // Public TryApplyPolling sets _confirmedText and _lastDisplayedText
+        // in lockstep, but the streaming pipeline can produce in-flight
+        // states where the displayed overlay outruns the confirmed buffer
+        // (the bug fix covers exactly this case). Reflect the divergent
+        // state directly so the regression test pins the fixed StopSession
+        // behavior — pre-fix this returned "" and silently dropped the
+        // user's words on long dictations.
+        var sut = new StreamingTranscriptState();
+        sut.StartSession();
+
+        SetPrivateField(sut, "_confirmedText", "hello");
+        SetPrivateField(sut, "_lastDisplayedText", "hello world how are you");
+
+        Assert.Equal("hello world how are you", sut.StopSession());
+    }
+
+    private static void SetPrivateField(StreamingTranscriptState target, string name, string value)
+    {
+        var field =
+            typeof(StreamingTranscriptState).GetField(
+                name,
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new InvalidOperationException($"Field {name} not found.");
+        field.SetValue(target, value);
     }
 }
