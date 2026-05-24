@@ -8,4 +8,7 @@
         <RootNamespace>TypeWhisper.Cli</RootNamespace>
         <AssemblyName>typewhisper</AssemblyName>
     </PropertyGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="TypeWhisper.Cli.Tests"/>
+    </ItemGroup>
 </Project>

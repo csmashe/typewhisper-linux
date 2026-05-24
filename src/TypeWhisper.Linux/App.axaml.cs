@@ -111,6 +111,9 @@ public class App : Application
             dictation.Initialize();
             tray.DictationToggleRequested += (_, _) => _ = dictation.ToggleAsync();
 
+            var sessionResults = services.GetRequiredService<DictationSessionResultStore>();
+            dictation.SessionCompleted += sessionResults.Record;
+
             // Bring up the IPC control socket so `typewhisper` (with no args)
             // from a second terminal can toggle dictation in this instance.
             // The bind itself is the single-instance guard; if another live
@@ -456,6 +459,16 @@ public class App : Application
         catch (Exception ex)
         {
             Debug.WriteLine($"[App] HTTP API dispose failed: {ex.Message}");
+        }
+
+        try
+        {
+            var sessionResults = services.GetService<DictationSessionResultStore>();
+            sessionResults?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Dictation session result store dispose failed: {ex.Message}");
         }
 
         // Placeholder: keeps the method async for future awaitable teardown

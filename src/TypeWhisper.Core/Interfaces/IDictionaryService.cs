@@ -34,6 +34,26 @@ public interface IDictionaryService
         throw new NotSupportedException();
     }
 
+    bool DeleteTerm(string term)
+    {
+        throw new NotSupportedException();
+    }
+
+    IReadOnlyList<DictionaryCorrection> GetCorrections()
+    {
+        throw new NotSupportedException();
+    }
+
+    DictionaryCorrection UpsertCorrection(string original, string replacement, bool caseSensitive)
+    {
+        throw new NotSupportedException();
+    }
+
+    bool DeleteCorrection(string original)
+    {
+        throw new NotSupportedException();
+    }
+
     void LearnCorrection(string original, string replacement);
 
     void ActivatePack(TermPack pack);

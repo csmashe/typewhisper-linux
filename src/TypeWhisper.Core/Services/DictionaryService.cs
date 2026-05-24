@@ -234,6 +234,142 @@ public sealed class DictionaryService : IDictionaryService
         EntriesChanged?.Invoke();
     }
 
+    public bool DeleteTerm(string term)
+    {
+        if (string.IsNullOrWhiteSpace(term))
+        {
+            return false;
+        }
+
+        EnsureCacheLoaded();
+        bool removed;
+        lock (_gate)
+        {
+            removed = _cache.RemoveAll(e =>
+                e.EntryType == DictionaryEntryType.Term
+                && e.Original.Trim().Equals(term.Trim(), StringComparison.OrdinalIgnoreCase)
+            ) > 0;
+
+            if (removed)
+            {
+                SaveToDisk();
+            }
+        }
+
+        if (removed)
+        {
+            EntriesChanged?.Invoke();
+        }
+
+        return removed;
+    }
+
+    public IReadOnlyList<DictionaryCorrection> GetCorrections()
+    {
+        EnsureCacheLoaded();
+        lock (_gate)
+        {
+            return _cache
+                .Where(e =>
+                    e.IsEnabled
+                    && e.EntryType == DictionaryEntryType.Correction
+                    && e.Replacement is not null
+                )
+                .Select(e => new DictionaryCorrection(e.Original, e.Replacement!, e.CaseSensitive))
+                .ToList();
+        }
+    }
+
+    public DictionaryCorrection UpsertCorrection(
+        string original,
+        string replacement,
+        bool caseSensitive
+    )
+    {
+        if (string.IsNullOrWhiteSpace(original))
+        {
+            throw new ArgumentException("Original must not be empty.", nameof(original));
+        }
+
+        if (replacement is null)
+        {
+            throw new ArgumentNullException(nameof(replacement));
+        }
+
+        EnsureCacheLoaded();
+
+        lock (_gate)
+        {
+            var existing = _cache.FirstOrDefault(e =>
+                e.EntryType == DictionaryEntryType.Correction
+                && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
+            );
+
+            if (existing is not null)
+            {
+                var idx = _cache.FindIndex(e => e.Id == existing.Id);
+                if (idx >= 0)
+                {
+                    _cache[idx] = existing with
+                    {
+                        Replacement = replacement,
+                        CaseSensitive = caseSensitive,
+                        IsEnabled = true
+                    };
+                }
+            }
+            else
+            {
+                _cache.Add(
+                    new DictionaryEntry
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        EntryType = DictionaryEntryType.Correction,
+                        Original = original,
+                        Replacement = replacement,
+                        CaseSensitive = caseSensitive,
+                        Source = DictionaryEntrySource.Manual
+                    }
+                );
+            }
+
+            SaveToDisk();
+        }
+
+        EntriesChanged?.Invoke();
+        return new DictionaryCorrection(original, replacement, caseSensitive);
+    }
+
+    public bool DeleteCorrection(string original)
+    {
+        if (string.IsNullOrWhiteSpace(original))
+        {
+            return false;
+        }
+
+        EnsureCacheLoaded();
+        bool removed;
+        lock (_gate)
+        {
+            removed = _cache.RemoveAll(e =>
+                e.EntryType == DictionaryEntryType.Correction
+                && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
+            ) > 0;
+
+            if (removed)
+            {
+                SaveToDisk();
+            }
+        }
+
+        if (removed)
+        {
+            EntriesChanged?.Invoke();
+        }
+
+        return removed;
+    }
+
     public void LearnCorrection(string original, string replacement)
     {
         EnsureCacheLoaded();

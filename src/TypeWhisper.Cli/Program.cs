@@ -44,8 +44,18 @@ static class Program
             return 1;
         }
 
-        ApplyAuthorization(options.Token);
-        var baseUrl = $"http://127.0.0.1:{options.Port}";
+        // Auto-discovery: pick up port + token from ~/.config/typewhisper/api-discovery.json
+        // when neither was explicitly passed. Explicit --port/--token always wins.
+        var discovered = TryReadDiscoveryFile();
+        var port = options.PortWasExplicit
+            ? options.Port
+            : discovered?.Port ?? options.Port;
+        var token = options.TokenWasExplicit
+            ? options.Token
+            : options.Token ?? discovered?.Token;
+
+        ApplyAuthorization(token);
+        var baseUrl = $"http://127.0.0.1:{port}";
 
         return options.Command switch
         {
@@ -159,7 +169,14 @@ static class Program
 
         if (file == "-")
         {
-            audioStream = Console.OpenStandardInput();
+            // Buffer stdin so we can magic-sniff the first bytes and still
+            // forward the whole stream to the API. Audio uploads from
+            // dictation pipelines fit easily in memory at MaxTranscribeRequestBytes.
+            var buffer = new MemoryStream();
+            await Console.OpenStandardInput().CopyToAsync(buffer);
+            buffer.Position = 0;
+            audioStream = buffer;
+            fileName = $"stdin.{StdinAudioSniffer.Detect(buffer.GetBuffer().AsSpan(0, (int)buffer.Length))}";
         }
         else
         {
@@ -241,6 +258,40 @@ static class Program
         }
     }
 
+    static DiscoveryFile? TryReadDiscoveryFile()
+    {
+        try
+        {
+            var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+            if (string.IsNullOrWhiteSpace(configHome))
+            {
+                configHome = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".config"
+                );
+            }
+
+            var path = Path.Combine(configHome, "typewhisper", "api-discovery.json");
+            if (!File.Exists(path))
+                return null;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+            int? port = null;
+            string? token = null;
+            if (root.TryGetProperty("port", out var portEl) && portEl.ValueKind == JsonValueKind.Number)
+                port = portEl.GetInt32();
+            if (root.TryGetProperty("token", out var tokenEl) && tokenEl.ValueKind == JsonValueKind.String)
+                token = tokenEl.GetString();
+
+            return port is null ? null : new DiscoveryFile(port.Value, token);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     static void PrintUsage()
     {
         Console.WriteLine(
@@ -255,8 +306,9 @@ static class Program
               transcribe <file|->       Transcribe an audio file, or - for stdin
 
             Global options:
-              --port <N>                API server port (default: 9876)
+              --port <N>                API server port (default: 9876, or auto-discovered)
               --token <token>           API bearer token, or TYPEWHISPER_API_TOKEN
+              --api-token <token>       Alias of --token (Mac CLI parity)
               --json                    Output as JSON
               --version                 Show version
               --help, -h                Show this help
@@ -377,25 +429,29 @@ static class Program
         return 1;
     }
 
-    private sealed record CliOptions
+    private sealed record DiscoveryFile(int Port, string? Token);
+
+    internal sealed record CliOptions
     {
-        public string? Command { get; private init; }
-        public List<string> Positionals { get; private init; } = [];
-        public int Port { get; private init; } = DefaultPort;
-        public string? Token { get; private init; }
-        public bool Json { get; private init; }
-        public bool ShowHelp { get; private init; }
-        public bool ShowVersion { get; private init; }
-        public string? Language { get; private init; }
-        public List<string> LanguageHints { get; private init; } = [];
-        public string Task { get; private init; } = "transcribe";
-        public string? TranslateTo { get; private init; }
-        public string? ResponseFormat { get; private init; }
-        public string? Prompt { get; private init; }
-        public string? Engine { get; private init; }
-        public string? Model { get; private init; }
-        public bool AwaitDownload { get; private init; }
-        public string? Error { get; private init; }
+        public string? Command { get; init; }
+        public List<string> Positionals { get; init; } = [];
+        public int Port { get; init; } = DefaultPort;
+        public bool PortWasExplicit { get; init; }
+        public string? Token { get; init; }
+        public bool TokenWasExplicit { get; init; }
+        public bool Json { get; init; }
+        public bool ShowHelp { get; init; }
+        public bool ShowVersion { get; init; }
+        public string? Language { get; init; }
+        public List<string> LanguageHints { get; init; } = [];
+        public string Task { get; init; } = "transcribe";
+        public string? TranslateTo { get; init; }
+        public string? ResponseFormat { get; init; }
+        public string? Prompt { get; init; }
+        public string? Engine { get; init; }
+        public string? Model { get; init; }
+        public bool AwaitDownload { get; init; }
+        public string? Error { get; init; }
 
         public static CliOptions Parse(string[] args)
         {
@@ -411,7 +467,9 @@ static class Program
             string? engine = null;
             string? model = null;
             string? token = Environment.GetEnvironmentVariable("TYPEWHISPER_API_TOKEN");
+            var tokenWasExplicit = false;
             var port = DefaultPort;
+            var portWasExplicit = false;
             var json = false;
             var awaitDownload = false;
 
@@ -442,10 +500,13 @@ static class Program
                             {
                                 Error = "--port requires a number between 1 and 65535.",
                             };
+                        portWasExplicit = true;
                         break;
                     case "--token":
+                    case "--api-token":
                         if (!TryReadValue(args, ref i, out token))
-                            return options with { Error = "--token requires a value." };
+                            return options with { Error = $"{arg} requires a value." };
+                        tokenWasExplicit = true;
                         break;
                     case "--language":
                         if (!TryReadValue(args, ref i, out language))
@@ -497,7 +558,9 @@ static class Program
                 Command = command,
                 Positionals = positionals,
                 Port = port,
+                PortWasExplicit = portWasExplicit,
                 Token = token,
+                TokenWasExplicit = tokenWasExplicit,
                 Json = json,
                 Language = language,
                 LanguageHints = languageHints,
@@ -533,5 +596,55 @@ static class Program
             value = args[++index];
             return true;
         }
+    }
+}
+
+/// <summary>
+///     Pure-function audio magic-byte sniffer used by the <c>transcribe -</c>
+///     stdin path so the server-side filename hint matches the actual
+///     container. Returns a short extension (no leading dot). Defaults to
+///     "wav" when no header is recognized.
+/// </summary>
+internal static class StdinAudioSniffer
+{
+    public static string Detect(ReadOnlySpan<byte> head)
+    {
+        if (head.Length >= 12
+            && head[0] == (byte)'R' && head[1] == (byte)'I'
+            && head[2] == (byte)'F' && head[3] == (byte)'F'
+            && head[8] == (byte)'W' && head[9] == (byte)'A'
+            && head[10] == (byte)'V' && head[11] == (byte)'E')
+        {
+            return "wav";
+        }
+
+        if (head.Length >= 4
+            && head[0] == (byte)'f' && head[1] == (byte)'L'
+            && head[2] == (byte)'a' && head[3] == (byte)'C')
+        {
+            return "flac";
+        }
+
+        if (head.Length >= 4
+            && head[0] == (byte)'O' && head[1] == (byte)'g'
+            && head[2] == (byte)'g' && head[3] == (byte)'S')
+        {
+            return "ogg";
+        }
+
+        if (head.Length >= 3
+            && head[0] == (byte)'I' && head[1] == (byte)'D' && head[2] == (byte)'3')
+        {
+            return "mp3";
+        }
+
+        // MPEG audio frame sync (mp3 with no ID3 tag): 0xFF followed by
+        // 0xFB / 0xF3 / 0xF2 (or other 0xFx variants for MPEG-2/2.5).
+        if (head.Length >= 2 && head[0] == 0xFF && (head[1] & 0xE0) == 0xE0)
+        {
+            return "mp3";
+        }
+
+        return "wav";
     }
 }

@@ -125,6 +125,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
         services.AddSingleton<SettingsBackupService>();
+        services.AddSingleton<ApiDiscoveryFile>();
+        services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();
         services.AddSingleton<CliInstallService>();
         services.AddSingleton<WatchFolderService>();

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -50,6 +51,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly PromptProcessingService _promptProcessing;
     private readonly RecentTranscriptionsService _recentTranscriptions;
     private readonly object _recordingSessionLock = new();
+    private readonly HashSet<int> _inFlightSessions = new();
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
     private readonly ISnippetService _snippets;
@@ -274,6 +276,32 @@ public sealed class DictationOrchestrator : IDisposable
     public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
     /// <summary>
+    ///     Fires once per dictation immediately after the publish of
+    ///     <see cref="TranscriptionCompletedEvent" /> with the just-completed
+    ///     session's metadata. Used by <see cref="DictationSessionResultStore" />
+    ///     to back the <c>GET /v1/dictation/transcription</c> poll endpoint.
+    /// </summary>
+    public event Action<DictationSessionResult>? SessionCompleted;
+
+    /// <summary>
+    ///     True only while the dictation pipeline for <paramref name="sessionId" />
+    ///     is still actively recording or running its post-stop transcription.
+    ///     Backed by an explicit in-flight set that is added in
+    ///     <see cref="StartAsync" /> and removed in a <c>finally</c> at every
+    ///     terminal point (success, cancel, transcription failure, short/silent
+    ///     discard). Unknown ids and already-completed ids both return false —
+    ///     callers should fall back to <see cref="DictationSessionResultStore" />
+    ///     to distinguish "completed → ready/failed/canceled" from "not_found".
+    /// </summary>
+    public bool IsSessionInFlight(int sessionId)
+    {
+        lock (_recordingSessionLock)
+        {
+            return _inFlightSessions.Contains(sessionId);
+        }
+    }
+
+    /// <summary>
     ///     Projects an overlay StatusText string to one of the documented
     ///     <c>typewhisper status</c> state labels (transcribing / injecting /
     ///     idle). The <c>recording</c> label is sourced from the audio recorder,
@@ -397,18 +425,19 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    public async Task StartAsync()
+    public async Task<int> StartAsync()
     {
         if (!await _toggleGate.WaitAsync(0))
         {
-            return;
+            return 0;
         }
 
+        var startedSessionId = 0;
         try
         {
             if (_audio.IsRecording)
             {
-                return;
+                return 0;
             }
 
             _audio.WhisperModeEnabled = _settings.Current.WhisperModeEnabled;
@@ -428,7 +457,7 @@ public sealed class DictationOrchestrator : IDisposable
                 var message = BuildRecordingStartFailureMessage(ex);
                 ReportStatus(message);
                 ShowFeedback(message, true);
-                return;
+                return 0;
             }
 
             if (!_audio.IsRecording)
@@ -436,7 +465,7 @@ public sealed class DictationOrchestrator : IDisposable
                 var message = BuildRecordingStartFailureMessage(null);
                 ReportStatus(message);
                 ShowFeedback(message, true);
-                return;
+                return 0;
             }
 
             try
@@ -502,12 +531,15 @@ public sealed class DictationOrchestrator : IDisposable
             lock (_recordingSessionLock)
             {
                 sessionId = ++_recordingSession;
+                _inFlightSessions.Add(sessionId);
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
                 _recordingWindowId = _activeWindow.GetActiveWindowId();
                 _recordingProfile = null;
             }
+
+            startedSessionId = sessionId;
 
             var recordingSnapshotTask = Task.Run(async () =>
             {
@@ -711,6 +743,8 @@ public sealed class DictationOrchestrator : IDisposable
         {
             _toggleGate.Release();
         }
+
+        return startedSessionId;
     }
 
     public async Task StopAsync()
@@ -836,6 +870,7 @@ public sealed class DictationOrchestrator : IDisposable
                         )
                     }
                 );
+                FinalizeSession(recordingContext.SessionId, "canceled", "Canceled");
                 return;
             }
 
@@ -877,6 +912,7 @@ public sealed class DictationOrchestrator : IDisposable
                     }
                 );
                 StatusMessage?.Invoke(this, "Too short");
+                FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
                 return;
             }
 
@@ -895,6 +931,7 @@ public sealed class DictationOrchestrator : IDisposable
                     }
                 );
                 StatusMessage?.Invoke(this, "No speech detected");
+                FinalizeSession(recordingContext.SessionId, "discarded", "No speech detected");
                 return;
             }
 
@@ -905,7 +942,19 @@ public sealed class DictationOrchestrator : IDisposable
             RecordingCaptured?.Invoke(this, path);
             Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
 
-            await TranscribeAndInsertAsync(wav, path, duration, recordingContext);
+            try
+            {
+                await TranscribeAndInsertAsync(wav, path, duration, recordingContext);
+            }
+            finally
+            {
+                // Guarantee the session leaves the in-flight set even when
+                // TranscribeAndInsertAsync bails before publishing a terminal
+                // status (e.g. exception before catch handlers, or a cancel
+                // that races the catch). The status record fire is the
+                // primary signal; this is the belt-and-suspenders.
+                ClearSessionInFlight(recordingContext.SessionId);
+            }
         }
         finally
         {
@@ -971,6 +1020,7 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] Model load canceled by user ('{effectiveModelId}').");
             ReportStatus(context, "Canceled");
             ShowFeedback(context, "Canceled", false);
+            PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
             return;
         }
         catch (Exception ex)
@@ -980,6 +1030,7 @@ public sealed class DictationOrchestrator : IDisposable
             );
             ReportStatus(context, $"Failed to load configured model: {ex.Message}");
             ShowFeedback(context, "Model load failed.", true);
+            PublishSessionTerminal(context.SessionId, "failed", ex.Message);
             return;
         }
 
@@ -1023,6 +1074,7 @@ public sealed class DictationOrchestrator : IDisposable
                 Trace.WriteLine("[Dictation] Transcription canceled by user.");
                 ReportStatus(context, "Canceled");
                 ShowFeedback(context, "Canceled", false);
+                PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
                 return;
             }
             catch (Exception ex)
@@ -1039,6 +1091,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, $"Transcription failed: {ex.Message}");
                 _speechFeedback.AnnounceError(ex.Message);
                 ShowFeedback(context, "Transcription failed.", true);
+                PublishSessionTerminal(context.SessionId, "failed", ex.Message);
                 return;
             }
             finally
@@ -1056,6 +1109,11 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 ReportStatus(context, "Transcription returned no text.");
                 ShowFeedback(context, "Transcription returned no text.", true);
+                PublishSessionTerminal(
+                    context.SessionId,
+                    "discarded",
+                    "Transcription returned no text."
+                );
                 return;
             }
 
@@ -1066,6 +1124,7 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 ReportStatus(context, "No speech detected.");
                 ShowFeedback(context, "No speech detected.", true);
+                PublishSessionTerminal(context.SessionId, "discarded", "No speech detected.");
                 return;
             }
 
@@ -1198,6 +1257,18 @@ public sealed class DictationOrchestrator : IDisposable
                     AppProcessName = context.AppProcess,
                     Url = context.AppUrl
                 }
+            );
+            PublishSessionResult(
+                new DictationSessionResult(
+                    context.SessionId,
+                    "ready",
+                    finalText,
+                    rawText,
+                    result?.DetectedLanguage,
+                    duration,
+                    engineProviderId,
+                    engineModelId
+                )
             );
             transcriptionCompletedPublished = true;
 
@@ -1354,6 +1425,10 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine("[Dictation] Pipeline canceled by user.");
             ReportStatus(context, "Canceled");
             ShowFeedback(context, "Canceled", false);
+            if (!transcriptionCompletedPublished)
+            {
+                PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
+            }
         }
         catch (Exception ex) when (!transcriptionCompletedPublished)
         {
@@ -1374,6 +1449,7 @@ public sealed class DictationOrchestrator : IDisposable
             ReportStatus(context, $"Transcription failed: {ex.Message}");
             _speechFeedback.AnnounceError(ex.Message);
             ShowFeedback(context, "Transcription failed.", true);
+            PublishSessionTerminal(context.SessionId, "failed", ex.Message);
         }
         catch (Exception ex)
         {
@@ -2217,6 +2293,54 @@ public sealed class DictationOrchestrator : IDisposable
         {
             Trace.WriteLine($"[Dictation] Partial transcription polling failed: {ex.Message}");
         }
+    }
+
+    private void ClearSessionInFlight(int sessionId)
+    {
+        lock (_recordingSessionLock)
+        {
+            _inFlightSessions.Remove(sessionId);
+        }
+    }
+
+    private void PublishSessionResult(DictationSessionResult result)
+    {
+        ClearSessionInFlight(result.SessionId);
+        try
+        {
+            SessionCompleted?.Invoke(result);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] SessionCompleted handler threw: {ex}");
+        }
+    }
+
+    private void PublishSessionTerminal(int sessionId, string status, string? message)
+    {
+        PublishSessionResult(
+            new DictationSessionResult(
+                sessionId,
+                status,
+                string.Empty,
+                null,
+                null,
+                0,
+                null,
+                null,
+                message
+            )
+        );
+    }
+
+    /// <summary>
+    ///     StopAsync calls this on the pre-transcription terminal paths
+    ///     (canceled, too-short, no-speech). The post-transcription pipeline
+    ///     calls <see cref="PublishSessionResult" /> directly.
+    /// </summary>
+    private void FinalizeSession(int sessionId, string status, string? message)
+    {
+        PublishSessionTerminal(sessionId, status, message);
     }
 
     private void TryPublishPartialTranscript(int sessionVersion, string? text)
