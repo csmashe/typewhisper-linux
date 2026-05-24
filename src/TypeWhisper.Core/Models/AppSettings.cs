@@ -101,6 +101,7 @@ public record AppSettings
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
+    public string SelectedIndustryPresetId { get; init; } = "general";
 
     // Prompt Palette
     public string PromptPaletteHotkey { get; init; } = "";

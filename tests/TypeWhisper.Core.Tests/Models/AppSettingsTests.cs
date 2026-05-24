@@ -25,6 +25,12 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void DefaultSelectedIndustryPresetId_IsGeneral()
+    {
+        Assert.Equal("general", AppSettings.Default.SelectedIndustryPresetId);
+    }
+
+    [Fact]
     public void DefaultOverlayCustomPosition_IsNull()
     {
         Assert.Null(AppSettings.Default.OverlayCustomLeft);

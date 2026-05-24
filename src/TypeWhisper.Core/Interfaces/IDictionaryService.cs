@@ -39,6 +39,23 @@ public interface IDictionaryService
     void ActivatePack(TermPack pack);
     void DeactivatePack(string packId);
 
+    void ApplyIndustryPreset(string presetId)
+    {
+        var preset = IndustryPreset.All.FirstOrDefault(p =>
+            string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)
+        );
+        if (preset?.TermPackId is not { } packId)
+        {
+            return;
+        }
+
+        var pack = TermPack.FindById(packId);
+        if (pack is not null)
+        {
+            ActivatePack(pack);
+        }
+    }
+
     string ExportToCsv()
     {
         throw new NotSupportedException();

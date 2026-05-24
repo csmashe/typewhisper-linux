@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -119,6 +120,43 @@ public class DictionaryServiceTests : IDisposable
         Assert.Equal(3, _sut.Entries.Count);
         Assert.Contains(_sut.Entries, e => e.Id == "existing" && e.Original == "React");
         Assert.Contains(_sut.Entries, e => e.Id == "pack:test:React" && e.Original == "React");
+    }
+
+    [Fact]
+    public void ApplyIndustryPreset_General_DoesNotActivateAnyPack()
+    {
+        ((IDictionaryService)_sut).ApplyIndustryPreset("general");
+
+        Assert.Empty(_sut.Entries);
+    }
+
+    [Fact]
+    public void ApplyIndustryPreset_UnknownId_DoesNotActivateAnyPack()
+    {
+        ((IDictionaryService)_sut).ApplyIndustryPreset("does-not-exist");
+
+        Assert.Empty(_sut.Entries);
+    }
+
+    [Theory]
+    [InlineData("real-estate")]
+    [InlineData("architecture")]
+    [InlineData("legal")]
+    public void ApplyIndustryPreset_Industry_ActivatesMatchingPack(string presetId)
+    {
+        var preset = IndustryPreset.All.Single(p => p.Id == presetId);
+        Assert.NotNull(preset.TermPackId);
+        var pack = TermPack.FindById(preset.TermPackId!);
+        Assert.NotNull(pack);
+
+        ((IDictionaryService)_sut).ApplyIndustryPreset(presetId);
+
+        Assert.Equal(pack!.Terms.Length, _sut.Entries.Count);
+        Assert.All(_sut.Entries, entry =>
+        {
+            Assert.Equal(DictionaryEntryType.Term, entry.EntryType);
+            Assert.StartsWith($"pack:{preset.TermPackId}:", entry.Id);
+        });
     }
 
     [Fact]
