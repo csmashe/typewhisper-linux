@@ -301,7 +301,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
 
     private void EnsureConfigured()
     {
-        if (string.IsNullOrEmpty(_apiKey))
+        if (string.IsNullOrWhiteSpace(_apiKey))
             throw new InvalidOperationException(
                 "OpenAI API key not configured. Set it in plugin settings."
             );

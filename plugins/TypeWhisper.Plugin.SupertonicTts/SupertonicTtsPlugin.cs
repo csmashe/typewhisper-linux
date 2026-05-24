@@ -300,6 +300,9 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
     internal async Task DownloadAssetsAsync(IProgress<double>? progress, CancellationToken ct)
     {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(SupertonicTtsPlugin));
+
         if (!_licenseAccepted)
             throw new InvalidOperationException("The Supertonic 3 OpenRAIL-M license must be accepted before downloading model assets.");
 
@@ -347,24 +350,38 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         if (_disposed)
             return;
 
+        // Set _disposed first so any DownloadAssetsAsync still waiting for the
+        // download lock bails out before touching the asset manager. Then take
+        // the download lock to wait for an already-in-flight download to finish
+        // — disposing the asset manager while a download is mid-write would
+        // corrupt the staging files and crash the next launch.
         _disposed = true;
 
-        // Block teardown until any in-flight synthesis releases the lock so the
-        // ONNX sessions are never disposed mid-inference.
-        _synthesisLock.Wait();
+        _downloadLock.Wait();
         try
         {
-            _synthesizer?.Dispose();
-            _synthesizer = null;
+            // Block teardown until any in-flight synthesis releases the lock so
+            // the ONNX sessions are never disposed mid-inference.
+            _synthesisLock.Wait();
+            try
+            {
+                _synthesizer?.Dispose();
+                _synthesizer = null;
+            }
+            finally
+            {
+                _synthesisLock.Release();
+            }
+
+            if (_injectedAssetManager is null && _assetManager is IDisposable disposableAssets)
+                disposableAssets.Dispose();
+            _synthesisLock.Dispose();
         }
         finally
         {
-            _synthesisLock.Release();
+            _downloadLock.Release();
         }
 
-        if (_injectedAssetManager is null && _assetManager is IDisposable disposableAssets)
-            disposableAssets.Dispose();
-        _synthesisLock.Dispose();
         _downloadLock.Dispose();
     }
 

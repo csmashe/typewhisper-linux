@@ -31,7 +31,7 @@
   "Settings.ReasoningLow": "Niedrig",
   "Settings.ReasoningMedium": "Mittel",
   "Settings.ReasoningHigh": "Hoch",
-  "Settings.ReasoningXHigh": "X Hoch",
+  "Settings.ReasoningXHigh": "Sehr hoch",
   "Settings.ReasoningHelp": "Reasoning-Effort für GPT-5, o-Serie und Codex-Modelle.",
   "Settings.Temperature": "Temperatur",
   "Settings.TemperatureProviderDefault": "Anbieter-Standard",

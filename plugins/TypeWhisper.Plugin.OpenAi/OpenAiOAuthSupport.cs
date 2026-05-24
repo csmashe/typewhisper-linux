@@ -142,7 +142,7 @@ internal static class OpenAiOAuthClient
         HttpRequestMessage request,
         CancellationToken ct)
     {
-        var response = await httpClient.SendAsync(request, ct);
+        using var response = await httpClient.SendAsync(request, ct);
         var json = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"OpenAI token request failed with status {(int)response.StatusCode}: {json}");

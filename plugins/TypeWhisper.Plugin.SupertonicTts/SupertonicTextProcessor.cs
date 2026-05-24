@@ -55,6 +55,10 @@ internal sealed class SupertonicTextProcessor
         if (!SupportedLanguages.Contains(language))
             throw new ArgumentException($"Unsupported Supertonic language: {language}");
 
+        // Embed a deterministic lower-case tag so callers that pass "EN"/"En"
+        // don't produce a different token sequence than "en".
+        language = (language ?? "").Trim().ToLowerInvariant();
+
         text = text.Normalize(NormalizationForm.FormKD);
         text = RemoveEmojiCodePoints(text);
 

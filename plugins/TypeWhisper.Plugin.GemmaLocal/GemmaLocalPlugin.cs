@@ -49,6 +49,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private LLamaWeights? _weights;
     private LLamaContext? _context;
     private string? _loadedModelId;
+    private Task? _autoLoadTask;
+    private CancellationTokenSource? _autoLoadCts;
 
     public string PluginId => "com.typewhisper.gemma-local";
     public string PluginName => "Gemma 4 (Local)";
@@ -60,22 +62,30 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _selectedModelId = host.GetSetting<string>("selectedModel");
         host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
 
-        // Auto-load previously selected model in background (don't block app startup)
+        // Auto-load previously selected model in background (don't block app startup).
+        // Tracked via _autoLoadTask/_autoLoadCts so DeactivateAsync can cancel and
+        // await it instead of racing UnloadModel against an in-flight LoadModelAsync.
         if (!string.IsNullOrEmpty(_selectedModelId) && IsModelDownloaded(_selectedModelId))
         {
             var modelId = _selectedModelId;
-            _ = Task.Run(async () =>
+            _autoLoadCts = new CancellationTokenSource();
+            var token = _autoLoadCts.Token;
+            _autoLoadTask = Task.Run(async () =>
             {
                 try
                 {
-                    await LoadModelAsync(modelId, CancellationToken.None);
+                    await LoadModelAsync(modelId, token);
                     host.Log(PluginLogLevel.Info, $"Auto-loaded model: {modelId}");
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    // Plugin is being deactivated; don't log the cancellation as a failure.
                 }
                 catch (Exception ex)
                 {
                     host.Log(PluginLogLevel.Warning, $"Failed to auto-load model: {ex.Message}");
                 }
-            });
+            }, token);
         }
 
         return Task.CompletedTask;
@@ -83,6 +93,24 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     public async Task DeactivateAsync()
     {
+        // Cancel and await the auto-load task before tearing down so it can't
+        // re-populate _context/_weights after we've unloaded them.
+        var autoLoadCts = _autoLoadCts;
+        var autoLoadTask = _autoLoadTask;
+        _autoLoadCts = null;
+        _autoLoadTask = null;
+        if (autoLoadCts is not null)
+        {
+            try { autoLoadCts.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+        if (autoLoadTask is not null)
+        {
+            try { await autoLoadTask.ConfigureAwait(false); }
+            catch { /* already surfaced via the task's own catch */ }
+        }
+        autoLoadCts?.Dispose();
+
         // Acquire _inferenceLock so we can't dispose _context/_weights while
         // ProcessAsync is mid-inference. Mirrors the unload path in
         // SetSettingValueAsync and LoadModelAsync.

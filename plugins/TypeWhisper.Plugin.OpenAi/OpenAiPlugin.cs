@@ -1043,7 +1043,24 @@ public sealed class OpenAiPlugin
         }
 
         if (HasChatGptCredentials)
-            return new PluginSettingsValidationResult(true, ChatGptConnectedMessage());
+        {
+            // Stored credentials might have been revoked or expired beyond refresh.
+            // ValidOAuthAccessTokenAsync returns the cached access token if it's
+            // still valid, otherwise hits the refresh endpoint — either way, a
+            // failure means the credentials no longer work.
+            try
+            {
+                _ = await ValidOAuthAccessTokenAsync(ct);
+                return new PluginSettingsValidationResult(true, ChatGptConnectedMessage());
+            }
+            catch (Exception ex)
+                when (ex is InvalidOperationException or HttpRequestException or JsonException)
+            {
+                return new PluginSettingsValidationResult(
+                    false,
+                    $"Stored ChatGPT login could not be refreshed: {ex.Message}");
+            }
+        }
 
         try
         {

@@ -63,6 +63,11 @@ jobs:
             'whisper-cpp'        = 'TypeWhisper.Plugin.WhisperCpp'
             'file-memory'        = 'TypeWhisper.Plugin.FileMemory'
             'openai-vector-memory' = 'TypeWhisper.Plugin.OpenAiVectorMemory'
+            'elevenlabs'         = 'TypeWhisper.Plugin.ElevenLabs'
+            'live-transcript'    = 'TypeWhisper.Plugin.LiveTranscript'
+            'smallest-ai'        = 'TypeWhisper.Plugin.SmallestAi'
+            'supertonic-tts'     = 'TypeWhisper.Plugin.SupertonicTts'
+            'xai'                = 'TypeWhisper.Plugin.Xai'
           }
           $projectName = $map[$env:PLUGIN_NAME]
           if (-not $projectName) {

@@ -69,7 +69,10 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             throw new InvalidOperationException("Plugin not configured. API key required.");
 
         // Speechmatics v2 requires an explicit language code; "auto" is not supported.
-        var lang = string.IsNullOrEmpty(language) || language == "auto" ? "en" : language;
+        var lang = string.IsNullOrEmpty(language)
+            || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)
+                ? "en"
+                : language;
 
         // Step 1: Submit batch transcription job
         var config = JsonSerializer.Serialize(

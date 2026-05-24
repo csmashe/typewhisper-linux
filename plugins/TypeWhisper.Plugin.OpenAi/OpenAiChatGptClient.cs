@@ -35,7 +35,7 @@ internal sealed class OpenAiChatGptClient
         request.Content = OpenAiJson.CreateJsonContent(
             CreateRequestBody(model, systemPrompt, userText, reasoningEffort));
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(ParseErrorMessage(body, (int)response.StatusCode));
@@ -97,28 +97,41 @@ internal sealed class OpenAiChatGptClient
             if (payload == "[DONE]")
                 continue;
 
-            using var doc = JsonDocument.Parse(payload);
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("type", out var typeEl))
-                continue;
-
-            switch (typeEl.GetString())
+            JsonDocument doc;
+            try
             {
-                case "response.output_text.delta":
-                    if (GetString(root, "delta") is { } delta)
-                        deltaBuffer += delta;
-                    break;
-                case "response.output_text.done":
-                    if (GetString(root, "text") is { Length: > 0 } text)
-                        completedParts.Add(text);
-                    break;
-                case "response.content_part.done":
-                    if (root.TryGetProperty("part", out var part)
-                        && GetString(part, "text") is { Length: > 0 } partText)
-                    {
-                        completedParts.Add(partText);
-                    }
-                    break;
+                doc = JsonDocument.Parse(payload);
+            }
+            catch (JsonException)
+            {
+                // SSE streams may contain comments, heartbeats, or malformed
+                // frames; skipping them keeps parsing of valid frames alive.
+                continue;
+            }
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var typeEl))
+                    continue;
+
+                switch (typeEl.GetString())
+                {
+                    case "response.output_text.delta":
+                        if (GetString(root, "delta") is { } delta)
+                            deltaBuffer += delta;
+                        break;
+                    case "response.output_text.done":
+                        if (GetString(root, "text") is { Length: > 0 } text)
+                            completedParts.Add(text);
+                        break;
+                    case "response.content_part.done":
+                        if (root.TryGetProperty("part", out var part)
+                            && GetString(part, "text") is { Length: > 0 } partText)
+                        {
+                            completedParts.Add(partText);
+                        }
+                        break;
+                }
             }
         }
 

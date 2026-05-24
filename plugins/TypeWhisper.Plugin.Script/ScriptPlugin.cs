@@ -244,6 +244,19 @@ public sealed class ScriptService
             _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
             return text;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller cancelled — kill the child so it doesn't outlive the request.
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            { /* best effort */
+            }
+            _host.Log(PluginLogLevel.Info, $"Script '{script.Name}' cancelled by caller.");
+            throw;
+        }
 
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
@@ -527,9 +540,31 @@ public sealed class ScriptPlugin
         }
 
         if (Service is not null)
+        {
             Service.ReplaceAll(entries);
+        }
         else
-            new ScriptStore(ResolveDataDir()).Save(entries);
+        {
+            // Mirror ScriptService's _loadSucceeded safeguard: refuse to write
+            // if the existing file fails to load, otherwise a corrupt/locked
+            // scripts.json would be silently overwritten.
+            var store = new ScriptStore(ResolveDataDir());
+            try
+            {
+                _ = store.Load();
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(
+                    new PluginSettingsValidationResult(
+                        false,
+                        $"Refusing to overwrite scripts.json — existing file could not be read: {ex.Message}"
+                    )
+                );
+            }
+
+            store.Save(entries);
+        }
 
         return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
     }

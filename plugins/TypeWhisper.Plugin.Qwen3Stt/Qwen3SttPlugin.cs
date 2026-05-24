@@ -67,6 +67,11 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. Base URL required.");
 
+        if (translate)
+            throw new NotSupportedException(
+                "Translation is not supported by the Qwen3 STT plugin."
+            );
+
         var baseUrl = _baseUrl ?? DefaultBaseUrl;
         var apiKey = _apiKey ?? "";
         var model = _selectedModelId ?? DefaultModel;

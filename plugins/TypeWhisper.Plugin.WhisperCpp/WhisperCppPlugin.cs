@@ -231,7 +231,9 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _host?.SetSetting("selectedModel", modelId);
     }
 
-    public void ConfigureComputeBackend(string backend)
+    public void ConfigureComputeBackend(string backend) => TryConfigureComputeBackend(backend);
+
+    private bool TryConfigureComputeBackend(string backend)
     {
         var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? "cuda"
@@ -243,7 +245,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         try
         {
             if (_computeBackend == normalized)
-                return;
+                return true;
 
             // RuntimeLibraryOrder is consulted once when the native library first
             // loads (see EnsureRuntimeLibraryOrderInitialized). Once that has run,
@@ -255,7 +257,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                     PluginLogLevel.Warning,
                     $"Cannot switch compute backend to '{normalized}' after the native runtime has loaded ({_computeBackend}). Restart the app to change backends."
                 );
-                return;
+                return false;
             }
 
             _computeBackend = normalized;
@@ -264,6 +266,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 DisposeFactoryUnsafe();
                 _loadedModelId = null;
             }
+            return true;
         }
         finally
         {
@@ -273,7 +276,6 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     public void SetAccelerationPreference(TranscriptionAccelerationPreference preference)
     {
-        _accelerationPreference = preference;
         var backend = preference switch
         {
             TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
@@ -281,8 +283,14 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             _ => "cpu",
         };
 
-        ConfigureComputeBackend(backend);
-        _accelerationStatus = CreatePendingAccelerationStatus(preference);
+        // Only treat the preference as "applied" if the backend swap was
+        // actually accepted — otherwise reporting a pending CUDA status would
+        // contradict the still-active CPU runtime.
+        if (TryConfigureComputeBackend(backend))
+        {
+            _accelerationPreference = preference;
+            _accelerationStatus = CreatePendingAccelerationStatus(preference);
+        }
     }
 
     public bool IsModelDownloaded(string modelId) => File.Exists(GetModelPath(modelId));

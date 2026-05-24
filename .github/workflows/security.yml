@@ -28,6 +28,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/dependency-review-action@v4
 
@@ -36,6 +38,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: github/codeql-action/init@v3
         with:
@@ -104,6 +108,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Ensure NuGet global packages folder
         shell: pwsh
@@ -173,6 +179,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Check Python requirements file
         id: requirements

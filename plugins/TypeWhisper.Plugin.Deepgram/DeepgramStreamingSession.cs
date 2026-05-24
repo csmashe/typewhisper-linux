@@ -25,9 +25,9 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
 
         var langParam = string.IsNullOrEmpty(language)
             ? "&detect_language=true"
-            : $"&language={language}";
+            : $"&language={Uri.EscapeDataString(language)}";
         var url =
-            $"wss://api.deepgram.com/v1/listen?model={model}&encoding=linear16&sample_rate=16000&interim_results=true&punctuate=true&smart_format=true{langParam}";
+            $"wss://api.deepgram.com/v1/listen?model={Uri.EscapeDataString(model)}&encoding=linear16&sample_rate=16000&interim_results=true&punctuate=true&smart_format=true{langParam}";
 
         session._ws.Options.SetRequestHeader("Authorization", $"Token {apiKey}");
         await session._ws.ConnectAsync(new Uri(url), ct);

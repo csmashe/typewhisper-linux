@@ -30,7 +30,7 @@ internal sealed class OpenAiResponsesClient
         request.Content = OpenAiJson.CreateJsonContent(
             CreateRequestBody(model, systemPrompt, userText, reasoningEffort));
 
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
         var json = await response.Content.ReadAsStringAsync(ct);
         return ParseResponse(json);
     }
