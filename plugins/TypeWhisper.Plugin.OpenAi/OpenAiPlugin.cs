@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -33,6 +34,10 @@ public sealed class OpenAiPlugin
     private const string OAuthAccountIdSettingName = "oauthAccountID";
     private const string OAuthPlanTypeSettingName = "oauthPlanType";
     private const string OAuthExpiresAtSettingName = "oauthExpiresAt";
+    private const string TemperatureModeSettingName = "llmTemperatureMode";
+    private const string TemperatureValueSettingName = "llmTemperatureValue";
+    private const string TemperatureModeProviderDefault = "providerDefault";
+    private const string TemperatureModeCustom = "custom";
 
     private readonly HttpClient _httpClient;
     private readonly Func<byte[], ITtsPlaybackSession> _ttsPlaybackFactory;
@@ -55,6 +60,8 @@ public sealed class OpenAiPlugin
     private string? _oauthPlanType;
     private DateTimeOffset? _oauthExpiresAt;
     private bool _forgetChatGptLogin;
+    private string _temperatureMode = TemperatureModeProviderDefault;
+    private double _temperatureValue = 0.3;
 
     private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
     [
@@ -140,6 +147,8 @@ public sealed class OpenAiPlugin
         _oauthAccountId = host.GetSetting<string>(OAuthAccountIdSettingName);
         _oauthPlanType = host.GetSetting<string>(OAuthPlanTypeSettingName);
         _oauthExpiresAt = LoadExpiresAt(host);
+        _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
+        _temperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
 
         SelectModelCore(
             host.GetSetting<string>(SelectedModelSettingName) ?? TranscriptionModelEntries[0].Id,
@@ -258,7 +267,11 @@ public sealed class OpenAiPlugin
             modelId,
             systemPrompt,
             userText,
-            ct
+            ct,
+            maxOutputTokens: 2048,
+            maxOutputTokenParameter: OutputTokenParameter(modelId),
+            reasoningEffort: SupportsReasoningEffort(modelId) ? _reasoningEffort : null,
+            temperature: ResolvedTemperature(modelId)
         );
     }
 
@@ -322,6 +335,8 @@ public sealed class OpenAiPlugin
     internal string? SelectedLlmModelId => _selectedLlmModelId;
     internal string ReasoningEffort => _reasoningEffort;
     internal string TtsInstructions => _ttsInstructions;
+    internal string TemperatureMode => _temperatureMode;
+    internal double TemperatureValue => _temperatureValue;
 
     internal static bool UsesResponsesApi(string modelId)
     {
@@ -353,9 +368,80 @@ public sealed class OpenAiPlugin
             || lowered.Contains("codex", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     Returns the chat-completion body field used to cap output tokens.
+    ///     Newer GPT-5 / o-series models reject the legacy <c>max_tokens</c>
+    ///     and require <c>max_completion_tokens</c>; everything else keeps
+    ///     <c>max_tokens</c>.
+    /// </summary>
+    internal static string OutputTokenParameter(string modelId)
+    {
+        var lowered = modelId.ToLowerInvariant();
+        if (lowered.StartsWith("gpt-5", StringComparison.Ordinal)
+            || lowered.StartsWith("o1", StringComparison.Ordinal)
+            || lowered.StartsWith("o3", StringComparison.Ordinal)
+            || lowered.StartsWith("o4", StringComparison.Ordinal))
+        {
+            return "max_completion_tokens";
+        }
+
+        return "max_tokens";
+    }
+
+    /// <summary>
+    ///     Whether the model accepts a user-supplied <c>temperature</c> parameter
+    ///     in chat-completion mode. GPT-5 with reasoning_effort set does not.
+    /// </summary>
+    internal static bool SupportsCustomTemperature(string modelId, string? reasoningEffort) =>
+        ChatCompletionTemperature(modelId, reasoningEffort) is not null;
+
+    /// <summary>
+    ///     Provider-default chat-completion temperature for the given model.
+    ///     Returns <c>null</c> for GPT-5 with reasoning_effort set (the model
+    ///     rejects the field outright in that mode); otherwise 0.3 — the value
+    ///     upstream picked when surfacing the setting to users.
+    /// </summary>
+    internal static double? ChatCompletionTemperature(string modelId, string? reasoningEffort)
+    {
+        var lowered = modelId.ToLowerInvariant();
+        if (lowered.StartsWith("gpt-5", StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            return null;
+        }
+
+        return 0.3;
+    }
+
+    internal static string NormalizeTemperatureMode(string? mode) =>
+        mode == TemperatureModeCustom ? TemperatureModeCustom : TemperatureModeProviderDefault;
+
+    internal static double NormalizeTemperatureValue(double? value)
+    {
+        // `Math.Clamp(double.NaN, …)` returns NaN unchanged (IEEE 754: every
+        // NaN comparison is false, so the min/max checks short-circuit). A
+        // persisted NaN would later throw inside System.Text.Json when the
+        // chat-completion body is serialized — and re-throw on every activate
+        // that loads the setting. Reject non-finite inputs up-front so a
+        // corrupted config can't poison the runtime.
+        if (value is null || !double.IsFinite(value.Value))
+            return 0.3;
+
+        return Math.Clamp(value.Value, 0.0, 2.0);
+    }
+
     internal async Task<IReadOnlyList<PluginModelInfo>> RefreshAvailableLlmModelsAsync(
         CancellationToken ct = default)
     {
+        // ChatGPT-login mode uses the static ChatGptModels catalog and has no
+        // /v1/models endpoint to refresh from — short-circuit to keep the
+        // selection normalized without burning a (failing) HTTP call.
+        if (_authMode == OpenAiAuthMode.ChatGpt)
+        {
+            NormalizeSelectedLlmModel(persist: true);
+            return SupportedModels;
+        }
+
         var models = await FetchLlmModelsAsync(ct);
         if (models.Count == 0)
             return [];
@@ -464,6 +550,18 @@ public sealed class OpenAiPlugin
     {
         _reasoningEffort = NormalizeReasoningEffort(effort);
         _host?.SetSetting(ReasoningEffortSettingName, _reasoningEffort);
+    }
+
+    internal void SetTemperatureMode(string? mode)
+    {
+        _temperatureMode = NormalizeTemperatureMode(mode);
+        _host?.SetSetting(TemperatureModeSettingName, _temperatureMode);
+    }
+
+    internal void SetTemperatureValue(double value)
+    {
+        _temperatureValue = NormalizeTemperatureValue(value);
+        _host?.SetSetting(TemperatureValueSettingName, _temperatureValue);
     }
 
     // ChatGPT OAuth login
@@ -663,6 +761,20 @@ public sealed class OpenAiPlugin
         _host.NotifyCapabilitiesChanged();
     }
 
+    internal double? ResolvedTemperature(string modelId)
+    {
+        // When the model rejects temperature outright (e.g. GPT-5 with a
+        // reasoning_effort set), honor that regardless of the user's mode —
+        // sending the field would 400 the request.
+        var reasoningEffort = SupportsReasoningEffort(modelId) ? _reasoningEffort : null;
+        if (!SupportsCustomTemperature(modelId, reasoningEffort))
+            return null;
+
+        return _temperatureMode == TemperatureModeCustom
+            ? _temperatureValue
+            : ChatCompletionTemperature(modelId, reasoningEffort);
+    }
+
     private void NormalizeSelectedLlmModel(bool persist)
     {
         var available = SupportedModels;
@@ -673,9 +785,13 @@ public sealed class OpenAiPlugin
             || available.All(model => !string.Equals(model.Id, _selectedLlmModelId, StringComparison.Ordinal)))
         {
             _selectedLlmModelId = available.First().Id;
-            if (persist)
-                _host?.SetSetting(SelectedLlmModelSettingName, _selectedLlmModelId);
         }
+
+        // Persist even when the in-memory selection didn't change — this guards
+        // against a stale-cleared setting where _selectedLlmModelId is still
+        // valid but the persisted setting was lost.
+        if (persist)
+            _host?.SetSetting(SelectedLlmModelSettingName, _selectedLlmModelId);
     }
 
     private static DateTimeOffset? LoadExpiresAt(IPluginHostServices host)
@@ -777,6 +893,27 @@ public sealed class OpenAiPlugin
                 Kind: PluginSettingKind.Dropdown
             ),
             new(
+                Key: TemperatureModeSettingName,
+                Label: "Temperature",
+                Description: "Provider Default uses the recommended value (0.3) for each model. "
+                    + "Custom lets you pick a value below. Only used when the model supports "
+                    + "temperature (no GPT-5 + reasoning).",
+                Options:
+                [
+                    new PluginSettingOption(TemperatureModeProviderDefault, "Provider Default"),
+                    new PluginSettingOption(TemperatureModeCustom, "Custom"),
+                ],
+                Kind: PluginSettingKind.Dropdown
+            ),
+            new(
+                Key: TemperatureValueSettingName,
+                Label: "Temperature value",
+                Placeholder: "0.3",
+                Description: "Sampling temperature 0.0–2.0. Applied when Temperature is set to Custom. "
+                    + "Ignored on models that don't accept the field (e.g. GPT-5 with reasoning).",
+                Kind: PluginSettingKind.Text
+            ),
+            new(
                 Key: SelectedVoiceSettingName,
                 Label: "Text-to-speech voice",
                 Description: "Choose the OpenAI text-to-speech voice.",
@@ -809,6 +946,9 @@ public sealed class OpenAiPlugin
                 SelectedModelSettingName => _selectedModelId,
                 SelectedLlmModelSettingName => _selectedLlmModelId,
                 ReasoningEffortSettingName => _reasoningEffort,
+                TemperatureModeSettingName => _temperatureMode,
+                TemperatureValueSettingName => _temperatureValue.ToString(
+                    CultureInfo.InvariantCulture),
                 SelectedVoiceSettingName => _selectedVoiceId,
                 TtsInstructionsSettingName => _ttsInstructions,
                 ForgetChatGptLoginSettingName => _forgetChatGptLogin ? "true" : "false",
@@ -837,6 +977,25 @@ public sealed class OpenAiPlugin
             case ReasoningEffortSettingName:
                 if (!string.IsNullOrWhiteSpace(value))
                     SetReasoningEffort(value);
+                break;
+            case TemperatureModeSettingName:
+                SetTemperatureMode(value);
+                break;
+            case TemperatureValueSettingName:
+                // `double.TryParse(..., NumberStyles.Float, ...)` accepts
+                // "NaN" / "Infinity" / "-Infinity" — reject them before they
+                // can reach the persisted setting (System.Text.Json throws on
+                // non-finite doubles by default, which would break both save
+                // and the next activate).
+                if (double.TryParse(
+                        value,
+                        NumberStyles.Float,
+                        CultureInfo.InvariantCulture,
+                        out var parsedTemperature)
+                    && double.IsFinite(parsedTemperature))
+                {
+                    SetTemperatureValue(parsedTemperature);
+                }
                 break;
             case SelectedVoiceSettingName:
                 if (!string.IsNullOrWhiteSpace(value))

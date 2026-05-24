@@ -339,8 +339,12 @@ public partial class PromptsSectionViewModel : ObservableObject
         _isRefreshingProviders = true;
         try
         {
-            AvailableProviders.Clear();
-            AvailableProviders.Add(new ProviderOption(null, "Use default provider"));
+            // Build the resolved-model list first so we can use it to decide
+            // whether the "Use default provider" placeholder needs an "(auto)"
+            // suffix naming the host's fallback. Adapted from upstream's WPF
+            // WorkflowsViewModel.GetDefaultProviderLabel() — the fork inlines
+            // the same intent into the existing placeholder.
+            var resolvedOptions = new List<ProviderOption>();
             foreach (
                 var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
             )
@@ -355,13 +359,20 @@ public partial class PromptsSectionViewModel : ObservableObject
 
                 foreach (var model in provider.SupportedModels)
                 {
-                    AvailableProviders.Add(
+                    resolvedOptions.Add(
                         new ProviderOption(
                             $"plugin:{plugin.Manifest.Id}:{model.Id}",
                             $"{provider.ProviderName} / {model.DisplayName}"
                         )
                     );
                 }
+            }
+
+            AvailableProviders.Clear();
+            AvailableProviders.Add(new ProviderOption(null, DefaultProviderPlaceholderLabel(resolvedOptions)));
+            foreach (var option in resolvedOptions)
+            {
+                AvailableProviders.Add(option);
             }
 
             EditProviderOverride = AvailableProviders.Any(option =>
@@ -393,6 +404,33 @@ public partial class PromptsSectionViewModel : ObservableObject
             : null;
         OnPropertyChanged(nameof(SelectedEditProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));
+    }
+
+    private string DefaultProviderPlaceholderLabel(IReadOnlyList<ProviderOption> resolvedOptions)
+    {
+        const string baseLabel = "Use default provider";
+        var configured = _settings.Current.DefaultLlmProvider;
+        var configuredResolves = !string.IsNullOrWhiteSpace(configured)
+            && resolvedOptions.Any(option =>
+                string.Equals(option.Value, configured, StringComparison.Ordinal));
+        if (configuredResolves)
+        {
+            return baseLabel;
+        }
+
+        // Mirrors PromptProcessingService.ResolveProvider's final fallback:
+        // first available LLM provider in registration order.
+        var fallback = _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
+        if (fallback is null)
+        {
+            return baseLabel;
+        }
+
+        var fallbackModel = fallback.SupportedModels.FirstOrDefault();
+        var fallbackLabel = fallbackModel is null
+            ? fallback.ProviderName
+            : $"{fallback.ProviderName} / {fallbackModel.DisplayName}";
+        return $"{baseLabel} ({fallbackLabel})";
     }
 
     private void SelectById(string id)

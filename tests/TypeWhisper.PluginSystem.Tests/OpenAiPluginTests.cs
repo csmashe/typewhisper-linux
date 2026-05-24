@@ -551,6 +551,8 @@ public class OpenAiPluginTests
                 "selectedModel",
                 "selectedLLMModel",
                 "reasoningEffort",
+                "llmTemperatureMode",
+                "llmTemperatureValue",
                 "selectedVoice",
                 "ttsInstructions",
                 "forgetChatGptLogin",
@@ -724,6 +726,142 @@ public class OpenAiPluginTests
 
         Assert.False(session.IsActive);
         Assert.Equal(0, requestCount);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_UsesCustomTemperatureForApiKeyChatCompletions()
+    {
+        // gpt-4o routes through /v1/chat/completions (not the Responses API),
+        // so the temperature/max-tokens dictionary built in OpenAiChatHelper is
+        // observable in the outgoing body. Setting llmTemperatureMode=custom
+        // pins the user's chosen sampling temperature into that body.
+        string? capturedBody = null;
+        var handler = new CapturingHandler((_, body) =>
+        {
+            capturedBody = body;
+            return Task.FromResult(JsonResponse(
+                """{"choices":[{"message":{"content":"OK"}}]}"""));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "sk-test";
+        host.SetSetting("llmTemperatureMode", "custom");
+        host.SetSetting("llmTemperatureValue", 0.7);
+        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        await sut.ActivateAsync(host);
+
+        await sut.ProcessAsync("system", "user", "gpt-4o", CancellationToken.None);
+
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.Equal(0.7, doc.RootElement.GetProperty("temperature").GetDouble(), 5);
+        Assert.Equal(2048, doc.RootElement.GetProperty("max_tokens").GetInt32());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AppliesReasoningEffortToOSeriesChatCompletions()
+    {
+        // o-series models route to /v1/responses (UsesResponsesApi covers o4),
+        // and the Responses body must include reasoning.effort so the model
+        // actually exercises its reasoning channel. Regression test for the
+        // o-series path B4 introduced.
+        string? capturedBody = null;
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new CapturingHandler((request, body) =>
+        {
+            capturedRequest = request;
+            capturedBody = body;
+            return Task.FromResult(JsonResponse("""{"output_text":"OK"}"""));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "sk-test";
+        host.SetSetting("reasoningEffort", "high");
+        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        await sut.ActivateAsync(host);
+
+        await sut.ProcessAsync("system", "user", "o4-mini", CancellationToken.None);
+
+        Assert.Equal("https://api.openai.com/v1/responses", capturedRequest?.RequestUri?.ToString());
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.Equal("high", doc.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
+    }
+
+    [Fact]
+    public async Task ResolvedTemperature_ReturnsNullForGPT5WithReasoning()
+    {
+        // Pins the rule: GPT-5 with reasoning_effort set rejects the
+        // temperature field, so ResolvedTemperature must return null even
+        // when the user explicitly chose Custom mode.
+        var host = new TestPluginHostServices();
+        host.SetSetting("reasoningEffort", "medium");
+        host.SetSetting("llmTemperatureMode", "custom");
+        host.SetSetting("llmTemperatureValue", 0.7);
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Null(sut.ResolvedTemperature("gpt-5.5"));
+        // Non-reasoning model in Custom mode honors the user's value.
+        Assert.Equal(0.7, sut.ResolvedTemperature("gpt-4o"));
+    }
+
+    [Fact]
+    public async Task SetSettingValueAsync_RejectsNonFiniteTemperatureValues()
+    {
+        // double.TryParse(NumberStyles.Float, …) accepts "NaN" / "Infinity" /
+        // "-Infinity", and Math.Clamp(NaN, …) returns NaN. Persisting NaN
+        // would throw inside System.Text.Json on the next chat-completion or
+        // activate. The plugin must drop non-finite inputs and keep the
+        // current value (which itself was normalized to a finite default).
+        var host = new TestPluginHostServices();
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        await sut.SetSettingValueAsync("llmTemperatureValue", "NaN");
+        Assert.Equal(0.3, sut.TemperatureValue);
+
+        await sut.SetSettingValueAsync("llmTemperatureValue", "Infinity");
+        Assert.Equal(0.3, sut.TemperatureValue);
+
+        await sut.SetSettingValueAsync("llmTemperatureValue", "-Infinity");
+        Assert.Equal(0.3, sut.TemperatureValue);
+
+        // Sanity: a finite value still goes through and clamps to range.
+        await sut.SetSettingValueAsync("llmTemperatureValue", "9.5");
+        Assert.Equal(2.0, sut.TemperatureValue);
+    }
+
+    [Fact]
+    public async Task RefreshAvailableLlmModels_ChatGptMode_ReturnsStaticCatalogWithoutHttp()
+    {
+        // ChatGPT-login mode has no /v1/models endpoint to query — the catalog
+        // is the static ChatGptModels list. RefreshAvailableLlmModelsAsync must
+        // short-circuit, otherwise it would call /v1/models with an OAuth
+        // bearer token and 401.
+        var requestCount = 0;
+        var handler = new CapturingHandler((_, _) =>
+        {
+            requestCount++;
+            return Task.FromResult(JsonResponse("{}"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        await sut.ActivateAsync(host);
+
+        var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
+
+        Assert.Equal(0, requestCount);
+        Assert.NotEmpty(models);
+        Assert.Equal("gpt-5.5", models.First().Id);
     }
 
     private static JsonElement LoadManifest()
