@@ -26,7 +26,7 @@
                        Classes="section-title" />
 
             <Border Classes="panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
@@ -115,6 +115,34 @@
                                         TickFrequency="0.25"
                                         IsSnapToTickEnabled="True"
                                         Value="{Binding PreviewBubbleAutoHideSeconds, Mode=TwoWay}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="7" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="8" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <StackPanel VerticalAlignment="Center"
+                                        Spacing="2">
+                                <TextBlock Text="Window position"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Drag the overlay anywhere to move it; reset here."
+                                           Foreground="#9BAABC"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        Spacing="6">
+                                <TextBlock Text="{Binding OverlayPositionStatusText}"
+                                           Foreground="#9BAABC"
+                                           FontSize="12"
+                                           HorizontalAlignment="Right" />
+                                <Button Content="Reset to default"
+                                        HorizontalAlignment="Right"
+                                        Command="{Binding ResetOverlayPositionCommand}"
+                                        IsEnabled="{Binding IsOverlayPositionCustomized}" />
                             </StackPanel>
                         </Grid>
                     </Border>

@@ -72,6 +72,8 @@ public record AppSettings
     public OverlayWidget OverlayLeftWidget { get; init; } = OverlayWidget.Waveform;
     public OverlayWidget OverlayRightWidget { get; init; } = OverlayWidget.Timer;
     public int PreviewBubbleAutoHideMilliseconds { get; init; } = DefaultPreviewBubbleAutoHideMilliseconds;
+    public double? OverlayCustomLeft { get; init; }
+    public double? OverlayCustomTop { get; init; }
 
     // Translation
     public string TranscriptionTask { get; init; } = "transcribe";
@@ -141,6 +143,23 @@ public record AppSettings
             milliseconds,
             MinPreviewBubbleAutoHideMilliseconds,
             MaxPreviewBubbleAutoHideMilliseconds);
+
+    public static (double Left, double Top) ClampOverlayPositionToWorkArea(
+        double left,
+        double top,
+        double workAreaLeft,
+        double workAreaTop,
+        double workAreaRight,
+        double workAreaBottom,
+        double windowWidth,
+        double windowHeight)
+    {
+        var maxLeft = Math.Max(workAreaLeft, workAreaRight - windowWidth);
+        var maxTop = Math.Max(workAreaTop, workAreaBottom - windowHeight);
+        var clampedLeft = Math.Clamp(left, workAreaLeft, maxLeft);
+        var clampedTop = Math.Clamp(top, workAreaTop, maxTop);
+        return (clampedLeft, clampedTop);
+    }
 }
 
 public enum RecordingMode

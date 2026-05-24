@@ -44,6 +44,70 @@ public sealed class AppearanceSectionViewModelTests
             Times.Once);
     }
 
+    [Theory]
+    [InlineData(null, null, false)]
+    [InlineData(120.0, null, false)]
+    [InlineData(null, 80.0, false)]
+    [InlineData(120.0, 80.0, true)]
+    public void IsOverlayPositionCustomized_RequiresBothFields(
+        double? left,
+        double? top,
+        bool expected)
+    {
+        var settings = CreateSettingsMock(
+            AppSettings.Default with
+            {
+                OverlayCustomLeft = left,
+                OverlayCustomTop = top,
+            });
+
+        var sut = new AppearanceSectionViewModel(settings.Object);
+
+        Assert.Equal(expected, sut.IsOverlayPositionCustomized);
+    }
+
+    [Fact]
+    public void ResetOverlayPositionCommand_ClearsBothFields()
+    {
+        var settings = CreateSettingsMock(
+            AppSettings.Default with
+            {
+                OverlayCustomLeft = 120.0,
+                OverlayCustomTop = 80.0,
+            });
+        var sut = new AppearanceSectionViewModel(settings.Object);
+
+        sut.ResetOverlayPositionCommand.Execute(null);
+
+        settings.Verify(
+            s => s.Save(
+                It.Is<AppSettings>(a =>
+                    a.OverlayCustomLeft == null && a.OverlayCustomTop == null)),
+            Times.Once);
+    }
+
+    [Fact]
+    public void Refresh_PropagatesIsOverlayPositionCustomized()
+    {
+        var settings = CreateSettingsMock(AppSettings.Default);
+        var sut = new AppearanceSectionViewModel(settings.Object);
+        Assert.False(sut.IsOverlayPositionCustomized);
+
+        var propertyChanged = new List<string?>();
+        sut.PropertyChanged += (_, e) => propertyChanged.Add(e.PropertyName);
+
+        var updated = AppSettings.Default with
+        {
+            OverlayCustomLeft = 250.0,
+            OverlayCustomTop = 150.0,
+        };
+        settings.SetupGet(s => s.Current).Returns(updated);
+        settings.Raise(s => s.SettingsChanged += null, updated);
+
+        Assert.True(sut.IsOverlayPositionCustomized);
+        Assert.Contains(nameof(AppearanceSectionViewModel.IsOverlayPositionCustomized), propertyChanged);
+    }
+
     private static Mock<ISettingsService> CreateSettingsMock(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();

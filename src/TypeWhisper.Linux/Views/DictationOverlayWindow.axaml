@@ -14,7 +14,7 @@
         Topmost="True"
         CanResize="False"
         SizeToContent="WidthAndHeight">
-    <Grid Margin="10" IsVisible="{Binding HasVisibleContent}">
+    <Grid Margin="10" Cursor="SizeAll" IsVisible="{Binding HasVisibleContent}">
         <Border Background="#F0181818"
                 BorderBrush="#25FFFFFF"
                 BorderThickness="1"

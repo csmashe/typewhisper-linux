@@ -23,4 +23,48 @@ public class AppSettingsTests
     {
         Assert.Equal(expected, AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(input));
     }
+
+    [Fact]
+    public void DefaultOverlayCustomPosition_IsNull()
+    {
+        Assert.Null(AppSettings.Default.OverlayCustomLeft);
+        Assert.Null(AppSettings.Default.OverlayCustomTop);
+    }
+
+    [Theory]
+    // Inside work area → passthrough.
+    [InlineData(100, 50, 0, 0, 1920, 1080, 320, 80, 100, 50)]
+    // Past the right/bottom edge → clamped to right/bottom minus size.
+    [InlineData(2000, 1200, 0, 0, 1920, 1080, 320, 80, 1600, 1000)]
+    // Past the left/top edge → clamped to the work area origin.
+    [InlineData(-50, -25, 0, 0, 1920, 1080, 320, 80, 0, 0)]
+    // Multi-monitor: non-zero work-area origin.
+    [InlineData(50, 30, 1920, 0, 3840, 1080, 320, 80, 1920, 30)]
+    // Degenerate: window larger than the work area → clamps to the min, not negative.
+    [InlineData(500, 500, 0, 0, 200, 100, 400, 200, 0, 0)]
+    public void ClampOverlayPositionToWorkArea_ClampsToBounds(
+        double left,
+        double top,
+        double workAreaLeft,
+        double workAreaTop,
+        double workAreaRight,
+        double workAreaBottom,
+        double windowWidth,
+        double windowHeight,
+        double expectedLeft,
+        double expectedTop)
+    {
+        var (clampedLeft, clampedTop) = AppSettings.ClampOverlayPositionToWorkArea(
+            left,
+            top,
+            workAreaLeft,
+            workAreaTop,
+            workAreaRight,
+            workAreaBottom,
+            windowWidth,
+            windowHeight);
+
+        Assert.Equal(expectedLeft, clampedLeft);
+        Assert.Equal(expectedTop, clampedTop);
+    }
 }

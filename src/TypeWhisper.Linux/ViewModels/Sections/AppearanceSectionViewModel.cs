@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -45,6 +46,30 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     public string PreviewBubbleAutoHideSecondsText => $"{PreviewBubbleAutoHideSeconds:0.##} s";
 
+    public bool IsOverlayPositionCustomized =>
+        _settings.Current.OverlayCustomLeft is not null
+        && _settings.Current.OverlayCustomTop is not null;
+
+    public string OverlayPositionStatusText =>
+        IsOverlayPositionCustomized
+            ? $"Custom position: {(int)Math.Round(_settings.Current.OverlayCustomLeft ?? 0)}, {(int)Math.Round(_settings.Current.OverlayCustomTop ?? 0)}"
+            : "Using default (Top/Bottom)";
+
+    [RelayCommand]
+    private void ResetOverlayPosition()
+    {
+        if (!IsOverlayPositionCustomized)
+        {
+            return;
+        }
+
+        _settings.Save(_settings.Current with
+        {
+            OverlayCustomLeft = null,
+            OverlayCustomTop = null,
+        });
+    }
+
     private void Refresh(AppSettings settings)
     {
         SelectedOverlayPosition =
@@ -59,6 +84,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
         PreviewBubbleAutoHideSeconds =
             AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
                 settings.PreviewBubbleAutoHideMilliseconds) / 1000d;
+
+        OnPropertyChanged(nameof(IsOverlayPositionCustomized));
+        OnPropertyChanged(nameof(OverlayPositionStatusText));
+        ResetOverlayPositionCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedOverlayPositionChanged(OverlayPositionOption? value)
