@@ -4,6 +4,10 @@ public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
 
+    public const int MinPreviewBubbleAutoHideMilliseconds = 0;
+    public const int DefaultPreviewBubbleAutoHideMilliseconds = 1500;
+    public const int MaxPreviewBubbleAutoHideMilliseconds = 5000;
+
     private readonly Dictionary<string, TextInsertionStrategy> _appInsertionStrategies = new(
         StringComparer.OrdinalIgnoreCase
     );
@@ -67,6 +71,7 @@ public record AppSettings
     public OverlayPosition OverlayPosition { get; init; } = OverlayPosition.Bottom;
     public OverlayWidget OverlayLeftWidget { get; init; } = OverlayWidget.Waveform;
     public OverlayWidget OverlayRightWidget { get; init; } = OverlayWidget.Timer;
+    public int PreviewBubbleAutoHideMilliseconds { get; init; } = DefaultPreviewBubbleAutoHideMilliseconds;
 
     // Translation
     public string TranscriptionTask { get; init; } = "transcribe";
@@ -130,6 +135,12 @@ public record AppSettings
     public bool WaylandEvdevHotkeysEnabled { get; init; } = true;
 
     public static AppSettings Default => new();
+
+    public static int NormalizePreviewBubbleAutoHideMilliseconds(int milliseconds) =>
+        Math.Clamp(
+            milliseconds,
+            MinPreviewBubbleAutoHideMilliseconds,
+            MaxPreviewBubbleAutoHideMilliseconds);
 }
 
 public enum RecordingMode

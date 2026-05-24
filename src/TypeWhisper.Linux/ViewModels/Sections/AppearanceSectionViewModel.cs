@@ -17,6 +17,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
     [ObservableProperty]
     private OverlayWidgetOption? _selectedRightWidget;
 
+    [ObservableProperty]
+    private double _previewBubbleAutoHideSeconds =
+        AppSettings.DefaultPreviewBubbleAutoHideMilliseconds / 1000d;
+
     public AppearanceSectionViewModel(ISettingsService settings)
     {
         _settings = settings;
@@ -39,6 +43,8 @@ public partial class AppearanceSectionViewModel : ObservableObject
         new(OverlayWidget.AppName, "App name")
     ];
 
+    public string PreviewBubbleAutoHideSecondsText => $"{PreviewBubbleAutoHideSeconds:0.##} s";
+
     private void Refresh(AppSettings settings)
     {
         SelectedOverlayPosition =
@@ -50,6 +56,9 @@ public partial class AppearanceSectionViewModel : ObservableObject
         SelectedRightWidget =
             OverlayWidgets.FirstOrDefault(option => option.Value == settings.OverlayRightWidget)
             ?? OverlayWidgets[0];
+        PreviewBubbleAutoHideSeconds =
+            AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                settings.PreviewBubbleAutoHideMilliseconds) / 1000d;
     }
 
     partial void OnSelectedOverlayPositionChanged(OverlayPositionOption? value)
@@ -80,6 +89,22 @@ public partial class AppearanceSectionViewModel : ObservableObject
         }
 
         _settings.Save(_settings.Current with { OverlayRightWidget = value.Value });
+    }
+
+    partial void OnPreviewBubbleAutoHideSecondsChanged(double value)
+    {
+        OnPropertyChanged(nameof(PreviewBubbleAutoHideSecondsText));
+
+        var milliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+            (int)Math.Round(value * 1000, MidpointRounding.AwayFromZero));
+
+        if (_settings.Current.PreviewBubbleAutoHideMilliseconds == milliseconds)
+        {
+            return;
+        }
+
+        _settings.Save(
+            _settings.Current with { PreviewBubbleAutoHideMilliseconds = milliseconds });
     }
 }
 

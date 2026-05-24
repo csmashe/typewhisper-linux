@@ -45,6 +45,7 @@ public class SettingsServiceTests : IDisposable
             VocabularyBoostingEnabled = true,
             AutoAddDictionaryCorrections = true,
             CleanupLevel = CleanupLevel.Light,
+            PreviewBubbleAutoHideMilliseconds = 3750,
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
                 ["kitty"] = TextInsertionStrategy.DirectTyping,
@@ -60,6 +61,7 @@ public class SettingsServiceTests : IDisposable
         Assert.True(sut2.Current.VocabularyBoostingEnabled);
         Assert.True(sut2.Current.AutoAddDictionaryCorrections);
         Assert.Equal(CleanupLevel.Light, sut2.Current.CleanupLevel);
+        Assert.Equal(3750, sut2.Current.PreviewBubbleAutoHideMilliseconds);
         Assert.Equal(
             TextInsertionStrategy.DirectTyping,
             sut2.Current.AppInsertionStrategies["kitty"]

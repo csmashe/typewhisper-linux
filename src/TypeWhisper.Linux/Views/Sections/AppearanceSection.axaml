@@ -26,7 +26,7 @@
                        Classes="section-title" />
 
             <Border Classes="panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto">
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
@@ -85,6 +85,37 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="6" Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <StackPanel VerticalAlignment="Center"
+                                        Spacing="2">
+                                <TextBlock Text="Auto-hide delay"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Time the post-dictation feedback bubble stays visible (0 hides it)."
+                                           Foreground="#9BAABC"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        Spacing="6">
+                                <TextBlock Text="{Binding PreviewBubbleAutoHideSecondsText}"
+                                           Foreground="#9BAABC"
+                                           FontSize="12"
+                                           HorizontalAlignment="Right" />
+                                <Slider Minimum="0"
+                                        Maximum="5"
+                                        SmallChange="0.25"
+                                        LargeChange="0.5"
+                                        TickFrequency="0.25"
+                                        IsSnapToTickEnabled="True"
+                                        Value="{Binding PreviewBubbleAutoHideSeconds, Mode=TwoWay}" />
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>
