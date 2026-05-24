@@ -111,4 +111,35 @@ public sealed class ShortcutMatcherTests
 
         Assert.Equal(ShortcutMatchKind.Dictation, kind);
     }
+
+    [Fact]
+    public void Match_SideSpecificSingleModifierBinding_MatchesOnlyThatSide()
+    {
+        // B8: when the dictation key IS a side-specific modifier (e.g.
+        // VcRightAlt with no mods), the matcher distinguishes left/right
+        // naturally because the key field — not the modifier mask — carries
+        // the side information.
+        var set = new GlobalShortcutSet(
+            KeyCode.VcRightAlt,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            RecordingMode.Toggle,
+            false
+        );
+
+        var rightMatch = ShortcutMatcher.Match(KeyCode.VcRightAlt, ModifierMask.None, set);
+        var leftMatch = ShortcutMatcher.Match(KeyCode.VcLeftAlt, ModifierMask.None, set);
+
+        Assert.Equal(ShortcutMatchKind.Dictation, rightMatch);
+        Assert.Equal(ShortcutMatchKind.None, leftMatch);
+    }
 }

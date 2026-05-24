@@ -602,15 +602,18 @@ public sealed class HotkeyService : IDisposable
                 continue;
             }
 
+            // Intra-batch collision: reuse the full HotkeyMatches so the
+            // prefix-collision rule applies between prompt-action entries
+            // too (e.g. a batch containing both `Left Ctrl` and `Ctrl+F9`
+            // would otherwise accept both and shadow the chord at runtime).
             if (
                 accepted.Any(prior =>
-                    prior.Key == entry.Key
-                    && ShortcutMatcher.ModifiersMatch(prior.Modifiers, entry.Modifiers)
+                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
                 )
             )
             {
                 Trace.WriteLine(
-                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that duplicates an earlier entry."
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with an earlier entry."
                 );
                 continue;
             }
@@ -726,8 +729,73 @@ public sealed class HotkeyService : IDisposable
         // otherwise a chord like RightCtrl+Space could slip past the check
         // and collide with a LeftCtrl+Space binding at runtime, since the
         // dispatcher uses ModifiersMatch when resolving presses.
-        return key == otherKey.Value
-               && ShortcutMatcher.ModifiersMatch(modifiers, otherModifiers);
+        if (key == otherKey.Value
+            && ShortcutMatcher.ModifiersMatch(modifiers, otherModifiers))
+        {
+            return true;
+        }
+
+        // B8 prefix collision: a side-specific single-modifier binding (e.g.
+        // `Left Ctrl` → `(VcLeftControl, None)`) fires on the bare modifier
+        // press, which is also the first keystroke of every chord that uses
+        // the same physical modifier. Reject either direction at config
+        // time so users can't shadow their own chord bindings. The chord
+        // side is checked against BOTH left and right flags because the
+        // matcher collapses them — pressing the modifier-only's bound side
+        // also satisfies any chord storing the opposite-side flag.
+        if (CollidesAsModifierPrefix(key, modifiers, otherKey.Value, otherModifiers)
+            || CollidesAsModifierPrefix(otherKey.Value, otherModifiers, key, modifiers))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool CollidesAsModifierPrefix(
+        KeyCode modifierOnlyKey,
+        ModifierMask modifierOnlyMods,
+        KeyCode chordKey,
+        ModifierMask chordMods
+    )
+    {
+        if (modifierOnlyMods != ModifierMask.None)
+        {
+            return false;
+        }
+
+        var physicalGroup = PhysicalModifierGroup(modifierOnlyKey);
+        if (physicalGroup == ModifierMask.None)
+        {
+            return false;
+        }
+
+        // The chord must use the same physical modifier (in either side
+        // flag — the matcher collapses them) AND must have a different
+        // terminal key, otherwise the existing exact-match branch already
+        // caught the collision and we'd double-count.
+        if (chordKey == modifierOnlyKey && chordMods == modifierOnlyMods)
+        {
+            return false;
+        }
+
+        return (chordMods & physicalGroup) != ModifierMask.None;
+    }
+
+    private static ModifierMask PhysicalModifierGroup(KeyCode key)
+    {
+        return key switch
+        {
+            KeyCode.VcLeftControl or KeyCode.VcRightControl
+                => ModifierMask.LeftCtrl | ModifierMask.RightCtrl,
+            KeyCode.VcLeftShift or KeyCode.VcRightShift
+                => ModifierMask.LeftShift | ModifierMask.RightShift,
+            KeyCode.VcLeftAlt or KeyCode.VcRightAlt
+                => ModifierMask.LeftAlt | ModifierMask.RightAlt,
+            KeyCode.VcLeftMeta or KeyCode.VcRightMeta
+                => ModifierMask.LeftMeta | ModifierMask.RightMeta,
+            _ => ModifierMask.None
+        };
     }
 
     private IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> GetBoundHotkeys(
@@ -784,6 +852,29 @@ public sealed class HotkeyService : IDisposable
 
     private static string FormatHotkey(KeyCode key, ModifierMask mods)
     {
+        // Tier-A side-specific single modifier round-trip: the binding's "key"
+        // is itself a side-specific modifier with no extra mods. Emit the
+        // parser-symmetric spelling so format → parse → format is stable.
+        if (mods == ModifierMask.None)
+        {
+            var sideSpecific = key switch
+            {
+                KeyCode.VcLeftControl => "Left Ctrl",
+                KeyCode.VcRightControl => "Right Ctrl",
+                KeyCode.VcLeftShift => "Left Shift",
+                KeyCode.VcRightShift => "Right Shift",
+                KeyCode.VcLeftAlt => "Left Alt",
+                KeyCode.VcRightAlt => "Right Alt",
+                KeyCode.VcLeftMeta => "Left Meta",
+                KeyCode.VcRightMeta => "Right Meta",
+                _ => null
+            };
+            if (sideSpecific is not null)
+            {
+                return sideSpecific;
+            }
+        }
+
         var parts = new List<string>();
         if (mods.HasFlag(ModifierMask.LeftCtrl) || mods.HasFlag(ModifierMask.RightCtrl))
         {
@@ -822,6 +913,19 @@ public sealed class HotkeyService : IDisposable
         if (string.IsNullOrWhiteSpace(text))
         {
             return false;
+        }
+
+        // Tier-A side-specific single modifier: "Right Alt", "Left Ctrl", etc.
+        // Checked before the '+' split so a stray chord like "Right Alt+R"
+        // falls through to the normal loop instead of silently absorbing the
+        // side prefix here.
+        var trimmed = text.Trim();
+        if (!trimmed.Contains('+')
+            && TryParseSideSpecificSingleModifier(trimmed, out var sideModifierKey))
+        {
+            key = sideModifierKey;
+            modifiers = ModifierMask.None;
+            return true;
         }
 
         var parts = text.Split(
@@ -924,6 +1028,23 @@ public sealed class HotkeyService : IDisposable
         }
 
         return key is not null;
+    }
+
+    private static bool TryParseSideSpecificSingleModifier(string token, out KeyCode key)
+    {
+        key = token.ToLowerInvariant() switch
+        {
+            "left ctrl" or "left control" => KeyCode.VcLeftControl,
+            "right ctrl" or "right control" => KeyCode.VcRightControl,
+            "left shift" => KeyCode.VcLeftShift,
+            "right shift" => KeyCode.VcRightShift,
+            "left alt" => KeyCode.VcLeftAlt,
+            "right alt" => KeyCode.VcRightAlt,
+            "left meta" or "left super" or "left win" => KeyCode.VcLeftMeta,
+            "right meta" or "right super" or "right win" => KeyCode.VcRightMeta,
+            _ => KeyCode.VcUndefined
+        };
+        return key != KeyCode.VcUndefined;
     }
 
     /// <summary>

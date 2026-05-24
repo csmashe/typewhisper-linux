@@ -1,4 +1,5 @@
 using SharpHook;
+using SharpHook.Native;
 using System.Diagnostics;
 
 namespace TypeWhisper.Linux.Services.Hotkey;
@@ -168,11 +169,33 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
 
     private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
     {
-        _dispatcher.Handle(e.Data.KeyCode, e.RawEvent.Mask, true);
+        _dispatcher.Handle(e.Data.KeyCode, NormalizeMask(e.Data.KeyCode, e.RawEvent.Mask), true);
     }
 
     private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
     {
-        _dispatcher.Handle(e.Data.KeyCode, e.RawEvent.Mask, false);
+        _dispatcher.Handle(e.Data.KeyCode, NormalizeMask(e.Data.KeyCode, e.RawEvent.Mask), false);
+    }
+
+    // When the trigger key is itself a side-specific modifier, libuiohook's
+    // mask may include the bit for that key on press (and lose it on release).
+    // Mask it out so a bare "Right Ctrl" press matches a `(VcRightControl,
+    // None)` binding regardless of platform — mirrors the equivalent strip
+    // in EvdevGlobalShortcutBackend.OnKeyEvent.
+    private static ModifierMask NormalizeMask(KeyCode key, ModifierMask mask)
+    {
+        var modBit = key switch
+        {
+            KeyCode.VcLeftControl => ModifierMask.LeftCtrl,
+            KeyCode.VcRightControl => ModifierMask.RightCtrl,
+            KeyCode.VcLeftShift => ModifierMask.LeftShift,
+            KeyCode.VcRightShift => ModifierMask.RightShift,
+            KeyCode.VcLeftAlt => ModifierMask.LeftAlt,
+            KeyCode.VcRightAlt => ModifierMask.RightAlt,
+            KeyCode.VcLeftMeta => ModifierMask.LeftMeta,
+            KeyCode.VcRightMeta => ModifierMask.RightMeta,
+            _ => ModifierMask.None
+        };
+        return modBit == ModifierMask.None ? mask : mask & ~modBit;
     }
 }
