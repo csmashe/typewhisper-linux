@@ -122,13 +122,21 @@ public sealed class AudioRecordingService : IDisposable
         {
             _sampleChunks.Clear();
             _sampleCount = 0;
-            _captureSampleRate = SampleRate;
+            // Do NOT reset _captureSampleRate here: EnsureInputStreamStarted may
+            // reuse a stream opened by an in-flight preview, and the actual
+            // negotiated rate is only assigned inside CreateInputStream. Resetting
+            // to SampleRate would make the resampler a no-op and persist samples
+            // captured at the real rate but tagged as 16 kHz — slow/garbled audio.
         }
 
         if (!EnsureInputStreamStarted())
         {
             return;
         }
+
+        Trace.WriteLine(
+            $"[AudioRecordingService] Recording started: captureSampleRate={_captureSampleRate} Hz, target={SampleRate} Hz."
+        );
 
         Volatile.Write(ref _isRecording, 1);
     }
@@ -418,8 +426,11 @@ public sealed class AudioRecordingService : IDisposable
             return false;
         }
 
+        // CreateInputStream returns an already-started stream so we commit
+        // _captureSampleRate only after the negotiated rate has been validated
+        // by an actual Start() call (the PaStream constructor alone accepts
+        // rates that the underlying device later rejects at start time).
         _stream = CreateInputStream(deviceIndex.Value, InputAudioCallback);
-        _stream.Start();
         return true;
     }
 
@@ -451,16 +462,17 @@ public sealed class AudioRecordingService : IDisposable
 
         foreach (var sampleRate in candidateRates)
         {
+            PaStream? stream = null;
             try
             {
-                var stream = CreateInputStream(deviceIndex, inputInfo, sampleRate, callback);
+                stream = CreateInputStream(deviceIndex, inputInfo, sampleRate, callback);
+                stream.Start();
                 _captureSampleRate = sampleRate;
-                if (sampleRate != SampleRate)
-                {
-                    Trace.WriteLine(
-                        $"[AudioRecordingService] Capturing at {sampleRate} Hz and resampling to {SampleRate} Hz."
-                    );
-                }
+                Trace.WriteLine(
+                    $"[AudioRecordingService] Opened input stream: device={deviceIndex} ('{inputInfo.name}'), "
+                    + $"negotiatedRate={sampleRate} Hz, deviceDefaultRate={inputInfo.defaultSampleRate} Hz, "
+                    + $"resampleToTarget={(sampleRate != SampleRate ? "yes" : "no")}."
+                );
 
                 return stream;
             }
@@ -470,6 +482,7 @@ public sealed class AudioRecordingService : IDisposable
                 Trace.WriteLine(
                     $"[AudioRecordingService] Failed to open input stream at {sampleRate} Hz: {ex.Message}"
                 );
+                try { stream?.Dispose(); } catch { /* best effort */ }
             }
         }
 
@@ -559,6 +572,12 @@ public sealed class AudioRecordingService : IDisposable
             }
 
             var outputSamples = ResampleToSampleRate(samples, _captureSampleRate, SampleRate);
+            Trace.WriteLine(
+                $"[AudioRecordingService] Finalized WAV: capturedSamples={samples.Length} @ {_captureSampleRate} Hz "
+                + $"({samples.Length / (double)_captureSampleRate:F2}s real-time), "
+                + $"outputSamples={outputSamples.Length} @ {SampleRate} Hz "
+                + $"({outputSamples.Length / (double)SampleRate:F2}s tagged)."
+            );
             return FloatSamplesToWav(outputSamples, SampleRate);
         }
     }
