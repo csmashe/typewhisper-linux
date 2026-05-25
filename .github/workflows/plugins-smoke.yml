@@ -79,8 +79,23 @@ jobs:
           }
 
           $scanMode = if ($runAll) { 'all' } elseif ($projects.Count -gt 0) { 'changed' } else { 'none' }
-          $json = if ($projects.Count -gt 0) { ConvertTo-Json -InputObject $projects -Compress -AsArray } else { '[]' }
+          # ConvertTo-Json has two traps here we have to avoid:
+          #   1. `-InputObject $projects -AsArray` wraps everything in an extra
+          #      outer array (`[["a","b"]]`), which the matrix engine then
+          #      treats as one sequence-typed value instead of an array of
+          #      strings to fan out over. This was the original bug.
+          #   2. Piping a single-element array unwraps it, so `@("a") | ...`
+          #      serialises as `"a"`, not `["a"]`.
+          # Building the JSON by hand for these flat strings sidesteps both.
           $hasProjects = if ($projects.Count -gt 0) { 'true' } else { 'false' }
+          if ($projects.Count -gt 0) {
+            $escaped = $projects | ForEach-Object {
+              '"' + ($_ -replace '\\', '\\\\' -replace '"', '\"') + '"'
+            }
+            $json = '[' + ($escaped -join ',') + ']'
+          } else {
+            $json = '[]'
+          }
 
           Write-Host "Plugin smoke scan mode: $scanMode"
           if ($changedFiles.Count -gt 0) {
