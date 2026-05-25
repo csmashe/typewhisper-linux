@@ -23,9 +23,18 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
     {
         var session = new DeepgramStreamingSession();
 
-        var langParam = string.IsNullOrEmpty(language)
-            ? "&detect_language=true"
-            : $"&language={Uri.EscapeDataString(language)}";
+        // Deepgram's streaming WebSocket does not accept detect_language=true
+        // (it's batch-only). For an unspecified language Nova-3 supports
+        // language=multi for code-switching; older models default to English
+        // when language is omitted, so Nova-2 has no auto-detect option here.
+        var isUnspecified =
+            string.IsNullOrEmpty(language)
+            || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase);
+        var langParam = isUnspecified
+            ? (model.StartsWith("nova-3", StringComparison.OrdinalIgnoreCase)
+                ? "&language=multi"
+                : string.Empty)
+            : $"&language={Uri.EscapeDataString(language!)}";
         var url =
             $"wss://api.deepgram.com/v1/listen?model={Uri.EscapeDataString(model)}&encoding=linear16&sample_rate=16000&interim_results=true&punctuate=true&smart_format=true{langParam}";
 

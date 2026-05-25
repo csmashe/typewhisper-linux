@@ -283,14 +283,16 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             _ => "cpu",
         };
 
-        // Only treat the preference as "applied" if the backend swap was
-        // actually accepted — otherwise reporting a pending CUDA status would
-        // contradict the still-active CPU runtime.
-        if (TryConfigureComputeBackend(backend))
-        {
-            _accelerationPreference = preference;
-            _accelerationStatus = CreatePendingAccelerationStatus(preference);
-        }
+        // Always record the host's last requested preference so the SDK getter
+        // reflects user intent, even when the runtime can't honour it yet.
+        _accelerationPreference = preference;
+
+        _accelerationStatus = TryConfigureComputeBackend(backend)
+            ? CreatePendingAccelerationStatus(preference)
+            // Swap was rejected because the native runtime is already pinned.
+            // Report the still-active backend with RequiresRestart=true so the UI
+            // surfaces the mismatch instead of silently dropping the request.
+            : CreateLoadedAccelerationStatus(_computeBackend, preference);
     }
 
     public bool IsModelDownloaded(string modelId) => File.Exists(GetModelPath(modelId));

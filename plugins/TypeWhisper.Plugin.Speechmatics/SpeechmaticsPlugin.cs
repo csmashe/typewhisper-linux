@@ -69,7 +69,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             throw new InvalidOperationException("Plugin not configured. API key required.");
 
         // Speechmatics v2 requires an explicit language code; "auto" is not supported.
-        var lang = string.IsNullOrEmpty(language)
+        var lang = string.IsNullOrWhiteSpace(language)
             || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)
                 ? "en"
                 : language;

@@ -1056,9 +1056,14 @@ public sealed class OpenAiPlugin
             catch (Exception ex)
                 when (ex is InvalidOperationException or HttpRequestException or JsonException)
             {
+                // Don't auto-clear credentials here — HttpRequestException can also fire
+                // on transient network failures where the stored tokens are still valid.
+                // Surface the failure plus an explicit recovery path the user can take.
                 return new PluginSettingsValidationResult(
                     false,
-                    $"Stored ChatGPT login could not be refreshed: {ex.Message}");
+                    $"Stored ChatGPT login could not be refreshed: {ex.Message} "
+                        + "Enable \"Forget ChatGPT login\" and re-run Validate to clear the "
+                        + "stored credentials, then sign in again.");
             }
         }
 
