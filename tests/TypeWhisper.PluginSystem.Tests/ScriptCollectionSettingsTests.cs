@@ -20,8 +20,6 @@ public class ScriptCollectionSettingsTests : IDisposable
         Directory.CreateDirectory(_tempDir);
     }
 
-    private string ConfigPath => Path.Combine(_tempDir, "scripts.json");
-
     public void Dispose()
     {
         try
@@ -35,29 +33,6 @@ public class ScriptCollectionSettingsTests : IDisposable
         {
             // Best-effort cleanup in tests.
         }
-    }
-
-    private static PluginCollectionItem Item(
-        string name,
-        string command,
-        string shell = "",
-        string enabled = "true",
-        string? id = null
-    )
-    {
-        var values = new Dictionary<string, string?>
-        {
-            ["name"] = name,
-            ["command"] = command,
-            ["shell"] = shell,
-            ["enabled"] = enabled
-        };
-        if (id is not null)
-        {
-            values["__id"] = id;
-        }
-
-        return new PluginCollectionItem(values);
     }
 
     [Fact]
@@ -277,6 +252,31 @@ public class ScriptCollectionSettingsTests : IDisposable
         Assert.Equal(CollectionKey, scripts.Key);
         Assert.Equal("name", scripts.ItemLabelFieldKey);
         Assert.Contains(scripts.ItemFields, f => f.Key == "__id");
+    }
+
+    private string ConfigPath => Path.Combine(_tempDir, "scripts.json");
+
+    private static PluginCollectionItem Item(
+        string name,
+        string command,
+        string shell = "",
+        string enabled = "true",
+        string? id = null
+    )
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["name"] = name,
+            ["command"] = command,
+            ["shell"] = shell,
+            ["enabled"] = enabled
+        };
+        if (id is not null)
+        {
+            values["__id"] = id;
+        }
+
+        return new PluginCollectionItem(values);
     }
 
     private static IPluginHostServices CreateHost(string dataDir)

@@ -176,6 +176,11 @@ public sealed partial class SnippetService : ISnippetService
 
     public int ImportFromJson(string json)
     {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return 0;
+        }
+
         var imported = JsonSerializer.Deserialize(json, SnippetJsonContext.Default.ListSnippet);
         if (imported is null or { Count: 0 })
         {
@@ -214,7 +219,9 @@ public sealed partial class SnippetService : ISnippetService
 
     private static bool AppliesToProfile(Snippet snippet, string? profileId)
     {
-        if (snippet.ProfileIds.Count == 0)
+        // JSON with explicit "profileIds": null defeats the [] default initializer
+        // and would NRE on .Count below. Treat null/empty the same: "applies everywhere".
+        if (snippet.ProfileIds is null || snippet.ProfileIds.Count == 0)
         {
             return true;
         }

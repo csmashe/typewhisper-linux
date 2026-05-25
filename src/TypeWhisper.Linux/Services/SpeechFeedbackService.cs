@@ -83,8 +83,6 @@ public sealed class SpeechFeedbackService : IDisposable
         _systemProvider.Dispose();
     }
 
-    public event EventHandler? ProvidersChanged;
-
     public IReadOnlyList<TtsVoiceOption> GetVoiceOptions(string? providerId)
     {
         var provider = FindProvider(providerId) ?? _systemProvider;
@@ -211,6 +209,8 @@ public sealed class SpeechFeedbackService : IDisposable
         }
         catch { }
     }
+
+    public event EventHandler? ProvidersChanged;
 
     private void SpeakCore(
         TtsSpeakRequest request,

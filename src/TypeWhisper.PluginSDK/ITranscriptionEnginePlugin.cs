@@ -38,7 +38,10 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     void SelectModel(string modelId);
 
     /// <summary>Configures the preferred compute backend. Common values: "cpu", "cuda".</summary>
-    void ConfigureComputeBackend(string backend) { }
+    Task ConfigureComputeBackendAsync(string backend)
+    {
+        return Task.CompletedTask;
+    }
 
     /// <summary>Acceleration backends this engine can run on. Default: CPU only.</summary>
     IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>

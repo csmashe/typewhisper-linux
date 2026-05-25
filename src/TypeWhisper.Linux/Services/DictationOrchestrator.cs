@@ -270,69 +270,6 @@ public sealed class DictationOrchestrator : IDisposable
         _toggleGate.Dispose();
     }
 
-    public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
-    public event EventHandler<bool>? RecordingStateChanged;
-    public event EventHandler<string>? TranscriptionCompleted;
-    public event EventHandler<string>? StatusMessage;
-    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
-
-    /// <summary>
-    ///     Fires once per dictation immediately after the publish of
-    ///     <see cref="TranscriptionCompletedEvent" /> with the just-completed
-    ///     session's metadata. Used by <see cref="DictationSessionResultStore" />
-    ///     to back the <c>GET /v1/dictation/transcription</c> poll endpoint.
-    /// </summary>
-    public event Action<DictationSessionResult>? SessionCompleted;
-
-    /// <summary>
-    ///     True only while the dictation pipeline for <paramref name="sessionId" />
-    ///     is still actively recording or running its post-stop transcription.
-    ///     Backed by an explicit in-flight set that is added in
-    ///     <see cref="StartAsync" /> and removed in a <c>finally</c> at every
-    ///     terminal point (success, cancel, transcription failure, short/silent
-    ///     discard). Unknown ids and already-completed ids both return false —
-    ///     callers should fall back to <see cref="DictationSessionResultStore" />
-    ///     to distinguish "completed → ready/failed/canceled" from "not_found".
-    /// </summary>
-    public bool IsSessionInFlight(int sessionId)
-    {
-        lock (_recordingSessionLock)
-        {
-            return _inFlightSessions.Contains(sessionId);
-        }
-    }
-
-    /// <summary>
-    ///     Projects an overlay StatusText string to one of the documented
-    ///     <c>typewhisper status</c> state labels (transcribing / injecting /
-    ///     idle). The <c>recording</c> label is sourced from the audio recorder,
-    ///     not StatusText, so it is not produced here. Kept pure and cheap —
-    ///     status reads must not block the UI thread.
-    /// </summary>
-    internal static string MapOverlayStatusToStateLabel(string? statusText)
-    {
-        if (statusText is null)
-        {
-            return "idle";
-        }
-
-        if (
-            statusText.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
-            || statusText.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase)
-        )
-        {
-            return "transcribing";
-        }
-
-        // Overlay shows "Inserting…"; the documented CLI state is "injecting".
-        if (statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase))
-        {
-            return "injecting";
-        }
-
-        return "idle";
-    }
-
     public void Initialize()
     {
         if (_initialized || _disposed)
@@ -993,6 +930,69 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 _toggleGate.Release();
             }
+        }
+    }
+
+    /// <summary>
+    ///     Projects an overlay StatusText string to one of the documented
+    ///     <c>typewhisper status</c> state labels (transcribing / injecting /
+    ///     idle). The <c>recording</c> label is sourced from the audio recorder,
+    ///     not StatusText, so it is not produced here. Kept pure and cheap —
+    ///     status reads must not block the UI thread.
+    /// </summary>
+    internal static string MapOverlayStatusToStateLabel(string? statusText)
+    {
+        if (statusText is null)
+        {
+            return "idle";
+        }
+
+        if (
+            statusText.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
+            || statusText.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return "transcribing";
+        }
+
+        // Overlay shows "Inserting…"; the documented CLI state is "injecting".
+        if (statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase))
+        {
+            return "injecting";
+        }
+
+        return "idle";
+    }
+
+    public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
+    public event EventHandler<bool>? RecordingStateChanged;
+    public event EventHandler<string>? TranscriptionCompleted;
+    public event EventHandler<string>? StatusMessage;
+    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
+
+    /// <summary>
+    ///     Fires once per dictation immediately after the publish of
+    ///     <see cref="TranscriptionCompletedEvent" /> with the just-completed
+    ///     session's metadata. Used by <see cref="DictationSessionResultStore" />
+    ///     to back the <c>GET /v1/dictation/transcription</c> poll endpoint.
+    /// </summary>
+    public event Action<DictationSessionResult>? SessionCompleted;
+
+    /// <summary>
+    ///     True only while the dictation pipeline for <paramref name="sessionId" />
+    ///     is still actively recording or running its post-stop transcription.
+    ///     Backed by an explicit in-flight set that is added in
+    ///     <see cref="StartAsync" /> and removed in a <c>finally</c> at every
+    ///     terminal point (success, cancel, transcription failure, short/silent
+    ///     discard). Unknown ids and already-completed ids both return false —
+    ///     callers should fall back to <see cref="DictationSessionResultStore" />
+    ///     to distinguish "completed → ready/failed/canceled" from "not_found".
+    /// </summary>
+    public bool IsSessionInFlight(int sessionId)
+    {
+        lock (_recordingSessionLock)
+        {
+            return _inFlightSessions.Contains(sessionId);
         }
     }
 

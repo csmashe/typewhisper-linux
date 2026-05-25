@@ -72,7 +72,25 @@ internal sealed class ScriptStore
     {
         Directory.CreateDirectory(_dataDir);
         var json = JsonSerializer.Serialize(entries.ToList(), s_jsonOptions);
-        File.WriteAllText(_configPath, json);
+
+        // Atomically replace the target so a crash mid-write can't truncate _configPath.
+        var tempPath = Path.Combine(_dataDir, $"{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempPath, json);
+            if (File.Exists(_configPath))
+                File.Replace(tempPath, _configPath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _configPath);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 }
 
@@ -244,9 +262,10 @@ public sealed class ScriptService
             _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
             return text;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            // Caller cancelled — kill the child so it doesn't outlive the request.
+            // Caller cancelled (ct) — kill the child so it doesn't outlive the
+            // dictation flow as a leaked process, then propagate the cancellation.
             try
             {
                 process.Kill(entireProcessTree: true);
@@ -291,10 +310,25 @@ public sealed class ScriptService
     /// </summary>
     public void ReplaceAll(IEnumerable<ScriptEntry> entries)
     {
+        // Save() throws on persistence failure. Snapshot the existing collection
+        // first so we can restore it on failure; otherwise rejected edits would
+        // stay active in memory while the UI reports the save as failed.
+        var snapshot = Scripts.ToList();
         Scripts.Clear();
         foreach (var entry in entries)
             Scripts.Add(entry);
-        Save();
+
+        try
+        {
+            Save();
+        }
+        catch
+        {
+            Scripts.Clear();
+            foreach (var entry in snapshot)
+                Scripts.Add(entry);
+            throw;
+        }
     }
 
     private void Load()
@@ -339,7 +373,9 @@ public sealed class ScriptService
                 PluginLogLevel.Warning,
                 "Refusing to save script configuration because the existing file could not be loaded."
             );
-            return;
+            throw new InvalidOperationException(
+                "Cannot save script configuration because the existing file could not be loaded."
+            );
         }
 
         try
@@ -349,6 +385,7 @@ public sealed class ScriptService
         catch (Exception ex)
         {
             _host.Log(PluginLogLevel.Warning, $"Failed to save script configuration: {ex.Message}");
+            throw;
         }
     }
 }
@@ -414,7 +451,7 @@ public sealed class ScriptPlugin
                 Kind: PluginSettingKind.Dropdown,
                 Options:
                 [
-                    new PluginSettingOption("", "OS default"),
+                    new PluginSettingOption("", "bash (default)"),
                     new PluginSettingOption("bash", "bash"),
                     new PluginSettingOption("sh", "sh"),
                     new PluginSettingOption("pwsh", "PowerShell"),
@@ -445,9 +482,26 @@ public sealed class ScriptPlugin
         if (!string.Equals(collectionKey, ScriptsCollectionKey, StringComparison.Ordinal))
             return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
 
-        var source = Service is not null
-            ? Service.Scripts.ToList()
-            : new ScriptStore(ResolveDataDir()).Load();
+        List<ScriptEntry> source;
+        if (Service is not null)
+        {
+            source = Service.Scripts.ToList();
+        }
+        else
+        {
+            // ScriptStore.Load surfaces I/O / JSON errors so callers can decide
+            // how to react; for settings retrieval we don't want a corrupt file
+            // to break the screen — log and fall back to an empty list.
+            try
+            {
+                source = new ScriptStore(ResolveDataDir()).Load();
+            }
+            catch (Exception ex)
+            {
+                _host?.Log(PluginLogLevel.Warning, $"Failed to load scripts: {ex.Message}");
+                source = [];
+            }
+        }
 
         var items = source
             .Select(s => new PluginCollectionItem(
@@ -539,31 +593,43 @@ public sealed class ScriptPlugin
             );
         }
 
-        if (Service is not null)
+        try
         {
-            Service.ReplaceAll(entries);
-        }
-        else
-        {
-            // Mirror ScriptService's _loadSucceeded safeguard: refuse to write
-            // if the existing file fails to load, otherwise a corrupt/locked
-            // scripts.json would be silently overwritten.
-            var store = new ScriptStore(ResolveDataDir());
-            try
+            if (Service is not null)
             {
-                _ = store.Load();
+                Service.ReplaceAll(entries);
             }
-            catch (Exception ex)
+            else
             {
-                return Task.FromResult(
-                    new PluginSettingsValidationResult(
-                        false,
-                        $"Refusing to overwrite scripts.json — existing file could not be read: {ex.Message}"
-                    )
-                );
-            }
+                // Mirror ScriptService's _loadSucceeded safeguard: refuse to write
+                // if the existing file fails to load, otherwise a corrupt/locked
+                // scripts.json would be silently overwritten.
+                var store = new ScriptStore(ResolveDataDir());
+                try
+                {
+                    _ = store.Load();
+                }
+                catch (Exception ex)
+                {
+                    return Task.FromResult(
+                        new PluginSettingsValidationResult(
+                            false,
+                            $"Refusing to overwrite scripts.json — existing file could not be read: {ex.Message}"
+                        )
+                    );
+                }
 
-            store.Save(entries);
+                store.Save(entries);
+            }
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(
+                new PluginSettingsValidationResult(
+                    false,
+                    $"Failed to save scripts: {ex.Message}"
+                )
+            );
         }
 
         return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));

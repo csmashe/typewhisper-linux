@@ -29,38 +29,6 @@ public class PluginRegistryServiceTests : IDisposable
         _manager?.Dispose();
     }
 
-    private PluginManager CreateManager()
-    {
-        _manager = new PluginManager(
-            _loader,
-            _eventBus,
-            _activeWindow.Object,
-            _profiles.Object,
-            _settings.Object
-        );
-        return _manager;
-    }
-
-    private static HttpClient CreateMockHttpClient(
-        string responseJson,
-        HttpStatusCode statusCode = HttpStatusCode.OK
-    )
-    {
-        var handler = new Mock<HttpMessageHandler>();
-        handler
-            .Protected()
-            .Setup<Task<HttpResponseMessage>>(
-                "SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>()
-            )
-            .ReturnsAsync(
-                new HttpResponseMessage(statusCode) { Content = new StringContent(responseJson) }
-            );
-
-        return new HttpClient(handler.Object);
-    }
-
     [Fact]
     public async Task FetchRegistryAsync_DeserializesAndFiltersLinuxCompatiblePlugins()
     {
@@ -182,5 +150,37 @@ public class PluginRegistryServiceTests : IDisposable
         await service.FirstRunAutoInstallAsync();
 
         _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
+    private PluginManager CreateManager()
+    {
+        _manager = new PluginManager(
+            _loader,
+            _eventBus,
+            _activeWindow.Object,
+            _profiles.Object,
+            _settings.Object
+        );
+        return _manager;
+    }
+
+    private static HttpClient CreateMockHttpClient(
+        string responseJson,
+        HttpStatusCode statusCode = HttpStatusCode.OK
+    )
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>()
+            )
+            .ReturnsAsync(
+                new HttpResponseMessage(statusCode) { Content = new StringContent(responseJson) }
+            );
+
+        return new HttpClient(handler.Object);
     }
 }

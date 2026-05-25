@@ -37,8 +37,6 @@ public sealed class RecentTranscriptionsService
         _commands = commands;
     }
 
-    public event Action<string, bool>? FeedbackRequested;
-
     public void RecordTranscription(
         string id,
         string finalText,
@@ -54,6 +52,21 @@ public sealed class RecentTranscriptionsService
     {
         Dispatcher.UIThread.Post(TogglePaletteCore);
     }
+
+    public async Task CopyLastTranscriptionToClipboardAsync()
+    {
+        var entry = _store.LatestEntry(_history.Records);
+        if (entry is null)
+        {
+            FeedbackRequested?.Invoke("No recent transcriptions.", false);
+            return;
+        }
+
+        var result = await _textInsertion.InsertTextAsync(entry.FinalText, false);
+        FeedbackRequested?.Invoke(StatusTextFor(result), IsError(result));
+    }
+
+    public event Action<string, bool>? FeedbackRequested;
 
     private void TogglePaletteCore()
     {
@@ -89,19 +102,6 @@ public sealed class RecentTranscriptionsService
 
         window.Show();
         window.Activate();
-    }
-
-    public async Task CopyLastTranscriptionToClipboardAsync()
-    {
-        var entry = _store.LatestEntry(_history.Records);
-        if (entry is null)
-        {
-            FeedbackRequested?.Invoke("No recent transcriptions.", false);
-            return;
-        }
-
-        var result = await _textInsertion.InsertTextAsync(entry.FinalText, false);
-        FeedbackRequested?.Invoke(StatusTextFor(result), IsError(result));
     }
 
     private void InsertEntryFireAndForget(RecentTranscriptionEntry entry, string? targetWindowId)

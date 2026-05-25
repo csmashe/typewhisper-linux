@@ -168,25 +168,6 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         );
     }
 
-    private static IEnumerable<string> BuildManagedLines(DeShortcutSpec spec)
-    {
-        var (mods, key) = ToHyprlandBind(spec.Trigger);
-        yield return $"bind  = {mods}, {key}, exec, {spec.OnPressCommand}";
-        if (!string.IsNullOrWhiteSpace(spec.OnReleaseCommand))
-        {
-            yield return $"bindr = {mods}, {key}, exec, {spec.OnReleaseCommand}";
-        }
-
-        if (
-            !string.IsNullOrWhiteSpace(spec.OnCancelTrigger)
-            && !string.IsNullOrWhiteSpace(spec.OnCancelCommand)
-        )
-        {
-            var (cmods, ckey) = ToHyprlandBind(spec.OnCancelTrigger!);
-            yield return $"bind  = {cmods}, {ckey}, exec, {spec.OnCancelCommand}";
-        }
-    }
-
     /// <summary>
     ///     Convert "Ctrl+Shift+Space" into Hyprland's "CTRL SHIFT", "SPACE"
     ///     form. Modifiers are space-separated; the key is uppercased
@@ -227,6 +208,25 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
 
         var key = parts[^1].ToUpperInvariant();
         return (string.Join(' ', mods), key);
+    }
+
+    private static IEnumerable<string> BuildManagedLines(DeShortcutSpec spec)
+    {
+        var (mods, key) = ToHyprlandBind(spec.Trigger);
+        yield return $"bind  = {mods}, {key}, exec, {spec.OnPressCommand}";
+        if (!string.IsNullOrWhiteSpace(spec.OnReleaseCommand))
+        {
+            yield return $"bindr = {mods}, {key}, exec, {spec.OnReleaseCommand}";
+        }
+
+        if (
+            !string.IsNullOrWhiteSpace(spec.OnCancelTrigger)
+            && !string.IsNullOrWhiteSpace(spec.OnCancelCommand)
+        )
+        {
+            var (cmods, ckey) = ToHyprlandBind(spec.OnCancelTrigger!);
+            yield return $"bind  = {cmods}, {ckey}, exec, {spec.OnCancelCommand}";
+        }
     }
 
     private async Task<bool> ApplyLiveAsync(DeShortcutSpec spec, CancellationToken ct)

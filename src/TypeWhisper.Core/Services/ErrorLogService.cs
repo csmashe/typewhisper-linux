@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -76,7 +77,7 @@ public sealed class ErrorLogService : IErrorLogService
             app = new
             {
                 version = GetAppVersion(),
-                platform = "Linux",
+                platform = RuntimeInformation.OSDescription,
                 os_version = Environment.OSVersion.VersionString,
                 dotnet_version = Environment.Version.ToString(),
                 locale = CultureInfo.CurrentCulture.Name,
@@ -107,6 +108,15 @@ public sealed class ErrorLogService : IErrorLogService
             var entries = JsonSerializer.Deserialize<List<ErrorLogEntry>>(json);
             if (entries is not null)
             {
+                // Entries are persisted newest-first (AddEntry inserts at index 0).
+                // Trim to MaxEntries on load so a file written by an older build
+                // with a higher cap — or hand-edited — doesn't leave the in-memory
+                // cache permanently over budget until the next AddEntry trims it down.
+                if (entries.Count > MaxEntries)
+                {
+                    entries = entries.GetRange(0, MaxEntries);
+                }
+
                 lock (_lock)
                 {
                     _entries.Clear();

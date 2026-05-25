@@ -20,8 +20,6 @@ public class WebhookCollectionSettingsTests : IDisposable
         Directory.CreateDirectory(_tempDir);
     }
 
-    private string ConfigPath => Path.Combine(_tempDir, "webhooks.json");
-
     public void Dispose()
     {
         try
@@ -35,33 +33,6 @@ public class WebhookCollectionSettingsTests : IDisposable
         {
             // Best-effort cleanup in tests.
         }
-    }
-
-    private static PluginCollectionItem Item(
-        string name,
-        string url = "https://example.com/hook",
-        string method = "POST",
-        string headers = "",
-        string profiles = "",
-        string enabled = "true",
-        string? id = null
-    )
-    {
-        var values = new Dictionary<string, string?>
-        {
-            ["name"] = name,
-            ["url"] = url,
-            ["method"] = method,
-            ["headers"] = headers,
-            ["profiles"] = profiles,
-            ["enabled"] = enabled
-        };
-        if (id is not null)
-        {
-            values["__id"] = id;
-        }
-
-        return new PluginCollectionItem(values);
     }
 
     [Fact]
@@ -300,6 +271,35 @@ public class WebhookCollectionSettingsTests : IDisposable
         plugin.SetDataDirectory(_tempDir);
         var items = await plugin.GetItemsAsync("not-a-collection");
         Assert.Empty(items);
+    }
+
+    private string ConfigPath => Path.Combine(_tempDir, "webhooks.json");
+
+    private static PluginCollectionItem Item(
+        string name,
+        string url = "https://example.com/hook",
+        string method = "POST",
+        string headers = "",
+        string profiles = "",
+        string enabled = "true",
+        string? id = null
+    )
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["name"] = name,
+            ["url"] = url,
+            ["method"] = method,
+            ["headers"] = headers,
+            ["profiles"] = profiles,
+            ["enabled"] = enabled
+        };
+        if (id is not null)
+        {
+            values["__id"] = id;
+        }
+
+        return new PluginCollectionItem(values);
     }
 
     private static IPluginHostServices CreateHost(string dataDir)

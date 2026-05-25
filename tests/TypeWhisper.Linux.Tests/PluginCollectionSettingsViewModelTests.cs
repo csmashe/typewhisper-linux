@@ -39,22 +39,6 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         }
     }
 
-    // ---- Full PluginsSectionViewModel flow --------------------------------
-
-    private (
-        PluginsSectionViewModel Vm,
-        PluginRow Row,
-        FakeCollectionPlugin Plugin
-        ) CreateSectionWithCollectionPlugin()
-    {
-        var plugin = new FakeCollectionPlugin();
-        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, plugin.PluginId, plugin);
-        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
-        var vm = new PluginsSectionViewModel(manager);
-        var row = vm.PluginGroups.SelectMany(g => g.Plugins).Single(p => p.Id == plugin.PluginId);
-        return (vm, row, plugin);
-    }
-
     [Fact]
     public async Task ToggleExpanded_PopulatesCollectionsFromProvider()
     {
@@ -272,40 +256,6 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         Assert.Equal("false", field.Value);
     }
 
-    // ---- PluginCollectionRow / PluginCollectionItemRow direct tests -------
-
-    private static PluginCollectionDefinition ThingsDefinition()
-    {
-        return new PluginCollectionDefinition(
-            "things",
-            "Things",
-            "Some things.",
-            [
-                new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
-                new PluginSettingDefinition("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
-                new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text)
-            ],
-            "name",
-            "Add thing"
-        );
-    }
-
-    private static PluginCollectionRow CreateCollectionRow(params PluginCollectionItem[] items)
-    {
-        var ownerRow = new PluginRow(
-            null,
-            "p",
-            "P",
-            "1",
-            "",
-            "utility",
-            true,
-            true,
-            true
-        );
-        return new PluginCollectionRow(ThingsDefinition(), ownerRow, items);
-    }
-
     [Fact]
     public void CollectionRow_AddItem_GeneratesGuidId()
     {
@@ -390,6 +340,56 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         );
 
         Assert.Equal(knownId, collection.Items[0].HiddenId);
+    }
+
+    // ---- Full PluginsSectionViewModel flow --------------------------------
+
+    private (
+        PluginsSectionViewModel Vm,
+        PluginRow Row,
+        FakeCollectionPlugin Plugin
+        ) CreateSectionWithCollectionPlugin()
+    {
+        var plugin = new FakeCollectionPlugin();
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, plugin.PluginId, plugin);
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
+        var vm = new PluginsSectionViewModel(manager);
+        var row = vm.PluginGroups.SelectMany(g => g.Plugins).Single(p => p.Id == plugin.PluginId);
+        return (vm, row, plugin);
+    }
+
+    // ---- PluginCollectionRow / PluginCollectionItemRow direct tests -------
+
+    private static PluginCollectionDefinition ThingsDefinition()
+    {
+        return new PluginCollectionDefinition(
+            "things",
+            "Things",
+            "Some things.",
+            [
+                new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
+                new PluginSettingDefinition("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
+                new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text)
+            ],
+            "name",
+            "Add thing"
+        );
+    }
+
+    private static PluginCollectionRow CreateCollectionRow(params PluginCollectionItem[] items)
+    {
+        var ownerRow = new PluginRow(
+            null,
+            "p",
+            "P",
+            "1",
+            "",
+            "utility",
+            true,
+            true,
+            true
+        );
+        return new PluginCollectionRow(ThingsDefinition(), ownerRow, items);
     }
 
     /// <summary>

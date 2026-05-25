@@ -34,6 +34,18 @@ public partial class PromptPaletteWindow : Window
         return _resultSource.Task;
     }
 
+    /// <summary>
+    ///     Displays a status message and locks the UI while an action runs.
+    ///     Called by the host after picking an action if it needs to show progress.
+    /// </summary>
+    public void ShowStatus(string text)
+    {
+        StatusText.Text = text;
+        StatusBorder.IsVisible = true;
+        ActionListBox.IsEnabled = false;
+        SearchBox.IsEnabled = false;
+    }
+
     private void OnOpened(object? sender, EventArgs e)
     {
         if (!string.IsNullOrWhiteSpace(SourceText))
@@ -161,17 +173,5 @@ public partial class PromptPaletteWindow : Window
         }
 
         Close();
-    }
-
-    /// <summary>
-    ///     Displays a status message and locks the UI while an action runs.
-    ///     Called by the host after picking an action if it needs to show progress.
-    /// </summary>
-    public void ShowStatus(string text)
-    {
-        StatusText.Text = text;
-        StatusBorder.IsVisible = true;
-        ActionListBox.IsEnabled = false;
-        SearchBox.IsEnabled = false;
     }
 }

@@ -32,18 +32,6 @@ public class PluginHostServicesTests : IDisposable
         }
     }
 
-    private PluginHostServices CreateServices(Action? onCapabilitiesChanged = null)
-    {
-        return new PluginHostServices(
-            "test-plugin",
-            _tempDir,
-            _activeWindow.Object,
-            _eventBus.Object,
-            _profiles.Object,
-            onCapabilitiesChanged
-        );
-    }
-
     [Fact]
     public void NotifyCapabilitiesChanged_InvokesCallback()
     {
@@ -102,5 +90,17 @@ public class PluginHostServicesTests : IDisposable
     {
         var services = CreateServices();
         Assert.Empty(services.Localization.AvailableLanguages);
+    }
+
+    private PluginHostServices CreateServices(Action? onCapabilitiesChanged = null)
+    {
+        return new PluginHostServices(
+            "test-plugin",
+            _tempDir,
+            _activeWindow.Object,
+            _eventBus.Object,
+            _profiles.Object,
+            onCapabilitiesChanged
+        );
     }
 }

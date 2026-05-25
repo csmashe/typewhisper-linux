@@ -228,84 +228,6 @@ public sealed class BrowserAccessibilitySetupHelper
         }
     }
 
-    private static bool IsForceEnabledInProfile(string profileDir)
-    {
-        // Either user.js (our preferred override file) or Firefox's own
-        // prefs.js — whichever already has the right value satisfies us.
-        foreach (var name in new[] { "user.js", "prefs.js" })
-        {
-            var path = Path.Combine(profileDir, name);
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            try
-            {
-                var content = File.ReadAllText(path);
-                if (Regex.IsMatch(content, ForceDisabledNegOnePattern, RegexOptions.Multiline))
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                /* unreadable, skip */
-            }
-        }
-
-        return false;
-    }
-
-    private static IEnumerable<string> EnumerateFirefoxProfileDirs()
-    {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        // Cover every place a Firefox-family browser stores its profile:
-        //   - ~/.mozilla/firefox    legacy default
-        //   - ~/.config/mozilla     Fedora's XDG-compliant layout
-        //   - ~/snap/...            Snap-wrapped Firefox
-        //   - ~/.var/app/<id>/...   Flatpak-wrapped Firefox / Zen / LibreWolf
-        //   - ~/.zen, ~/.librewolf  native Zen / LibreWolf installs
-        // Zen and LibreWolf are Firefox forks that follow the same
-        // profile-dir conventions but use their own sandbox IDs and
-        // top-level dot-dirs. Missing any of these means our setup
-        // claims success while the user.js override never reaches the
-        // browser's actual profile.
-        var roots = new[]
-        {
-            Path.Combine(home, ".mozilla", "firefox"),
-            Path.Combine(home, ".config", "mozilla", "firefox"),
-            Path.Combine(home, "snap", "firefox", "common", ".mozilla", "firefox"),
-            Path.Combine(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
-            Path.Combine(home, ".var", "app", "app.zen_browser.zen", ".zen"),
-            Path.Combine(home, ".var", "app", "io.github.zen_browser.zen", ".zen"),
-            Path.Combine(home, ".zen"),
-            Path.Combine(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
-            Path.Combine(home, ".librewolf")
-        };
-        foreach (var root in roots)
-        {
-            if (!Directory.Exists(root))
-            {
-                continue;
-            }
-
-            foreach (var dir in Directory.EnumerateDirectories(root))
-            {
-                // A real profile directory has either prefs.js (after first
-                // run) or times.json (created on profile bootstrap). Filter
-                // out the Crash Reports / Pending Pings sibling dirs.
-                if (
-                    File.Exists(Path.Combine(dir, "prefs.js"))
-                    || File.Exists(Path.Combine(dir, "times.json"))
-                )
-                {
-                    yield return dir;
-                }
-            }
-        }
-    }
-
     public Task<SetupResult> SetUpAsync(CancellationToken ct)
     {
         try
@@ -563,6 +485,146 @@ public sealed class BrowserAccessibilitySetupHelper
         return actions;
     }
 
+    /// <summary>
+    ///     Prepends the Firefox-family env wrapper to every <c>Exec=</c>
+    ///     line in the .desktop content. Inlining the env vars on the
+    ///     launcher means accessibility takes effect on every menu launch
+    ///     without depending on systemd-user reading
+    ///     <c>~/.config/environment.d/</c> — which can silently fail to
+    ///     happen across logouts on some session managers.
+    /// </summary>
+    internal static string PrependEnvWrapperToExecLines(string content)
+    {
+        var lines = content.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (!line.StartsWith("Exec=", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (line.Contains("MOZ_ENABLE_ACCESSIBILITY=", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            const int prefixEnd = 5; // "Exec=".Length
+            lines[i] = "Exec=" + FirefoxEnvWrapper + " " + line[prefixEnd..];
+        }
+
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    ///     Inserts <paramref name="flag" /> into an <c>Exec=</c> line at the
+    ///     position the browser actually receives it.
+    ///     Naively inserting after the first token breaks Flatpak launchers
+    ///     (<c>Exec=/usr/bin/flatpak run org.chromium.Chromium %U</c>) and
+    ///     env-wrappers (<c>Exec=env VAR=x /usr/bin/chrome %U</c>) — in those
+    ///     cases the wrapper would consume or reject the flag. Anchoring on the
+    ///     XDG field-code (<c>%U</c>, <c>%F</c>, ...) or Flatpak escape marker
+    ///     (<c>@@</c>) puts the flag in the browser's argument position for
+    ///     both wrapped and unwrapped launchers. Falls back to appending when
+    ///     the Exec line has no field codes (rare).
+    /// </summary>
+    internal static string InsertChromiumFlag(string execLine, string flag)
+    {
+        const int prefixEnd = 5; // "Exec=".Length
+        var tailStart = FindFieldCodeOrFlatpakEscape(execLine, prefixEnd);
+
+        if (tailStart < 0)
+        {
+            return execLine.TrimEnd() + " " + flag;
+        }
+
+        var leftEnd = tailStart;
+        while (leftEnd > prefixEnd && execLine[leftEnd - 1] == ' ')
+        {
+            leftEnd--;
+        }
+
+        return execLine[..leftEnd] + " " + flag + " " + execLine[tailStart..];
+    }
+
+    private static bool IsForceEnabledInProfile(string profileDir)
+    {
+        // Either user.js (our preferred override file) or Firefox's own
+        // prefs.js — whichever already has the right value satisfies us.
+        foreach (var name in new[] { "user.js", "prefs.js" })
+        {
+            var path = Path.Combine(profileDir, name);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                var content = File.ReadAllText(path);
+                if (Regex.IsMatch(content, ForceDisabledNegOnePattern, RegexOptions.Multiline))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                /* unreadable, skip */
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> EnumerateFirefoxProfileDirs()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        // Cover every place a Firefox-family browser stores its profile:
+        //   - ~/.mozilla/firefox    legacy default
+        //   - ~/.config/mozilla     Fedora's XDG-compliant layout
+        //   - ~/snap/...            Snap-wrapped Firefox
+        //   - ~/.var/app/<id>/...   Flatpak-wrapped Firefox / Zen / LibreWolf
+        //   - ~/.zen, ~/.librewolf  native Zen / LibreWolf installs
+        // Zen and LibreWolf are Firefox forks that follow the same
+        // profile-dir conventions but use their own sandbox IDs and
+        // top-level dot-dirs. Missing any of these means our setup
+        // claims success while the user.js override never reaches the
+        // browser's actual profile.
+        var roots = new[]
+        {
+            Path.Combine(home, ".mozilla", "firefox"),
+            Path.Combine(home, ".config", "mozilla", "firefox"),
+            Path.Combine(home, "snap", "firefox", "common", ".mozilla", "firefox"),
+            Path.Combine(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
+            Path.Combine(home, ".var", "app", "app.zen_browser.zen", ".zen"),
+            Path.Combine(home, ".var", "app", "io.github.zen_browser.zen", ".zen"),
+            Path.Combine(home, ".zen"),
+            Path.Combine(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
+            Path.Combine(home, ".librewolf")
+        };
+        foreach (var root in roots)
+        {
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            foreach (var dir in Directory.EnumerateDirectories(root))
+            {
+                // A real profile directory has either prefs.js (after first
+                // run) or times.json (created on profile bootstrap). Filter
+                // out the Crash Reports / Pending Pings sibling dirs.
+                if (
+                    File.Exists(Path.Combine(dir, "prefs.js"))
+                    || File.Exists(Path.Combine(dir, "times.json"))
+                )
+                {
+                    yield return dir;
+                }
+            }
+        }
+    }
+
     private static IEnumerable<string> EnumerateOwnedLauncherPaths()
     {
         var dir = UserApplicationsDir();
@@ -779,68 +841,6 @@ public sealed class BrowserAccessibilitySetupHelper
         }
 
         return string.Join('\n', lines);
-    }
-
-    /// <summary>
-    ///     Prepends the Firefox-family env wrapper to every <c>Exec=</c>
-    ///     line in the .desktop content. Inlining the env vars on the
-    ///     launcher means accessibility takes effect on every menu launch
-    ///     without depending on systemd-user reading
-    ///     <c>~/.config/environment.d/</c> — which can silently fail to
-    ///     happen across logouts on some session managers.
-    /// </summary>
-    internal static string PrependEnvWrapperToExecLines(string content)
-    {
-        var lines = content.Split('\n');
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i];
-            if (!line.StartsWith("Exec=", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (line.Contains("MOZ_ENABLE_ACCESSIBILITY=", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            const int prefixEnd = 5; // "Exec=".Length
-            lines[i] = "Exec=" + FirefoxEnvWrapper + " " + line[prefixEnd..];
-        }
-
-        return string.Join('\n', lines);
-    }
-
-    /// <summary>
-    ///     Inserts <paramref name="flag" /> into an <c>Exec=</c> line at the
-    ///     position the browser actually receives it.
-    ///     Naively inserting after the first token breaks Flatpak launchers
-    ///     (<c>Exec=/usr/bin/flatpak run org.chromium.Chromium %U</c>) and
-    ///     env-wrappers (<c>Exec=env VAR=x /usr/bin/chrome %U</c>) — in those
-    ///     cases the wrapper would consume or reject the flag. Anchoring on the
-    ///     XDG field-code (<c>%U</c>, <c>%F</c>, ...) or Flatpak escape marker
-    ///     (<c>@@</c>) puts the flag in the browser's argument position for
-    ///     both wrapped and unwrapped launchers. Falls back to appending when
-    ///     the Exec line has no field codes (rare).
-    /// </summary>
-    internal static string InsertChromiumFlag(string execLine, string flag)
-    {
-        const int prefixEnd = 5; // "Exec=".Length
-        var tailStart = FindFieldCodeOrFlatpakEscape(execLine, prefixEnd);
-
-        if (tailStart < 0)
-        {
-            return execLine.TrimEnd() + " " + flag;
-        }
-
-        var leftEnd = tailStart;
-        while (leftEnd > prefixEnd && execLine[leftEnd - 1] == ' ')
-        {
-            leftEnd--;
-        }
-
-        return execLine[..leftEnd] + " " + flag + " " + execLine[tailStart..];
     }
 
     private static int FindFieldCodeOrFlatpakEscape(string line, int searchStart)

@@ -160,7 +160,13 @@ public sealed class SettingsService : ISettingsService
                 > 0 => settings with
                 {
                     HistoryRetentionMode = HistoryRetentionMode.Duration,
-                    HistoryRetentionMinutes = legacyDays.Value * 24 * 60
+                    // Widen to long for the multiplication so a pathologically large
+                    // legacy value (anything past ~1.5M days) doesn't overflow int and
+                    // wrap to a negative retention.
+                    HistoryRetentionMinutes = (int)Math.Min(
+                        (long)legacyDays.Value * 24 * 60,
+                        int.MaxValue
+                    )
                 },
                 _ => settings with
                 {

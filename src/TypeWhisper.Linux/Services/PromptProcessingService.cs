@@ -55,7 +55,7 @@ public sealed class PromptProcessingService
 
         return await provider.ProcessAsync(
             systemPrompt,
-            FrameInputAsData(inputText),
+            FormatPromptActionInput(inputText),
             modelId,
             ct
         );
@@ -75,15 +75,10 @@ public sealed class PromptProcessingService
 
         return await provider.ProcessAsync(
             systemPrompt,
-            FrameInputAsData(inputText),
+            FormatPromptActionInput(inputText),
             modelId,
             ct
         );
-    }
-
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
-    {
-        return ResolveProvider(action.ProviderOverride);
     }
 
     // Frames user-dictated/selected text as inert data before it reaches the LLM.
@@ -91,7 +86,7 @@ public sealed class PromptProcessingService
     // instruction telling the model to treat that value as source data, not as
     // commands — so an embedded "ignore previous instructions" phrase is processed,
     // not obeyed. JSON escaping also neutralizes embedded quotes and newlines.
-    internal static string FrameInputAsData(string inputText)
+    internal static string FormatPromptActionInput(string inputText)
     {
         var payload = JsonSerializer.Serialize(
             new Dictionary<string, string> { ["dictated_text"] = inputText }
@@ -102,6 +97,11 @@ public sealed class PromptProcessingService
 
                 {payload}
                 """;
+    }
+
+    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
+    {
+        return ResolveProvider(action.ProviderOverride);
     }
 
     private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(string? providerOverride)

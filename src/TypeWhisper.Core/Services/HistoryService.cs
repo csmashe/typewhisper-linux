@@ -14,7 +14,14 @@ public sealed class HistoryService : IHistoryService
     private readonly object _gate = new();
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private List<TranscriptionRecord> _cache = [];
+
     private bool _cacheLoaded;
+
+    // Set when the on-disk history file existed but couldn't be read.
+    // SaveToDisk refuses to write while this is set so a transient read error
+    // doesn't cause the next AddRecord call to replace the user's history
+    // with a one-entry file.
+    private bool _cacheLoadFailed;
     private List<string> _distinctApps = [];
     private double _totalDuration;
 
@@ -91,8 +98,13 @@ public sealed class HistoryService : IHistoryService
         EnsureCacheLoaded();
         lock (_gate)
         {
-            _cache.Insert(0, record);
+            // Stage on a copy and persist before mutating _cache/stats so a save
+            // failure can't leave the in-memory state ahead of disk.
+            var newCache = new List<TranscriptionRecord>(_cache.Count + 1) { record };
+            newCache.AddRange(_cache);
+            SaveToDisk(newCache);
 
+            _cache = newCache;
             _totalRecords++;
             _totalWords += record.WordCount;
             _totalDuration += record.DurationSeconds;
@@ -104,8 +116,6 @@ public sealed class HistoryService : IHistoryService
                 _distinctApps.Add(record.AppProcessName);
                 _distinctApps.Sort(StringComparer.OrdinalIgnoreCase);
             }
-
-            SaveToDisk(_cache.ToList());
         }
 
         RecordsChanged?.Invoke();
@@ -124,9 +134,12 @@ public sealed class HistoryService : IHistoryService
 
             var old = _cache[idx];
             var updated = old with { FinalText = finalText };
-            _cache[idx] = updated;
+            var newCache = new List<TranscriptionRecord>(_cache);
+            newCache[idx] = updated;
+            SaveToDisk(newCache);
+
+            _cache = newCache;
             _totalWords += updated.WordCount - old.WordCount;
-            SaveToDisk(_cache.ToList());
         }
 
         RecordsChanged?.Invoke();
@@ -146,9 +159,14 @@ public sealed class HistoryService : IHistoryService
                 return;
             }
 
-            _cache[idx] = _cache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
+            var newCache = new List<TranscriptionRecord>(_cache);
+            newCache[idx] = newCache[idx] with
+            {
+                PendingCorrectionSuggestions = suggestions.ToList()
+            };
+            SaveToDisk(newCache);
 
-            SaveToDisk(_cache.ToList());
+            _cache = newCache;
         }
 
         RecordsChanged?.Invoke();
@@ -157,7 +175,7 @@ public sealed class HistoryService : IHistoryService
     public void DeleteRecord(string id)
     {
         EnsureCacheLoaded();
-        string? removedAudioFileName = null;
+        string? removedAudioFileName;
         lock (_gate)
         {
             var idx = _cache.FindIndex(r => r.Id == id);
@@ -167,14 +185,17 @@ public sealed class HistoryService : IHistoryService
             }
 
             var removed = _cache[idx];
-            _cache.RemoveAt(idx);
+            var newCache = new List<TranscriptionRecord>(_cache);
+            newCache.RemoveAt(idx);
+            SaveToDisk(newCache);
+
+            _cache = newCache;
             _totalRecords--;
             _totalWords -= removed.WordCount;
             _totalDuration -= removed.DurationSeconds;
             removedAudioFileName = removed.AudioFileName;
 
             RebuildDistinctApps();
-            SaveToDisk(_cache.ToList());
         }
 
         DeleteAudioFile(removedAudioFileName);
@@ -187,13 +208,18 @@ public sealed class HistoryService : IHistoryService
         List<string?> audioFiles;
         lock (_gate)
         {
+            // Collect audio file names from current cache, then persist the
+            // empty list. Only commit the in-memory clear if save succeeds —
+            // otherwise the file deletes below would orphan records that are
+            // still in history.json.
             audioFiles = _cache.Select(r => r.AudioFileName).ToList();
+            SaveToDisk([]);
+
             _cache.Clear();
             _totalRecords = 0;
             _totalWords = 0;
             _totalDuration = 0;
             _distinctApps.Clear();
-            SaveToDisk([]);
         }
 
         DeleteAudioFiles(audioFiles);
@@ -230,7 +256,6 @@ public sealed class HistoryService : IHistoryService
         EnsureCacheLoaded();
         var cutoff = DateTime.UtcNow - retention.Value;
         List<string?> removedAudioFiles;
-        List<TranscriptionRecord> snapshot;
 
         lock (_gate)
         {
@@ -244,10 +269,11 @@ public sealed class HistoryService : IHistoryService
                 return;
             }
 
-            _cache = _cache.Where(r => r.CreatedAt >= cutoff).ToList();
+            var newCache = _cache.Where(r => r.CreatedAt >= cutoff).ToList();
+            SaveToDisk(newCache);
+
+            _cache = newCache;
             RebuildStats();
-            snapshot = _cache.ToList();
-            SaveToDisk(snapshot);
         }
 
         DeleteAudioFiles(removedAudioFiles);
@@ -425,7 +451,12 @@ public sealed class HistoryService : IHistoryService
         }
         catch (Exception ex)
         {
+            // File exists but is unreadable (transient IO / permission). Set
+            // _cacheLoadFailed so SaveToDisk refuses to overwrite — otherwise
+            // the next AddRecord would replace the user's whole history with
+            // a single record.
             Trace.WriteLine($"[HistoryService] Failed to read history from '{_filePath}': {ex}");
+            _cacheLoadFailed = true;
             return [];
         }
 
@@ -443,24 +474,27 @@ public sealed class HistoryService : IHistoryService
 
     private void SaveToDisk(IReadOnlyList<TranscriptionRecord> records)
     {
-        try
+        if (_cacheLoadFailed)
         {
-            var dir = Path.GetDirectoryName(_filePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            var json = JsonSerializer.Serialize(
-                records,
-                new JsonSerializerOptions { WriteIndented = true }
+            Trace.WriteLine(
+                $"[HistoryService] Skipping save to '{_filePath}': previous load failed and overwriting would discard existing data."
             );
-            File.WriteAllText(_filePath, json);
+            throw new IOException(
+                $"Refusing to overwrite '{_filePath}' because the previous load failed."
+            );
         }
-        catch (Exception ex)
+
+        var dir = Path.GetDirectoryName(_filePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
-            Trace.WriteLine($"[HistoryService] Failed to save history to '{_filePath}': {ex}");
+            Directory.CreateDirectory(dir);
         }
+
+        var json = JsonSerializer.Serialize(
+            records,
+            new JsonSerializerOptions { WriteIndented = true }
+        );
+        File.WriteAllText(_filePath, json);
     }
 
     private static string CsvEscape(string value)
@@ -528,10 +562,33 @@ public sealed class HistoryService : IHistoryService
 
         try
         {
-            var path = Path.Combine(_audioDirectory, audioFileName);
-            if (File.Exists(path))
+            // Producers (DictationOrchestrator) write Path.GetFileName(...) so
+            // this is normally just a bare filename. But history.json can be
+            // hand-edited, so treat audioFileName as untrusted: strip any
+            // directory components and confirm the resolved path stays inside
+            // _audioDirectory before deleting.
+            var safeName = Path.GetFileName(audioFileName);
+            if (string.IsNullOrEmpty(safeName) || Path.IsPathRooted(audioFileName))
             {
-                File.Delete(path);
+                return;
+            }
+
+            var directoryRoot = Path.GetFullPath(_audioDirectory);
+            var separator = Path.DirectorySeparatorChar;
+            if (!directoryRoot.EndsWith(separator))
+            {
+                directoryRoot += separator;
+            }
+
+            var candidate = Path.GetFullPath(Path.Combine(_audioDirectory, safeName));
+            if (!candidate.StartsWith(directoryRoot, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (File.Exists(candidate))
+            {
+                File.Delete(candidate);
             }
         }
         catch { }

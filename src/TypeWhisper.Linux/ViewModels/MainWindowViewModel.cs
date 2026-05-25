@@ -110,28 +110,6 @@ public partial class MainWindowViewModel : ObservableObject
     public string AppTitle => "TypeWhisper";
     public string VersionLabel => About.Version == "dev" ? "dev" : $"v{About.Version}";
 
-    partial void OnSelectedItemChanged(NavItem? value)
-    {
-        foreach (var item in NavItems)
-        {
-            item.IsSelected = item == value;
-        }
-
-        if (value is { IsHeader: false, Content: not null })
-        {
-            CurrentSection = value.Content;
-        }
-    }
-
-    [RelayCommand]
-    private void NavigateToItem(NavItem? item)
-    {
-        if (item is { IsHeader: false })
-        {
-            SelectedItem = item;
-        }
-    }
-
     public void Navigate<TSection>()
         where TSection : class
     {
@@ -159,6 +137,28 @@ public partial class MainWindowViewModel : ObservableObject
         else
         {
             wizard.Show();
+        }
+    }
+
+    partial void OnSelectedItemChanged(NavItem? value)
+    {
+        foreach (var item in NavItems)
+        {
+            item.IsSelected = item == value;
+        }
+
+        if (value is { IsHeader: false, Content: not null })
+        {
+            CurrentSection = value.Content;
+        }
+    }
+
+    [RelayCommand]
+    private void NavigateToItem(NavItem? item)
+    {
+        if (item is { IsHeader: false })
+        {
+            SelectedItem = item;
         }
     }
 }

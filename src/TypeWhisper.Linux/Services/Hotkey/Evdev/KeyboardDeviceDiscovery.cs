@@ -72,6 +72,31 @@ internal static class KeyboardDeviceDiscovery
     }
 
     /// <summary>
+    ///     True when the EV_KEY capability bitmap declares the representative
+    ///     typing keys — the signal that the device is a keyboard (physical or
+    ///     virtual) rather than a button, switch, lid sensor or mouse.
+    /// </summary>
+    internal static bool LooksLikeKeyboard(ReadOnlySpan<byte> evKeyBits)
+    {
+        return IsBitSet(evKeyBits, KeyEnter)
+               && IsBitSet(evKeyBits, KeyA)
+               && IsBitSet(evKeyBits, KeyZ)
+               && IsBitSet(evKeyBits, KeySpace);
+    }
+
+    /// <summary>
+    ///     True for TypeWhisper's own ydotool injection device. Its synthetic
+    ///     keystrokes (including Ctrl+V paste chords) must not be watched:
+    ///     <see cref="EvdevGlobalShortcutBackend" /> aggregates modifier state
+    ///     globally, so our own output could otherwise form phantom hotkey
+    ///     chords with a real keypress on the physical keyboard.
+    /// </summary>
+    internal static bool IsExcludedByName(string deviceName)
+    {
+        return deviceName.Contains("ydotoold", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     ///     Opens <paramref name="node" /> and probes it: keep it when it is
     ///     keyboard-capable and not TypeWhisper's own ydotool output device. A
     ///     node we can't open (permissions, already removed) is treated as
@@ -110,31 +135,6 @@ internal static class KeyboardDeviceDiscovery
             Trace.WriteLine($"[KeyboardDeviceDiscovery] Probe {node} skipped: {ex.Message}");
             return false;
         }
-    }
-
-    /// <summary>
-    ///     True when the EV_KEY capability bitmap declares the representative
-    ///     typing keys — the signal that the device is a keyboard (physical or
-    ///     virtual) rather than a button, switch, lid sensor or mouse.
-    /// </summary>
-    internal static bool LooksLikeKeyboard(ReadOnlySpan<byte> evKeyBits)
-    {
-        return IsBitSet(evKeyBits, KeyEnter)
-               && IsBitSet(evKeyBits, KeyA)
-               && IsBitSet(evKeyBits, KeyZ)
-               && IsBitSet(evKeyBits, KeySpace);
-    }
-
-    /// <summary>
-    ///     True for TypeWhisper's own ydotool injection device. Its synthetic
-    ///     keystrokes (including Ctrl+V paste chords) must not be watched:
-    ///     <see cref="EvdevGlobalShortcutBackend" /> aggregates modifier state
-    ///     globally, so our own output could otherwise form phantom hotkey
-    ///     chords with a real keypress on the physical keyboard.
-    /// </summary>
-    internal static bool IsExcludedByName(string deviceName)
-    {
-        return deviceName.Contains("ydotoold", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsBitSet(ReadOnlySpan<byte> bits, int bit)

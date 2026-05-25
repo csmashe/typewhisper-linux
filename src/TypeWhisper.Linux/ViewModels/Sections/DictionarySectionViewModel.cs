@@ -120,6 +120,16 @@ public partial class DictionarySectionViewModel : ObservableObject
         }
     }
 
+    public string ExportToCsv()
+    {
+        return _dict.ExportToCsv();
+    }
+
+    public int ImportFromCsv(string csv)
+    {
+        return _dict.ImportFromCsv(csv);
+    }
+
     partial void OnSelectedTabChanged(int value)
     {
         OnPropertyChanged(nameof(IsAllTabSelected));
@@ -169,16 +179,6 @@ public partial class DictionarySectionViewModel : ObservableObject
     private void ClearSearch()
     {
         SearchText = "";
-    }
-
-    public string ExportToCsv()
-    {
-        return _dict.ExportToCsv();
-    }
-
-    public int ImportFromCsv(string csv)
-    {
-        return _dict.ImportFromCsv(csv);
     }
 
     [RelayCommand]

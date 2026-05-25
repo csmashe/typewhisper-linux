@@ -7,51 +7,6 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class ShortcutDispatcherTests
 {
-    private static GlobalShortcutSet Set(RecordingMode mode, bool cancelEnabled = false)
-    {
-        return new GlobalShortcutSet(
-            KeyCode.VcSpace,
-            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-            KeyCode.VcP,
-            ModifierMask.LeftCtrl,
-            null,
-            ModifierMask.None,
-            null,
-            ModifierMask.None,
-            null,
-            ModifierMask.None,
-            KeyCode.VcEscape,
-            ModifierMask.None,
-            mode,
-            cancelEnabled
-        );
-    }
-
-    private static GlobalShortcutSet SetWithPromptAction(
-        string actionId,
-        KeyCode key,
-        ModifierMask mods
-    )
-    {
-        return new GlobalShortcutSet(
-            KeyCode.VcSpace,
-            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-            null,
-            ModifierMask.None,
-            null,
-            ModifierMask.None,
-            null,
-            ModifierMask.None,
-            null,
-            ModifierMask.None,
-            KeyCode.VcEscape,
-            ModifierMask.None,
-            RecordingMode.Toggle,
-            false,
-            new[] { new PromptActionHotkey(actionId, key, mods) }
-        );
-    }
-
     [Fact]
     public void PromptActionPress_FiresPromptActionRequestedWithId()
     {
@@ -230,5 +185,50 @@ public sealed class ShortcutDispatcherTests
         d.Handle(KeyCode.VcP, ModifierMask.LeftCtrl, true);
 
         Assert.Equal(1, palette);
+    }
+
+    private static GlobalShortcutSet Set(RecordingMode mode, bool cancelEnabled = false)
+    {
+        return new GlobalShortcutSet(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            KeyCode.VcP,
+            ModifierMask.LeftCtrl,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            mode,
+            cancelEnabled
+        );
+    }
+
+    private static GlobalShortcutSet SetWithPromptAction(
+        string actionId,
+        KeyCode key,
+        ModifierMask mods
+    )
+    {
+        return new GlobalShortcutSet(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            RecordingMode.Toggle,
+            false,
+            new[] { new PromptActionHotkey(actionId, key, mods) }
+        );
     }
 }

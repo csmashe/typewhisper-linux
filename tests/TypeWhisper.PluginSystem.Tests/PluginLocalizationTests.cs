@@ -27,12 +27,6 @@ public class PluginLocalizationTests : IDisposable
         }
     }
 
-    private void WriteLocale(string lang, Dictionary<string, string> strings)
-    {
-        var json = JsonSerializer.Serialize(strings);
-        File.WriteAllText(Path.Combine(_locDir, $"{lang}.json"), json);
-    }
-
     [Fact]
     public void GetString_ReturnsKeyWhenNoLocalizationFolder()
     {
@@ -148,5 +142,11 @@ public class PluginLocalizationTests : IDisposable
         Assert.DoesNotContain("bad", loc.AvailableLanguages);
         Assert.Contains("en", loc.AvailableLanguages);
         Assert.Equal("OK", loc.GetString("ok"));
+    }
+
+    private void WriteLocale(string lang, Dictionary<string, string> strings)
+    {
+        var json = JsonSerializer.Serialize(strings);
+        File.WriteAllText(Path.Combine(_locDir, $"{lang}.json"), json);
     }
 }

@@ -258,42 +258,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private async Task DownloadAndLoadModelCoreAsync(
-        string modelId,
-        CancellationToken cancellationToken
-    )
-    {
-        if (!IsPluginModel(modelId))
-        {
-            throw new ArgumentException($"Unknown model: {modelId}");
-        }
-
-        var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
-        var plugin =
-            PluginManager.TranscriptionEngines.FirstOrDefault(e => e.PluginId == pluginId)
-            ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
-
-        try
-        {
-            if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
-            {
-                SetStatus(modelId, ModelStatus.DownloadingModel(0));
-
-                var progress = new Progress<double>(p =>
-                    SetStatus(modelId, ModelStatus.DownloadingModel(p))
-                );
-                await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
-            }
-
-            await LoadModelCoreAsync(modelId, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            SetStatus(modelId, ModelStatus.Failed(ex.Message));
-            throw;
-        }
-    }
-
     public async Task LoadModelAsync(string modelId, CancellationToken cancellationToken = default)
     {
         await _modelLock.WaitAsync(cancellationToken);
@@ -304,95 +268,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         finally
         {
             _modelLock.Release();
-        }
-    }
-
-    private async Task LoadModelCoreAsync(string modelId, CancellationToken cancellationToken)
-    {
-        if (!IsPluginModel(modelId))
-        {
-            throw new ArgumentException($"Unknown model: {modelId}");
-        }
-
-        var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
-        var plugin =
-            PluginManager.TranscriptionEngines.FirstOrDefault(e => e.PluginId == pluginId)
-            ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
-
-        if (!plugin.IsConfigured && !plugin.SupportsModelDownload)
-        {
-            throw new InvalidOperationException(
-                $"{plugin.ProviderDisplayName}: not configured (missing API key or model)."
-            );
-        }
-
-        CancelAutoUnload();
-        SetStatus(modelId, ModelStatus.LoadingModel);
-        try
-        {
-            var requestedPreference = GetAccelerationPreference(
-                _settings.Current.LocalModelAcceleration
-            );
-            var pluginSupportsCuda = plugin.SupportedAccelerationBackends.Contains(
-                TranscriptionAccelerationBackend.NvidiaCuda
-            );
-
-            // For CPU-only plugins (SherpaOnnx, Granite), skip the preflight + hard-error
-            // path entirely. Their SetAccelerationPreference already handles a CUDA
-            // preference by warning and falling back to CPU, so running the preflight
-            // here would just throw on a CUDA-less host and block a perfectly valid
-            // CPU-only model load. Still resolve Auto → Cpu locally so plugins
-            // never see the unresolved Auto sentinel (SDK contract).
-            TranscriptionAccelerationPreference resolvedPreference;
-            if (pluginSupportsCuda)
-            {
-                resolvedPreference = ResolveAutoPreference(
-                    requestedPreference,
-                    () => CudaRuntimePreflight().Success
-                );
-            }
-            else
-            {
-                resolvedPreference =
-                    requestedPreference == TranscriptionAccelerationPreference.Auto
-                        ? TranscriptionAccelerationPreference.Cpu
-                        : requestedPreference;
-            }
-
-            if (
-                pluginSupportsCuda
-                && resolvedPreference == TranscriptionAccelerationPreference.NvidiaCuda
-            )
-            {
-                var (ok, message) = CudaRuntimePreflight();
-                if (!ok)
-                {
-                    // Explicit NvidiaCuda preserves the hard-error path so the user
-                    // knows when CUDA is broken; Auto already resolved to Cpu above
-                    // if CUDA wasn't visible, so this only fires for the explicit
-                    // case (and for Auto on systems where the preflight returns
-                    // success on the first call but fails on the second — pathological,
-                    // surfaces the error rather than silently misloading).
-                    throw new InvalidOperationException(message);
-                }
-            }
-
-            plugin.SetAccelerationPreference(resolvedPreference);
-
-            if (plugin.SupportsModelDownload)
-            {
-                await plugin.LoadModelAsync(pluginModelId, cancellationToken);
-            }
-
-            plugin.SelectModel(pluginModelId);
-            SetStatus(modelId, ModelStatus.Ready);
-            ActiveModelId = modelId;
-            _activeModelAccelerationPreference = requestedPreference;
-        }
-        catch (Exception ex)
-        {
-            SetStatus(modelId, ModelStatus.Failed(ex.Message));
-            throw;
         }
     }
 
@@ -419,45 +294,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private async Task UnloadModelCoreAsync()
-    {
-        CancelAutoUnload();
-        if (ActiveModelId is not { } modelId)
-        {
-            return;
-        }
-
-        // Await the native teardown before releasing _modelLock so a queued
-        // load/acquire/delete cannot enter the exclusive section while the
-        // plugin's native model is still being disposed.
-        var plugin = ActiveTranscriptionPlugin;
-        if (plugin is not null)
-        {
-            try
-            {
-                await plugin.UnloadModelAsync();
-            }
-            catch (Exception ex)
-            {
-                // Teardown failed: the native model may still be loaded. Leave
-                // ActiveModelId and the tracked status untouched so we neither
-                // misreport availability nor lose the active model a retry
-                // would target.
-                Debug.WriteLine($"UnloadModelAsync failed: {ex.Message}");
-                return;
-            }
-        }
-
-        // Unload succeeded. The model is no longer loaded but, for
-        // download-capable plugins, still on disk — so drop the tracked
-        // override and let GetStatus recompute real availability rather than
-        // pinning NotDownloaded on a model that is merely unloaded.
-        _modelStatuses.Remove(modelId);
-        OnPropertyChanged(nameof(GetStatus));
-        ActiveModelId = null;
-        _activeModelAccelerationPreference = null;
-    }
-
     public void ScheduleAutoUnload()
     {
         CancelAutoUnload();
@@ -475,13 +311,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             UnloadModel();
         };
         _autoUnloadTimer.Start();
-    }
-
-    private void CancelAutoUnload()
-    {
-        _autoUnloadTimer?.Stop();
-        _autoUnloadTimer?.Dispose();
-        _autoUnloadTimer = null;
     }
 
     public bool CanDeleteModel(string modelId)
@@ -515,36 +344,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private async Task DeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
-    {
-        if (ActiveModelId == modelId)
-        {
-            var plugin = ActiveTranscriptionPlugin;
-            if (plugin is not null)
-            {
-                await plugin.UnloadModelAsync();
-            }
-
-            ActiveModelId = null;
-            _activeModelAccelerationPreference = null;
-        }
-
-        if (IsPluginModel(modelId))
-        {
-            var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
-            var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
-                e.PluginId == pluginId
-            );
-
-            if (plugin is { SupportsModelDownload: true })
-            {
-                await plugin.DeleteModelAsync(pluginModelId, cancellationToken);
-            }
-        }
-
-        SetStatus(modelId, ModelStatus.NotDownloaded);
-    }
-
     public void DeleteModel(string modelId)
     {
         _ = DeleteModelAsync(modelId);
@@ -564,42 +363,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             _modelLock.Release();
         }
-    }
-
-    private async Task<bool> EnsureModelLoadedCoreAsync(
-        string? modelId,
-        CancellationToken cancellationToken
-    )
-    {
-        var targetModelId = modelId ?? _settings.Current.SelectedModelId;
-        if (string.IsNullOrWhiteSpace(targetModelId))
-        {
-            return false;
-        }
-
-        var targetPreference = GetAccelerationPreference(
-            _settings.Current.LocalModelAcceleration
-        );
-
-        if (
-            ActiveModelId == targetModelId
-            && _activeModelAccelerationPreference == targetPreference
-        )
-        {
-            CancelAutoUnload();
-            return true;
-        }
-
-        if (!IsDownloaded(targetModelId))
-        {
-            await DownloadAndLoadModelCoreAsync(targetModelId, cancellationToken);
-        }
-        else
-        {
-            await LoadModelCoreAsync(targetModelId, cancellationToken);
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -713,6 +476,243 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             ),
             _ => modelId
         };
+    }
+
+    private async Task DownloadAndLoadModelCoreAsync(
+        string modelId,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!IsPluginModel(modelId))
+        {
+            throw new ArgumentException($"Unknown model: {modelId}");
+        }
+
+        var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
+        var plugin =
+            PluginManager.TranscriptionEngines.FirstOrDefault(e => e.PluginId == pluginId)
+            ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
+
+        try
+        {
+            if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
+            {
+                SetStatus(modelId, ModelStatus.DownloadingModel(0));
+
+                var progress = new Progress<double>(p =>
+                    SetStatus(modelId, ModelStatus.DownloadingModel(p))
+                );
+                await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
+            }
+
+            await LoadModelCoreAsync(modelId, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            SetStatus(modelId, ModelStatus.Failed(ex.Message));
+            throw;
+        }
+    }
+
+    private async Task LoadModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
+        if (!IsPluginModel(modelId))
+        {
+            throw new ArgumentException($"Unknown model: {modelId}");
+        }
+
+        var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
+        var plugin =
+            PluginManager.TranscriptionEngines.FirstOrDefault(e => e.PluginId == pluginId)
+            ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
+
+        if (!plugin.IsConfigured && !plugin.SupportsModelDownload)
+        {
+            throw new InvalidOperationException(
+                $"{plugin.ProviderDisplayName}: not configured (missing API key or model)."
+            );
+        }
+
+        CancelAutoUnload();
+        SetStatus(modelId, ModelStatus.LoadingModel);
+        try
+        {
+            var requestedPreference = GetAccelerationPreference(
+                _settings.Current.LocalModelAcceleration
+            );
+            var pluginSupportsCuda = plugin.SupportedAccelerationBackends.Contains(
+                TranscriptionAccelerationBackend.NvidiaCuda
+            );
+
+            // For CPU-only plugins (SherpaOnnx), skip the preflight + hard-error path
+            // entirely. Their SetAccelerationPreference already handles a CUDA
+            // preference by warning and falling back to CPU, so running the preflight
+            // here would just throw on a CUDA-less host and block a perfectly valid
+            // CPU-only model load. Still resolve Auto → Cpu locally so plugins never
+            // see the unresolved Auto sentinel (SDK contract).
+            TranscriptionAccelerationPreference resolvedPreference;
+            if (pluginSupportsCuda)
+            {
+                resolvedPreference = ResolveAutoPreference(
+                    requestedPreference,
+                    () => CudaRuntimePreflight().Success
+                );
+            }
+            else
+            {
+                resolvedPreference =
+                    requestedPreference == TranscriptionAccelerationPreference.Auto
+                        ? TranscriptionAccelerationPreference.Cpu
+                        : requestedPreference;
+            }
+
+            if (
+                pluginSupportsCuda
+                && resolvedPreference == TranscriptionAccelerationPreference.NvidiaCuda
+            )
+            {
+                var (ok, message) = CudaRuntimePreflight();
+                if (!ok)
+                {
+                    // Explicit NvidiaCuda preserves the hard-error path so the user
+                    // knows when CUDA is broken; Auto already resolved to Cpu above
+                    // if CUDA wasn't visible, so this only fires for the explicit
+                    // case (and for Auto on systems where the preflight returns
+                    // success on the first call but fails on the second — pathological,
+                    // surfaces the error rather than silently misloading).
+                    throw new InvalidOperationException(message);
+                }
+            }
+
+            plugin.SetAccelerationPreference(resolvedPreference);
+
+            if (plugin.SupportsModelDownload)
+            {
+                await plugin.LoadModelAsync(pluginModelId, cancellationToken);
+            }
+
+            plugin.SelectModel(pluginModelId);
+            SetStatus(modelId, ModelStatus.Ready);
+            ActiveModelId = modelId;
+            _activeModelAccelerationPreference = requestedPreference;
+        }
+        catch (Exception ex)
+        {
+            SetStatus(modelId, ModelStatus.Failed(ex.Message));
+            throw;
+        }
+    }
+
+    private async Task UnloadModelCoreAsync()
+    {
+        CancelAutoUnload();
+        if (ActiveModelId is not { } modelId)
+        {
+            return;
+        }
+
+        // Await the native teardown before releasing _modelLock so a queued
+        // load/acquire/delete cannot enter the exclusive section while the
+        // plugin's native model is still being disposed.
+        var plugin = ActiveTranscriptionPlugin;
+        if (plugin is not null)
+        {
+            try
+            {
+                await plugin.UnloadModelAsync();
+            }
+            catch (Exception ex)
+            {
+                // Teardown failed: the native model may still be loaded. Leave
+                // ActiveModelId and the tracked status untouched so we neither
+                // misreport availability nor lose the active model a retry
+                // would target.
+                Debug.WriteLine($"UnloadModelAsync failed: {ex.Message}");
+                return;
+            }
+        }
+
+        // Unload succeeded. The model is no longer loaded but, for
+        // download-capable plugins, still on disk — so drop the tracked
+        // override and let GetStatus recompute real availability rather than
+        // pinning NotDownloaded on a model that is merely unloaded.
+        _modelStatuses.Remove(modelId);
+        OnPropertyChanged(nameof(GetStatus));
+        ActiveModelId = null;
+        _activeModelAccelerationPreference = null;
+    }
+
+    private void CancelAutoUnload()
+    {
+        _autoUnloadTimer?.Stop();
+        _autoUnloadTimer?.Dispose();
+        _autoUnloadTimer = null;
+    }
+
+    private async Task DeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
+        if (ActiveModelId == modelId)
+        {
+            var plugin = ActiveTranscriptionPlugin;
+            if (plugin is not null)
+            {
+                await plugin.UnloadModelAsync();
+            }
+
+            ActiveModelId = null;
+            _activeModelAccelerationPreference = null;
+        }
+
+        if (IsPluginModel(modelId))
+        {
+            var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
+            var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
+                e.PluginId == pluginId
+            );
+
+            if (plugin is { SupportsModelDownload: true })
+            {
+                await plugin.DeleteModelAsync(pluginModelId, cancellationToken);
+            }
+        }
+
+        SetStatus(modelId, ModelStatus.NotDownloaded);
+    }
+
+    private async Task<bool> EnsureModelLoadedCoreAsync(
+        string? modelId,
+        CancellationToken cancellationToken
+    )
+    {
+        var targetModelId = modelId ?? _settings.Current.SelectedModelId;
+        if (string.IsNullOrWhiteSpace(targetModelId))
+        {
+            return false;
+        }
+
+        var targetPreference = GetAccelerationPreference(
+            _settings.Current.LocalModelAcceleration
+        );
+
+        if (
+            ActiveModelId == targetModelId
+            && _activeModelAccelerationPreference == targetPreference
+        )
+        {
+            CancelAutoUnload();
+            return true;
+        }
+
+        if (!IsDownloaded(targetModelId))
+        {
+            await DownloadAndLoadModelCoreAsync(targetModelId, cancellationToken);
+        }
+        else
+        {
+            await LoadModelCoreAsync(targetModelId, cancellationToken);
+        }
+
+        return true;
     }
 
     private void SetStatus(string modelId, ModelStatus status)

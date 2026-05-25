@@ -190,17 +190,6 @@ public sealed class HotkeyService : IDisposable
         disposeTask.Wait(TimeSpan.FromSeconds(1));
     }
 
-    public event EventHandler? DictationToggleRequested;
-    public event EventHandler? DictationStartRequested;
-    public event EventHandler? DictationStopRequested;
-    public event EventHandler? PromptPaletteRequested;
-    public event EventHandler? RecentTranscriptionsRequested;
-    public event EventHandler? CopyLastTranscriptionRequested;
-    public event EventHandler? TransformSelectionRequested;
-    public event EventHandler? CancelRequested;
-    public event EventHandler<string>? PromptActionHotkeyTriggered;
-    public event EventHandler<string>? HookFailed;
-
     /// <summary>
     ///     Disposes the current backend and asks the selector to resolve a
     ///     fresh one — used when a setting that influences backend selection
@@ -240,12 +229,6 @@ public sealed class HotkeyService : IDisposable
         Initialize();
         OnPropertyChangedHook();
     }
-
-    /// <summary>
-    ///     Hook for derived/wrapping logic (e.g. unit-test instrumentation) to
-    ///     observe a backend switch. The base implementation is a no-op.
-    /// </summary>
-    private static void OnPropertyChangedHook() { }
 
     public void Initialize()
     {
@@ -289,75 +272,6 @@ public sealed class HotkeyService : IDisposable
         }
 
         PushShortcutsIfRunning();
-    }
-
-    private void UnsubscribeBackendHandlers(IGlobalShortcutBackend? backend)
-    {
-        if (backend is null)
-        {
-            return;
-        }
-
-        if (_onDictationToggleRequested is not null)
-        {
-            backend.DictationToggleRequested -= _onDictationToggleRequested;
-        }
-
-        if (_onDictationStartRequested is not null)
-        {
-            backend.DictationStartRequested -= _onDictationStartRequested;
-        }
-
-        if (_onDictationStopRequested is not null)
-        {
-            backend.DictationStopRequested -= _onDictationStopRequested;
-        }
-
-        if (_onPromptPaletteRequested is not null)
-        {
-            backend.PromptPaletteRequested -= _onPromptPaletteRequested;
-        }
-
-        if (_onRecentTranscriptionsRequested is not null)
-        {
-            backend.RecentTranscriptionsRequested -= _onRecentTranscriptionsRequested;
-        }
-
-        if (_onCopyLastTranscriptionRequested is not null)
-        {
-            backend.CopyLastTranscriptionRequested -= _onCopyLastTranscriptionRequested;
-        }
-
-        if (_onTransformSelectionRequested is not null)
-        {
-            backend.TransformSelectionRequested -= _onTransformSelectionRequested;
-        }
-
-        if (_onCancelRequested is not null)
-        {
-            backend.CancelRequested -= _onCancelRequested;
-        }
-
-        if (_onPromptActionRequested is not null)
-        {
-            backend.PromptActionRequested -= _onPromptActionRequested;
-        }
-
-        if (_onBackendFailed is not null)
-        {
-            backend.Failed -= _onBackendFailed;
-        }
-
-        _onDictationToggleRequested = null;
-        _onDictationStartRequested = null;
-        _onDictationStopRequested = null;
-        _onPromptPaletteRequested = null;
-        _onRecentTranscriptionsRequested = null;
-        _onCopyLastTranscriptionRequested = null;
-        _onTransformSelectionRequested = null;
-        _onCancelRequested = null;
-        _onPromptActionRequested = null;
-        _onBackendFailed = null;
     }
 
     public void SetHotkey(KeyCode key, ModifierMask modifiers)
@@ -539,6 +453,101 @@ public sealed class HotkeyService : IDisposable
         _transformSelectionModifiers = modifiers;
         PushShortcutsIfRunning();
         return true;
+    }
+
+    /// <summary>
+    ///     Compatibility shim for callers (notably tests) — forwards to
+    ///     <see cref="ShortcutMatcher.ModifiersMatch" />.
+    /// </summary>
+    internal static bool ModifiersMatch(ModifierMask pressed, ModifierMask required)
+    {
+        return ShortcutMatcher.ModifiersMatch(pressed, required);
+    }
+
+    public event EventHandler? DictationToggleRequested;
+    public event EventHandler? DictationStartRequested;
+    public event EventHandler? DictationStopRequested;
+    public event EventHandler? PromptPaletteRequested;
+    public event EventHandler? RecentTranscriptionsRequested;
+    public event EventHandler? CopyLastTranscriptionRequested;
+    public event EventHandler? TransformSelectionRequested;
+    public event EventHandler? CancelRequested;
+    public event EventHandler<string>? PromptActionHotkeyTriggered;
+    public event EventHandler<string>? HookFailed;
+
+    /// <summary>
+    ///     Hook for derived/wrapping logic (e.g. unit-test instrumentation) to
+    ///     observe a backend switch. The base implementation is a no-op.
+    /// </summary>
+    private static void OnPropertyChangedHook() { }
+
+    private void UnsubscribeBackendHandlers(IGlobalShortcutBackend? backend)
+    {
+        if (backend is null)
+        {
+            return;
+        }
+
+        if (_onDictationToggleRequested is not null)
+        {
+            backend.DictationToggleRequested -= _onDictationToggleRequested;
+        }
+
+        if (_onDictationStartRequested is not null)
+        {
+            backend.DictationStartRequested -= _onDictationStartRequested;
+        }
+
+        if (_onDictationStopRequested is not null)
+        {
+            backend.DictationStopRequested -= _onDictationStopRequested;
+        }
+
+        if (_onPromptPaletteRequested is not null)
+        {
+            backend.PromptPaletteRequested -= _onPromptPaletteRequested;
+        }
+
+        if (_onRecentTranscriptionsRequested is not null)
+        {
+            backend.RecentTranscriptionsRequested -= _onRecentTranscriptionsRequested;
+        }
+
+        if (_onCopyLastTranscriptionRequested is not null)
+        {
+            backend.CopyLastTranscriptionRequested -= _onCopyLastTranscriptionRequested;
+        }
+
+        if (_onTransformSelectionRequested is not null)
+        {
+            backend.TransformSelectionRequested -= _onTransformSelectionRequested;
+        }
+
+        if (_onCancelRequested is not null)
+        {
+            backend.CancelRequested -= _onCancelRequested;
+        }
+
+        if (_onPromptActionRequested is not null)
+        {
+            backend.PromptActionRequested -= _onPromptActionRequested;
+        }
+
+        if (_onBackendFailed is not null)
+        {
+            backend.Failed -= _onBackendFailed;
+        }
+
+        _onDictationToggleRequested = null;
+        _onDictationStartRequested = null;
+        _onDictationStopRequested = null;
+        _onPromptPaletteRequested = null;
+        _onRecentTranscriptionsRequested = null;
+        _onCopyLastTranscriptionRequested = null;
+        _onTransformSelectionRequested = null;
+        _onCancelRequested = null;
+        _onPromptActionRequested = null;
+        _onBackendFailed = null;
     }
 
     private GlobalShortcutSet BuildShortcutSet()
@@ -1045,15 +1054,6 @@ public sealed class HotkeyService : IDisposable
             _ => KeyCode.VcUndefined
         };
         return key != KeyCode.VcUndefined;
-    }
-
-    /// <summary>
-    ///     Compatibility shim for callers (notably tests) — forwards to
-    ///     <see cref="ShortcutMatcher.ModifiersMatch" />.
-    /// </summary>
-    internal static bool ModifiersMatch(ModifierMask pressed, ModifierMask required)
-    {
-        return ShortcutMatcher.ModifiersMatch(pressed, required);
     }
 
     private enum HotkeyBinding

@@ -91,6 +91,25 @@ internal static class SocketPathResolver
         return Path.Combine(fallback, SocketFileName);
     }
 
+    /// <summary>Best-effort <c>chmod</c>; logs on failure but never throws.</summary>
+    public static void TryChmod(string path, uint mode)
+    {
+        try
+        {
+            var rc = chmod(path, mode);
+            if (rc != 0)
+            {
+                Trace.WriteLine(
+                    $"[SocketPathResolver] chmod({path}, 0{Convert.ToString(mode, 8)}) returned {rc}."
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[SocketPathResolver] chmod({path}) threw: {ex.Message}");
+        }
+    }
+
     private static string CreatePrivateSocketPath(int uid)
     {
         var privatePath = Path.Combine(
@@ -206,25 +225,6 @@ internal static class SocketPathResolver
         {
             Trace.WriteLine($"[SocketPathResolver] Could not stat {path}: {ex.Message}");
             return false;
-        }
-    }
-
-    /// <summary>Best-effort <c>chmod</c>; logs on failure but never throws.</summary>
-    public static void TryChmod(string path, uint mode)
-    {
-        try
-        {
-            var rc = chmod(path, mode);
-            if (rc != 0)
-            {
-                Trace.WriteLine(
-                    $"[SocketPathResolver] chmod({path}, 0{Convert.ToString(mode, 8)}) returned {rc}."
-                );
-            }
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[SocketPathResolver] chmod({path}) threw: {ex.Message}");
         }
     }
 

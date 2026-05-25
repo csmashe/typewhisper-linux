@@ -32,6 +32,17 @@ public partial class RecentTranscriptionsPaletteWindow : Window
         KeyDown += OnKeyDown;
     }
 
+    public void RequestClose()
+    {
+        if (_isClosing)
+        {
+            return;
+        }
+
+        _isClosing = true;
+        Close();
+    }
+
     private void OnOpened(object? sender, EventArgs e)
     {
         SearchBox.Focus();
@@ -97,16 +108,5 @@ public partial class RecentTranscriptionsPaletteWindow : Window
         _isSelecting = true;
         RequestClose();
         _viewModel.Select(item);
-    }
-
-    public void RequestClose()
-    {
-        if (_isClosing)
-        {
-            return;
-        }
-
-        _isClosing = true;
-        Close();
     }
 }

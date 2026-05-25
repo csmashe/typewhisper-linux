@@ -376,6 +376,54 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
+    public void ActivatePreview()
+    {
+        _previewAttached = true;
+        if (!_audio.StartPreview() && Devices.Count > 0)
+        {
+            MicrophoneStatus = "Could not start live input preview for the selected microphone.";
+        }
+    }
+
+    public void DeactivatePreview()
+    {
+        _previewAttached = false;
+        _audio.StopPreview();
+        PreviewLevel = 0;
+    }
+
+    public async Task DeleteSelectedModelAsync()
+    {
+        var selected = SelectedModel;
+        if (selected is null || !CanDeleteSelectedModel)
+        {
+            return;
+        }
+
+        _modelSelectionCts?.Cancel();
+        StatusText = $"Deleting {selected.DisplayLabel}...";
+
+        try
+        {
+            await _models.DeleteModelAsync(selected.ModelId);
+            if (_settings.Current.SelectedModelId == selected.ModelId)
+            {
+                _settings.Save(_settings.Current with { SelectedModelId = null });
+            }
+
+            SelectedModel = null;
+            StatusText = $"{selected.DisplayLabel} was deleted from disk.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Model delete failed: {ex.Message}";
+        }
+        finally
+        {
+            RefreshModelState();
+        }
+    }
+
     [RelayCommand]
     private async Task Toggle()
     {
@@ -400,22 +448,6 @@ public partial class DictationSectionViewModel : ObservableObject
             Devices.Count == 0
                 ? "No input devices detected."
                 : $"{Devices.Count} input device(s) available.";
-    }
-
-    public void ActivatePreview()
-    {
-        _previewAttached = true;
-        if (!_audio.StartPreview() && Devices.Count > 0)
-        {
-            MicrophoneStatus = "Could not start live input preview for the selected microphone.";
-        }
-    }
-
-    public void DeactivatePreview()
-    {
-        _previewAttached = false;
-        _audio.StopPreview();
-        PreviewLevel = 0;
     }
 
     private void RefreshModels()
@@ -780,38 +812,6 @@ public partial class DictationSectionViewModel : ObservableObject
                    || message.Contains("libcublas.so.12", StringComparison.Ordinal)
                )
                && message.Contains("cannot open shared object file", StringComparison.OrdinalIgnoreCase);
-    }
-
-    public async Task DeleteSelectedModelAsync()
-    {
-        var selected = SelectedModel;
-        if (selected is null || !CanDeleteSelectedModel)
-        {
-            return;
-        }
-
-        _modelSelectionCts?.Cancel();
-        StatusText = $"Deleting {selected.DisplayLabel}...";
-
-        try
-        {
-            await _models.DeleteModelAsync(selected.ModelId);
-            if (_settings.Current.SelectedModelId == selected.ModelId)
-            {
-                _settings.Save(_settings.Current with { SelectedModelId = null });
-            }
-
-            SelectedModel = null;
-            StatusText = $"{selected.DisplayLabel} was deleted from disk.";
-        }
-        catch (Exception ex)
-        {
-            StatusText = $"Model delete failed: {ex.Message}";
-        }
-        finally
-        {
-            RefreshModelState();
-        }
     }
 
     partial void OnSelectedDeviceChanged(AudioInputDevice? value)

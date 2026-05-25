@@ -49,8 +49,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private LLamaWeights? _weights;
     private LLamaContext? _context;
     private string? _loadedModelId;
-    private Task? _autoLoadTask;
-    private CancellationTokenSource? _autoLoadCts;
+    private CancellationTokenSource? _startupCts;
+    private Task? _startupTask;
 
     public string PluginId => "com.typewhisper.gemma-local";
     public string PluginName => "Gemma 4 (Local)";
@@ -63,29 +63,29 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
 
         // Auto-load previously selected model in background (don't block app startup).
-        // Tracked via _autoLoadTask/_autoLoadCts so DeactivateAsync can cancel and
-        // await it instead of racing UnloadModel against an in-flight LoadModelAsync.
+        // Track the task + CTS so DeactivateAsync can cancel and await it instead of
+        // letting it race back to life and recreate _weights/_context after teardown.
         if (!string.IsNullOrEmpty(_selectedModelId) && IsModelDownloaded(_selectedModelId))
         {
             var modelId = _selectedModelId;
-            _autoLoadCts = new CancellationTokenSource();
-            var token = _autoLoadCts.Token;
-            _autoLoadTask = Task.Run(async () =>
+            _startupCts = new CancellationTokenSource();
+            var startupCt = _startupCts.Token;
+            _startupTask = Task.Run(async () =>
             {
                 try
                 {
-                    await LoadModelAsync(modelId, token);
+                    await LoadModelAsync(modelId, startupCt);
                     host.Log(PluginLogLevel.Info, $"Auto-loaded model: {modelId}");
                 }
-                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                catch (OperationCanceledException)
                 {
-                    // Plugin is being deactivated; don't log the cancellation as a failure.
+                    // Deactivated before startup load completed; nothing to log.
                 }
                 catch (Exception ex)
                 {
                     host.Log(PluginLogLevel.Warning, $"Failed to auto-load model: {ex.Message}");
                 }
-            }, token);
+            }, startupCt);
         }
 
         return Task.CompletedTask;
@@ -93,23 +93,35 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     public async Task DeactivateAsync()
     {
-        // Cancel and await the auto-load task before tearing down so it can't
-        // re-populate _context/_weights after we've unloaded them.
-        var autoLoadCts = _autoLoadCts;
-        var autoLoadTask = _autoLoadTask;
-        _autoLoadCts = null;
-        _autoLoadTask = null;
-        if (autoLoadCts is not null)
+        // Cancel and wait for the background startup task before tearing down
+        // _context/_weights, so it can't recreate them after we unload.
+        var startupCts = _startupCts;
+        var startupTask = _startupTask;
+        _startupCts = null;
+        _startupTask = null;
+
+        if (startupCts is not null)
         {
-            try { autoLoadCts.Cancel(); }
+            try
+            {
+                startupCts.Cancel();
+            }
             catch (ObjectDisposedException) { }
         }
-        if (autoLoadTask is not null)
+
+        if (startupTask is not null)
         {
-            try { await autoLoadTask.ConfigureAwait(false); }
-            catch { /* already surfaced via the task's own catch */ }
+            try
+            {
+                await startupTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // Startup-task exceptions are already logged via its own catch.
+            }
         }
-        autoLoadCts?.Dispose();
+
+        startupCts?.Dispose();
 
         // Acquire _inferenceLock so we can't dispose _context/_weights while
         // ProcessAsync is mid-inference. Mirrors the unload path in
@@ -326,33 +338,56 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
         var buffer = new byte[81920];
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        await using (
-            var fileStream = new FileStream(
-                filePath + ".tmp",
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.None,
-                81920,
-                true
-            )
-        )
+        var tempPath = filePath + ".tmp";
+        var completed = false;
+        try
         {
-            int read;
-            while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
+            await using (
+                var fileStream = new FileStream(
+                    tempPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    81920,
+                    true
+                )
+            )
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                bytesRead += read;
-
-                var now = DateTime.UtcNow;
-                if ((now - lastReport).TotalMilliseconds > 250)
+                int read;
+                while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
                 {
-                    progress?.Report((double)bytesRead / totalBytes);
-                    lastReport = now;
+                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                    bytesRead += read;
+
+                    var now = DateTime.UtcNow;
+                    if ((now - lastReport).TotalMilliseconds > 250)
+                    {
+                        progress?.Report((double)bytesRead / totalBytes);
+                        lastReport = now;
+                    }
+                }
+            }
+
+            File.Move(tempPath, filePath, overwrite: true);
+            completed = true;
+        }
+        finally
+        {
+            // A cancelled/failed download leaves a partial .tmp behind that
+            // confuses the next attempt (and wastes disk on multi-GB models).
+            if (!completed && File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // best effort
                 }
             }
         }
 
-        File.Move(filePath + ".tmp", filePath, overwrite: true);
         progress?.Report(1.0);
         Log(PluginLogLevel.Info, $"Download complete: {model.FileName}");
     }
@@ -373,8 +408,15 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 // The lock covers the full unload-then-load window so callers can't
                 // observe a torn state (e.g. _weights set but _context still old).
                 await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
+                var loaded = false;
                 try
                 {
+                    // If the user has switched models OR cleared the selection while we
+                    // were queued behind the lock, abort: a late finish here would
+                    // overwrite the newer state and load a model the user no longer wants.
+                    if (_selectedModelId != modelId)
+                        return;
+
                     UnloadModel();
 
                     var modelParams = new ModelParams(filePath)
@@ -386,17 +428,32 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
                     _weights = LLamaWeights.LoadFromFile(modelParams);
                     _context = _weights.CreateContext(modelParams);
+
+                    // The heavy load runs without the lock blocking SelectModel,
+                    // so the user can switch selections while we're loading. If
+                    // that happened, drop what we just loaded instead of letting
+                    // the late finish silently roll back their newer choice.
+                    if (_selectedModelId != modelId)
+                    {
+                        UnloadModel();
+                        return;
+                    }
+
                     _loadedModelId = modelId;
                     _selectedModelId = modelId;
                     _host?.SetSetting("selectedModel", modelId);
+                    loaded = true;
                 }
                 finally
                 {
                     _inferenceLock.Release();
                 }
 
-                _host?.NotifyCapabilitiesChanged();
-                Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
+                if (loaded)
+                {
+                    _host?.NotifyCapabilitiesChanged();
+                    Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
+                }
             },
             ct
         );

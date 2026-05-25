@@ -84,9 +84,6 @@ public sealed class WatchFolderService : IDisposable
         Stop();
     }
 
-    public event EventHandler? StateChanged;
-    public event EventHandler<WatchFolderHistoryItem>? FileProcessed;
-
     public void Start(
         WatchFolderOptions options,
         Func<
@@ -167,6 +164,9 @@ public sealed class WatchFolderService : IDisposable
         SaveHistory();
         OnStateChanged();
     }
+
+    public event EventHandler? StateChanged;
+    public event EventHandler<WatchFolderHistoryItem>? FileProcessed;
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)
     {

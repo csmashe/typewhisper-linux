@@ -201,8 +201,6 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public event EventHandler? PluginStateChanged;
-
     public async Task InitializeAsync()
     {
         var discovered = _loader.DiscoverAndLoad(_searchDirectories);
@@ -320,92 +318,6 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
-    {
-        try
-        {
-            var hostServices = new PluginHostServices(
-                plugin.Manifest.Id,
-                plugin.PluginDirectory,
-                _activeWindow,
-                EventBus,
-                _profiles,
-                () =>
-                {
-                    RebuildCapabilityIndices();
-                    PluginStateChanged?.Invoke(this, EventArgs.Empty);
-                }
-            );
-
-            await plugin.Instance.ActivateAsync(hostServices);
-
-            lock (_lock)
-            {
-                _hostServices[plugin.Manifest.Id] = hostServices;
-                _activatedPlugins.Add(plugin.Manifest.Id);
-            }
-
-            Trace.WriteLine($"[PluginManager] Activated plugin: {plugin.Manifest.Id}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine(
-                $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
-            );
-            return false;
-        }
-    }
-
-    private async Task<bool> DeactivatePluginAsync(LoadedPlugin plugin)
-    {
-        try
-        {
-            await plugin.Instance.DeactivateAsync();
-
-            lock (_lock)
-            {
-                _hostServices.Remove(plugin.Manifest.Id);
-                _activatedPlugins.Remove(plugin.Manifest.Id);
-            }
-
-            Trace.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine(
-                $"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}"
-            );
-            return false;
-        }
-    }
-
-    private void RebuildCapabilityIndices()
-    {
-        lock (_lock)
-        {
-            var activePlugins = _allPlugins
-                .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
-                .Select(p => p.Instance)
-                .ToList();
-
-            _llmProviders = activePlugins.OfType<ILlmProviderPlugin>().ToList();
-            _transcriptionEngines = activePlugins.OfType<ITranscriptionEnginePlugin>().ToList();
-            _postProcessors = activePlugins
-                .OfType<IPostProcessorPlugin>()
-                .OrderBy(p => p.Priority)
-                .ToList();
-            _actionPlugins = activePlugins.OfType<IActionPlugin>().ToList();
-            _ttsProviders = activePlugins.OfType<ITtsProviderPlugin>().ToList();
-        }
-
-        // PluginStateChanged is raised outside _lock to avoid a deadlock if
-        // a handler (e.g. a ViewModel) calls back into PluginManager methods
-        // that also acquire _lock.
-        PluginStateChanged?.Invoke(this, EventArgs.Empty);
-    }
-
     public async Task UnloadPluginAsync(string pluginId)
     {
         LoadedPlugin? plugin;
@@ -494,6 +406,104 @@ public sealed class PluginManager : IDisposable
         }
 
         RebuildCapabilityIndices();
+    }
+
+    public ITtsProviderPlugin? GetTtsProvider(string providerId)
+    {
+        lock (_lock)
+        {
+            return _ttsProviders.FirstOrDefault(provider =>
+                string.Equals(provider.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+    }
+
+    public event EventHandler? PluginStateChanged;
+
+    private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
+    {
+        try
+        {
+            var hostServices = new PluginHostServices(
+                plugin.Manifest.Id,
+                plugin.PluginDirectory,
+                _activeWindow,
+                EventBus,
+                _profiles,
+                () =>
+                {
+                    RebuildCapabilityIndices();
+                    PluginStateChanged?.Invoke(this, EventArgs.Empty);
+                }
+            );
+
+            await plugin.Instance.ActivateAsync(hostServices);
+
+            lock (_lock)
+            {
+                _hostServices[plugin.Manifest.Id] = hostServices;
+                _activatedPlugins.Add(plugin.Manifest.Id);
+            }
+
+            Trace.WriteLine($"[PluginManager] Activated plugin: {plugin.Manifest.Id}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
+            );
+            return false;
+        }
+    }
+
+    private async Task<bool> DeactivatePluginAsync(LoadedPlugin plugin)
+    {
+        try
+        {
+            await plugin.Instance.DeactivateAsync();
+
+            lock (_lock)
+            {
+                _hostServices.Remove(plugin.Manifest.Id);
+                _activatedPlugins.Remove(plugin.Manifest.Id);
+            }
+
+            Trace.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}"
+            );
+            return false;
+        }
+    }
+
+    private void RebuildCapabilityIndices()
+    {
+        lock (_lock)
+        {
+            var activePlugins = _allPlugins
+                .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
+                .Select(p => p.Instance)
+                .ToList();
+
+            _llmProviders = activePlugins.OfType<ILlmProviderPlugin>().ToList();
+            _transcriptionEngines = activePlugins.OfType<ITranscriptionEnginePlugin>().ToList();
+            _postProcessors = activePlugins
+                .OfType<IPostProcessorPlugin>()
+                .OrderBy(p => p.Priority)
+                .ToList();
+            _actionPlugins = activePlugins.OfType<IActionPlugin>().ToList();
+            _ttsProviders = activePlugins.OfType<ITtsProviderPlugin>().ToList();
+        }
+
+        // PluginStateChanged is raised outside _lock to avoid a deadlock if
+        // a handler (e.g. a ViewModel) calls back into PluginManager methods
+        // that also acquire _lock.
+        PluginStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void PersistEnabledState(string pluginId, bool enabled)
@@ -592,16 +602,6 @@ public sealed class PluginManager : IDisposable
                 $"[PluginManager] Failed to migrate API key for {pluginId}: {ex.Message}"
             );
             return false;
-        }
-    }
-
-    public ITtsProviderPlugin? GetTtsProvider(string providerId)
-    {
-        lock (_lock)
-        {
-            return _ttsProviders.FirstOrDefault(provider =>
-                string.Equals(provider.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
-            );
         }
     }
 }

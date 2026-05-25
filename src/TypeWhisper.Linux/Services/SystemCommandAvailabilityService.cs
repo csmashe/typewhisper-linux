@@ -171,15 +171,6 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
-    /// <summary>
-    ///     Fired after <see cref="RefreshSnapshot" /> rebuilds the cached
-    ///     snapshot. Subscribers (notably the live insertion platform) re-read
-    ///     their derived state so a one-click ydotool setup takes effect
-    ///     without an app restart. Handlers must not throw — the refresh
-    ///     flow can't usefully report a subscriber failure to the user.
-    /// </summary>
-    public event EventHandler<LinuxCapabilitySnapshot>? SnapshotChanged;
-
     public LinuxCapabilitySnapshot GetSnapshot()
     {
         var s = _snapshot;
@@ -202,25 +193,6 @@ public sealed class SystemCommandAvailabilityService
         }
 
         return snapshot;
-    }
-
-    /// <summary>
-    ///     Test seam: replaces the cached snapshot with a supplied one and
-    ///     raises <see cref="SnapshotChanged" />. Lets the chain-rebuild
-    ///     integration be exercised without relying on whatever ydotool /
-    ///     wtype binaries happen to live on the test host.
-    /// </summary>
-    internal void RaiseSnapshotChangedForTests(LinuxCapabilitySnapshot snapshot)
-    {
-        Interlocked.Exchange(ref _snapshot, snapshot);
-        try
-        {
-            SnapshotChanged?.Invoke(this, snapshot);
-        }
-        catch
-        {
-            // Match RefreshSnapshot's swallow-on-subscriber-throw behavior.
-        }
     }
 
     public static string? FindCuda12RuntimeDirectory()
@@ -408,43 +380,55 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
-    private LinuxCapabilitySnapshot BuildSnapshot()
+    public static bool IsCommandAvailable(string commandName)
     {
-        var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
-        var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
-        var hasXclip = IsCommandAvailable("xclip");
-        var hasWlClipboard = IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
-        var speechCommand = ResolveSpeechFeedbackCommand();
+        var pathValue = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(pathValue))
+        {
+            return false;
+        }
 
-        var hasPactl = IsCommandAvailable("pactl");
-        var hasPlayerCtl = IsCommandAvailable("playerctl");
-        var hasCanberraGtkPlay = IsCommandAvailable("canberra-gtk-play");
-        var hasYdotool = IsCommandAvailable("ydotool");
-        var ydotoolSocket = ResolveYdotoolSocketPath();
+        foreach (
+            var directory in pathValue.Split(
+                Path.PathSeparator,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+            )
+        )
+        {
+            try
+            {
+                var candidate = Path.Combine(directory, commandName);
+                if (File.Exists(candidate))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Ignore invalid PATH entries.
+            }
+        }
 
-        return new LinuxCapabilitySnapshot(
-            isWayland ? "Wayland"
-            : isX11 ? "X11"
-            : "Unknown",
-            isWayland ? hasWlClipboard : hasXclip,
-            isWayland ? "wl-clipboard" : "xclip",
-            IsCommandAvailable("xdotool"),
-            IsCommandAvailable("wtype"),
-            IsCommandAvailable("ffmpeg"),
-            speechCommand is not null,
-            speechCommand,
-            hasPactl,
-            hasPlayerCtl,
-            hasCanberraGtkPlay,
-            IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
-            (
-                IsLibraryAvailable("libcudart.so.12") && IsLibraryAvailable("libcublas.so.12")
-            ) || FindCuda12RuntimeDirectory() is not null,
-            DesktopDetector.DetectId(),
-            hasYdotool,
-            ydotoolSocket is not null,
-            ydotoolSocket
-        );
+        return false;
+    }
+
+    /// <summary>
+    ///     Test seam: replaces the cached snapshot with a supplied one and
+    ///     raises <see cref="SnapshotChanged" />. Lets the chain-rebuild
+    ///     integration be exercised without relying on whatever ydotool /
+    ///     wtype binaries happen to live on the test host.
+    /// </summary>
+    internal void RaiseSnapshotChangedForTests(LinuxCapabilitySnapshot snapshot)
+    {
+        Interlocked.Exchange(ref _snapshot, snapshot);
+        try
+        {
+            SnapshotChanged?.Invoke(this, snapshot);
+        }
+        catch
+        {
+            // Match RefreshSnapshot's swallow-on-subscriber-throw behavior.
+        }
     }
 
     /// <summary>
@@ -493,6 +477,54 @@ public sealed class SystemCommandAvailabilityService
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     Fired after <see cref="RefreshSnapshot" /> rebuilds the cached
+    ///     snapshot. Subscribers (notably the live insertion platform) re-read
+    ///     their derived state so a one-click ydotool setup takes effect
+    ///     without an app restart. Handlers must not throw — the refresh
+    ///     flow can't usefully report a subscriber failure to the user.
+    /// </summary>
+    public event EventHandler<LinuxCapabilitySnapshot>? SnapshotChanged;
+
+    private LinuxCapabilitySnapshot BuildSnapshot()
+    {
+        var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+        var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
+        var hasXclip = IsCommandAvailable("xclip");
+        var hasWlClipboard = IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
+        var speechCommand = ResolveSpeechFeedbackCommand();
+
+        var hasPactl = IsCommandAvailable("pactl");
+        var hasPlayerCtl = IsCommandAvailable("playerctl");
+        var hasCanberraGtkPlay = IsCommandAvailable("canberra-gtk-play");
+        var hasYdotool = IsCommandAvailable("ydotool");
+        var ydotoolSocket = ResolveYdotoolSocketPath();
+
+        return new LinuxCapabilitySnapshot(
+            isWayland ? "Wayland"
+            : isX11 ? "X11"
+            : "Unknown",
+            isWayland ? hasWlClipboard : hasXclip,
+            isWayland ? "wl-clipboard" : "xclip",
+            IsCommandAvailable("xdotool"),
+            IsCommandAvailable("wtype"),
+            IsCommandAvailable("ffmpeg"),
+            speechCommand is not null,
+            speechCommand,
+            hasPactl,
+            hasPlayerCtl,
+            hasCanberraGtkPlay,
+            IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
+            (
+                IsLibraryAvailable("libcudart.so.12") && IsLibraryAvailable("libcublas.so.12")
+            ) || FindCuda12RuntimeDirectory() is not null,
+            DesktopDetector.DetectId(),
+            hasYdotool,
+            ydotoolSocket is not null,
+            ydotoolSocket
+        );
     }
 
     private static string? TryReadUserId()
@@ -554,38 +586,6 @@ public sealed class SystemCommandAvailabilityService
         }
 
         return null;
-    }
-
-    public static bool IsCommandAvailable(string commandName)
-    {
-        var pathValue = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(pathValue))
-        {
-            return false;
-        }
-
-        foreach (
-            var directory in pathValue.Split(
-                Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-            )
-        )
-        {
-            try
-            {
-                var candidate = Path.Combine(directory, commandName);
-                if (File.Exists(candidate))
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                // Ignore invalid PATH entries.
-            }
-        }
-
-        return false;
     }
 
     private static bool IsLibraryAvailable(string libraryName)

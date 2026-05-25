@@ -84,6 +84,16 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         _dictionary.EntriesChanged -= _entriesChangedHandler;
     }
 
+    public string ExportToJson()
+    {
+        return _snippets.ExportToJson();
+    }
+
+    public int ImportFromJson(string json)
+    {
+        return _snippets.ImportFromJson(json);
+    }
+
     partial void OnSelectedTagFilterChanged(string value)
     {
         Refresh();
@@ -207,16 +217,6 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         CaseSensitive = false;
         SelectedTriggerMode = SnippetTriggerMode.Anywhere;
         ShowEditor = false;
-    }
-
-    public string ExportToJson()
-    {
-        return _snippets.ExportToJson();
-    }
-
-    public int ImportFromJson(string json)
-    {
-        return _snippets.ImportFromJson(json);
     }
 
     private void Refresh()

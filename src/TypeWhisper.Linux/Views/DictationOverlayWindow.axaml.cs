@@ -46,6 +46,16 @@ public partial class DictationOverlayWindow : Window
         PositionChanged += OnUserPositionChanged;
     }
 
+    public void Initialize()
+    {
+        if (_viewModel is null)
+        {
+            return;
+        }
+
+        UpdateWindowVisibility();
+    }
+
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(DictationOverlayViewModel.HasVisibleContent))
@@ -73,16 +83,6 @@ public partial class DictationOverlayWindow : Window
                 },
                 DispatcherPriority.Background);
         }
-    }
-
-    public void Initialize()
-    {
-        if (_viewModel is null)
-        {
-            return;
-        }
-
-        UpdateWindowVisibility();
     }
 
     private void UpdateWindowVisibility()

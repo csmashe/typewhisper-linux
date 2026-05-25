@@ -115,21 +115,6 @@ internal static class ShortcutMatcher
         return ShortcutMatchKind.None;
     }
 
-    private static bool Matches(
-        KeyCode key,
-        ModifierMask pressedMods,
-        KeyCode? targetKey,
-        ModifierMask targetMods
-    )
-    {
-        if (targetKey is null)
-        {
-            return false;
-        }
-
-        return key == targetKey.Value && ModifiersMatch(pressedMods, targetMods);
-    }
-
     public static bool CancelCollidesWithAnyBinding(GlobalShortcutSet set)
     {
         var pressedMods = set.CancelModifiers;
@@ -182,6 +167,21 @@ internal static class ShortcutMatcher
                && HasShift(pressed) == HasShift(required)
                && HasAlt(pressed) == HasAlt(required)
                && HasMeta(pressed) == HasMeta(required);
+    }
+
+    private static bool Matches(
+        KeyCode key,
+        ModifierMask pressedMods,
+        KeyCode? targetKey,
+        ModifierMask targetMods
+    )
+    {
+        if (targetKey is null)
+        {
+            return false;
+        }
+
+        return key == targetKey.Value && ModifiersMatch(pressedMods, targetMods);
     }
 
     private static bool HasCtrl(ModifierMask mask)

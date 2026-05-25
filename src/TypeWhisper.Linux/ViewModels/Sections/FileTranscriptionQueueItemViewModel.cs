@@ -65,6 +65,11 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
     public bool HasDetectedLanguage => !string.IsNullOrWhiteSpace(DetectedLanguage);
     public bool HasError => !string.IsNullOrWhiteSpace(ErrorText);
 
+    public void RefreshExportState()
+    {
+        OnPropertyChanged(nameof(CanExportSubtitles));
+    }
+
     partial void OnStatusChanged(FileTranscriptionQueueItemStatus value)
     {
         OnPropertyChanged(nameof(IsProcessing));
@@ -87,10 +92,5 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
     partial void OnErrorTextChanged(string value)
     {
         OnPropertyChanged(nameof(HasError));
-    }
-
-    public void RefreshExportState()
-    {
-        OnPropertyChanged(nameof(CanExportSubtitles));
     }
 }

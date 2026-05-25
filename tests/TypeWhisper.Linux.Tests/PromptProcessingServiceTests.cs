@@ -68,7 +68,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
 
         Assert.Equal(
-            $"processed:Default Provider:model-a:{PromptProcessingService.FrameInputAsData("hello")}",
+            $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
             result
         );
     }
@@ -116,7 +116,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
 
         Assert.Equal(
-            $"processed:Override Provider:model-b:{PromptProcessingService.FrameInputAsData("hello")}",
+            $"processed:Override Provider:model-b:{PromptProcessingService.FormatPromptActionInput("hello")}",
             result
         );
     }
@@ -149,12 +149,12 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
 
         Assert.Equal(
-            $"processed:First Provider:model-z:{PromptProcessingService.FrameInputAsData("hello")}",
+            $"processed:First Provider:model-z:{PromptProcessingService.FormatPromptActionInput("hello")}",
             result
         );
     }
 
-    // Framing behavior (FrameInputAsData) is covered by PromptProcessingInputFramingTests.
+    // Framing behavior (FormatPromptActionInput) is covered by PromptProcessingInputFramingTests.
 
     private static Mock<ISettingsService> CreateSettings(AppSettings current)
     {

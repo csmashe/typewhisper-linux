@@ -19,6 +19,7 @@ docs/*
 publish/
 .agents/
 .claude/
+.serena/
 .venv
 granite-speech-onnx/
 granite-speech-onnx-int8/

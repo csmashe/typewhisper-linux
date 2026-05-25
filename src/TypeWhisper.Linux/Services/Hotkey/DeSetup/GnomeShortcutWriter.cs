@@ -257,33 +257,6 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         );
     }
 
-    private static string BuildCustomPath(string shortcutId)
-    {
-        // Bake a short suffix derived from the shortcut id so removal
-        // can target exactly the entry we created and so two
-        // TypeWhisper-managed shortcuts don't collide. We use the
-        // SHA-derived hex to stay deterministic across runs (string
-        // GetHashCode is randomized per-process in .NET).
-        return
-            $"/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/typewhisper-{StableHashHex(shortcutId)}/";
-    }
-
-    private static string StableHashHex(string s)
-    {
-        // FNV-1a 32-bit — tiny, deterministic, plenty of entropy for a
-        // disambiguation suffix. Anything cryptographic is overkill.
-        const uint offset = 2166136261;
-        const uint prime = 16777619;
-        var h = offset;
-        foreach (var c in s)
-        {
-            h ^= c;
-            h *= prime;
-        }
-
-        return h.ToString("x8", CultureInfo.InvariantCulture);
-    }
-
     /// <summary>
     ///     Parse a <c>gsettings get</c> result for a list-of-strings key.
     ///     gsettings prints either <c>@as []</c> for empty or a Python-style
@@ -530,6 +503,33 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
 
         sb.Append(key);
         return sb.ToString();
+    }
+
+    private static string BuildCustomPath(string shortcutId)
+    {
+        // Bake a short suffix derived from the shortcut id so removal
+        // can target exactly the entry we created and so two
+        // TypeWhisper-managed shortcuts don't collide. We use the
+        // SHA-derived hex to stay deterministic across runs (string
+        // GetHashCode is randomized per-process in .NET).
+        return
+            $"/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/typewhisper-{StableHashHex(shortcutId)}/";
+    }
+
+    private static string StableHashHex(string s)
+    {
+        // FNV-1a 32-bit — tiny, deterministic, plenty of entropy for a
+        // disambiguation suffix. Anything cryptographic is overkill.
+        const uint offset = 2166136261;
+        const uint prime = 16777619;
+        var h = offset;
+        foreach (var c in s)
+        {
+            h ^= c;
+            h *= prime;
+        }
+
+        return h.ToString("x8", CultureInfo.InvariantCulture);
     }
 
     private static bool IsFunctionKey(string k)

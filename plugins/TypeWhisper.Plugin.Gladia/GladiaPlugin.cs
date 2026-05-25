@@ -88,26 +88,38 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var transcript =
-            root.GetProperty("result")
-                .GetProperty("transcription")
-                .GetProperty("full_transcript")
-                .GetString()
-            ?? "";
-
-        double duration = 0;
+        // Require result.transcription.full_transcript: a missing or wrong-typed
+        // value means the response shape isn't what we expect (API drift, status
+        // payload, error body). Surface that as a failure rather than returning a
+        // blank successful transcription. Duration/languages stay optional —
+        // they're metadata that legitimately may be absent.
         if (
-            root.GetProperty("result")
-                .GetProperty("transcription")
-                .TryGetProperty("duration", out var durEl)
+            !root.TryGetProperty("result", out var result)
+            || result.ValueKind != JsonValueKind.Object
+            || !result.TryGetProperty("transcription", out var transcription)
+            || transcription.ValueKind != JsonValueKind.Object
+            || !transcription.TryGetProperty("full_transcript", out var fullEl)
+            || fullEl.ValueKind != JsonValueKind.String
         )
-            duration = durEl.GetDouble();
+        {
+            throw new InvalidOperationException(
+                $"Gladia response missing 'result.transcription.full_transcript' string: {json}"
+            );
+        }
 
+        var transcript = fullEl.GetString() ?? "";
+        double duration = 0;
         string? detectedLanguage = null;
+
         if (
-            root.GetProperty("result")
-                .GetProperty("transcription")
-                .TryGetProperty("languages", out var langsEl)
+            transcription.TryGetProperty("duration", out var durEl)
+            && durEl.ValueKind == JsonValueKind.Number
+            && durEl.TryGetDouble(out var parsedDuration)
+        )
+            duration = parsedDuration;
+
+        if (
+            transcription.TryGetProperty("languages", out var langsEl)
             && langsEl.ValueKind == JsonValueKind.Array
             && langsEl.GetArrayLength() > 0
         )

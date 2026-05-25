@@ -44,19 +44,6 @@ public class PluginManagerTests : IDisposable
         }
     }
 
-    private PluginManager CreateManager()
-    {
-        _manager = new PluginManager(
-            _loader,
-            _eventBus,
-            _activeWindow.Object,
-            _profiles.Object,
-            _settings.Object,
-            [_pluginSearchDir]
-        );
-        return _manager;
-    }
-
     [Fact]
     public async Task InitializeAsync_WithNoPluginDirs_AllPluginsIsEmpty()
     {
@@ -173,6 +160,19 @@ public class PluginManagerTests : IDisposable
         await manager.InitializeAsync();
 
         Assert.True(eventFired);
+    }
+
+    private PluginManager CreateManager()
+    {
+        _manager = new PluginManager(
+            _loader,
+            _eventBus,
+            _activeWindow.Object,
+            _profiles.Object,
+            _settings.Object,
+            [_pluginSearchDir]
+        );
+        return _manager;
     }
 }
 

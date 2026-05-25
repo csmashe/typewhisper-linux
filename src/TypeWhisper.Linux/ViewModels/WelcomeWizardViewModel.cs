@@ -161,6 +161,99 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public bool CanRunCudaBenchmark => _commands.GetSnapshot().CanUseCuda;
     public bool CudaBenchmarkButtonEnabled => CanRunCudaBenchmark && !IsCudaBenchmarkRunning;
 
+    public async Task<bool> RunPasteSmokeTestAsync()
+    {
+        PasteTestPassed = false;
+        PasteSmokeText = "";
+        PasteTestStatus = "Running paste test...";
+
+        InsertionResult result;
+        try
+        {
+            result = await _textInsertion.InsertTextAsync(
+                PasteSmokeExpectedText,
+                strategy: TextInsertionStrategy.ClipboardPaste
+            );
+        }
+        catch (Exception ex)
+        {
+            PasteSmokeText = ex.Message;
+            PasteTestPassed = false;
+            PasteTestStatus = $"Paste test failed: {ex.Message}";
+            return false;
+        }
+
+        if (result is InsertionResult.MissingClipboardTool)
+        {
+            PasteTestStatus =
+                "Clipboard helper is missing; install the helper shown in System check.";
+            return false;
+        }
+
+        if (result is InsertionResult.MissingPasteTool)
+        {
+            PasteTestStatus =
+                $"Automatic paste helper is missing. {_commands.GetSnapshot().PasteToolInstallHint}";
+            return false;
+        }
+
+        if (result is InsertionResult.CopiedToClipboard)
+        {
+            PasteTestStatus = "Paste did not complete; test text was left on the clipboard.";
+            return false;
+        }
+
+        if (result is not InsertionResult.Pasted)
+        {
+            PasteTestStatus = $"Paste test returned {result}.";
+            return false;
+        }
+
+        PasteTestStatus = "Paste command sent. Checking the test field...";
+        return true;
+    }
+
+    public void CompletePasteSmokeTest(string? actualText)
+    {
+        PasteSmokeText = actualText ?? "";
+        PasteTestPassed = PasteSmokeText.Contains(
+            PasteSmokeExpectedText,
+            StringComparison.OrdinalIgnoreCase
+        );
+        PasteTestStatus = PasteTestPassed
+            ? "Paste test passed."
+            : "Paste test did not find the expected text in the field.";
+    }
+
+    // Called by the view on Close — guards are needed because Avalonia can
+    // fire Closed more than once for modal dialogs on certain backends.
+    public void Cleanup()
+    {
+        if (_cleanedUp)
+        {
+            return;
+        }
+
+        _cleanedUp = true;
+        _pluginManager.PluginStateChanged -= _pluginStateChangedHandler;
+        _models.PropertyChanged -= _modelStateChangedHandler;
+        _audio.LevelChanged -= OnAudioLevelChanged;
+
+        if (IsMicTestRunning)
+        {
+            _audio.StopPreview();
+        }
+
+        if (IsFirstDictationRecording)
+        {
+            FireAndLog(() => _audio.StopRecordingAsync(), "welcome wizard stop recording");
+        }
+
+        IsMicTestRunning = false;
+        IsFirstDictationRecording = false;
+        MicLevel = 0;
+    }
+
     // Events consumed by the view to close itself.
     public event EventHandler? RequestClose;
 
@@ -630,70 +723,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
     }
 
-    public async Task<bool> RunPasteSmokeTestAsync()
-    {
-        PasteTestPassed = false;
-        PasteSmokeText = "";
-        PasteTestStatus = "Running paste test...";
-
-        InsertionResult result;
-        try
-        {
-            result = await _textInsertion.InsertTextAsync(
-                PasteSmokeExpectedText,
-                strategy: TextInsertionStrategy.ClipboardPaste
-            );
-        }
-        catch (Exception ex)
-        {
-            PasteSmokeText = ex.Message;
-            PasteTestPassed = false;
-            PasteTestStatus = $"Paste test failed: {ex.Message}";
-            return false;
-        }
-
-        if (result is InsertionResult.MissingClipboardTool)
-        {
-            PasteTestStatus =
-                "Clipboard helper is missing; install the helper shown in System check.";
-            return false;
-        }
-
-        if (result is InsertionResult.MissingPasteTool)
-        {
-            PasteTestStatus =
-                $"Automatic paste helper is missing. {_commands.GetSnapshot().PasteToolInstallHint}";
-            return false;
-        }
-
-        if (result is InsertionResult.CopiedToClipboard)
-        {
-            PasteTestStatus = "Paste did not complete; test text was left on the clipboard.";
-            return false;
-        }
-
-        if (result is not InsertionResult.Pasted)
-        {
-            PasteTestStatus = $"Paste test returned {result}.";
-            return false;
-        }
-
-        PasteTestStatus = "Paste command sent. Checking the test field...";
-        return true;
-    }
-
-    public void CompletePasteSmokeTest(string? actualText)
-    {
-        PasteSmokeText = actualText ?? "";
-        PasteTestPassed = PasteSmokeText.Contains(
-            PasteSmokeExpectedText,
-            StringComparison.OrdinalIgnoreCase
-        );
-        PasteTestStatus = PasteTestPassed
-            ? "Paste test passed."
-            : "Paste test did not find the expected text in the field.";
-    }
-
     [RelayCommand]
     private async Task ToggleFirstDictationAsync()
     {
@@ -816,35 +845,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
         {
             IsCudaBenchmarkRunning = false;
         }
-    }
-
-    // Called by the view on Close — guards are needed because Avalonia can
-    // fire Closed more than once for modal dialogs on certain backends.
-    public void Cleanup()
-    {
-        if (_cleanedUp)
-        {
-            return;
-        }
-
-        _cleanedUp = true;
-        _pluginManager.PluginStateChanged -= _pluginStateChangedHandler;
-        _models.PropertyChanged -= _modelStateChangedHandler;
-        _audio.LevelChanged -= OnAudioLevelChanged;
-
-        if (IsMicTestRunning)
-        {
-            _audio.StopPreview();
-        }
-
-        if (IsFirstDictationRecording)
-        {
-            FireAndLog(() => _audio.StopRecordingAsync(), "welcome wizard stop recording");
-        }
-
-        IsMicTestRunning = false;
-        IsFirstDictationRecording = false;
-        MicLevel = 0;
     }
 
     private void OnAudioLevelChanged(object? sender, float level)

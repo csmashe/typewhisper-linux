@@ -127,11 +127,28 @@ public static class Program
                     // when IBus destroys an input context before Avalonia releases it.
                     // Set TYPEWHISPER_DISABLE_IME=1 to disable IME composition.
                     EnableIme = !IsImeDisabled(),
-                    // Skip GLX: Avalonia's GlxContext.RestoreContext.Dispose throws
-                    // SynchronizationLockException on every frame under Mesa/XWayland,
-                    // breaking the render loop. EGL works on both X11 and XWayland;
-                    // Software is a guaranteed fallback.
-                    RenderingMode = new[] { X11RenderingMode.Egl, X11RenderingMode.Software }
+                    // Rendering mode order is session-dependent:
+                    //   - Native X11: prefer GLX. It's the only X11 backend that
+                    //     reliably picks an ARGB-capable framebuffer config, which
+                    //     TransparencyLevelHint="Transparent" needs (used by the
+                    //     dictation overlay window). EGL on X11/Mesa typically
+                    //     returns an RGB-only visual, so the window paints opaque
+                    //     black behind the rounded Border and you get a square
+                    //     black box around the overlay.
+                    //   - XWayland (X11 app on a Wayland session): prefer EGL.
+                    //     GlxContext.RestoreContext.Dispose throws
+                    //     SynchronizationLockException every frame on Mesa/XWayland
+                    //     and breaks the render loop. EGL's opaque-window cost is
+                    //     less bad than no rendering at all.
+                    // Software is the universal fallback in both lists.
+                    RenderingMode = IsNativeX11Session()
+                        ? new[]
+                        {
+                            X11RenderingMode.Glx,
+                            X11RenderingMode.Egl,
+                            X11RenderingMode.Software
+                        }
+                        : new[] { X11RenderingMode.Egl, X11RenderingMode.Software }
                 }
             )
 #if DEBUG
@@ -157,6 +174,17 @@ public static class Program
         return Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder(args)
             .ConfigureServices(ServiceRegistrations.Register)
             .Build();
+    }
+
+    // Native X11 = X11 session type AND no Wayland display socket. A Wayland
+    // session running this X11 app routes through XWayland, where GLX is broken
+    // on Mesa (see RenderingMode comment above).
+    private static bool IsNativeX11Session()
+    {
+        var sessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
+        var waylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
+        return string.Equals(sessionType, "x11", StringComparison.OrdinalIgnoreCase)
+               && string.IsNullOrEmpty(waylandDisplay);
     }
 
     private static bool IsImeDisabled()

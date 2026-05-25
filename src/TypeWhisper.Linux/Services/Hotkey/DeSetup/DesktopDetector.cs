@@ -88,42 +88,6 @@ public static class DesktopDetector
         };
     }
 
-    private static string RawXdgFallback()
-    {
-        var raw = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return "your desktop";
-        }
-
-        var tokens = raw.Split(
-            ':',
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-        );
-        if (tokens.Length == 0)
-        {
-            return "your desktop";
-        }
-
-        return tokens[^1] switch
-        {
-            "GNOME" => "GNOME",
-            "ubuntu" => "GNOME",
-            "KDE" => "KDE Plasma",
-            "Hyprland" => "Hyprland",
-            "sway" => "Sway",
-            "XFCE" => "XFCE",
-            "MATE" => "MATE",
-            "Cinnamon" => "Cinnamon",
-            "Unity" => "Unity",
-            "LXQt" => "LXQt",
-            "Pantheon" => "Pantheon",
-            "Budgie" => "Budgie",
-            "Deepin" => "Deepin",
-            _ => tokens[^1]
-        };
-    }
-
     /// <summary>
     ///     True if a binary with the given name is reachable through
     ///     <c>PATH</c>. Used by writers to verify their helper command
@@ -165,5 +129,41 @@ public static class DesktopDetector
         }
 
         return false;
+    }
+
+    private static string RawXdgFallback()
+    {
+        var raw = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return "your desktop";
+        }
+
+        var tokens = raw.Split(
+            ':',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+        );
+        if (tokens.Length == 0)
+        {
+            return "your desktop";
+        }
+
+        return tokens[^1] switch
+        {
+            "GNOME" => "GNOME",
+            "ubuntu" => "GNOME",
+            "KDE" => "KDE Plasma",
+            "Hyprland" => "Hyprland",
+            "sway" => "Sway",
+            "XFCE" => "XFCE",
+            "MATE" => "MATE",
+            "Cinnamon" => "Cinnamon",
+            "Unity" => "Unity",
+            "LXQt" => "LXQt",
+            "Pantheon" => "Pantheon",
+            "Budgie" => "Budgie",
+            "Deepin" => "Deepin",
+            _ => tokens[^1]
+        };
     }
 }

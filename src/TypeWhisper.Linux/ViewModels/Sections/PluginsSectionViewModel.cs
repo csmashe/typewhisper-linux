@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+
 // ReSharper disable SuspiciousTypeConversion.Global
 // ReSharper disable UnusedParameterInPartialMethod
 
@@ -52,7 +53,6 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.deepgram",
         "com.typewhisper.gladia",
         "com.typewhisper.google-cloud-stt",
-        "com.typewhisper.granite-speech",
         "com.typewhisper.openai",
         "com.typewhisper.qwen3-stt",
         "com.typewhisper.sherpa-onnx",

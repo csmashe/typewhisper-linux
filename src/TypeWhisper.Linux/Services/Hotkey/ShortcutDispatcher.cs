@@ -39,16 +39,6 @@ internal sealed class ShortcutDispatcher
     private GlobalShortcutSet? _shortcuts;
     private bool _transformSelectionKeyDown;
 
-    public event Action? DictationToggleRequested;
-    public event Action? DictationStartRequested;
-    public event Action? DictationStopRequested;
-    public event Action? PromptPaletteRequested;
-    public event Action? TransformSelectionRequested;
-    public event Action? RecentTranscriptionsRequested;
-    public event Action? CopyLastTranscriptionRequested;
-    public event Action? CancelRequested;
-    public event Action<string>? PromptActionRequested;
-
     public void UpdateShortcuts(GlobalShortcutSet shortcuts)
     {
         Volatile.Write(ref _shortcuts, shortcuts);
@@ -80,6 +70,16 @@ internal sealed class ShortcutDispatcher
             HandleRelease(key, set);
         }
     }
+
+    public event Action? DictationToggleRequested;
+    public event Action? DictationStartRequested;
+    public event Action? DictationStopRequested;
+    public event Action? PromptPaletteRequested;
+    public event Action? TransformSelectionRequested;
+    public event Action? RecentTranscriptionsRequested;
+    public event Action? CopyLastTranscriptionRequested;
+    public event Action? CancelRequested;
+    public event Action<string>? PromptActionRequested;
 
     private void HandlePress(KeyCode key, ModifierMask mods, GlobalShortcutSet set)
     {
