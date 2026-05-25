@@ -61,6 +61,12 @@ jobs:
             }
           }
 
+          # Flat string array of plugin .csproj paths. We used to emit objects
+          # ({name, path}) here, but GitHub Actions' matrix expression engine
+          # silently dropped most entries when the matrix value was an
+          # [ordered]-hashtable-derived JSON object — only one matrix job got
+          # created and ${{ matrix.plugin.path }} rendered as empty in run:
+          # blocks. A flat string matrix sidesteps that entirely.
           $projects = @()
           foreach ($project in $allProjects) {
             $relativePath = $project.FullName.Replace($env:GITHUB_WORKSPACE + [System.IO.Path]::DirectorySeparatorChar, '').Replace('\', '/')
@@ -68,15 +74,12 @@ jobs:
             $pluginDir = if ($parts.Count -ge 2) { $parts[1] } else { '' }
 
             if ($runAll -or $selectedPluginDirs.Contains($pluginDir)) {
-              $projects += [ordered]@{
-                name = $project.BaseName
-                path = $relativePath
-              }
+              $projects += $relativePath
             }
           }
 
           $scanMode = if ($runAll) { 'all' } elseif ($projects.Count -gt 0) { 'changed' } else { 'none' }
-          $json = if ($projects.Count -gt 0) { ConvertTo-Json -InputObject $projects -Compress -Depth 3 -AsArray } else { '[]' }
+          $json = if ($projects.Count -gt 0) { ConvertTo-Json -InputObject $projects -Compress -AsArray } else { '[]' }
           $hasProjects = if ($projects.Count -gt 0) { 'true' } else { 'false' }
 
           Write-Host "Plugin smoke scan mode: $scanMode"
@@ -86,7 +89,7 @@ jobs:
           }
           if ($projects.Count -gt 0) {
             Write-Host "Selected plugin projects:"
-            $projects | ForEach-Object { Write-Host "  $($_.path)" }
+            $projects | ForEach-Object { Write-Host "  $_" }
           } else {
             Write-Host "No plugin projects selected for this pull request."
           }
@@ -153,10 +156,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: ${{ fromJson(needs.discover-plugins.outputs.projects) }}
+        plugin_path: ${{ fromJson(needs.discover-plugins.outputs.projects) }}
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Resolve plugin metadata
+        id: meta
+        shell: pwsh
+        env:
+          PLUGIN_PATH: ${{ matrix.plugin_path }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PLUGIN_PATH)) {
+            throw "Matrix value PLUGIN_PATH is empty; discover-plugins emitted a bad entry."
+          }
+          $name = [System.IO.Path]::GetFileNameWithoutExtension($env:PLUGIN_PATH)
+          "name=$name" >> $env:GITHUB_OUTPUT
+          Write-Host "Plugin: $name ($env:PLUGIN_PATH)"
 
       - name: Ensure NuGet global packages folder
         shell: pwsh
@@ -174,16 +190,23 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path artifacts/logs | Out-Null
 
-      - name: Restore ${{ matrix.plugin.name }}
-        run: dotnet restore ${{ matrix.plugin.path }}
+      - name: Restore ${{ steps.meta.outputs.name }}
+        env:
+          PLUGIN_PATH: ${{ matrix.plugin_path }}
+        run: dotnet restore "$PLUGIN_PATH"
 
-      - name: Build ${{ matrix.plugin.name }}
-        run: dotnet build ${{ matrix.plugin.path }} -c Release --no-restore -bl:artifacts/logs/${{ matrix.plugin.name }}.binlog
+      - name: Build ${{ steps.meta.outputs.name }}
+        env:
+          PLUGIN_PATH: ${{ matrix.plugin_path }}
+          PLUGIN_NAME: ${{ steps.meta.outputs.name }}
+        run: dotnet build "$PLUGIN_PATH" -c Release --no-restore -bl:"artifacts/logs/${PLUGIN_NAME}.binlog"
 
       - name: Validate built output
         shell: pwsh
+        env:
+          PLUGIN_PATH: ${{ matrix.plugin_path }}
         run: |
-          $projectPath = Resolve-Path "${{ matrix.plugin.path }}"
+          $projectPath = Resolve-Path $env:PLUGIN_PATH
           $projectDir = Split-Path $projectPath -Parent
           $manifestPath = Join-Path $projectDir 'manifest.json'
           $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
@@ -218,6 +241,6 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: plugins-smoke-${{ matrix.plugin.name }}
+          name: plugins-smoke-${{ steps.meta.outputs.name }}
           path: artifacts/logs/*.binlog
           if-no-files-found: ignore

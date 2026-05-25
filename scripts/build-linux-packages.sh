@@ -70,6 +70,16 @@ if [ ! -x "$PUBLISH_DIR/typewhisper" ]; then
   chmod +x "$PUBLISH_DIR/typewhisper"
 fi
 
+# Whisper.net (and a couple of other plugin deps) bundle native libs for every
+# RID they support. For a linux-x64 build, the linux-arm/linux-arm64/win/osx
+# directories are dead weight (~50 MB per package format) and they also break
+# rpmbuild's auto-strip phase, which can't read non-host ELF formats.
+echo "==> Pruning non-linux-x64 native runtimes"
+find "$PUBLISH_DIR" -type d \
+  \( -name "linux-arm" -o -name "linux-arm64" -o -name "linux-musl-*" \
+     -o -name "win-*" -o -name "osx-*" -o -name "browser-*" -o -name "android-*" \
+  \) -prune -exec rm -rf {} +
+
 # ---------- tar.gz (the JustWorks fallback) ----------
 echo "==> Building tar.gz"
 TARBALL_NAME="typewhisper-linux-x64-${VERSION}"
@@ -299,6 +309,13 @@ EOF
   tar -czf "$RPM_TOP/SOURCES/typewhisper-$RPM_VERSION_CLEAN.tar.gz" -C "$RPM_TOP/SOURCES" "typewhisper-$RPM_VERSION_CLEAN"
 
   cat > "$RPM_TOP/SPECS/typewhisper.spec" <<EOF
+# Self-contained .NET app + native plugin libs: skip rpm's auto debuginfo
+# extraction and binary stripping. .NET single-file/self-contained payloads
+# and bundled .so files aren't candidates for distro-style debug splitting.
+%global debug_package %{nil}
+%global __strip /bin/true
+%global __os_install_post %{nil}
+
 Name:           typewhisper
 Version:        $RPM_VERSION_CLEAN
 Release:        1%{?dist}
