@@ -9,7 +9,6 @@ public interface IHistoryService
     int TotalRecords { get; }
     int TotalWords { get; }
     double TotalDuration { get; }
-    event Action? RecordsChanged;
 
     void AddRecord(TranscriptionRecord record);
     void UpdateRecord(string id, string finalText);
@@ -36,4 +35,5 @@ public interface IHistoryService
     );
 
     string ExportToJson(IReadOnlyList<TranscriptionRecord> records);
+    event Action? RecordsChanged;
 }

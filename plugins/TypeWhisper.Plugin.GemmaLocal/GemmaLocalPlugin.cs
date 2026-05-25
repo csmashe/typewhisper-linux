@@ -338,33 +338,56 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
         var buffer = new byte[81920];
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        await using (
-            var fileStream = new FileStream(
-                filePath + ".tmp",
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.None,
-                81920,
-                true
-            )
-        )
+        var tempPath = filePath + ".tmp";
+        var completed = false;
+        try
         {
-            int read;
-            while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
+            await using (
+                var fileStream = new FileStream(
+                    tempPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    81920,
+                    true
+                )
+            )
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                bytesRead += read;
-
-                var now = DateTime.UtcNow;
-                if ((now - lastReport).TotalMilliseconds > 250)
+                int read;
+                while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
                 {
-                    progress?.Report((double)bytesRead / totalBytes);
-                    lastReport = now;
+                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                    bytesRead += read;
+
+                    var now = DateTime.UtcNow;
+                    if ((now - lastReport).TotalMilliseconds > 250)
+                    {
+                        progress?.Report((double)bytesRead / totalBytes);
+                        lastReport = now;
+                    }
+                }
+            }
+
+            File.Move(tempPath, filePath, overwrite: true);
+            completed = true;
+        }
+        finally
+        {
+            // A cancelled/failed download leaves a partial .tmp behind that
+            // confuses the next attempt (and wastes disk on multi-GB models).
+            if (!completed && File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // best effort
                 }
             }
         }
 
-        File.Move(filePath + ".tmp", filePath, overwrite: true);
         progress?.Report(1.0);
         Log(PluginLogLevel.Info, $"Download complete: {model.FileName}");
     }
@@ -405,6 +428,17 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
                     _weights = LLamaWeights.LoadFromFile(modelParams);
                     _context = _weights.CreateContext(modelParams);
+
+                    // The heavy load runs without the lock blocking SelectModel,
+                    // so the user can switch selections while we're loading. If
+                    // that happened, drop what we just loaded instead of letting
+                    // the late finish silently roll back their newer choice.
+                    if (_selectedModelId != modelId)
+                    {
+                        UnloadModel();
+                        return;
+                    }
+
                     _loadedModelId = modelId;
                     _selectedModelId = modelId;
                     _host?.SetSetting("selectedModel", modelId);

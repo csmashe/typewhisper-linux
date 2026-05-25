@@ -15,7 +15,7 @@ TypeWhisper lets you dictate into other applications, transcribe audio files, re
 The Linux branch currently includes:
 
 - Global dictation with toggle, push-to-talk, and hybrid activation modes
-- A Linux desktop UI with dashboard, dictation, shortcuts, file transcription, recorder, history, dictionary, snippets, profiles, prompts, extensions, general, appearance, advanced, and about sections
+- A Linux desktop UI with dashboard, dictation, shortcuts, text insertion, file transcription, recorder, history, dictionary, snippets, profiles, prompts, plugins, general, appearance, advanced, and about sections
 - Plugin-backed transcription engines and prompt/LLM providers
 - Drag-and-drop file transcription with batch queues, watch folders, and `ffmpeg`-based import when available
 - Session recording to WAV with optional transcript sidecar text files
@@ -31,6 +31,7 @@ This branch contains Linux-specific work that is not part of the original branch
 
 - CUDA GPU support for the bundled whisper.cpp transcription engine on compatible NVIDIA systems
 - Linux desktop integration through Avalonia, XDG autostart, Linux tray behavior, and a user-level desktop launcher
+- Wayland global hotkey detection via an evdev backend that reads `/dev/input/event*` directly, so the configured shortcut fires regardless of which window has focus; falls back to the XDG portal and then focused-only SharpHook when the evdev path is unavailable. Enabled by default, requires the current user to be in the `input` group, and can be turned off from Settings → Shortcuts to keep focused-only behavior
 - Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `canberra-gtk-play`, or CUDA runtime libraries
 - Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
 - Linux session audio handling for dictation, file transcription, and recorder workflows
@@ -41,8 +42,8 @@ This branch contains Linux-specific work that is not part of the original branch
 - Transform-selection hotkey that voice-edits the text currently selected in another application
 - Spoken IDE file references such as "at file dot ts" mapped to file tags for editor/IDE workflows
 - Per-app text-insertion strategies (`Auto`, `Clipboard Paste`, `Direct Typing`, `Copy Only`) keyed by process name, with auto-paste retry and clipboard preservation
-- Smart `Auto` insertion in browsers: types directly into web inputs, but falls back to clipboard paste when the active tab looks like a webmail composer
-- Active-window detection covers Chromium, Firefox, and Firefox-derived browsers including Zen Browser, with title-based inference when process metadata is unavailable
+- Smart `Auto` insertion that picks per-target: types directly into supported browsers (falling back to clipboard paste when the title looks like a webmail composer), types directly into terminals and the Codex CLI (where synthesized Ctrl+V isn't interpreted as paste), and on Wayland sessions where the focused app can't be identified, prefers direct typing for ASCII text and clipboard paste for non-ASCII text
+- Active-window detection covers the Chromium family (Chromium, Chrome, Brave, Edge, Vivaldi, Opera) and the Firefox family (Firefox, Zen Browser, LibreWolf, Waterfox), with title-based inference when process metadata is unavailable
 - Correction suggestions generated from user edits in history, with optional auto-learning into the dictionary and confidence scoring
 - Dictionary entries gain starring, priority, source tracking (`Manual`, `Import`, `CorrectionSuggestion`, `AutoLearned`), and times-applied/times-corrected stats
 - Snippets gain an `Exact Phrase` trigger mode alongside `Anywhere`, plus per-profile scoping by profile id
@@ -80,9 +81,9 @@ Some Linux dictation features depend on external desktop tools:
 - Sound feedback uses `canberra-gtk-play`
 - Audio ducking uses `pactl`
 - Media pause uses `playerctl`
-- Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session — `wtype` is preferred on Wayland with a fallback to `xdotool` (X11 and XWayland apps). **Wayland support is a work in progress and is not currently working.**
+- Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session. On wlroots compositors (Hyprland, Sway) `wtype` is tried first; on GNOME and KDE Wayland — which omit the wtype virtual-keyboard protocol — `ydotool` is tried first instead, with `wtype` and `xdotool` as later fallbacks. X11 sessions use `xdotool`.
 
-When one of those tools is missing, the Linux UI disables that control and shows the reason, including session-aware install hints (for example, suggesting `wtype` on a Wayland session).
+When one of those tools is missing, the Linux UI disables that control and shows the reason, including session-aware install hints (for example, suggesting `wtype` on a wlroots Wayland session, or `ydotool` on GNOME / KDE Wayland). The **Text insertion** settings panel surfaces the current backend chain and offers a one-click setup flow for the `ydotool` daemon and `input`-group membership when needed.
 
 ### Personalization
 
@@ -219,7 +220,7 @@ the walker reached the address bar but didn't recognise it.
   - `canberra-gtk-play` for sound feedback
   - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
   - `xclip` (X11 clipboard) and `wl-copy`/`wl-paste` (Wayland clipboard) for clipboard-backed auto-paste
-  - `wtype` for Wayland keyboard input, with `xdotool` as a fallback on X11 and XWayland apps
+  - `wtype` (wlroots Wayland: Hyprland, Sway) and `ydotool` (GNOME / KDE Wayland, where wtype is unavailable) for Wayland keyboard input; `xdotool` as a fallback on X11 and XWayland apps. `ydotool` requires its daemon to be running and the current user to be in the `input` group
 - Optional CUDA backend:
   - NVIDIA GPU and driver
   - CUDA 12 runtime/toolkit libraries providing `libcudart.so.12` and `libcublas.so.12`
@@ -249,6 +250,21 @@ pull request with the distribution, desktop environment, display server,
 reproduction steps, and any relevant logs (the Error Log section on the
 About page has a per-window AT-SPI walk diagnostic for URL detection
 issues).
+
+## Download a Prebuilt Release
+
+Tagged releases on [GitHub Releases](https://github.com/TypeWhisper/typewhisper-linux/releases) ship four formats for `linux-x64`. Pick whichever fits your distribution and root preference:
+
+| Format | Filename | Where it installs | Notes |
+|--------|----------|-------------------|-------|
+| AppImage | `TypeWhisper-<version>-x86_64.AppImage` | Anywhere — run the file directly | Portable, no install step. `chmod +x` and double-click or run from a terminal. |
+| Debian / Ubuntu `.deb` | `typewhisper_<version>_amd64.deb` | `/opt/typewhisper` with `/usr/bin/typewhisper` wrapper | `sudo apt install ./typewhisper_<version>_amd64.deb`. Recommends `libpulse0`, `pulseaudio-utils`, `playerctl`, `xdotool`. |
+| Fedora / RHEL `.rpm` | `typewhisper-<version>-1.x86_64.rpm` | `/opt/typewhisper` with `/usr/bin/typewhisper` wrapper | `sudo dnf install ./typewhisper-<version>-1.x86_64.rpm`. Recommends `pulseaudio-libs`, `pulseaudio-utils`, `playerctl`, `xdotool`. |
+| Tarball | `typewhisper-linux-x64-<version>.tar.gz` | User-local: `~/.local/share/TypeWhisper` + `~/.local/bin/typewhisper` symlink | No root required. Extract, then `./install.sh` (or `./install.sh --uninstall` to remove). |
+
+All four formats bundle the self-contained .NET runtime and the Linux plugins — `.NET 10 SDK` is only needed if you're building from source. Optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `wl-copy`/`xclip`, `canberra-gtk-play`, `espeak-ng`) are still installed via your distro; see *Linux Requirements* below.
+
+The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayland global hotkeys (`input`-group membership for the evdev backend) still need their per-distro setup steps regardless of which package format you install.
 
 ## Build and Run
 
@@ -446,7 +462,7 @@ The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin
 - Action plugins — `Linear` and `Obsidian`
 - Post-processing plugins — `Script` (run a shell command against the transcription)
 - Memory storage plugins — `FileMemory` (local JSON) and `OpenAiVectorMemory` (embedding-backed recall)
-- Companion plugins — `LiveTranscript` window and `Webhook` notifications
+- Companion plugins — `Webhook` notifications
 
 The Linux build currently deploys bundled plugins from `plugins/` into the app output, then copies them into the user plugin directory on first run if they are missing.
 

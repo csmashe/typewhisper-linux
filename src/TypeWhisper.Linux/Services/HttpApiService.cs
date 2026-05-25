@@ -88,8 +88,6 @@ public sealed class HttpApiService : IDisposable
         _disposed = true;
     }
 
-    public event Action? StateChanged;
-
     public void Start(int port)
     {
         if (IsRunning && _port == port)
@@ -129,19 +127,6 @@ public sealed class HttpApiService : IDisposable
         Stop(true);
     }
 
-    private void Stop(bool updateStatus)
-    {
-        _cts?.Cancel();
-        _listener?.Stop();
-        _listener?.Close();
-        _listener = null;
-        _port = 0;
-        if (updateStatus)
-        {
-            SetStatus("Local API is disabled.");
-        }
-    }
-
     public void ApplySettings()
     {
         var settings = _settings.Current;
@@ -153,6 +138,28 @@ public sealed class HttpApiService : IDisposable
         else
         {
             Stop();
+        }
+    }
+
+    internal static string ReadBearerToken(AppSettings settings)
+    {
+        return string.IsNullOrWhiteSpace(settings.ApiServerBearerToken)
+            ? ""
+            : ApiKeyProtection.Decrypt(settings.ApiServerBearerToken);
+    }
+
+    public event Action? StateChanged;
+
+    private void Stop(bool updateStatus)
+    {
+        _cts?.Cancel();
+        _listener?.Stop();
+        _listener?.Close();
+        _listener = null;
+        _port = 0;
+        if (updateStatus)
+        {
+            SetStatus("Local API is disabled.");
         }
     }
 
@@ -879,13 +886,6 @@ public sealed class HttpApiService : IDisposable
             Encoding.UTF8.GetBytes(providedToken),
             Encoding.UTF8.GetBytes(expectedToken)
         );
-    }
-
-    internal static string ReadBearerToken(AppSettings settings)
-    {
-        return string.IsNullOrWhiteSpace(settings.ApiServerBearerToken)
-            ? ""
-            : ApiKeyProtection.Decrypt(settings.ApiServerBearerToken);
     }
 
     private string? GetAllowedOrigin(HttpListenerRequest request)

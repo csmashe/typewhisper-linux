@@ -78,8 +78,6 @@ public sealed class AudioRecordingService : IDisposable
         }
     }
 
-    public event EventHandler<float>? LevelChanged;
-
     public IReadOnlyList<AudioInputDevice> GetInputDevices()
     {
         EnsurePortAudioInitialized();
@@ -241,41 +239,29 @@ public sealed class AudioRecordingService : IDisposable
         UpdateLevel(0f);
     }
 
-    private StreamCallbackResult InputAudioCallback(
-        IntPtr input,
-        IntPtr output,
-        uint frameCount,
-        ref StreamCallbackTimeInfo timeInfo,
-        StreamCallbackFlags statusFlags,
-        IntPtr userData
-    )
+    public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
     {
-        return ProcessAudioBuffer(input, frameCount, IsRecording);
-    }
+        var devices = GetInputDevices();
 
-    private StreamCallbackResult ProcessAudioBuffer(IntPtr input, uint frameCount, bool copySamples)
-    {
-        if (input == IntPtr.Zero || frameCount == 0)
+        if (!string.IsNullOrWhiteSpace(preferredDeviceId))
         {
-            return StreamCallbackResult.Continue;
-        }
-
-        var buffer = new float[frameCount];
-        Marshal.Copy(input, buffer, 0, (int)frameCount);
-
-        var processedBuffer = ApplyWhisperModeGain(buffer, copySamples && WhisperModeEnabled);
-        UpdateLevel(ComputeRmsLevel(processedBuffer));
-
-        if (copySamples)
-        {
-            lock (_sampleLock)
+            var byId = devices.FirstOrDefault(d => d.PersistentId == preferredDeviceId);
+            if (byId is not null)
             {
-                _sampleChunks.Add(processedBuffer);
-                _sampleCount += processedBuffer.Length;
+                return byId;
             }
         }
 
-        return StreamCallbackResult.Continue;
+        if (preferredIndex.HasValue)
+        {
+            var byIndex = devices.FirstOrDefault(d => d.Index == preferredIndex.Value);
+            if (byIndex is not null)
+            {
+                return byIndex;
+            }
+        }
+
+        return devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
     }
 
     // Simple per-chunk AGC for "whisper mode": boosts quiet speech so it
@@ -326,6 +312,79 @@ public sealed class AudioRecordingService : IDisposable
         return (float)Math.Sqrt(sumSquares / samples.Length);
     }
 
+    // Linear interpolation resampler. Quality is adequate for speech (the
+    // band of interest is well below Nyquist for any of our capture rates)
+    // and avoids the dependency on a native resampling library.
+    internal static float[] ResampleToSampleRate(
+        float[] samples,
+        int sourceSampleRate,
+        int targetSampleRate
+    )
+    {
+        if (samples.Length == 0 || sourceSampleRate <= 0 || sourceSampleRate == targetSampleRate)
+        {
+            return samples;
+        }
+
+        var outputLength = Math.Max(
+            1,
+            (int)Math.Round(samples.Length * (double)targetSampleRate / sourceSampleRate)
+        );
+        var output = new float[outputLength];
+        var ratio = (double)sourceSampleRate / targetSampleRate;
+
+        for (var i = 0; i < output.Length; i++)
+        {
+            var sourceIndex = i * ratio;
+            var leftIndex = (int)Math.Floor(sourceIndex);
+            var rightIndex = Math.Min(leftIndex + 1, samples.Length - 1);
+            var fraction = (float)(sourceIndex - leftIndex);
+
+            output[i] = samples[leftIndex] + (samples[rightIndex] - samples[leftIndex]) * fraction;
+        }
+
+        return output;
+    }
+
+    public event EventHandler<float>? LevelChanged;
+
+    private StreamCallbackResult InputAudioCallback(
+        IntPtr input,
+        IntPtr output,
+        uint frameCount,
+        ref StreamCallbackTimeInfo timeInfo,
+        StreamCallbackFlags statusFlags,
+        IntPtr userData
+    )
+    {
+        return ProcessAudioBuffer(input, frameCount, IsRecording);
+    }
+
+    private StreamCallbackResult ProcessAudioBuffer(IntPtr input, uint frameCount, bool copySamples)
+    {
+        if (input == IntPtr.Zero || frameCount == 0)
+        {
+            return StreamCallbackResult.Continue;
+        }
+
+        var buffer = new float[frameCount];
+        Marshal.Copy(input, buffer, 0, (int)frameCount);
+
+        var processedBuffer = ApplyWhisperModeGain(buffer, copySamples && WhisperModeEnabled);
+        UpdateLevel(ComputeRmsLevel(processedBuffer));
+
+        if (copySamples)
+        {
+            lock (_sampleLock)
+            {
+                _sampleChunks.Add(processedBuffer);
+                _sampleCount += processedBuffer.Length;
+            }
+        }
+
+        return StreamCallbackResult.Continue;
+    }
+
     private void UpdateLevel(float level)
     {
         Volatile.Write(ref _currentRmsLevel, level);
@@ -374,31 +433,6 @@ public sealed class AudioRecordingService : IDisposable
                 return true;
             }
         }
-    }
-
-    public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
-    {
-        var devices = GetInputDevices();
-
-        if (!string.IsNullOrWhiteSpace(preferredDeviceId))
-        {
-            var byId = devices.FirstOrDefault(d => d.PersistentId == preferredDeviceId);
-            if (byId is not null)
-            {
-                return byId;
-            }
-        }
-
-        if (preferredIndex.HasValue)
-        {
-            var byIndex = devices.FirstOrDefault(d => d.Index == preferredIndex.Value);
-            if (byIndex is not null)
-            {
-                return byIndex;
-            }
-        }
-
-        return devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
     }
 
     private int? ResolveSelectedDeviceIndex()
@@ -482,7 +516,11 @@ public sealed class AudioRecordingService : IDisposable
                 Trace.WriteLine(
                     $"[AudioRecordingService] Failed to open input stream at {sampleRate} Hz: {ex.Message}"
                 );
-                try { stream?.Dispose(); } catch { /* best effort */ }
+                try { stream?.Dispose(); }
+                catch
+                {
+                    /* best effort */
+                }
             }
         }
 
@@ -580,40 +618,6 @@ public sealed class AudioRecordingService : IDisposable
             );
             return FloatSamplesToWav(outputSamples, SampleRate);
         }
-    }
-
-    // Linear interpolation resampler. Quality is adequate for speech (the
-    // band of interest is well below Nyquist for any of our capture rates)
-    // and avoids the dependency on a native resampling library.
-    internal static float[] ResampleToSampleRate(
-        float[] samples,
-        int sourceSampleRate,
-        int targetSampleRate
-    )
-    {
-        if (samples.Length == 0 || sourceSampleRate <= 0 || sourceSampleRate == targetSampleRate)
-        {
-            return samples;
-        }
-
-        var outputLength = Math.Max(
-            1,
-            (int)Math.Round(samples.Length * (double)targetSampleRate / sourceSampleRate)
-        );
-        var output = new float[outputLength];
-        var ratio = (double)sourceSampleRate / targetSampleRate;
-
-        for (var i = 0; i < output.Length; i++)
-        {
-            var sourceIndex = i * ratio;
-            var leftIndex = (int)Math.Floor(sourceIndex);
-            var rightIndex = Math.Min(leftIndex + 1, samples.Length - 1);
-            var fraction = (float)(sourceIndex - leftIndex);
-
-            output[i] = samples[leftIndex] + (samples[rightIndex] - samples[leftIndex]) * fraction;
-        }
-
-        return output;
     }
 
     private static byte[] WriteWav(

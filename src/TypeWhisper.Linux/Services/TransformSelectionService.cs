@@ -40,8 +40,6 @@ public sealed class TransformSelectionService
         _commands = commands;
     }
 
-    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
-
     public async Task ToggleAsync()
     {
         if (!await _gate.WaitAsync(0))
@@ -90,6 +88,8 @@ public sealed class TransformSelectionService
                || normalized.Equals("nevermind", StringComparison.OrdinalIgnoreCase)
                || normalized.Equals("stop", StringComparison.OrdinalIgnoreCase);
     }
+
+    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
     private async Task StartAsync()
     {

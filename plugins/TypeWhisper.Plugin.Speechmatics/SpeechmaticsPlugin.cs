@@ -70,13 +70,15 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
         // Speechmatics v2 requires an explicit language code; "auto" is not supported.
         // Surface this clearly rather than silently transcribing as English, which
-        // produces garbage output for non-English audio.
-        if (language == "auto")
+        // produces garbage output for non-English audio. Normalize first so " Auto " /
+        // "AUTO" / etc. from less-careful callers hit the same guard.
+        var normalized = language?.Trim().ToLowerInvariant();
+        if (normalized == "auto")
             throw new NotSupportedException(
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
 
-        var lang = string.IsNullOrEmpty(language) ? "en" : language;
+        var lang = string.IsNullOrEmpty(normalized) ? "en" : normalized;
 
         // Step 1: Submit batch transcription job
         var config = JsonSerializer.Serialize(

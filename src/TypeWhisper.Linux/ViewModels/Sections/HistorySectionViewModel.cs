@@ -7,6 +7,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+
 // ReSharper disable UnusedParameterInPartialMethod
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -71,59 +72,21 @@ public partial class HistorySectionViewModel : ObservableObject
     public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
     public bool HasVisibleRecords => Groups.Any(group => group.Entries.Count > 0);
 
-    private async Task LoadAsync()
-    {
-        IsLoading = true;
-        try
-        {
-            await _history.EnsureLoadedAsync();
-            Refresh();
-        }
-        finally
-        {
-            IsLoading = false;
-            OnPropertyChanged(nameof(ShowTimeline));
-            OnPropertyChanged(nameof(ShowEmptyState));
-        }
-    }
-
-    partial void OnSearchQueryChanged(string value)
-    {
-        Refresh();
-    }
-
-    partial void OnSelectedAppFilterChanged(string value)
-    {
-        Refresh();
-    }
-
     public void ClearAll()
     {
         _history.ClearAll();
     }
 
-    [RelayCommand]
-    private void DeleteRecord(HistoryRecordRow record)
+    public string BuildExportContent(string extension)
     {
-        _history.DeleteRecord(record.Record.Id);
-    }
-
-    [RelayCommand]
-    private void TogglePlayback(HistoryRecordRow record)
-    {
-        if (!record.HasSessionAudio || string.IsNullOrWhiteSpace(record.Record.AudioFileName))
+        var visibleRecords = GetVisibleRecords().ToList();
+        return extension.ToLowerInvariant() switch
         {
-            return;
-        }
-
-        if (record.IsPlaying)
-        {
-            _audioPlayback.Stop();
-        }
-        else
-        {
-            _audioPlayback.Play(record.Record.AudioFileName);
-        }
+            ".csv" => _history.ExportToCsv(visibleRecords),
+            ".md" => _history.ExportToMarkdown(visibleRecords),
+            ".json" => _history.ExportToJson(visibleRecords),
+            _ => _history.ExportToText(visibleRecords)
+        };
     }
 
     internal void SaveEdit(HistoryRecordRow record, string newText)
@@ -262,16 +225,54 @@ public partial class HistorySectionViewModel : ObservableObject
                );
     }
 
-    public string BuildExportContent(string extension)
+    private async Task LoadAsync()
     {
-        var visibleRecords = GetVisibleRecords().ToList();
-        return extension.ToLowerInvariant() switch
+        IsLoading = true;
+        try
         {
-            ".csv" => _history.ExportToCsv(visibleRecords),
-            ".md" => _history.ExportToMarkdown(visibleRecords),
-            ".json" => _history.ExportToJson(visibleRecords),
-            _ => _history.ExportToText(visibleRecords)
-        };
+            await _history.EnsureLoadedAsync();
+            Refresh();
+        }
+        finally
+        {
+            IsLoading = false;
+            OnPropertyChanged(nameof(ShowTimeline));
+            OnPropertyChanged(nameof(ShowEmptyState));
+        }
+    }
+
+    partial void OnSearchQueryChanged(string value)
+    {
+        Refresh();
+    }
+
+    partial void OnSelectedAppFilterChanged(string value)
+    {
+        Refresh();
+    }
+
+    [RelayCommand]
+    private void DeleteRecord(HistoryRecordRow record)
+    {
+        _history.DeleteRecord(record.Record.Id);
+    }
+
+    [RelayCommand]
+    private void TogglePlayback(HistoryRecordRow record)
+    {
+        if (!record.HasSessionAudio || string.IsNullOrWhiteSpace(record.Record.AudioFileName))
+        {
+            return;
+        }
+
+        if (record.IsPlaying)
+        {
+            _audioPlayback.Stop();
+        }
+        else
+        {
+            _audioPlayback.Play(record.Record.AudioFileName);
+        }
     }
 
     private IEnumerable<TranscriptionRecord> GetVisibleRecords()
@@ -435,6 +436,24 @@ public partial class HistoryRecordRow : ObservableObject
     public bool HasCorrectionSuggestions =>
         IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
 
+    internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
+    {
+        CorrectionSuggestions.Clear();
+        foreach (var suggestion in suggestions)
+        {
+            CorrectionSuggestions.Add(new CorrectionSuggestionRow(suggestion));
+        }
+
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
+    }
+
+    internal void NotifyPlaybackStateChanged()
+    {
+        OnPropertyChanged(nameof(HasSessionAudio));
+        OnPropertyChanged(nameof(IsPlaying));
+        OnPropertyChanged(nameof(PlaybackButtonText));
+    }
+
     partial void OnIsExpandedChanged(bool value)
     {
         if (value)
@@ -524,24 +543,6 @@ public partial class HistoryRecordRow : ObservableObject
     private void AddToDictionary()
     {
         _owner.AddTermFromHistory(this);
-    }
-
-    internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
-    {
-        CorrectionSuggestions.Clear();
-        foreach (var suggestion in suggestions)
-        {
-            CorrectionSuggestions.Add(new CorrectionSuggestionRow(suggestion));
-        }
-
-        OnPropertyChanged(nameof(HasCorrectionSuggestions));
-    }
-
-    internal void NotifyPlaybackStateChanged()
-    {
-        OnPropertyChanged(nameof(HasSessionAudio));
-        OnPropertyChanged(nameof(IsPlaying));
-        OnPropertyChanged(nameof(PlaybackButtonText));
     }
 
     private void NotifyExpansionStateChanged()

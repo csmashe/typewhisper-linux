@@ -267,43 +267,6 @@ public sealed class DictationOrchestrator : IDisposable
         _toggleGate.Dispose();
     }
 
-    public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
-    public event EventHandler<bool>? RecordingStateChanged;
-    public event EventHandler<string>? TranscriptionCompleted;
-    public event EventHandler<string>? StatusMessage;
-    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
-
-    /// <summary>
-    ///     Projects an overlay StatusText string to one of the documented
-    ///     <c>typewhisper status</c> state labels (transcribing / injecting /
-    ///     idle). The <c>recording</c> label is sourced from the audio recorder,
-    ///     not StatusText, so it is not produced here. Kept pure and cheap —
-    ///     status reads must not block the UI thread.
-    /// </summary>
-    internal static string MapOverlayStatusToStateLabel(string? statusText)
-    {
-        if (statusText is null)
-        {
-            return "idle";
-        }
-
-        if (
-            statusText.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
-            || statusText.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase)
-        )
-        {
-            return "transcribing";
-        }
-
-        // Overlay shows "Inserting…"; the documented CLI state is "injecting".
-        if (statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase))
-        {
-            return "injecting";
-        }
-
-        return "idle";
-    }
-
     public void Initialize()
     {
         if (_initialized || _disposed)
@@ -941,6 +904,43 @@ public sealed class DictationOrchestrator : IDisposable
             }
         }
     }
+
+    /// <summary>
+    ///     Projects an overlay StatusText string to one of the documented
+    ///     <c>typewhisper status</c> state labels (transcribing / injecting /
+    ///     idle). The <c>recording</c> label is sourced from the audio recorder,
+    ///     not StatusText, so it is not produced here. Kept pure and cheap —
+    ///     status reads must not block the UI thread.
+    /// </summary>
+    internal static string MapOverlayStatusToStateLabel(string? statusText)
+    {
+        if (statusText is null)
+        {
+            return "idle";
+        }
+
+        if (
+            statusText.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
+            || statusText.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return "transcribing";
+        }
+
+        // Overlay shows "Inserting…"; the documented CLI state is "injecting".
+        if (statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase))
+        {
+            return "injecting";
+        }
+
+        return "idle";
+    }
+
+    public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
+    public event EventHandler<bool>? RecordingStateChanged;
+    public event EventHandler<string>? TranscriptionCompleted;
+    public event EventHandler<string>? StatusMessage;
+    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
     private async Task TranscribeAndInsertAsync(
         byte[] wav,

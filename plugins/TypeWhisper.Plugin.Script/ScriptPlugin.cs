@@ -262,6 +262,19 @@ public sealed class ScriptService
             _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
             return text;
         }
+        catch (OperationCanceledException)
+        {
+            // Caller cancelled (ct) — kill the child so it doesn't outlive the
+            // dictation flow as a leaked process, then propagate the cancellation.
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            { /* best effort */
+            }
+            throw;
+        }
 
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
@@ -437,7 +450,7 @@ public sealed class ScriptPlugin
                 Kind: PluginSettingKind.Dropdown,
                 Options:
                 [
-                    new PluginSettingOption("", "OS default"),
+                    new PluginSettingOption("", "bash (default)"),
                     new PluginSettingOption("bash", "bash"),
                     new PluginSettingOption("sh", "sh"),
                     new PluginSettingOption("pwsh", "PowerShell"),

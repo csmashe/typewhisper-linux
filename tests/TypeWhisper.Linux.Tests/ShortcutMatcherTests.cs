@@ -7,26 +7,6 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class ShortcutMatcherTests
 {
-    private static GlobalShortcutSet DefaultSet()
-    {
-        return new GlobalShortcutSet(
-            KeyCode.VcSpace,
-            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-            null,
-            ModifierMask.None,
-            null,
-            ModifierMask.None,
-            null,
-            ModifierMask.None,
-            null,
-            ModifierMask.None,
-            KeyCode.VcEscape,
-            ModifierMask.None,
-            RecordingMode.Toggle,
-            false
-        );
-    }
-
     [Fact]
     public void Match_DefaultBinding_IdentifiesDictation()
     {
@@ -68,5 +48,25 @@ public sealed class ShortcutMatcherTests
         );
 
         Assert.Equal(ShortcutMatchKind.Dictation, kind);
+    }
+
+    private static GlobalShortcutSet DefaultSet()
+    {
+        return new GlobalShortcutSet(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            RecordingMode.Toggle,
+            false
+        );
     }
 }

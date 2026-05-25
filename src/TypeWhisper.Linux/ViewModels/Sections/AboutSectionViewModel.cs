@@ -60,13 +60,6 @@ public partial class AboutSectionViewModel : ObservableObject
     public ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
     public bool HasErrors => ErrorEntries.Count > 0;
 
-    [RelayCommand]
-    private void ClearErrors()
-    {
-        _errorLog.ClearAll();
-        RefreshErrors();
-    }
-
     public string ExportDiagnostics()
     {
         return _errorLog.ExportDiagnostics();
@@ -118,6 +111,13 @@ public partial class AboutSectionViewModel : ObservableObject
         {
             IsBackupBusy = false;
         }
+    }
+
+    [RelayCommand]
+    private void ClearErrors()
+    {
+        _errorLog.ClearAll();
+        RefreshErrors();
     }
 
     private void RefreshErrors()

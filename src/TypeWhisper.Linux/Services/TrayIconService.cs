@@ -47,10 +47,6 @@ public sealed class TrayIconService : IDisposable
         _trayIcon?.Dispose();
     }
 
-    public event EventHandler? ShowSettingsRequested;
-    public event EventHandler? ExitRequested;
-    public event EventHandler? DictationToggleRequested;
-
     public void Initialize()
     {
         // A StatusNotifier host existing (the D-Bus probe) is necessary but
@@ -83,6 +79,14 @@ public sealed class TrayIconService : IDisposable
         {
             IsTrayAvailable = false;
             Debug.WriteLine($"[TrayIconService] Tray init failed: {ex.Message}");
+        }
+    }
+
+    public void UpdateTooltip(string text)
+    {
+        if (_trayIcon is not null)
+        {
+            _trayIcon.ToolTipText = text;
         }
     }
 
@@ -131,13 +135,9 @@ public sealed class TrayIconService : IDisposable
         return result.Succeeded && result.StandardOutput.Contains("true", StringComparison.Ordinal);
     }
 
-    public void UpdateTooltip(string text)
-    {
-        if (_trayIcon is not null)
-        {
-            _trayIcon.ToolTipText = text;
-        }
-    }
+    public event EventHandler? ShowSettingsRequested;
+    public event EventHandler? ExitRequested;
+    public event EventHandler? DictationToggleRequested;
 
     private static WindowIcon? LoadIcon()
     {

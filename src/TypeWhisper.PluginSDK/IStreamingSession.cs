@@ -9,11 +9,11 @@ public interface IStreamingSession : IAsyncDisposable
     /// <summary>Sends a chunk of PCM16 mono 16 kHz audio to the streaming endpoint.</summary>
     Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct);
 
-    /// <summary>Fired when partial or final transcript text arrives.</summary>
-    event Action<StreamingTranscriptEvent> TranscriptReceived;
-
     /// <summary>Signals end of audio input and flushes any remaining transcript.</summary>
     Task FinalizeAsync(CancellationToken ct);
+
+    /// <summary>Fired when partial or final transcript text arrives.</summary>
+    event Action<StreamingTranscriptEvent> TranscriptReceived;
 }
 
 /// <summary>A transcript update from a streaming session.</summary>

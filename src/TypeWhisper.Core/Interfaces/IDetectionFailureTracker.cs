@@ -22,9 +22,6 @@ public interface IDetectionFailureTracker
     /// <summary>Reason string from the most recent failure, or <c>null</c> if no failures have been recorded.</summary>
     string? LastFailureReason { get; }
 
-    /// <summary>Raised on every <see cref="RecordFailure" /> call, including the one that flips the banner state.</summary>
-    event EventHandler<DetectionFailureEvent>? OnFailure;
-
     /// <summary>Resets the consecutive-failure counter and clears the banner state.</summary>
     void RecordSuccess();
 
@@ -34,6 +31,9 @@ public interface IDetectionFailureTracker
     ///     <see cref="ShouldShowPersistentBanner" />, and fires <see cref="OnFailure" />.
     /// </summary>
     void RecordFailure(string compositor, string reason);
+
+    /// <summary>Raised on every <see cref="RecordFailure" /> call, including the one that flips the banner state.</summary>
+    event EventHandler<DetectionFailureEvent>? OnFailure;
 }
 
 /// <summary>

@@ -562,52 +562,6 @@ public sealed class TextInsertionServiceTests
         Assert.Empty(runner.Calls);
     }
 
-    private static LinuxCapabilitySnapshot SnapshotFor(
-        string sessionType,
-        bool hasXdotool,
-        bool hasWtype
-    )
-    {
-        return SnapshotFor(
-            sessionType,
-            hasXdotool,
-            hasWtype,
-            "unknown",
-            false,
-            false
-        );
-    }
-
-    private static LinuxCapabilitySnapshot SnapshotFor(
-        string sessionType,
-        bool hasXdotool,
-        bool hasWtype,
-        string compositor,
-        bool hasYdotool,
-        bool hasYdotoolSocket
-    )
-    {
-        return new LinuxCapabilitySnapshot(
-            sessionType,
-            true,
-            sessionType == "Wayland" ? "wl-clipboard" : "xclip",
-            hasXdotool,
-            hasWtype,
-            false,
-            false,
-            null,
-            false,
-            false,
-            false,
-            false,
-            false,
-            compositor,
-            hasYdotool,
-            hasYdotoolSocket,
-            hasYdotoolSocket ? "/run/user/1000/.ydotool_socket" : null
-        );
-    }
-
     [Fact]
     public async Task LinuxTextInsertionPlatform_GnomeWayland_PrefersYdotoolOverWtype()
     {
@@ -897,6 +851,52 @@ public sealed class TextInsertionServiceTests
 
         Assert.True(await platform.TypeTextAsync("after"));
         Assert.Equal("ydotool", Assert.Single(runner.Calls).FileName);
+    }
+
+    private static LinuxCapabilitySnapshot SnapshotFor(
+        string sessionType,
+        bool hasXdotool,
+        bool hasWtype
+    )
+    {
+        return SnapshotFor(
+            sessionType,
+            hasXdotool,
+            hasWtype,
+            "unknown",
+            false,
+            false
+        );
+    }
+
+    private static LinuxCapabilitySnapshot SnapshotFor(
+        string sessionType,
+        bool hasXdotool,
+        bool hasWtype,
+        string compositor,
+        bool hasYdotool,
+        bool hasYdotoolSocket
+    )
+    {
+        return new LinuxCapabilitySnapshot(
+            sessionType,
+            true,
+            sessionType == "Wayland" ? "wl-clipboard" : "xclip",
+            hasXdotool,
+            hasWtype,
+            false,
+            false,
+            null,
+            false,
+            false,
+            false,
+            false,
+            false,
+            compositor,
+            hasYdotool,
+            hasYdotoolSocket,
+            hasYdotoolSocket ? "/run/user/1000/.ydotool_socket" : null
+        );
     }
 
     private sealed class RecordingProcessRunner

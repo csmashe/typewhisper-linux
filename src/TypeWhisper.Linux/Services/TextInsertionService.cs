@@ -792,11 +792,6 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         );
     }
 
-    private void OnSnapshotChanged(object? sender, LinuxCapabilitySnapshot snapshot)
-    {
-        ApplyRefreshedSnapshot(snapshot);
-    }
-
     /// <summary>
     ///     Re-reads the capability snapshot and rebuilds the backend chain
     ///     in place. Called from the SnapshotChanged subscription so that
@@ -811,6 +806,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         _chain = newChain;
         _disabled = newDisabled;
         LastFailureReason = InsertionFailureReason.None;
+    }
+
+    private void OnSnapshotChanged(object? sender, LinuxCapabilitySnapshot snapshot)
+    {
+        ApplyRefreshedSnapshot(snapshot);
     }
 
     private async Task<bool> WalkChainAsync(Func<InputBackend, Task<bool>> attempt)

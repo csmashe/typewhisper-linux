@@ -19,18 +19,6 @@ public sealed class KeyboardDeviceDiscoveryTests
     private const int KeyPower = 116;
     private const int BtnLeft = 0x110;
 
-    /// <summary>Builds a 96-byte EV_KEY bitmap with the given key bits set.</summary>
-    private static byte[] Bitmap(params int[] setBits)
-    {
-        var bytes = new byte[96]; // (KEY_MAX 0x2ff / 8) + 1
-        foreach (var bit in setBits)
-        {
-            bytes[bit / 8] |= (byte)(1 << (bit % 8));
-        }
-
-        return bytes;
-    }
-
     [Fact]
     public void LooksLikeKeyboard_true_for_a_device_with_the_typing_keys()
     {
@@ -75,5 +63,17 @@ public sealed class KeyboardDeviceDiscoveryTests
     public void IsExcludedByName_only_excludes_the_ydotool_device(string name, bool excluded)
     {
         Assert.Equal(excluded, KeyboardDeviceDiscovery.IsExcludedByName(name));
+    }
+
+    /// <summary>Builds a 96-byte EV_KEY bitmap with the given key bits set.</summary>
+    private static byte[] Bitmap(params int[] setBits)
+    {
+        var bytes = new byte[96]; // (KEY_MAX 0x2ff / 8) + 1
+        foreach (var bit in setBits)
+        {
+            bytes[bit / 8] |= (byte)(1 << (bit % 8));
+        }
+
+        return bytes;
     }
 }

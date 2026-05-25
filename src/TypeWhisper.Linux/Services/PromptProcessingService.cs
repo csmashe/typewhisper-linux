@@ -75,11 +75,6 @@ public sealed class PromptProcessingService
         return await provider.ProcessAsync(systemPrompt, inputText, modelId, ct);
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
-    {
-        return ResolveProvider(action.ProviderOverride);
-    }
-
     internal static string FormatPromptActionInput(string inputText)
     {
         return $"""
@@ -87,6 +82,11 @@ public sealed class PromptProcessingService
 
                 {inputText}
                 """;
+    }
+
+    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
+    {
+        return ResolveProvider(action.ProviderOverride);
     }
 
     private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(string? providerOverride)

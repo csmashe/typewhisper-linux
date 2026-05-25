@@ -30,11 +30,6 @@ public partial class RecentTranscriptionsPaletteViewModel : ObservableObject
     public ObservableCollection<RecentTranscriptionPaletteItem> FilteredEntries { get; } = [];
     public bool HasFilteredEntries => FilteredEntries.Count > 0;
 
-    partial void OnSearchQueryChanged(string value)
-    {
-        RefreshFilteredEntries();
-    }
-
     public void MoveSelection(int offset)
     {
         if (FilteredEntries.Count == 0)
@@ -60,6 +55,11 @@ public partial class RecentTranscriptionsPaletteViewModel : ObservableObject
         }
 
         _onSelect(item);
+    }
+
+    partial void OnSearchQueryChanged(string value)
+    {
+        RefreshFilteredEntries();
     }
 
     private void RefreshFilteredEntries()

@@ -109,6 +109,13 @@ public sealed record TranslationModelInfo
         Pair("de", "es")
     ];
 
+    public static TranslationModelInfo? FindModel(string sourceLang, string targetLang)
+    {
+        return AvailableModels.FirstOrDefault(m =>
+            m.SourceLanguage == sourceLang && m.TargetLanguage == targetLang
+        );
+    }
+
     private static List<TranslationTargetOption> BuildOptions(bool includeGlobal)
     {
         var list = new List<TranslationTargetOption>();
@@ -160,12 +167,5 @@ public sealed record TranslationModelInfo
                 new TranslationFileInfo("config.json", $"{HF}/opus-mt-{repo}/resolve/main/config.json", 1)
             ]
         };
-    }
-
-    public static TranslationModelInfo? FindModel(string sourceLang, string targetLang)
-    {
-        return AvailableModels.FirstOrDefault(m =>
-            m.SourceLanguage == sourceLang && m.TargetLanguage == targetLang
-        );
     }
 }

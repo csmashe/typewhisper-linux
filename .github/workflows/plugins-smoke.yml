@@ -28,6 +28,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - id: discover
         shell: pwsh
@@ -118,6 +119,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Validate plugin manifests and localization files
         shell: pwsh
@@ -175,6 +178,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Resolve plugin metadata
         id: meta

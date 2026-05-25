@@ -29,9 +29,13 @@ public sealed class ProfileService : IProfileService
     public void AddProfile(Profile profile)
     {
         EnsureCacheLoaded();
-        _cache.Add(profile);
-        SortCache();
-        SaveToDisk();
+        // Stage on a copy and persist before swapping _cache so a save failure
+        // can't leave the service holding an unsaved profile that a later
+        // successful save would silently flush.
+        var newCache = new List<Profile>(_cache) { profile };
+        SortList(newCache);
+        SaveToDisk(newCache);
+        _cache = newCache;
         ProfilesChanged?.Invoke();
     }
 
@@ -39,22 +43,26 @@ public sealed class ProfileService : IProfileService
     {
         EnsureCacheLoaded();
         var updated = profile with { UpdatedAt = DateTime.UtcNow };
-        var idx = _cache.FindIndex(p => p.Id == profile.Id);
+        var newCache = new List<Profile>(_cache);
+        var idx = newCache.FindIndex(p => p.Id == profile.Id);
         if (idx >= 0)
         {
-            _cache[idx] = updated;
+            newCache[idx] = updated;
         }
 
-        SortCache();
-        SaveToDisk();
+        SortList(newCache);
+        SaveToDisk(newCache);
+        _cache = newCache;
         ProfilesChanged?.Invoke();
     }
 
     public void DeleteProfile(string id)
     {
         EnsureCacheLoaded();
-        _cache.RemoveAll(p => p.Id == id);
-        SaveToDisk();
+        var newCache = new List<Profile>(_cache);
+        newCache.RemoveAll(p => p.Id == id);
+        SaveToDisk(newCache);
+        _cache = newCache;
         ProfilesChanged?.Invoke();
     }
 
@@ -197,9 +205,9 @@ public sealed class ProfileService : IProfileService
                || host.EndsWith("." + pattern, StringComparison.OrdinalIgnoreCase);
     }
 
-    private void SortCache()
+    private static void SortList(List<Profile> profiles)
     {
-        _cache.Sort((a, b) => b.Priority.CompareTo(a.Priority));
+        profiles.Sort((a, b) => b.Priority.CompareTo(a.Priority));
     }
 
     private void EnsureCacheLoaded()
@@ -222,11 +230,11 @@ public sealed class ProfileService : IProfileService
             _cache = [];
         }
 
-        SortCache();
+        SortList(_cache);
         _cacheLoaded = true;
     }
 
-    private void SaveToDisk()
+    private void SaveToDisk(IReadOnlyList<Profile> profiles)
     {
         // Write to a sibling temp file and atomically move it over the target.
         // A crash or power loss mid-write previously truncated _filePath, which
@@ -242,7 +250,7 @@ public sealed class ProfileService : IProfileService
             }
 
             var json = JsonSerializer.Serialize(
-                _cache,
+                profiles,
                 new JsonSerializerOptions { WriteIndented = true }
             );
 
@@ -251,7 +259,7 @@ public sealed class ProfileService : IProfileService
 
             if (File.Exists(_filePath))
             {
-                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+                File.Replace(tempPath, _filePath, null);
             }
             else
             {
@@ -260,14 +268,19 @@ public sealed class ProfileService : IProfileService
 
             tempPath = null;
         }
-        catch
+        finally
         {
+            // Surface persistence failures to callers — swallowing them left
+            // _cache mutated and ProfilesChanged firing as if the write had
+            // succeeded. Cleanup the orphaned temp file before propagating.
             if (tempPath is not null)
             {
                 try
                 {
                     if (File.Exists(tempPath))
+                    {
                         File.Delete(tempPath);
+                    }
                 }
                 catch { }
             }

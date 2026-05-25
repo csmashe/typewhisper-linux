@@ -36,8 +36,6 @@ public sealed class AudioPlaybackService : IDisposable
         EnsurePortAudioTerminated();
     }
 
-    public event Action? PlaybackStateChanged;
-
     public bool CanPlay(string? audioFileName)
     {
         return ResolveAudioPath(audioFileName) is { } path && File.Exists(path);
@@ -122,6 +120,8 @@ public sealed class AudioPlaybackService : IDisposable
 
         NotifyPlaybackChanged();
     }
+
+    public event Action? PlaybackStateChanged;
 
     private StreamCallbackResult PlaybackCallback(
         IntPtr input,

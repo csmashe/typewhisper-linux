@@ -65,12 +65,48 @@ internal sealed class WebhookStore
         return JsonSerializer.Deserialize<List<WebhookConfig>>(json, s_jsonOptions) ?? [];
     }
 
-    /// <summary>Persists the supplied configs, creating the data directory if needed.</summary>
+    /// <summary>
+    /// Persists the supplied configs, creating the data directory if needed.
+    /// Writes through a sibling temp file and renames it over the target so a
+    /// crash or kill mid-write can't truncate webhooks.json.
+    /// </summary>
     public void Save(IEnumerable<WebhookConfig> configs)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
+        var dir = Path.GetDirectoryName(_configPath)!;
+        Directory.CreateDirectory(dir);
+
         var json = JsonSerializer.Serialize(configs.ToList(), s_jsonOptions);
-        File.WriteAllText(_configPath, json);
+        var tempPath = _configPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
+        try
+        {
+            File.WriteAllText(tempPath, json);
+
+            if (File.Exists(_configPath))
+            {
+                File.Replace(tempPath, _configPath, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(tempPath, _configPath);
+            }
+
+            tempPath = null!;
+        }
+        finally
+        {
+            if (tempPath is not null && File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // best effort cleanup
+                }
+            }
+        }
     }
 }
 
@@ -197,7 +233,7 @@ public sealed class WebhookService
             foreach (var header in webhook.Headers)
                 request.Headers.TryAddWithoutValidation(header.Key, header.Value);
 
-            var response = await _httpClient.SendAsync(request);
+            using var response = await _httpClient.SendAsync(request);
             var statusCode = (int)response.StatusCode;
 
             if (response.IsSuccessStatusCode)

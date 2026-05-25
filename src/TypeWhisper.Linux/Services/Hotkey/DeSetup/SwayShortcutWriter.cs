@@ -149,27 +149,6 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         );
     }
 
-    private static IEnumerable<string> BuildManagedLines(DeShortcutSpec spec)
-    {
-        var trigger = ToSwayBind(spec.Trigger);
-        // --no-repeat keeps a held key from spamming `record start`
-        // dozens of times a second when the user uses PTT. Sway will
-        // still deliver a single press + a single release.
-        yield return $"bindsym --no-repeat {trigger} exec {spec.OnPressCommand}";
-        if (!string.IsNullOrWhiteSpace(spec.OnReleaseCommand))
-        {
-            yield return $"bindsym --release {trigger} exec {spec.OnReleaseCommand}";
-        }
-
-        if (
-            !string.IsNullOrWhiteSpace(spec.OnCancelTrigger)
-            && !string.IsNullOrWhiteSpace(spec.OnCancelCommand)
-        )
-        {
-            yield return $"bindsym {ToSwayBind(spec.OnCancelTrigger!)} exec {spec.OnCancelCommand}";
-        }
-    }
-
     /// <summary>
     ///     Convert "Ctrl+Shift+Space" into Sway's "Ctrl+Shift+space" form.
     ///     Sway is case-sensitive for the named key tail (lower-case for
@@ -223,6 +202,27 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         // the exception: xkbcommon's keysym is "F1".."F35" mixed-case.
         sb.Append(NormalizeSwayKey(tail));
         return sb.ToString();
+    }
+
+    private static IEnumerable<string> BuildManagedLines(DeShortcutSpec spec)
+    {
+        var trigger = ToSwayBind(spec.Trigger);
+        // --no-repeat keeps a held key from spamming `record start`
+        // dozens of times a second when the user uses PTT. Sway will
+        // still deliver a single press + a single release.
+        yield return $"bindsym --no-repeat {trigger} exec {spec.OnPressCommand}";
+        if (!string.IsNullOrWhiteSpace(spec.OnReleaseCommand))
+        {
+            yield return $"bindsym --release {trigger} exec {spec.OnReleaseCommand}";
+        }
+
+        if (
+            !string.IsNullOrWhiteSpace(spec.OnCancelTrigger)
+            && !string.IsNullOrWhiteSpace(spec.OnCancelCommand)
+        )
+        {
+            yield return $"bindsym {ToSwayBind(spec.OnCancelTrigger!)} exec {spec.OnCancelCommand}";
+        }
     }
 
     private static string NormalizeSwayKey(string key)

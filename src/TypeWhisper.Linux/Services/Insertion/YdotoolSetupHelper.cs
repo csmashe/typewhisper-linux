@@ -59,122 +59,6 @@ public sealed class YdotoolSetupHelper
     }
 
     /// <summary>
-    ///     Absolute path to the user-level systemd unit we install when the
-    ///     distro doesn't ship one. Honors <c>XDG_CONFIG_HOME</c>, falling
-    ///     back to <c>~/.config</c>. Pure — no disk touch.
-    /// </summary>
-    internal static string UserUnitFilePath()
-    {
-        var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        var configHome = !string.IsNullOrEmpty(xdg)
-            ? xdg
-            : Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".config"
-            );
-        return Path.Combine(configHome, "systemd", "user", UserUnitName);
-    }
-
-    /// <summary>
-    ///     Builds the user-level <c>ydotoold.service</c> unit text. The first
-    ///     line carries <see cref="OwnershipMarker" /> so <see cref="RemoveAsync" />
-    ///     can confirm we own the file before deleting it. Pure.
-    /// </summary>
-    internal static string BuildUserUnitContent(string ydotooldPath)
-    {
-        return "# "
-               + OwnershipMarker
-               + " — user-level ydotoold service so direct-typing\n"
-               + "# works without a system unit. Delete this file to roll back.\n"
-               + "[Unit]\n"
-               + "Description=ydotool daemon (user) — installed by TypeWhisper\n"
-               + "Documentation=https://github.com/ReimuNotMoe/ydotool\n"
-               + "After=default.target\n"
-               + "\n"
-               + "[Service]\n"
-               + "Type=simple\n"
-               + $"ExecStart={ydotooldPath}\n"
-               + "Restart=on-failure\n"
-               + "RestartSec=2\n"
-               + "\n"
-               + "[Install]\n"
-               + "WantedBy=default.target\n";
-    }
-
-    /// <summary>
-    ///     Walks <c>$PATH</c> and returns the absolute path of the named
-    ///     binary, or <c>null</c> if it isn't reachable. Mirrors
-    ///     <see cref="DesktopDetector.BinaryExists" /> but returns the path —
-    ///     kept local to this helper since no other caller needs it.
-    /// </summary>
-    internal static string? ResolveBinaryPath(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return null;
-        }
-
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(path))
-        {
-            return null;
-        }
-
-        foreach (var dir in path.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrEmpty(dir))
-            {
-                continue;
-            }
-
-            try
-            {
-                var candidate = Path.Combine(dir, name);
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-            catch
-            {
-                // Bad PATH entry — skip.
-            }
-        }
-
-        return null;
-    }
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int access(string pathname, int mode);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern uint geteuid();
-
-    /// <summary>
-    ///     True only when this process can already read+write <c>/dev/uinput</c>
-    ///     (R_OK|W_OK = 6) — the ground-truth signal that the udev rule is
-    ///     unnecessary. Running as root is treated as "not accessible": root
-    ///     can always write the node, but the real non-root user still needs
-    ///     the rule, so we don't let a root-run GUI skip installing it.
-    /// </summary>
-    private static bool UinputIsAccessible()
-    {
-        try
-        {
-            if (geteuid() == 0)
-            {
-                return false;
-            }
-
-            return File.Exists("/dev/uinput") && access("/dev/uinput", 6) == 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
     ///     Cheap, side-effect-free probe of every component the install
     ///     touches. Called on panel load and again after any
     ///     <see cref="SetUpAsync" /> / <see cref="RemoveAsync" /> run. Includes
@@ -202,27 +86,6 @@ public sealed class YdotoolSetupHelper
             uinputAccessible,
             socket
         );
-    }
-
-    /// <summary>
-    ///     Synchronous probe used by <see cref="IsCurrentlyConfigured" />.
-    ///     One-shot subprocess (~5 ms), tight 500 ms ceiling so a hung
-    ///     daemon can't wedge the status panel. Blocks the caller — same as
-    ///     before the <see cref="IProcessRunner" /> seam; the runner uses
-    ///     ConfigureAwait(false) throughout so there is no UI-thread deadlock.
-    /// </summary>
-    private bool RunSyncProbe(string socketPath)
-    {
-        var result = _runner
-            .RunAsync(
-                YdotoolBackend.ExecutableName,
-                YdotoolBackend.ProbeArgs(),
-                new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath },
-                timeout: TimeSpan.FromMilliseconds(500)
-            )
-            .GetAwaiter()
-            .GetResult();
-        return result.Succeeded;
     }
 
     /// <summary>
@@ -336,57 +199,6 @@ public sealed class YdotoolSetupHelper
             true,
             $"ydotool is ready. Socket: {socket}. It starts automatically on login."
         );
-    }
-
-    /// <summary>
-    ///     Run a no-op ydotool invocation to confirm the daemon can
-    ///     actually write to /dev/uinput. Distinguishes "permission denied"
-    ///     from other failures so the message can point at the right fix.
-    /// </summary>
-    private async Task<SetupResult> ProbeYdotoolAsync(string socketPath, CancellationToken ct)
-    {
-        var probe = await _runner
-            .RunAsync(
-                YdotoolBackend.ExecutableName,
-                YdotoolBackend.ProbeArgs(),
-                new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath },
-                ct: ct
-            )
-            .ConfigureAwait(false);
-
-        if (probe.Succeeded)
-        {
-            return new SetupResult(true, "ydotool probe succeeded.");
-        }
-
-        if (LooksLikePermissionError(probe.StandardError))
-        {
-            return new SetupResult(
-                false,
-                "ydotoold can't write to /dev/uinput (permission denied).",
-                "On older systems where TAG+=\"uaccess\" doesn't apply, add yourself to the input group and log out / back in:\n"
-                + "  sudo usermod -aG input $USER\n"
-                + "Then re-open Settings → Text insertion to verify."
-            );
-        }
-
-        return new SetupResult(
-            false,
-            "ydotool probe failed.",
-            string.IsNullOrWhiteSpace(probe.StandardError)
-                ? "Check `journalctl --user -u ydotoold`."
-                : probe.StandardError.Trim()
-        );
-    }
-
-    private static bool LooksLikePermissionError(string stderr)
-    {
-        return !string.IsNullOrEmpty(stderr)
-               && (
-                   stderr.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
-                   || stderr.Contains("EACCES", StringComparison.OrdinalIgnoreCase)
-                   || stderr.Contains("not permitted", StringComparison.OrdinalIgnoreCase)
-               );
     }
 
     public async Task<SetupResult> RemoveAsync(CancellationToken ct)
@@ -522,6 +334,92 @@ public sealed class YdotoolSetupHelper
         );
     }
 
+    /// <summary>
+    ///     Absolute path to the user-level systemd unit we install when the
+    ///     distro doesn't ship one. Honors <c>XDG_CONFIG_HOME</c>, falling
+    ///     back to <c>~/.config</c>. Pure — no disk touch.
+    /// </summary>
+    internal static string UserUnitFilePath()
+    {
+        var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        var configHome = !string.IsNullOrEmpty(xdg)
+            ? xdg
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".config"
+            );
+        return Path.Combine(configHome, "systemd", "user", UserUnitName);
+    }
+
+    /// <summary>
+    ///     Builds the user-level <c>ydotoold.service</c> unit text. The first
+    ///     line carries <see cref="OwnershipMarker" /> so <see cref="RemoveAsync" />
+    ///     can confirm we own the file before deleting it. Pure.
+    /// </summary>
+    internal static string BuildUserUnitContent(string ydotooldPath)
+    {
+        return "# "
+               + OwnershipMarker
+               + " — user-level ydotoold service so direct-typing\n"
+               + "# works without a system unit. Delete this file to roll back.\n"
+               + "[Unit]\n"
+               + "Description=ydotool daemon (user) — installed by TypeWhisper\n"
+               + "Documentation=https://github.com/ReimuNotMoe/ydotool\n"
+               + "After=default.target\n"
+               + "\n"
+               + "[Service]\n"
+               + "Type=simple\n"
+               + $"ExecStart={ydotooldPath}\n"
+               + "Restart=on-failure\n"
+               + "RestartSec=2\n"
+               + "\n"
+               + "[Install]\n"
+               + "WantedBy=default.target\n";
+    }
+
+    /// <summary>
+    ///     Walks <c>$PATH</c> and returns the absolute path of the named
+    ///     binary, or <c>null</c> if it isn't reachable. Mirrors
+    ///     <see cref="DesktopDetector.BinaryExists" /> but returns the path —
+    ///     kept local to this helper since no other caller needs it.
+    /// </summary>
+    internal static string? ResolveBinaryPath(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrEmpty(dir))
+            {
+                continue;
+            }
+
+            try
+            {
+                var candidate = Path.Combine(dir, name);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+            catch
+            {
+                // Bad PATH entry — skip.
+            }
+        }
+
+        return null;
+    }
+
     internal static bool IsFileOwnedByTypeWhisper(string path)
     {
         try
@@ -535,6 +433,108 @@ public sealed class YdotoolSetupHelper
             // can't even inspect.
             return false;
         }
+    }
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int access(string pathname, int mode);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern uint geteuid();
+
+    /// <summary>
+    ///     True only when this process can already read+write <c>/dev/uinput</c>
+    ///     (R_OK|W_OK = 6) — the ground-truth signal that the udev rule is
+    ///     unnecessary. Running as root is treated as "not accessible": root
+    ///     can always write the node, but the real non-root user still needs
+    ///     the rule, so we don't let a root-run GUI skip installing it.
+    /// </summary>
+    private static bool UinputIsAccessible()
+    {
+        try
+        {
+            if (geteuid() == 0)
+            {
+                return false;
+            }
+
+            return File.Exists("/dev/uinput") && access("/dev/uinput", 6) == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     Synchronous probe used by <see cref="IsCurrentlyConfigured" />.
+    ///     One-shot subprocess (~5 ms), tight 500 ms ceiling so a hung
+    ///     daemon can't wedge the status panel. Blocks the caller — same as
+    ///     before the <see cref="IProcessRunner" /> seam; the runner uses
+    ///     ConfigureAwait(false) throughout so there is no UI-thread deadlock.
+    /// </summary>
+    private bool RunSyncProbe(string socketPath)
+    {
+        var result = _runner
+            .RunAsync(
+                YdotoolBackend.ExecutableName,
+                YdotoolBackend.ProbeArgs(),
+                new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath },
+                timeout: TimeSpan.FromMilliseconds(500)
+            )
+            .GetAwaiter()
+            .GetResult();
+        return result.Succeeded;
+    }
+
+    /// <summary>
+    ///     Run a no-op ydotool invocation to confirm the daemon can
+    ///     actually write to /dev/uinput. Distinguishes "permission denied"
+    ///     from other failures so the message can point at the right fix.
+    /// </summary>
+    private async Task<SetupResult> ProbeYdotoolAsync(string socketPath, CancellationToken ct)
+    {
+        var probe = await _runner
+            .RunAsync(
+                YdotoolBackend.ExecutableName,
+                YdotoolBackend.ProbeArgs(),
+                new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath },
+                ct: ct
+            )
+            .ConfigureAwait(false);
+
+        if (probe.Succeeded)
+        {
+            return new SetupResult(true, "ydotool probe succeeded.");
+        }
+
+        if (LooksLikePermissionError(probe.StandardError))
+        {
+            return new SetupResult(
+                false,
+                "ydotoold can't write to /dev/uinput (permission denied).",
+                "On older systems where TAG+=\"uaccess\" doesn't apply, add yourself to the input group and log out / back in:\n"
+                + "  sudo usermod -aG input $USER\n"
+                + "Then re-open Settings → Text insertion to verify."
+            );
+        }
+
+        return new SetupResult(
+            false,
+            "ydotool probe failed.",
+            string.IsNullOrWhiteSpace(probe.StandardError)
+                ? "Check `journalctl --user -u ydotoold`."
+                : probe.StandardError.Trim()
+        );
+    }
+
+    private static bool LooksLikePermissionError(string stderr)
+    {
+        return !string.IsNullOrEmpty(stderr)
+               && (
+                   stderr.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
+                   || stderr.Contains("EACCES", StringComparison.OrdinalIgnoreCase)
+                   || stderr.Contains("not permitted", StringComparison.OrdinalIgnoreCase)
+               );
     }
 
     private async Task<SetupResult> InstallUdevRuleAsync(CancellationToken ct)

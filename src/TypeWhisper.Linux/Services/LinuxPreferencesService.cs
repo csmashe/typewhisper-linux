@@ -42,8 +42,6 @@ public sealed class LinuxPreferencesService
 
     public LinuxPreferences Current { get; private set; } = LinuxPreferences.Default;
 
-    public event Action<LinuxPreferences>? Changed;
-
     public LinuxPreferences Load()
     {
         if (File.Exists(_path))
@@ -79,4 +77,6 @@ public sealed class LinuxPreferencesService
             Debug.WriteLine($"[LinuxPreferencesService] Save failed: {ex.Message}");
         }
     }
+
+    public event Action<LinuxPreferences>? Changed;
 }

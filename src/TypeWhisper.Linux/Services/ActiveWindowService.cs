@@ -206,33 +206,6 @@ public sealed class ActiveWindowService : IActiveWindowService
         return null;
     }
 
-    private ActiveWindowSnapshot? GetActiveWindowSnapshotSync()
-    {
-        foreach (var provider in _providers)
-        {
-            if (!provider.IsApplicable())
-            {
-                continue;
-            }
-
-            using var cts = new CancellationTokenSource(s_providerSyncBudget);
-            try
-            {
-                var snapshot = provider.TryGetActiveWindowAsync(cts.Token).GetAwaiter().GetResult();
-                if (snapshot is not null)
-                {
-                    return snapshot;
-                }
-            }
-            catch
-            {
-                // Skip misbehaving providers — orchestration must never throw.
-            }
-        }
-
-        return null;
-    }
-
     public string? GetActiveWindowId()
     {
         if (!s_isXdotoolAvailable)
@@ -252,77 +225,6 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
 
         var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId}", out _);
-        return exitCode == 0;
-    }
-
-    private static string? TryCaptureBrowserUrl(string windowId)
-    {
-        string? previousClipboard = null;
-
-        try
-        {
-            previousClipboard = TryReadClipboardText();
-
-            // Clear first so a failed copy does not return stale clipboard contents.
-            if (!TryWriteClipboardText(string.Empty))
-            {
-                return null;
-            }
-
-            if (!SendBrowserAddressBarCaptureKeys(windowId))
-            {
-                return null;
-            }
-
-            var copied = TryReadClipboardText();
-            return SanitizeCapturedBrowserUrl(copied);
-        }
-        finally
-        {
-            if (previousClipboard is not null)
-            {
-                TryWriteClipboardText(previousClipboard);
-            }
-        }
-    }
-
-    private static bool SendBrowserAddressBarCaptureKeys(string windowId)
-    {
-        // Linux adaptation: browsers reliably expose Ctrl+L / Ctrl+C on X11,
-        // so we can capture the address bar without adding a full AT-SPI stack.
-        if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+l"))
-        {
-            return false;
-        }
-
-        Thread.Sleep(60);
-
-        if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+c"))
-        {
-            return false;
-        }
-
-        Thread.Sleep(80);
-
-        RunXdotoolKey(windowId, "key Escape");
-        return true;
-    }
-
-    private static bool RunXdotoolKey(string windowId, string args)
-    {
-        var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId} {args}", out _);
-        return exitCode == 0;
-    }
-
-    private static string? TryReadClipboardText()
-    {
-        var exitCode = RunProcess("xclip", "-selection clipboard -o", out var output);
-        return exitCode == 0 ? output : null;
-    }
-
-    private static bool TryWriteClipboardText(string text)
-    {
-        var exitCode = RunProcessWithInput("xclip", "-selection clipboard", text);
         return exitCode == 0;
     }
 
@@ -515,6 +417,104 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
 
         return score;
+    }
+
+    private ActiveWindowSnapshot? GetActiveWindowSnapshotSync()
+    {
+        foreach (var provider in _providers)
+        {
+            if (!provider.IsApplicable())
+            {
+                continue;
+            }
+
+            using var cts = new CancellationTokenSource(s_providerSyncBudget);
+            try
+            {
+                var snapshot = provider.TryGetActiveWindowAsync(cts.Token).GetAwaiter().GetResult();
+                if (snapshot is not null)
+                {
+                    return snapshot;
+                }
+            }
+            catch
+            {
+                // Skip misbehaving providers — orchestration must never throw.
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryCaptureBrowserUrl(string windowId)
+    {
+        string? previousClipboard = null;
+
+        try
+        {
+            previousClipboard = TryReadClipboardText();
+
+            // Clear first so a failed copy does not return stale clipboard contents.
+            if (!TryWriteClipboardText(string.Empty))
+            {
+                return null;
+            }
+
+            if (!SendBrowserAddressBarCaptureKeys(windowId))
+            {
+                return null;
+            }
+
+            var copied = TryReadClipboardText();
+            return SanitizeCapturedBrowserUrl(copied);
+        }
+        finally
+        {
+            if (previousClipboard is not null)
+            {
+                TryWriteClipboardText(previousClipboard);
+            }
+        }
+    }
+
+    private static bool SendBrowserAddressBarCaptureKeys(string windowId)
+    {
+        // Linux adaptation: browsers reliably expose Ctrl+L / Ctrl+C on X11,
+        // so we can capture the address bar without adding a full AT-SPI stack.
+        if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+l"))
+        {
+            return false;
+        }
+
+        Thread.Sleep(60);
+
+        if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+c"))
+        {
+            return false;
+        }
+
+        Thread.Sleep(80);
+
+        RunXdotoolKey(windowId, "key Escape");
+        return true;
+    }
+
+    private static bool RunXdotoolKey(string windowId, string args)
+    {
+        var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId} {args}", out _);
+        return exitCode == 0;
+    }
+
+    private static string? TryReadClipboardText()
+    {
+        var exitCode = RunProcess("xclip", "-selection clipboard -o", out var output);
+        return exitCode == 0 ? output : null;
+    }
+
+    private static bool TryWriteClipboardText(string text)
+    {
+        var exitCode = RunProcessWithInput("xclip", "-selection clipboard", text);
+        return exitCode == 0;
     }
 
     private static bool CheckXdotoolAvailable()

@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+
 // ReSharper disable UnusedParameterInPartialMethod
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -145,6 +146,51 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         }
     }
 
+    public void HandleFileDrop(IReadOnlyList<string> files)
+    {
+        AddFiles(files);
+    }
+
+    public string BuildExportText()
+    {
+        return SelectedItem?.ResultText ?? ResultText;
+    }
+
+    public string BuildExportText(FileTranscriptionQueueItemViewModel item)
+    {
+        return item.ResultText;
+    }
+
+    public string? GetExportBaseName(FileTranscriptionQueueItemViewModel? item = null)
+    {
+        var filePath = item?.FilePath ?? SelectedItem?.FilePath ?? FilePath;
+        return string.IsNullOrWhiteSpace(filePath)
+            ? null
+            : Path.GetFileNameWithoutExtension(filePath);
+    }
+
+    public string? BuildSubtitleExport(FileTranscriptionQueueItemViewModel item, string extension)
+    {
+        if (item.RawResult?.Segments is not { Count: > 0 } segments)
+        {
+            return null;
+        }
+
+        return extension == "srt"
+            ? SubtitleExporter.ToSrt(segments)
+            : SubtitleExporter.ToWebVtt(segments);
+    }
+
+    public void SetWatchFolderPath(string path)
+    {
+        WatchFolderPath = path;
+    }
+
+    public void SetWatchFolderOutputPath(string path)
+    {
+        WatchFolderOutputPath = path;
+    }
+
     [RelayCommand]
     private void AddFiles(IEnumerable<string>? paths)
     {
@@ -226,11 +272,6 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         }
 
         RefreshSelectedItemResult();
-    }
-
-    public void HandleFileDrop(IReadOnlyList<string> files)
-    {
-        AddFiles(files);
     }
 
     private async Task ProcessQueueAsync()
@@ -383,46 +424,6 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         ResultText = item?.ResultText ?? "";
         DetectedLanguage = item?.DetectedLanguage;
         HasResult = item?.HasResult == true;
-    }
-
-    public string BuildExportText()
-    {
-        return SelectedItem?.ResultText ?? ResultText;
-    }
-
-    public string BuildExportText(FileTranscriptionQueueItemViewModel item)
-    {
-        return item.ResultText;
-    }
-
-    public string? GetExportBaseName(FileTranscriptionQueueItemViewModel? item = null)
-    {
-        var filePath = item?.FilePath ?? SelectedItem?.FilePath ?? FilePath;
-        return string.IsNullOrWhiteSpace(filePath)
-            ? null
-            : Path.GetFileNameWithoutExtension(filePath);
-    }
-
-    public string? BuildSubtitleExport(FileTranscriptionQueueItemViewModel item, string extension)
-    {
-        if (item.RawResult?.Segments is not { Count: > 0 } segments)
-        {
-            return null;
-        }
-
-        return extension == "srt"
-            ? SubtitleExporter.ToSrt(segments)
-            : SubtitleExporter.ToWebVtt(segments);
-    }
-
-    public void SetWatchFolderPath(string path)
-    {
-        WatchFolderPath = path;
-    }
-
-    public void SetWatchFolderOutputPath(string path)
-    {
-        WatchFolderOutputPath = path;
     }
 
     [RelayCommand]

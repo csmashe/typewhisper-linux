@@ -6,7 +6,6 @@ public interface ISnippetService
 {
     IReadOnlyList<Snippet> Snippets { get; }
     IReadOnlyList<string> AllTags { get; }
-    event Action? SnippetsChanged;
 
     void AddSnippet(Snippet snippet);
     void UpdateSnippet(Snippet snippet);
@@ -22,4 +21,5 @@ public interface ISnippetService
 
     string ExportToJson();
     int ImportFromJson(string json);
+    event Action? SnippetsChanged;
 }

@@ -5,7 +5,6 @@ namespace TypeWhisper.Core.Interfaces;
 public interface IDictionaryService
 {
     IReadOnlyList<DictionaryEntry> Entries { get; }
-    event Action? EntriesChanged;
 
     void AddEntry(DictionaryEntry entry);
     void AddEntries(IEnumerable<DictionaryEntry> entries);
@@ -48,4 +47,6 @@ public interface IDictionaryService
     {
         throw new NotSupportedException();
     }
+
+    event Action? EntriesChanged;
 }

@@ -36,16 +36,6 @@ public partial class DictationOverlayWindow : Window
         SizeChanged += (_, _) => PositionOverlay();
     }
 
-    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName != nameof(DictationOverlayViewModel.HasVisibleContent))
-        {
-            return;
-        }
-
-        Dispatcher.UIThread.Post(UpdateWindowVisibility);
-    }
-
     public void Initialize()
     {
         if (_viewModel is null)
@@ -54,6 +44,16 @@ public partial class DictationOverlayWindow : Window
         }
 
         UpdateWindowVisibility();
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(DictationOverlayViewModel.HasVisibleContent))
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(UpdateWindowVisibility);
     }
 
     private void UpdateWindowVisibility()
