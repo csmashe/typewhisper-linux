@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Text;
 using TypeWhisper.PluginSDK;
@@ -8,8 +9,13 @@ using Whisper.net.LibraryLoader;
 
 namespace TypeWhisper.Plugin.WhisperCpp;
 
-public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEnginePlugin
+public sealed class WhisperCppPlugin
+    : ITypeWhisperPlugin,
+        ITranscriptionEnginePlugin,
+        IPluginSettingsProvider
 {
+    private const string NoSpeechThresholdKey = "noSpeechThreshold";
+    private const float DefaultNoSpeechThreshold = 0.6f;
     private static readonly IReadOnlyList<ModelDefinition> Models =
     [
         new(
@@ -175,6 +181,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
     private bool _runtimeLibraryOrderInitialized;
+    private float _noSpeechThreshold = DefaultNoSpeechThreshold;
 
     public string PluginId => "com.typewhisper.whisper-cpp";
     public string PluginName => "whisper.cpp (Local)";
@@ -203,8 +210,29 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     {
         _host = host;
         _selectedModelId = host.GetSetting<string>("selectedModel");
+        _noSpeechThreshold = ReadNoSpeechThreshold(host);
         host.Log(PluginLogLevel.Info, "Activated");
         return Task.CompletedTask;
+    }
+
+    private static float ReadNoSpeechThreshold(IPluginHostServices host)
+    {
+        var raw = host.GetSetting<string>(NoSpeechThresholdKey);
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultNoSpeechThreshold;
+
+        if (
+            float.TryParse(
+                raw,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsed
+            )
+            && parsed is >= 0f and <= 1f
+        )
+            return parsed;
+
+        return DefaultNoSpeechThreshold;
     }
 
     public async Task DeactivateAsync()
@@ -386,9 +414,12 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (_factory is null || _loadedModelId is null)
                 throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
 
+            var threshold = _noSpeechThreshold;
+
             var builder = _factory
                 .CreateBuilder()
-                .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language);
+                .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language)
+                .WithNoSpeechThreshold(threshold);
 
             if (!string.IsNullOrWhiteSpace(prompt))
                 builder.WithPrompt(prompt);
@@ -406,15 +437,6 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
             await foreach (var segment in processor.ProcessAsync(audioStream, ct))
             {
-                var segmentText = segment.Text.Trim();
-                if (segmentText.Length > 0)
-                {
-                    if (text.Length > 0)
-                        text.Append(' ');
-
-                    text.Append(segmentText);
-                }
-
                 if (
                     string.IsNullOrWhiteSpace(detectedLanguage)
                     && !string.IsNullOrWhiteSpace(segment.Language)
@@ -423,6 +445,21 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
                 durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
                 noSpeechProbability = segment.NoSpeechProbability;
+
+                // whisper.cpp returns every segment, including ones it has
+                // flagged as silence. Skip those so training-bias phrases like
+                // "Thank you." don't leak into the output during silent gaps.
+                if (segment.NoSpeechProbability > threshold)
+                    continue;
+
+                var segmentText = segment.Text.Trim();
+                if (segmentText.Length > 0)
+                {
+                    if (text.Length > 0)
+                        text.Append(' ');
+
+                    text.Append(segmentText);
+                }
             }
 
             return new PluginTranscriptionResult(
@@ -483,6 +520,98 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     {
         DisposeFactoryUnsafe();
         _gate.Dispose();
+    }
+
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+        [
+            new(
+                Key: NoSpeechThresholdKey,
+                Label: "No-speech threshold",
+                Placeholder: DefaultNoSpeechThreshold.ToString(CultureInfo.InvariantCulture),
+                Description: "0.0 to 1.0. Segments whose no-speech probability exceeds this value "
+                    + "are dropped so silent gaps don't get transcribed as hallucinated phrases "
+                    + "(commonly \"Thank you.\"). Lower = more aggressive filtering. "
+                    + "Default 0.6 matches whisper.cpp's own default. Leave blank to use the default.",
+                Kind: PluginSettingKind.Text
+            ),
+        ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default)
+    {
+        if (key != NoSpeechThresholdKey)
+            return Task.FromResult<string?>(null);
+
+        var raw = _host?.GetSetting<string>(NoSpeechThresholdKey);
+        return Task.FromResult<string?>(string.IsNullOrWhiteSpace(raw) ? null : raw);
+    }
+
+    public Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
+    {
+        if (key != NoSpeechThresholdKey)
+            return Task.CompletedTask;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            _host?.SetSetting(NoSpeechThresholdKey, string.Empty);
+            _noSpeechThreshold = DefaultNoSpeechThreshold;
+            return Task.CompletedTask;
+        }
+
+        if (
+            !float.TryParse(
+                value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsed
+            )
+            || parsed is < 0f or > 1f
+        )
+        {
+            // Reject by leaving stored value/cache untouched. ValidateAsync
+            // surfaces the reason to the UI.
+            return Task.CompletedTask;
+        }
+
+        _host?.SetSetting(
+            NoSpeechThresholdKey,
+            parsed.ToString(CultureInfo.InvariantCulture)
+        );
+        _noSpeechThreshold = parsed;
+        return Task.CompletedTask;
+    }
+
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        var raw = _host?.GetSetting<string>(NoSpeechThresholdKey);
+        if (string.IsNullOrWhiteSpace(raw))
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(
+                    true,
+                    $"Using default threshold {DefaultNoSpeechThreshold.ToString(CultureInfo.InvariantCulture)}."
+                )
+            );
+
+        if (
+            float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            && parsed is >= 0f and <= 1f
+        )
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(
+                    true,
+                    $"Threshold set to {parsed.ToString(CultureInfo.InvariantCulture)}."
+                )
+            );
+
+        return Task.FromResult<PluginSettingsValidationResult?>(
+            new PluginSettingsValidationResult(
+                false,
+                "No-speech threshold must be a number between 0.0 and 1.0."
+            )
+        );
     }
 
     private ModelDefinition GetModel(string modelId) =>

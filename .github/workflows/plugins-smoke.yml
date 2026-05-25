@@ -2,9 +2,11 @@ name: Plugins Smoke
 
 on:
   pull_request:
+    branches:
+      - linux
   push:
     branches:
-      - main
+      - linux
   workflow_dispatch:
 
 permissions:
