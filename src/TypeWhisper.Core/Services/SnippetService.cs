@@ -219,7 +219,9 @@ public sealed partial class SnippetService : ISnippetService
 
     private static bool AppliesToProfile(Snippet snippet, string? profileId)
     {
-        if (snippet.ProfileIds.Count == 0)
+        // JSON with explicit "profileIds": null defeats the [] default initializer
+        // and would NRE on .Count below. Treat null/empty the same: "applies everywhere".
+        if (snippet.ProfileIds is null || snippet.ProfileIds.Count == 0)
         {
             return true;
         }

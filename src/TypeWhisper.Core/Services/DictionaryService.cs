@@ -109,6 +109,7 @@ public sealed class DictionaryService : IDictionaryService
                 .Where(e =>
                     e.IsEnabled
                     && e.EntryType == DictionaryEntryType.Correction
+                    && !string.IsNullOrEmpty(e.Original)
                     && e.Replacement is not null
                 )
                 .OrderByDescending(e => e.Priority)

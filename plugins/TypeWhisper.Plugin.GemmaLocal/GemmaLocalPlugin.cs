@@ -388,10 +388,10 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 var loaded = false;
                 try
                 {
-                    // If the user has switched models while we were queued behind the
-                    // lock, abort: a late finish here would overwrite the newer
-                    // selection and leave the wrong model loaded.
-                    if (_selectedModelId is not null && _selectedModelId != modelId)
+                    // If the user has switched models OR cleared the selection while we
+                    // were queued behind the lock, abort: a late finish here would
+                    // overwrite the newer state and load a model the user no longer wants.
+                    if (_selectedModelId != modelId)
                         return;
 
                     UnloadModel();

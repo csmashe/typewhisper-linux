@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -76,7 +77,7 @@ public sealed class ErrorLogService : IErrorLogService
             app = new
             {
                 version = GetAppVersion(),
-                platform = "Linux",
+                platform = RuntimeInformation.OSDescription,
                 os_version = Environment.OSVersion.VersionString,
                 dotnet_version = Environment.Version.ToString(),
                 locale = CultureInfo.CurrentCulture.Name,

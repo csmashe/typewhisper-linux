@@ -68,7 +68,10 @@ public sealed class ProfileService : IProfileService
 
         if (forcedProfileId is not null)
         {
-            var forced = _cache.FirstOrDefault(p => p.Id == forcedProfileId);
+            // Disabled profiles are excluded from the normal matching pipeline; a forced
+            // selection that points at a disabled profile should fall through too, otherwise
+            // the user can end up with a profile they've explicitly turned off.
+            var forced = _cache.FirstOrDefault(p => p.Id == forcedProfileId && p.IsEnabled);
             if (forced is not null)
             {
                 return new MatchResult(forced, MatchKind.ManualOverride, null, 1, false);

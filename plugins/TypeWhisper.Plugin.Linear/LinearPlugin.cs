@@ -306,31 +306,45 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         }
 
         var responseJson = await response.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(responseJson);
 
-        if (doc.RootElement.TryGetProperty("errors", out var errors))
+        try
         {
-            // GraphQL error arrays should contain { "message": "..." } objects, but
-            // be defensive: a missing/empty array or unexpected shape must not throw
-            // and hide the original failure.
-            string? errorMsg = null;
-            var firstError = errors.ValueKind == JsonValueKind.Array
-                ? errors.EnumerateArray().FirstOrDefault()
-                : default;
+            using var doc = JsonDocument.Parse(responseJson);
 
-            if (firstError.ValueKind == JsonValueKind.Object
-                && firstError.TryGetProperty("message", out var msgProp))
+            if (doc.RootElement.TryGetProperty("errors", out var errors))
             {
-                errorMsg = msgProp.GetString();
+                // GraphQL error arrays should contain { "message": "..." } objects, but
+                // be defensive: a missing/empty array or unexpected shape must not throw
+                // and hide the original failure.
+                string? errorMsg = null;
+                var firstError = errors.ValueKind == JsonValueKind.Array
+                    ? errors.EnumerateArray().FirstOrDefault()
+                    : default;
+
+                if (firstError.ValueKind == JsonValueKind.Object
+                    && firstError.TryGetProperty("message", out var msgProp))
+                {
+                    errorMsg = msgProp.GetString();
+                }
+
+                errorMsg ??= errors.GetRawText();
+                _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+                return null;
             }
 
-            errorMsg ??= errors.GetRawText();
-            _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+            // Clone so the returned element survives the JsonDocument's pooled-buffer disposal.
+            return doc.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            // A 200 response with non-JSON body shouldn't crash settings validation;
+            // surface the parse failure and the raw body, then return null so callers recover.
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API returned non-JSON body ({ex.Message}). Body: {responseJson}"
+            );
             return null;
         }
-
-        // Clone so the returned element survives the JsonDocument's pooled-buffer disposal.
-        return doc.RootElement.Clone();
     }
 
     private static string ExtractTitle(string input)

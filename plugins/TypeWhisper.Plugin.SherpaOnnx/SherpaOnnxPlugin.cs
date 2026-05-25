@@ -188,36 +188,53 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             long fileBytesRead = 0;
             var lastReport = DateTime.UtcNow;
 
+            // Per-invocation temp name so a concurrent duplicate download can't
+            // unlink an in-flight writer's file via its own catch-block cleanup.
+            var tmpPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-            await using (
-                var fileStream = new FileStream(
-                    filePath + ".tmp",
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    81920,
-                    true
-                )
-            )
+            try
             {
-                int read;
-                while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
+                await using (
+                    var fileStream = new FileStream(
+                        tmpPath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None,
+                        81920,
+                        true
+                    )
+                )
                 {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                    fileBytesRead += read;
-
-                    var now = DateTime.UtcNow;
-                    if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
+                    int read;
+                    while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
                     {
-                        progress?.Report(
-                            (double)(cumulativeBytesRead + fileBytesRead) / totalBytes
-                        );
-                        lastReport = now;
+                        await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                        fileBytesRead += read;
+
+                        var now = DateTime.UtcNow;
+                        if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
+                        {
+                            progress?.Report(
+                                (double)(cumulativeBytesRead + fileBytesRead) / totalBytes
+                            );
+                            lastReport = now;
+                        }
                     }
                 }
+
+                File.Move(tmpPath, filePath, overwrite: true);
+            }
+            catch
+            {
+                // Cancellation or I/O failure: don't leave a partial .tmp file behind
+                // to consume disk and confuse the next download attempt.
+                if (File.Exists(tmpPath))
+                {
+                    try { File.Delete(tmpPath); } catch { /* best effort */ }
+                }
+                throw;
             }
 
-            File.Move(filePath + ".tmp", filePath, overwrite: true);
             cumulativeBytesRead += fileBytesRead;
         }
 

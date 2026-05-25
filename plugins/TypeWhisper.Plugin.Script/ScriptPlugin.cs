@@ -72,7 +72,25 @@ internal sealed class ScriptStore
     {
         Directory.CreateDirectory(_dataDir);
         var json = JsonSerializer.Serialize(entries.ToList(), s_jsonOptions);
-        File.WriteAllText(_configPath, json);
+
+        // Atomically replace the target so a crash mid-write can't truncate _configPath.
+        var tempPath = Path.Combine(_dataDir, $"{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempPath, json);
+            if (File.Exists(_configPath))
+                File.Replace(tempPath, _configPath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _configPath);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 }
 
