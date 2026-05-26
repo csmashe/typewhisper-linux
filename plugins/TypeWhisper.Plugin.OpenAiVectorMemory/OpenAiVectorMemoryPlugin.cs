@@ -165,10 +165,24 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         try
         {
             var entries = await LoadEntriesAsync(ct);
+            // Snapshot before mutating so a SaveEntriesAsync failure doesn't
+            // leave the in-memory cache out of sync with the on-disk file —
+            // a later StoreAsync would otherwise persist the deleted state.
+            var snapshot = new List<VectorMemoryEntry>(entries);
             var removed = entries.RemoveAll(e => e.Content == content);
 
             if (removed > 0)
-                await SaveEntriesAsync(ct);
+            {
+                try
+                {
+                    await SaveEntriesAsync(ct);
+                }
+                catch
+                {
+                    _entries = snapshot;
+                    throw;
+                }
+            }
         }
         finally
         {
@@ -182,8 +196,19 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         try
         {
             var entries = await LoadEntriesAsync(ct);
+            var snapshot = new List<VectorMemoryEntry>(entries);
             entries.Clear();
-            await SaveEntriesAsync(ct);
+
+            try
+            {
+                await SaveEntriesAsync(ct);
+            }
+            catch
+            {
+                _entries = snapshot;
+                throw;
+            }
+
             _host?.Log(PluginLogLevel.Info, "All vector memories cleared");
         }
         finally

@@ -104,9 +104,12 @@ public sealed partial class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSe
                 firstResult.TryGetProperty("alternatives", out var alts)
                 && alts.ValueKind == JsonValueKind.Array
                 && alts.GetArrayLength() > 0
+                && alts[0].ValueKind == JsonValueKind.Object
+                && alts[0].TryGetProperty("transcript", out var transcriptEl)
+                && transcriptEl.ValueKind == JsonValueKind.String
             )
             {
-                transcript = alts[0].GetProperty("transcript").GetString() ?? "";
+                transcript = transcriptEl.GetString() ?? "";
             }
         }
 

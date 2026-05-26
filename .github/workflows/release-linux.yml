@@ -31,6 +31,7 @@ jobs:
         id: resolve
         env:
           INPUT_VERSION: ${{ inputs.version || '' }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -38,7 +39,7 @@ jobs:
             VERSION="${INPUT_VERSION#v}"
             TAG="v$VERSION"
           else
-            TAG="${{ github.ref_name }}"
+            TAG="$REF_NAME"
             if [[ "$TAG" != v* ]]; then
               echo "ERROR: workflow_dispatch without 'version' input requires a v*-prefixed tag ref. Got ref_name='$TAG'." >&2
               echo "Either trigger from a v* tag or pass the 'version' input." >&2

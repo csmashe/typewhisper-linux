@@ -154,7 +154,10 @@ tar -czf "$OUTPUT_DIR/${TARBALL_NAME}.tar.gz" -C "$STAGE_ROOT" "$TARBALL_NAME"
 echo "    -> $OUTPUT_DIR/${TARBALL_NAME}.tar.gz"
 
 # ---------- AppImage ----------
-if command -v wget >/dev/null 2>&1; then
+# Need both a downloader (wget) and a checksum verifier (sha256sum) — skipping
+# the SHA verification on a download-from-the-internet step is not acceptable
+# even on stripped environments.
+if command -v wget >/dev/null 2>&1 && command -v sha256sum >/dev/null 2>&1; then
   echo "==> Building AppImage"
   APPDIR="$STAGE_ROOT/TypeWhisper.AppDir"
   mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/128x128/apps"
@@ -204,7 +207,7 @@ EOF
   ARCH=x86_64 "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$APPIMAGE_OUT"
   echo "    -> $APPIMAGE_OUT"
 else
-  echo "WARN: wget not available; skipping AppImage" >&2
+  echo "WARN: wget or sha256sum not available; skipping AppImage" >&2
 fi
 
 # ---------- .deb ----------
