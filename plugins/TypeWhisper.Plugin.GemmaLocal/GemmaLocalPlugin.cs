@@ -14,31 +14,31 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private static readonly IReadOnlyList<GemmaModelDefinition> Models =
     [
         new(
-            "gemma4-4b-q4",
-            "Gemma 4 4B (Q4_K_M)",
+            "gemma4-e2b-it-q4",
+            "Gemma 4 E2B (Q4_K_M)",
             "~3 GB",
-            3000,
+            3100,
             true,
-            "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
-            "gemma-3-4b-it-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+            "gemma-4-E2B-it-Q4_K_M.gguf"
         ),
         new(
-            "gemma4-12b-q4",
-            "Gemma 4 12B (Q4_K_M)",
-            "~8 GB",
-            8000,
+            "gemma4-e4b-it-q4",
+            "Gemma 4 E4B (Q4_K_M)",
+            "~5 GB",
+            5000,
             false,
-            "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
-            "gemma-3-12b-it-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+            "gemma-4-E4B-it-Q4_K_M.gguf"
         ),
         new(
-            "gemma4-27b-q4",
-            "Gemma 4 27B (Q4_K_M)",
+            "gemma4-26b-a4b-it-q4",
+            "Gemma 4 26B A4B (Q4_K_M)",
             "~17 GB",
             17000,
             false,
-            "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/main/gemma-3-27b-it-Q4_K_M.gguf",
-            "gemma-3-27b-it-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+            "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
         ),
     ];
 
@@ -61,6 +61,21 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _host = host;
         _selectedModelId = host.GetSetting<string>("selectedModel");
         host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
+
+        // A persisted ID may name a model that no longer exists in Models
+        // (e.g. after a release that drops a quant). IsModelDownloaded calls
+        // GetModelDefinition, which throws — that would surface as a plugin
+        // activation failure. Clear the stale setting instead.
+        if (!string.IsNullOrEmpty(_selectedModelId)
+            && Models.All(m => m.Id != _selectedModelId))
+        {
+            host.Log(
+                PluginLogLevel.Warning,
+                $"Persisted model '{_selectedModelId}' is no longer available; clearing selection."
+            );
+            _selectedModelId = null;
+            host.SetSetting("selectedModel", string.Empty);
+        }
 
         // Auto-load previously selected model in background (don't block app startup).
         // Track the task + CTS so DeactivateAsync can cancel and await it instead of
@@ -338,7 +353,9 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
         var buffer = new byte[81920];
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        var tempPath = filePath + ".tmp";
+        // Per-invocation temp name so a concurrent duplicate download can't
+        // collide with an in-flight writer's FileShare.None open.
+        var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         var completed = false;
         try
         {
@@ -423,11 +440,26 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     {
                         ContextSize = 4096,
                         GpuLayerCount = 0, // CPU only (Backend.Cpu)
-                        Threads = (int)Math.Max(1, Environment.ProcessorCount / 2),
+                        Threads = Math.Max(1, Environment.ProcessorCount / 2),
                     };
 
-                    _weights = LLamaWeights.LoadFromFile(modelParams);
-                    _context = _weights.CreateContext(modelParams);
+                    // Load into a local first: if CreateContext throws, the
+                    // already-loaded native weights would otherwise be stranded
+                    // on the field with no owner to dispose them.
+                    var newWeights = LLamaWeights.LoadFromFile(modelParams);
+                    LLamaContext newContext;
+                    try
+                    {
+                        newContext = newWeights.CreateContext(modelParams);
+                    }
+                    catch
+                    {
+                        newWeights.Dispose();
+                        throw;
+                    }
+
+                    _weights = newWeights;
+                    _context = newContext;
 
                     // The heavy load runs without the lock blocking SelectModel,
                     // so the user can switch selections while we're loading. If
@@ -472,7 +504,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     private static string FormatGemmaPrompt(string systemPrompt, string userText)
     {
-        // Gemma 3 instruction-tuned chat format with proper system turn
+        // Gemma instruction-tuned chat format with proper system turn
         var sb = new System.Text.StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -510,7 +542,39 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     public void Dispose()
     {
-        UnloadModel();
+        // Cancel and await the background startup task before disposing
+        // _inferenceLock/_httpClient so a late finish can't run against
+        // disposed resources. Mirrors DeactivateAsync's teardown order.
+        var startupCts = _startupCts;
+        var startupTask = _startupTask;
+        _startupCts = null;
+        _startupTask = null;
+
+        if (startupCts is not null)
+        {
+            try { startupCts.Cancel(); } catch (ObjectDisposedException) { }
+        }
+
+        if (startupTask is not null)
+        {
+            try { startupTask.GetAwaiter().GetResult(); }
+            catch { /* errors already logged inside the task */ }
+        }
+
+        startupCts?.Dispose();
+
+        // Mirror DeactivateAsync: serialize teardown with any in-flight
+        // ProcessAsync so we don't dispose _context/_weights mid-inference.
+        _inferenceLock.Wait();
+        try
+        {
+            UnloadModel();
+        }
+        finally
+        {
+            _inferenceLock.Release();
+        }
+
         _inferenceLock.Dispose();
         _httpClient.Dispose();
     }

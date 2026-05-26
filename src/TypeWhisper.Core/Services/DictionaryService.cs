@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -133,6 +134,11 @@ public sealed class DictionaryService : IDictionaryService
                 .ToList();
         }
 
+        // Accumulate usage increments and persist once at the end. A per-match
+        // SaveToDisk would mean N file writes for a transcript with N
+        // corrections, which adds noticeable I/O to every dictation.
+        var usedIds = new List<string>();
+
         foreach (var entry in corrections)
         {
             var comparison = entry.CaseSensitive
@@ -155,10 +161,14 @@ public sealed class DictionaryService : IDictionaryService
                 var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
                     ? @"\b"
                     : @"(?=\W|$)";
+                // Use the MatchEvaluator overload so dollar sequences in
+                // user-supplied replacements (e.g. "$1", "$&") are inserted
+                // verbatim rather than interpreted as regex substitution tokens.
+                var replacement = entry.Replacement!;
                 var replaced = Regex.Replace(
                     text,
                     prefix + pattern + suffix,
-                    entry.Replacement!,
+                    _ => replacement,
                     options
                 );
                 if (string.Equals(replaced, text, StringComparison.Ordinal))
@@ -167,8 +177,13 @@ public sealed class DictionaryService : IDictionaryService
                 }
 
                 text = replaced;
-                IncrementUsageCount(entry.Id);
+                usedIds.Add(entry.Id);
             }
+        }
+
+        if (usedIds.Count > 0)
+        {
+            IncrementUsageCounts(usedIds);
         }
 
         return text;
@@ -551,6 +566,14 @@ public sealed class DictionaryService : IDictionaryService
                     continue;
                 }
 
+                // Term rows must not carry a Replacement: it's meaningless for
+                // terms and a hand-edited CSV with a stray value would break
+                // DictionaryEntryKey-based de-duplication on re-import.
+                if (entryType != DictionaryEntryType.Correction)
+                {
+                    replacement = null;
+                }
+
                 var entry = new DictionaryEntry
                 {
                     Id = Guid.NewGuid().ToString(),
@@ -654,23 +677,35 @@ public sealed class DictionaryService : IDictionaryService
         }
     }
 
-    private void IncrementUsageCount(string id)
+    private void IncrementUsageCounts(IReadOnlyList<string> ids)
     {
         lock (_gate)
         {
-            var idx = _cache.FindIndex(e => e.Id == id);
-            if (idx < 0)
+            var newCache = new List<DictionaryEntry>(_cache);
+            var now = DateTime.UtcNow;
+            var changed = false;
+
+            foreach (var id in ids)
+            {
+                var idx = newCache.FindIndex(e => e.Id == id);
+                if (idx < 0)
+                {
+                    continue;
+                }
+
+                newCache[idx] = newCache[idx] with
+                {
+                    UsageCount = newCache[idx].UsageCount + 1,
+                    TimesApplied = newCache[idx].TimesApplied + 1,
+                    LastUsedAt = now
+                };
+                changed = true;
+            }
+
+            if (!changed)
             {
                 return;
             }
-
-            var newCache = new List<DictionaryEntry>(_cache);
-            newCache[idx] = newCache[idx] with
-            {
-                UsageCount = newCache[idx].UsageCount + 1,
-                TimesApplied = newCache[idx].TimesApplied + 1,
-                LastUsedAt = DateTime.UtcNow
-            };
 
             try
             {
@@ -684,10 +719,10 @@ public sealed class DictionaryService : IDictionaryService
                 // throws (load-failed guard, disk full, permission), the
                 // post-processing pipeline would otherwise treat the whole
                 // correction step as failed and return the pre-correction text.
-                // Drop the increment so memory stays consistent with disk and
+                // Drop the increments so memory stays consistent with disk and
                 // swallow the exception.
                 Trace.WriteLine(
-                    $"[DictionaryService] Could not persist usage count for entry '{id}': {ex.Message}"
+                    $"[DictionaryService] Could not persist usage counts for {ids.Count} entries: {ex.Message}"
                 );
             }
         }
@@ -695,21 +730,25 @@ public sealed class DictionaryService : IDictionaryService
 
     private void EnsureCacheLoaded()
     {
-        if (_cacheLoaded)
+        // Volatile reads/writes pair the unsynchronized fast-path check with the
+        // in-lock state mutation: without them, a reader could see
+        // _cacheLoaded == true while _cache hasn't been published yet on weaker
+        // memory architectures (ARM/AArch64).
+        if (Volatile.Read(ref _cacheLoaded))
         {
             return;
         }
 
         lock (_gate)
         {
-            if (_cacheLoaded)
+            if (Volatile.Read(ref _cacheLoaded))
             {
                 return;
             }
 
             if (!File.Exists(_filePath))
             {
-                _cacheLoaded = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
 
@@ -723,8 +762,8 @@ public sealed class DictionaryService : IDictionaryService
                 Trace.WriteLine(
                     $"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}"
                 );
-                _cacheLoaded = true;
                 _cacheLoadFailed = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
             catch (UnauthorizedAccessException ex)
@@ -732,8 +771,8 @@ public sealed class DictionaryService : IDictionaryService
                 Trace.WriteLine(
                     $"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}"
                 );
-                _cacheLoaded = true;
                 _cacheLoadFailed = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
 
@@ -747,7 +786,7 @@ public sealed class DictionaryService : IDictionaryService
                 _cache = [];
             }
 
-            _cacheLoaded = true;
+            Volatile.Write(ref _cacheLoaded, true);
         }
     }
 
@@ -776,7 +815,27 @@ public sealed class DictionaryService : IDictionaryService
             entries,
             new JsonSerializerOptions { WriteIndented = true }
         );
-        File.WriteAllText(_filePath, json);
+
+        // Write to a sibling temp file and atomically replace, so a crash
+        // mid-write can't leave the user's dictionary truncated.
+        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(tempPath, json);
+            if (File.Exists(_filePath))
+                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _filePath);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 
     private static void PreserveBrokenFile(string path)

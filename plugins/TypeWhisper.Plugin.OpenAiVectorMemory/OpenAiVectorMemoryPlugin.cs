@@ -30,7 +30,11 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     {
         _host = host;
         _filePath = Path.Combine(host.PluginDataDirectory, "vector-memories.json");
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Normalize on load: legacy stored keys may carry trailing whitespace
+        // from before SetSettingValueAsync started trimming.
+        var stored = await host.LoadSecretAsync("api-key");
+        var trimmed = stored?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         host.Log(PluginLogLevel.Info, $"Activated (configured={!string.IsNullOrEmpty(_apiKey)})");
     }
 
@@ -161,10 +165,24 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         try
         {
             var entries = await LoadEntriesAsync(ct);
+            // Snapshot before mutating so a SaveEntriesAsync failure doesn't
+            // leave the in-memory cache out of sync with the on-disk file —
+            // a later StoreAsync would otherwise persist the deleted state.
+            var snapshot = new List<VectorMemoryEntry>(entries);
             var removed = entries.RemoveAll(e => e.Content == content);
 
             if (removed > 0)
-                await SaveEntriesAsync(ct);
+            {
+                try
+                {
+                    await SaveEntriesAsync(ct);
+                }
+                catch
+                {
+                    _entries = snapshot;
+                    throw;
+                }
+            }
         }
         finally
         {
@@ -178,8 +196,19 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         try
         {
             var entries = await LoadEntriesAsync(ct);
+            var snapshot = new List<VectorMemoryEntry>(entries);
             entries.Clear();
-            await SaveEntriesAsync(ct);
+
+            try
+            {
+                await SaveEntriesAsync(ct);
+            }
+            catch
+            {
+                _entries = snapshot;
+                throw;
+            }
+
             _host?.Log(PluginLogLevel.Info, "All vector memories cleared");
         }
         finally
@@ -210,7 +239,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, ct);
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
@@ -274,8 +303,11 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
             }
             catch (Exception ex)
             {
+                // Surface the failure instead of swallowing it: callers like
+                // StoreAsync/DeleteAsync would otherwise write back an empty
+                // list and clobber a corrupt-but-recoverable file.
                 _host?.Log(PluginLogLevel.Warning, $"Failed to load vector memories: {ex.Message}");
-                _entries = [];
+                throw;
             }
         }
         else
@@ -296,7 +328,27 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
             Directory.CreateDirectory(dir);
 
         var json = JsonSerializer.Serialize(_entries, JsonOptions);
-        await File.WriteAllTextAsync(_filePath, json, ct);
+
+        // Write to a sibling temp file and atomically replace, so a crash
+        // mid-write can't leave the vector store truncated.
+        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, json, ct);
+            if (File.Exists(_filePath))
+                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _filePath);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 
     private void EnsureConfigured()

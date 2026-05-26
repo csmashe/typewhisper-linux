@@ -46,7 +46,8 @@
                             Padding="18,12">
                         <TextBlock Text="{Binding MemoryHint}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE" />
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
                     </Border>
                 </Grid>
             </Border>

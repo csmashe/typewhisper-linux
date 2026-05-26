@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -51,8 +52,12 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
                     JsonSerializer.Deserialize<List<LinearTeam>>(cachedTeamsJson, s_jsonOptions)
                     ?? [];
             }
-            catch
+            catch (JsonException ex)
             {
+                host.Log(
+                    PluginLogLevel.Warning,
+                    $"Failed to deserialize cached teams; resetting cache: {ex.Message}"
+                );
                 _cachedTeams = [];
             }
         }
@@ -293,14 +298,19 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, ct);
 
         if (!response.IsSuccessStatusCode)
         {
+            // Linear error bodies can echo back the failed mutation, including
+            // issue titles/descriptions — log only status + a short fingerprint
+            // of the response so the body is correlatable across reports
+            // without leaking user content to the trace.
             var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var fingerprint = ShortFingerprint(errorBody);
             _host?.Log(
                 PluginLogLevel.Error,
-                $"Linear API error {(int)response.StatusCode}: {errorBody}"
+                $"Linear API error {(int)response.StatusCode} (body length={errorBody.Length}, sha256:{fingerprint})"
             );
             return null;
         }
@@ -327,8 +337,24 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
                     errorMsg = msgProp.GetString();
                 }
 
-                errorMsg ??= errors.GetRawText();
-                _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+                if (errorMsg is null)
+                {
+                    // Unexpected error shape: the raw payload can echo back the
+                    // failed mutation (issue title/description). Log only the
+                    // length + a short fingerprint so support can correlate
+                    // reports without spilling user content into traces.
+                    var raw = errors.GetRawText();
+                    var fingerprint = ShortFingerprint(raw);
+                    _host?.Log(
+                        PluginLogLevel.Error,
+                        $"Linear GraphQL error: {{redacted:length={raw.Length}, sha256:{fingerprint}}}"
+                    );
+                }
+                else
+                {
+                    _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+                }
+
                 return null;
             }
 
@@ -338,13 +364,21 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         catch (JsonException ex)
         {
             // A 200 response with non-JSON body shouldn't crash settings validation;
-            // surface the parse failure and the raw body, then return null so callers recover.
+            // log the parse failure plus a short fingerprint (not the raw body —
+            // it may echo user content), then return null so callers recover.
+            var fingerprint = ShortFingerprint(responseJson);
             _host?.Log(
                 PluginLogLevel.Error,
-                $"Linear API returned non-JSON body ({ex.Message}). Body: {responseJson}"
+                $"Linear API returned non-JSON body ({ex.Message}). Body length={responseJson.Length}, sha256:{fingerprint}"
             );
             return null;
         }
+    }
+
+    private static string ShortFingerprint(string value)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 
     private static string ExtractTitle(string input)

@@ -392,10 +392,10 @@ public sealed class WhisperCppPlugin
                     await fileStream.FlushAsync(ct);
                 }
 
-                if (File.Exists(modelPath))
-                    File.Delete(modelPath);
-
-                File.Move(tempPath, modelPath);
+                // Atomic on the same filesystem: a crash between delete and move
+                // would otherwise leave no model in place. Move(overwrite: true)
+                // is implemented via rename(2) on Linux, which is atomic.
+                File.Move(tempPath, modelPath, overwrite: true);
                 progress?.Report(1.0);
             }
             catch
@@ -611,8 +611,10 @@ public sealed class WhisperCppPlugin
             || parsed is < 0f or > 1f
         )
         {
-            // Reject by leaving stored value/cache untouched. ValidateAsync
-            // surfaces the reason to the UI.
+            // Persist the attempted value so ValidateAsync can read it back and
+            // surface the rejection reason to the UI. Leave _noSpeechThreshold
+            // at its last valid value so transcription keeps working.
+            _host?.SetSetting(NoSpeechThresholdKey, value);
             return Task.CompletedTask;
         }
 

@@ -47,6 +47,7 @@ jobs:
         with:
           languages: csharp
           queries: security-extended,security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Ensure NuGet global packages folder
         shell: pwsh

@@ -37,8 +37,27 @@ public partial class AboutSectionViewModel : ObservableObject
         _errorLog.EntriesChanged += RefreshErrors;
     }
 
-    public string Version { get; } =
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev";
+    // Prefer AssemblyInformationalVersion so pre-release suffixes ("-local",
+    // "-rc.1", "-dryrun.42") and any version we pass via -p:Version survive.
+    // AssemblyVersion is strictly numeric Major.Minor.Build.Revision and silently
+    // drops the suffix, so a "0.0.0-local" build shows up as "0.0.0". The +hash
+    // SourceLink suffix isn't useful to users — trim it.
+    public string Version { get; } = ResolveDisplayVersion();
+
+    private static string ResolveDisplayVersion()
+    {
+        var asm = Assembly.GetExecutingAssembly();
+        var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+
+        if (!string.IsNullOrWhiteSpace(info))
+        {
+            var plus = info.IndexOf('+');
+            return plus >= 0 ? info[..plus] : info;
+        }
+
+        return asm.GetName().Version?.ToString(3) ?? "dev";
+    }
 
     public string RuntimeVersion { get; } = Environment.Version.ToString();
 

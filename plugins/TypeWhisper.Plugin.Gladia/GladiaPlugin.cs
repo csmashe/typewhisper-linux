@@ -102,8 +102,11 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
             || fullEl.ValueKind != JsonValueKind.String
         )
         {
+            // Do not include `json` in the exception — Gladia error/partial
+            // payloads can contain transcript fragments that would then leak
+            // into any logger that records the exception message.
             throw new InvalidOperationException(
-                $"Gladia response missing 'result.transcription.full_transcript' string: {json}"
+                "Gladia response missing 'result.transcription.full_transcript' string."
             );
         }
 
@@ -122,6 +125,7 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
             transcription.TryGetProperty("languages", out var langsEl)
             && langsEl.ValueKind == JsonValueKind.Array
             && langsEl.GetArrayLength() > 0
+            && langsEl[0].ValueKind == JsonValueKind.String
         )
         {
             detectedLanguage = langsEl[0].GetString();

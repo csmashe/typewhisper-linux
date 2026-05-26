@@ -253,7 +253,7 @@ issues).
 
 ## Download a Prebuilt Release
 
-Tagged releases on [GitHub Releases](https://github.com/TypeWhisper/typewhisper-linux/releases) ship four formats for `linux-x64`. Pick whichever fits your distribution and root preference:
+Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four formats for `linux-x64`. Pick whichever fits your distribution and root preference:
 
 | Format | Filename | Where it installs | Notes |
 |--------|----------|-------------------|-------|
@@ -262,7 +262,7 @@ Tagged releases on [GitHub Releases](https://github.com/TypeWhisper/typewhisper-
 | Fedora / RHEL `.rpm` | `typewhisper-<version>-1.x86_64.rpm` | `/opt/typewhisper` with `/usr/bin/typewhisper` wrapper | `sudo dnf install ./typewhisper-<version>-1.x86_64.rpm`. Recommends `pulseaudio-libs`, `pulseaudio-utils`, `playerctl`, `xdotool`. |
 | Tarball | `typewhisper-linux-x64-<version>.tar.gz` | User-local: `~/.local/share/TypeWhisper` + `~/.local/bin/typewhisper` symlink | No root required. Extract, then `./install.sh` (or `./install.sh --uninstall` to remove). |
 
-All four formats bundle the self-contained .NET runtime and the Linux plugins — `.NET 10 SDK` is only needed if you're building from source. Optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `wl-copy`/`xclip`, `canberra-gtk-play`, `espeak-ng`) are still installed via your distro; see *Linux Requirements* below.
+All four formats bundle the self-contained .NET runtime and the Linux plugins — `.NET 10 SDK` is only needed if you're building from source. Optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `wl-copy`/`xclip`, `canberra-gtk-play`, `espeak-ng`) are still installed via your distro; see *Linux Requirements* above.
 
 The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayland global hotkeys (`input`-group membership for the evdev backend) still need their per-distro setup steps regardless of which package format you install.
 

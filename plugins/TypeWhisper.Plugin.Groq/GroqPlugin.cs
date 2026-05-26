@@ -182,17 +182,17 @@ public sealed partial class GroqPlugin
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        var normalizedApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        var normalizedApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         var wasConfigured = IsConfigured;
         var changed = !string.Equals(_apiKey, normalizedApiKey, StringComparison.Ordinal);
 
         _apiKey = normalizedApiKey;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (normalizedApiKey is null)
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", apiKey);
+                await _host.StoreSecretAsync("api-key", normalizedApiKey);
 
             if (changed)
             {
