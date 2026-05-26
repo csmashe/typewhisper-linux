@@ -46,9 +46,12 @@ public sealed class ErrorLogService : IErrorLogService
             {
                 _entries.RemoveAt(_entries.Count - 1);
             }
+
+            // Persist inside the lock so two near-simultaneous AddEntry calls
+            // can't have the older snapshot overwrite the newer one on disk.
+            SaveToDisk();
         }
 
-        SaveToDisk();
         EntriesChanged?.Invoke();
     }
 
@@ -57,9 +60,9 @@ public sealed class ErrorLogService : IErrorLogService
         lock (_lock)
         {
             _entries.Clear();
+            SaveToDisk();
         }
 
-        SaveToDisk();
         EntriesChanged?.Invoke();
     }
 
@@ -132,16 +135,14 @@ public sealed class ErrorLogService : IErrorLogService
 
     private void SaveToDisk()
     {
+        // Caller must hold _lock. Serializing while holding the lock keeps
+        // the on-disk file in step with the in-memory list — without this
+        // contract, two writers could interleave snapshot + write and the
+        // older snapshot would land last.
         try
         {
-            List<ErrorLogEntry> snapshot;
-            lock (_lock)
-            {
-                snapshot = [.. _entries];
-            }
-
             var json = JsonSerializer.Serialize(
-                snapshot,
+                _entries,
                 new JsonSerializerOptions { WriteIndented = true }
             );
 

@@ -81,9 +81,6 @@ public static class AppFormatterService
             {
                 lines[i] = "- " + trimmed[7..];
             }
-            else if (trimmed.StartsWith("* ") || trimmed.StartsWith("- "))
-            {
-            }
         }
 
         return string.Join('\n', lines);

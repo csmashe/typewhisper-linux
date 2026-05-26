@@ -131,12 +131,20 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? "cuda"
             : "cpu";
-        if (_computeBackend == normalized)
-            return Task.CompletedTask;
 
-        _computeBackend = normalized;
-        if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
-            UnloadRecognizer();
+        // Serialize backend switches with model load/unload: without the lock,
+        // a LoadModelAsync running on another thread could observe the old
+        // backend, pass its check, and then load against a recognizer that's
+        // been unloaded mid-flight.
+        lock (_sync)
+        {
+            if (_computeBackend == normalized)
+                return Task.CompletedTask;
+
+            _computeBackend = normalized;
+            if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
+                UnloadRecognizerUnsafe();
+        }
 
         return Task.CompletedTask;
     }
@@ -286,7 +294,11 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
 
-        if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+        string backend;
+        lock (_sync)
+            backend = _computeBackend;
+
+        if (!string.Equals(backend, "cpu", StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException(
                 "CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA."
             );
@@ -500,12 +512,20 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             var chunkId = System.Text.Encoding.ASCII.GetString(wavData, pos, 4);
             var chunkSize = BitConverter.ToInt32(wavData, pos + 4);
 
+            // chunkSize comes from untrusted WAV bytes — guard against negative
+            // values, overflow, and sizes that would run past the buffer before
+            // allocating or indexing based on it.
+            if (chunkSize < 0 || chunkSize > wavData.Length - (pos + 8))
+                throw new ArgumentException("Invalid WAV data: chunk size out of range");
+
             if (chunkId == "data")
             {
                 var dataStart = pos + 8;
-                var sampleCount = chunkSize / 2; // 16-bit samples
+                // Clamp to what's actually present in case the header lied.
+                var usableBytes = Math.Min(chunkSize, wavData.Length - dataStart);
+                var sampleCount = usableBytes / 2; // 16-bit samples
                 var samples = new float[sampleCount];
-                for (var i = 0; i < sampleCount && dataStart + i * 2 + 1 < wavData.Length; i++)
+                for (var i = 0; i < sampleCount; i++)
                 {
                     var sample = BitConverter.ToInt16(wavData, dataStart + i * 2);
                     samples[i] = sample / 32768f;
@@ -514,7 +534,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             }
 
             pos += 8 + chunkSize;
-            if (chunkSize % 2 != 0)
+            if (chunkSize % 2 != 0 && pos < wavData.Length)
                 pos++; // Padding byte
         }
 

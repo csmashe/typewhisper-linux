@@ -1,0 +1,21 @@
+name: TypeWhisper CodeQL config
+
+paths-ignore:
+  - '**/obj/**'
+  - '**/bin/**'
+  - '**/*.g.cs'
+  - '**/*.Designer.cs'
+  - '**/Generated/**'
+
+# Suppress advisory "note"-severity catch-shape rules. The codebase uses
+# `catch { }` (or `catch (ExpectedType) { }`) intentionally in two patterns:
+#  - best-effort cleanup of temp files on the failure path of atomic-replace
+#    writes, where the original exception must still propagate
+#  - Dispose()/teardown paths, where the inner work has already logged its
+#    own errors and Dispose must not throw
+# Refactoring to narrower types would add noise without improving safety.
+query-filters:
+  - exclude:
+      id: cs/catch-of-all-exceptions
+  - exclude:
+      id: cs/empty-catch-block

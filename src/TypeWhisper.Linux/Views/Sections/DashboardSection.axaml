@@ -133,7 +133,7 @@
                         Padding="16,20"
                         Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="◻"
+                        <TextBlock Text="⊞"
                                    FontSize="18"
                                    Foreground="#1593F5"
                                    HorizontalAlignment="Center"

@@ -494,7 +494,27 @@ public sealed class HistoryService : IHistoryService
             records,
             new JsonSerializerOptions { WriteIndented = true }
         );
-        File.WriteAllText(_filePath, json);
+
+        // Write to a sibling temp file and atomically replace, so a crash
+        // mid-write can't leave history truncated.
+        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(tempPath, json);
+            if (File.Exists(_filePath))
+                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _filePath);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 
     private static string CsvEscape(string value)

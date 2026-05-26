@@ -611,8 +611,10 @@ public sealed class WhisperCppPlugin
             || parsed is < 0f or > 1f
         )
         {
-            // Reject by leaving stored value/cache untouched. ValidateAsync
-            // surfaces the reason to the UI.
+            // Persist the attempted value so ValidateAsync can read it back and
+            // surface the rejection reason to the UI. Leave _noSpeechThreshold
+            // at its last valid value so transcription keeps working.
+            _host?.SetSetting(NoSpeechThresholdKey, value);
             return Task.CompletedTask;
         }
 

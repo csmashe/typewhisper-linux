@@ -107,6 +107,7 @@ public sealed partial class CloudflareAsrPlugin
         string? detectedLanguage = null;
         if (
             root.TryGetProperty("result", out var res)
+            && res.ValueKind == JsonValueKind.Object
             && res.TryGetProperty("language", out var langEl)
         )
         {
@@ -116,6 +117,7 @@ public sealed partial class CloudflareAsrPlugin
         double duration = 0;
         if (
             root.TryGetProperty("result", out var res2)
+            && res2.ValueKind == JsonValueKind.Object
             && res2.TryGetProperty("duration", out var durEl)
             && durEl.ValueKind == JsonValueKind.Number
             && durEl.TryGetDouble(out var parsedDuration)

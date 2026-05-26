@@ -158,12 +158,18 @@ public static class Program
             .LogToTrace();
 
         // .LogToTrace() above assigned Logger.Sink synchronously. Wrap it so
-        // the harmless XSMP "SESSION_MANAGER ... not defined" warning the X11
-        // backend emits on every Wayland startup is dropped — see
-        // SuppressXsmpWarningLogSink for why it's safe to ignore.
+        // two harmless Avalonia log lines are dropped:
+        //   - the XSMP "SESSION_MANAGER ... not defined" startup warning —
+        //     see SuppressXsmpWarningLogSink.
+        //   - the per-frame SynchronizationLockException from
+        //     GlxContext.RestoreContext.Dispose on GLX/Mesa+NVIDIA-hybrid
+        //     and XWayland — the frame still renders, only the log spams.
+        //     See SuppressGlxRenderExceptionLogSink.
         if (Logger.Sink is { } sink)
         {
-            Logger.Sink = new SuppressXsmpWarningLogSink(sink);
+            Logger.Sink = new SuppressGlxRenderExceptionLogSink(
+                new SuppressXsmpWarningLogSink(sink)
+            );
         }
 
         return builder;

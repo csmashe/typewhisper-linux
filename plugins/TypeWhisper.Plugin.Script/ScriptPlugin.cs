@@ -234,20 +234,33 @@ public sealed class ScriptService
         using var process = new Process { StartInfo = psi };
         process.Start();
 
-        // Write text to stdin and close it so the script knows input is complete
-        await process.StandardInput.WriteAsync(text);
-        process.StandardInput.Close();
-
-        // Read stdout and stderr concurrently to avoid deadlocks
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
+        // Create the 5s watchdog BEFORE the stdin write so a wedged child
+        // (e.g. one that never drains its stdin) can't block WriteAsync
+        // indefinitely. The same token also bounds the concurrent reads.
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
 
+        // Read stdout and stderr concurrently to avoid deadlocks. Starting
+        // the reads before stdin is written keeps a chatty script that prints
+        // a prologue before reading from wedging our WriteAsync on a full
+        // output pipe buffer.
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+
+        string stdout;
+        string stderr;
         try
         {
+            // Inside the watchdog try block: a child that wedges on stdin
+            // (or never exits) must trigger kill, not propagate OCE while
+            // the process keeps running and pipes stay open.
+            await process.StandardInput.WriteAsync(text.AsMemory(), timeoutCts.Token);
+            process.StandardInput.Close();
+
             await process.WaitForExitAsync(timeoutCts.Token);
+
+            stdout = await stdoutTask;
+            stderr = await stderrTask;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -276,9 +289,6 @@ public sealed class ScriptService
             _host.Log(PluginLogLevel.Info, $"Script '{script.Name}' cancelled by caller.");
             throw;
         }
-
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
 
         if (process.ExitCode != 0)
         {

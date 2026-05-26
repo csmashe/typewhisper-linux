@@ -28,8 +28,10 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
 
         var url = "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&format_turns=true";
         // The default streaming model is English-only; opt into the multilingual
-        // variant only when a non-English language is requested.
-        if (!string.IsNullOrEmpty(language) && language != "en")
+        // variant only when a non-English language is requested. Match by prefix
+        // so locale variants like "en-US" stay on the English model.
+        if (!string.IsNullOrEmpty(language)
+            && !language.StartsWith("en", StringComparison.OrdinalIgnoreCase))
             url += "&speech_model=universal-streaming-multilingual";
 
         session._ws.Options.SetRequestHeader("Authorization", apiKey);
@@ -65,7 +67,7 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         var buffer = new byte[8192];
-        var messageBuffer = new MemoryStream();
+        using var messageBuffer = new MemoryStream();
 
         try
         {
