@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
@@ -25,7 +24,7 @@ namespace TypeWhisper.Linux;
 /// </summary>
 internal static class ServiceRegistrations
 {
-    public static void Register(HostBuilderContext context, IServiceCollection services)
+    public static void Register(IServiceCollection services)
     {
         var dataPath = TypeWhisperEnvironment.DataPath;
 

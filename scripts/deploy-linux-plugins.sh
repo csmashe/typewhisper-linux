@@ -5,7 +5,14 @@
 # first run into $XDG_DATA_HOME/TypeWhisper/Plugins/.
 #
 # Usage:
-#   scripts/deploy-linux-plugins.sh [Release|Debug]
+#   scripts/deploy-linux-plugins.sh [Release|Debug] [version]
+#
+# The optional version arg must match whatever version was passed to the host
+# publish (-p:Version=...). It propagates to PluginSDK and every plugin so the
+# host's loaded PluginSDK.dll and the plugins' AssemblyRef to PluginSDK agree
+# on AssemblyVersion. Mismatch → plugins fail to type-load at runtime because
+# PluginAssemblyLoadContext redirects PluginSDK references to the host's copy
+# and the version doesn't satisfy the bind.
 #
 # Environment:
 #   TYPEWHISPER_PLUGIN_PUBLISH_JOBS=<n>  Max concurrent plugin publishes.
@@ -16,11 +23,19 @@
 set -euo pipefail
 
 CONFIG="${1:-Release}"
+VERSION="${2:-}"
 RID="linux-x64"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins"
 JOBS="${TYPEWHISPER_PLUGIN_PUBLISH_JOBS:-4}"
 TMP_DIR="$(mktemp -d)"
+
+# Only pass -p:Version when explicitly given. Empty string would override the
+# Directory.Build.props default with "" and produce a build error.
+VERSION_ARG=()
+if [ -n "$VERSION" ]; then
+  VERSION_ARG=(-p:Version="$VERSION")
+fi
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -60,6 +75,12 @@ declare -A PLUGINS=(
   ["com.typewhisper.webhook"]="TypeWhisper.Plugin.Webhook"
 )
 
+# Clean any plugins lingering from previous builds. The script's PLUGINS array
+# is the authoritative manifest; anything else in $OUT is a stale artifact from
+# an earlier script revision (or a hand-deployed plugin) that would otherwise
+# get bundled into the package with whatever PluginSDK version it was last
+# built against — usually mismatched with the host and a hard load failure.
+rm -rf "$OUT"
 mkdir -p "$OUT"
 
 # Build the shared PluginSDK once up front so the parallel plugin publishes
@@ -68,7 +89,20 @@ mkdir -p "$OUT"
 # deliberately omitted: it does not propagate to this project reference, so the
 # plugin publishes resolve the non-RID ref assembly under obj/$CONFIG/net10.0/.
 dotnet build "$ROOT/src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" \
-  -c "$CONFIG" -f net10.0 --nologo -v quiet > /dev/null
+  -c "$CONFIG" -f net10.0 "${VERSION_ARG[@]}" --nologo -v quiet > /dev/null
+
+# Sequentially restore each plugin up front. -p:BuildProjectReferences=false
+# stops MSBuild from re-building PluginSDK during the parallel publish below,
+# but it does NOT stop NuGet from walking project references during restore.
+# Without this pre-restore, parallel plugin publishes race to rewrite
+# src/TypeWhisper.PluginSDK/obj/project.assets.json. Combined with --no-restore
+# in publish_plugin below, restore happens exactly once per project and the
+# parallel phase is restore-free.
+for id in "${!PLUGINS[@]}"; do
+  project="${PLUGINS[$id]}"
+  dotnet restore "$ROOT/plugins/$project/$project.csproj" \
+    -r "$RID" "${VERSION_ARG[@]}" --nologo -v quiet > /dev/null
+done
 
 publish_plugin() {
   local id="$1"
@@ -81,7 +115,8 @@ publish_plugin() {
   {
     echo "==> $id ($project)"
     dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" \
-      --self-contained false -p:BuildProjectReferences=false --nologo -v quiet
+      --self-contained false -p:BuildProjectReferences=false --no-restore \
+      "${VERSION_ARG[@]}" --nologo -v quiet
 
     rm -rf "$dest"
     mkdir -p "$dest"

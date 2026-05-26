@@ -1,6 +1,6 @@
 using Avalonia;
 using Avalonia.Logging;
-using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using System.Net.Sockets;
 using TypeWhisper.Core;
@@ -12,16 +12,30 @@ namespace TypeWhisper.Linux;
 
 public static class Program
 {
-    public static IHost Host { get; private set; } = null!;
+    public static ServiceProvider Services { get; private set; } = null!;
     public static bool StartMinimized { get; private set; }
+
+    // Boot-time profiling stopwatch. Single instance, started at the top of
+    // Main; BootTrace.Stage(name) writes "+Xms: name" so we can see where
+    // startup time goes. Lightweight enough to leave on in release builds.
+    public static readonly Stopwatch BootStopwatch = Stopwatch.StartNew();
 
     public static int Main(string[] args)
     {
         // Pipe Debug.WriteLine output to stdout so plugin + service logs are
         // visible when the app runs from a terminal.
         Trace.Listeners.Add(new ConsoleTraceListener());
+        BootTrace.Stage("Main entered");
 
         TypeWhisperEnvironment.EnsureDirectories();
+        BootTrace.Initialize();
+        BootTrace.Stage("EnsureDirectories");
+
+        // GNOME launches menu-clicked apps at nice 6 / ionice idle for shell
+        // responsiveness. That throttles cold start ~60× for a CPU+IO-heavy
+        // .NET app. Restore defaults so menu launch matches terminal launch.
+        var priorityResult = TypeWhisper.Linux.Services.ProcessPriority.ResetToDefaults();
+        BootTrace.Stage($"ProcessPriority reset ({priorityResult})");
 
         var action = CommandLineParser.Parse(args);
         StartMinimized = action.StartMinimized;
@@ -58,9 +72,11 @@ public static class Program
         // bail with a friendly message. The bind that happens later in App
         // startup remains the authoritative single-instance guard for the
         // probe-then-bind race window.
+        BootTrace.Stage($"CommandLineParser.Parse (kind={action.Kind})");
         try
         {
             var socketPath = SocketPathResolver.ResolveControlSocketPath();
+            BootTrace.Stage("SocketPathResolver.ResolveControlSocketPath");
             if (action.Kind == CliActionKind.BareToggle)
             {
                 if (ControlSocketClient.TrySendToggle(socketPath, out var probeError))
@@ -72,36 +88,33 @@ public static class Program
                 {
                     Trace.WriteLine($"[Program] Control socket probe: {probeError}");
                 }
+                BootTrace.Stage("ControlSocketClient.TrySendToggle (no live peer)");
             }
             else if (ControlSocketClient.IsLivePeer(socketPath))
             {
                 Console.Error.WriteLine("TypeWhisper is already running.");
                 return 0;
             }
+            else
+            {
+                BootTrace.Stage("ControlSocketClient.IsLivePeer (none)");
+            }
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[Program] Control socket probe failed: {ex.Message}");
+            BootTrace.Stage($"control socket probe threw: {ex.GetType().Name}");
         }
 
-        Host = BuildHost(args);
-        Host.Start();
+        Services = BuildServices();
+        BootTrace.Stage("BuildServices");
 
         try
         {
+            BootTrace.Stage("StartWithClassicDesktopLifetime begin");
             var exitCode = BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
 
-            // Graceful shutdown with a hard cap. SharpHook's libuiohook thread
-            // waits on X11 events and can block Dispose() indefinitely on a
-            // quiet desktop; Host.StopAsync would then hang forever. Cap the
-            // wait and fall back to Environment.Exit so the tray icon releases.
-            var stopped = Host.StopAsync(TimeSpan.FromSeconds(3)).Wait(TimeSpan.FromSeconds(4));
-
-            if (!stopped)
-            {
-                Trace.WriteLine("[Program] Host.StopAsync timed out — forcing exit.");
-                Environment.Exit(exitCode);
-            }
+            Services.Dispose();
 
             return exitCode;
         }
@@ -175,11 +188,21 @@ public static class Program
         return builder;
     }
 
-    private static IHost BuildHost(string[] args)
+    private static ServiceProvider BuildServices()
     {
-        return Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder(args)
-            .ConfigureServices(ServiceRegistrations.Register)
-            .Build();
+        var services = new ServiceCollection();
+        BootTrace.Stage("ServiceCollection created");
+        ServiceRegistrations.Register(services);
+        BootTrace.Stage("ServiceRegistrations.Register");
+        var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions
+            {
+                ValidateOnBuild = false,
+                ValidateScopes = false
+            }
+        );
+        BootTrace.Stage("ServiceProvider built");
+        return provider;
     }
 
     // Native X11 = X11 session type AND no Wayland display socket. A Wayland

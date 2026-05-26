@@ -53,12 +53,18 @@ dotnet publish "$PROJECT" \
   --self-contained true \
   -p:Version="$VERSION" \
   -p:PublishSingleFile=false \
+  -p:PublishReadyToRun=true \
+  -p:DeployBundledLinuxPlugins=false \
   -p:DebugType=None \
   -p:DebugSymbols=false \
   --nologo
 
 echo "==> Bundling Linux plugins"
-bash "$ROOT/scripts/deploy-linux-plugins.sh" "$CONFIG"
+# Pass VERSION so PluginSDK and plugins build with the same AssemblyVersion as
+# the host. Otherwise plugins reference PluginSDK at the Directory.Build.props
+# default and the host loads it at our $VERSION; AssemblyLoadContext can't
+# satisfy the version-bound AssemblyRef and every plugin fails to type-load.
+bash "$ROOT/scripts/deploy-linux-plugins.sh" "$CONFIG" "$VERSION"
 
 # Copy bundled plugins into publish output (mirrors what install-linux-app.sh does).
 if [ -d "$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins" ]; then
