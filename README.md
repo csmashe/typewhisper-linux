@@ -253,7 +253,7 @@ issues).
 
 ## Download a Prebuilt Release
 
-Tagged releases on [GitHub Releases](https://github.com/TypeWhisper/typewhisper-linux/releases) ship four formats for `linux-x64`. Pick whichever fits your distribution and root preference:
+Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four formats for `linux-x64`. Pick whichever fits your distribution and root preference:
 
 | Format | Filename | Where it installs | Notes |
 |--------|----------|-------------------|-------|
