@@ -294,15 +294,6 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
 
-        string backend;
-        lock (_sync)
-            backend = _computeBackend;
-
-        if (!string.Equals(backend, "cpu", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException(
-                "CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA."
-            );
-
         if (!model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName))))
             throw new FileNotFoundException($"Model files not found for: {modelId}");
 
@@ -311,6 +302,11 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             {
                 lock (_sync)
                 {
+                    if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+                        throw new NotSupportedException(
+                            "CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA."
+                        );
+
                     UnloadRecognizerUnsafe();
 
                     _recognizer = model.SupportsTranslation

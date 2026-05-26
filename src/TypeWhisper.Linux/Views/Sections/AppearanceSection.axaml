@@ -152,53 +152,97 @@
             <TextBlock Text="Preview"
                        Classes="section-title" />
 
-            <!-- Static mock-up of the overlay so users can see the layout
-                 without triggering a real recording session. -->
+            <!-- Mirrors DictationOverlayWindow's bubble so users see the
+                 selected widgets in their real shape and colors. -->
             <Border Classes="panel"
                     Padding="24"
                     Height="220">
-                <Grid>
-                    <TextBlock Text="Overlay indicator"
-                               HorizontalAlignment="Center"
-                               Margin="0,24,0,0"
-                               Foreground="#9BAABC"
-                               FontSize="12.5" />
+                <Border Background="#F0181818"
+                        BorderBrush="#25FFFFFF"
+                        BorderThickness="1"
+                        CornerRadius="22"
+                        MinWidth="320"
+                        Padding="14,10"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                    <Grid ColumnDefinitions="Auto,*,Auto"
+                          ColumnSpacing="12">
+                        <Ellipse Width="14"
+                                 Height="14"
+                                 Fill="#1593F5"
+                                 VerticalAlignment="Center"
+                                 IsVisible="{Binding PreviewLeftIsIndicator}" />
 
-                    <Border Width="340"
-                            Height="76"
-                            CornerRadius="20"
-                            Background="#101821"
-                            BorderBrush="#1AFFFFFF"
-                            BorderThickness="1"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center">
-                        <Grid ColumnDefinitions="Auto,*,Auto"
-                              ColumnSpacing="16"
-                              Margin="18,0">
-                            <TextBlock Text="•••••"
-                                       VerticalAlignment="Center"
-                                       Foreground="#5EA4FF"
-                                       FontSize="16" />
-                            <StackPanel Grid.Column="1"
-                                        VerticalAlignment="Center"
-                                        Spacing="2">
-                                <TextBlock Text="Recording"
-                                           HorizontalAlignment="Center"
-                                           FontWeight="SemiBold" />
-                                <TextBlock
-                                    Text="Graphite body, brighter azure focus, and&#x0a;denser runtime metadata."
-                                    TextAlignment="Center"
-                                    Foreground="#8A9AAE"
-                                    FontSize="11" />
-                            </StackPanel>
-                            <TextBlock Grid.Column="2"
-                                       Text="0:00"
-                                       VerticalAlignment="Center"
-                                       Foreground="#9BAABC"
-                                       FontSize="12" />
-                        </Grid>
-                    </Border>
-                </Grid>
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="3"
+                                    Height="18"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding PreviewLeftIsWaveform}">
+                            <Border Width="4" Height="6" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                            <Border Width="4" Height="12" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                            <Border Width="4" Height="18" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                            <Border Width="4" Height="12" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                            <Border Width="4" Height="6" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                        </StackPanel>
+
+                        <TextBlock Text="{Binding PreviewLeftText}"
+                                   VerticalAlignment="Center"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#99FFFFFF"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="120"
+                                   IsVisible="{Binding PreviewLeftIsText}" />
+
+                        <TextBlock Grid.Column="1"
+                                   Text="Recording"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="#CCFFFFFF" />
+
+                        <Ellipse Grid.Column="2"
+                                 Width="14"
+                                 Height="14"
+                                 Fill="#1593F5"
+                                 VerticalAlignment="Center"
+                                 IsVisible="{Binding PreviewRightIsIndicator}" />
+
+                        <StackPanel Grid.Column="2"
+                                    Orientation="Horizontal"
+                                    Spacing="3"
+                                    Height="18"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding PreviewRightIsWaveform}">
+                            <Border Width="4" Height="6" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                            <Border Width="4" Height="12" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                            <Border Width="4" Height="18" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                            <Border Width="4" Height="12" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                            <Border Width="4" Height="6" CornerRadius="999"
+                                    Background="#1593F5" VerticalAlignment="Bottom" />
+                        </StackPanel>
+
+                        <TextBlock Grid.Column="2"
+                                   Text="{Binding PreviewRightText}"
+                                   VerticalAlignment="Center"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#99FFFFFF"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="120"
+                                   IsVisible="{Binding PreviewRightIsText}" />
+                    </Grid>
+                </Border>
             </Border>
         </StackPanel>
     </ScrollViewer>

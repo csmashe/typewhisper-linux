@@ -392,10 +392,10 @@ public sealed class WhisperCppPlugin
                     await fileStream.FlushAsync(ct);
                 }
 
-                if (File.Exists(modelPath))
-                    File.Delete(modelPath);
-
-                File.Move(tempPath, modelPath);
+                // Atomic on the same filesystem: a crash between delete and move
+                // would otherwise leave no model in place. Move(overwrite: true)
+                // is implemented via rename(2) on Linux, which is atomic.
+                File.Move(tempPath, modelPath, overwrite: true);
                 progress?.Report(1.0);
             }
             catch

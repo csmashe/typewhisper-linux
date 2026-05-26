@@ -298,7 +298,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -337,8 +337,24 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
                     errorMsg = msgProp.GetString();
                 }
 
-                errorMsg ??= errors.GetRawText();
-                _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+                if (errorMsg is null)
+                {
+                    // Unexpected error shape: the raw payload can echo back the
+                    // failed mutation (issue title/description). Log only the
+                    // length + a short fingerprint so support can correlate
+                    // reports without spilling user content into traces.
+                    var raw = errors.GetRawText();
+                    var fingerprint = ShortFingerprint(raw);
+                    _host?.Log(
+                        PluginLogLevel.Error,
+                        $"Linear GraphQL error: {{redacted:length={raw.Length}, sha256:{fingerprint}}}"
+                    );
+                }
+                else
+                {
+                    _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+                }
+
                 return null;
             }
 

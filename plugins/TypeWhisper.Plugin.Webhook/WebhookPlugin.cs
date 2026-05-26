@@ -123,14 +123,15 @@ public sealed class WebhookService
     private readonly HttpClient _httpClient = new();
     private readonly IPluginHostServices _host;
     private readonly WebhookStore _store;
+    private bool _loadSucceeded;
 
     public ObservableCollection<WebhookConfig> Webhooks { get; } = [];
     public ObservableCollection<DeliveryLogEntry> DeliveryLog { get; } = [];
 
-    public WebhookService(IPluginHostServices host)
+    public WebhookService(IPluginHostServices host, string dataDirectory)
     {
         _host = host;
-        _store = new WebhookStore(host.PluginDataDirectory);
+        _store = new WebhookStore(dataDirectory);
         Load();
     }
 
@@ -297,19 +298,44 @@ public sealed class WebhookService
 
     private void Load()
     {
+        List<WebhookConfig> loaded;
         try
         {
-            foreach (var config in _store.Load())
-                Webhooks.Add(config);
+            loaded = _store.Load();
         }
-        catch
+        catch (Exception ex)
         {
-            _host.Log(PluginLogLevel.Warning, "Failed to load webhook configuration");
+            // Surface as Warning + keep Webhooks empty, but leave
+            // _loadSucceeded=false so Save() refuses to overwrite a file
+            // that may still hold valid webhooks behind a parse error.
+            _host.Log(
+                PluginLogLevel.Warning,
+                $"Failed to load webhook configuration: {ex.Message}"
+            );
+            return;
         }
+
+        foreach (var config in loaded)
+            Webhooks.Add(config);
+        _loadSucceeded = true;
     }
 
     private void Save()
     {
+        if (!_loadSucceeded)
+        {
+            // Mirrors ScriptService: refuse to write when the existing
+            // file failed to load, so a corrupt or locked webhooks.json
+            // can't be silently replaced with an empty in-memory state.
+            _host.Log(
+                PluginLogLevel.Warning,
+                "Refusing to save webhook configuration because the existing file could not be loaded."
+            );
+            throw new InvalidOperationException(
+                "Cannot save webhook configuration because the existing file could not be loaded."
+            );
+        }
+
         try
         {
             _store.Save(Webhooks);
@@ -345,7 +371,14 @@ public sealed class WebhookPlugin
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        Service = new WebhookService(host);
+        // Single canonical data dir: prefer the one set via SetDataDirectory
+        // (called by the loader before ActivateAsync); fall back to the host's
+        // value for hosts that don't drive IPluginDataLocationAware. Threading
+        // the same string through WebhookService and ResolveDataDir() keeps
+        // the live service and any on-disk fallback path reading/writing the
+        // same webhooks.json.
+        _dataDirectory ??= host.PluginDataDirectory;
+        Service = new WebhookService(host, _dataDirectory);
         _subscription = host.EventBus.Subscribe<TranscriptionCompletedEvent>(
             OnTranscriptionCompleted
         );

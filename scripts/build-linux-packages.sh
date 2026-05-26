@@ -53,12 +53,18 @@ dotnet publish "$PROJECT" \
   --self-contained true \
   -p:Version="$VERSION" \
   -p:PublishSingleFile=false \
+  -p:PublishReadyToRun=true \
+  -p:DeployBundledLinuxPlugins=false \
   -p:DebugType=None \
   -p:DebugSymbols=false \
   --nologo
 
 echo "==> Bundling Linux plugins"
-bash "$ROOT/scripts/deploy-linux-plugins.sh" "$CONFIG"
+# Pass VERSION so PluginSDK and plugins build with the same AssemblyVersion as
+# the host. Otherwise plugins reference PluginSDK at the Directory.Build.props
+# default and the host loads it at our $VERSION; AssemblyLoadContext can't
+# satisfy the version-bound AssemblyRef and every plugin fails to type-load.
+bash "$ROOT/scripts/deploy-linux-plugins.sh" "$CONFIG" "$VERSION"
 
 # Copy bundled plugins into publish output (mirrors what install-linux-app.sh does).
 if [ -d "$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins" ]; then
@@ -154,7 +160,10 @@ tar -czf "$OUTPUT_DIR/${TARBALL_NAME}.tar.gz" -C "$STAGE_ROOT" "$TARBALL_NAME"
 echo "    -> $OUTPUT_DIR/${TARBALL_NAME}.tar.gz"
 
 # ---------- AppImage ----------
-if command -v wget >/dev/null 2>&1; then
+# Need both a downloader (wget) and a checksum verifier (sha256sum) — skipping
+# the SHA verification on a download-from-the-internet step is not acceptable
+# even on stripped environments.
+if command -v wget >/dev/null 2>&1 && command -v sha256sum >/dev/null 2>&1; then
   echo "==> Building AppImage"
   APPDIR="$STAGE_ROOT/TypeWhisper.AppDir"
   mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/128x128/apps"
@@ -187,15 +196,24 @@ exec "$HERE/usr/bin/typewhisper" "$@"
 EOF
   chmod +x "$APPDIR/AppRun"
 
+  # Pin to a tagged release and verify SHA256 before executing — the previous
+  # "continuous" URL was a moving target, which is a supply-chain risk for
+  # release artifacts built from it. SHA matches the asset digest exposed by
+  # GitHub's release API for AppImage/appimagetool 1.9.1.
+  APPIMAGETOOL_VERSION="1.9.1"
+  APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+  APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
   APPIMAGETOOL="$STAGE_ROOT/appimagetool"
-  wget -qO "$APPIMAGETOOL" "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+  wget -qO "$APPIMAGETOOL" "$APPIMAGETOOL_URL"
+  echo "${APPIMAGETOOL_SHA256}  ${APPIMAGETOOL}" | sha256sum --check --status \
+    || { echo "ERROR: appimagetool checksum mismatch — aborting AppImage build" >&2; exit 1; }
   chmod +x "$APPIMAGETOOL"
 
   APPIMAGE_OUT="$OUTPUT_DIR/${APP_NAME}-${VERSION}-x86_64.AppImage"
   ARCH=x86_64 "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$APPIMAGE_OUT"
   echo "    -> $APPIMAGE_OUT"
 else
-  echo "WARN: wget not available; skipping AppImage" >&2
+  echo "WARN: wget or sha256sum not available; skipping AppImage" >&2
 fi
 
 # ---------- .deb ----------

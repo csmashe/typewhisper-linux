@@ -134,6 +134,11 @@ public sealed class DictionaryService : IDictionaryService
                 .ToList();
         }
 
+        // Accumulate usage increments and persist once at the end. A per-match
+        // SaveToDisk would mean N file writes for a transcript with N
+        // corrections, which adds noticeable I/O to every dictation.
+        var usedIds = new List<string>();
+
         foreach (var entry in corrections)
         {
             var comparison = entry.CaseSensitive
@@ -172,8 +177,13 @@ public sealed class DictionaryService : IDictionaryService
                 }
 
                 text = replaced;
-                IncrementUsageCount(entry.Id);
+                usedIds.Add(entry.Id);
             }
+        }
+
+        if (usedIds.Count > 0)
+        {
+            IncrementUsageCounts(usedIds);
         }
 
         return text;
@@ -556,6 +566,14 @@ public sealed class DictionaryService : IDictionaryService
                     continue;
                 }
 
+                // Term rows must not carry a Replacement: it's meaningless for
+                // terms and a hand-edited CSV with a stray value would break
+                // DictionaryEntryKey-based de-duplication on re-import.
+                if (entryType != DictionaryEntryType.Correction)
+                {
+                    replacement = null;
+                }
+
                 var entry = new DictionaryEntry
                 {
                     Id = Guid.NewGuid().ToString(),
@@ -659,23 +677,35 @@ public sealed class DictionaryService : IDictionaryService
         }
     }
 
-    private void IncrementUsageCount(string id)
+    private void IncrementUsageCounts(IReadOnlyList<string> ids)
     {
         lock (_gate)
         {
-            var idx = _cache.FindIndex(e => e.Id == id);
-            if (idx < 0)
+            var newCache = new List<DictionaryEntry>(_cache);
+            var now = DateTime.UtcNow;
+            var changed = false;
+
+            foreach (var id in ids)
+            {
+                var idx = newCache.FindIndex(e => e.Id == id);
+                if (idx < 0)
+                {
+                    continue;
+                }
+
+                newCache[idx] = newCache[idx] with
+                {
+                    UsageCount = newCache[idx].UsageCount + 1,
+                    TimesApplied = newCache[idx].TimesApplied + 1,
+                    LastUsedAt = now
+                };
+                changed = true;
+            }
+
+            if (!changed)
             {
                 return;
             }
-
-            var newCache = new List<DictionaryEntry>(_cache);
-            newCache[idx] = newCache[idx] with
-            {
-                UsageCount = newCache[idx].UsageCount + 1,
-                TimesApplied = newCache[idx].TimesApplied + 1,
-                LastUsedAt = DateTime.UtcNow
-            };
 
             try
             {
@@ -689,10 +719,10 @@ public sealed class DictionaryService : IDictionaryService
                 // throws (load-failed guard, disk full, permission), the
                 // post-processing pipeline would otherwise treat the whole
                 // correction step as failed and return the pre-correction text.
-                // Drop the increment so memory stays consistent with disk and
+                // Drop the increments so memory stays consistent with disk and
                 // swallow the exception.
                 Trace.WriteLine(
-                    $"[DictionaryService] Could not persist usage count for entry '{id}': {ex.Message}"
+                    $"[DictionaryService] Could not persist usage counts for {ids.Count} entries: {ex.Message}"
                 );
             }
         }

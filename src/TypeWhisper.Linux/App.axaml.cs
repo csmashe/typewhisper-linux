@@ -33,16 +33,20 @@ public class App : Application
 
     public override void Initialize()
     {
+        BootTrace.Stage("App.Initialize begin");
         AvaloniaXamlLoader.Load(this);
+        BootTrace.Stage("App.Initialize end");
     }
 
     public override void OnFrameworkInitializationCompleted()
     {
+        BootTrace.Stage("OnFrameworkInitializationCompleted begin");
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var services = Program.Host.Services;
+            var services = Program.Services;
             var settings = services.GetRequiredService<ISettingsService>();
             settings.Load();
+            BootTrace.Stage("settings.Load");
 
             // Resolve + initialize the tray before MainWindow is built. The
             // probe sets TrayIconService.IsTrayAvailable, which GeneralSection
@@ -53,9 +57,12 @@ public class App : Application
             // It also has to be ready before the close handler is wired.
             var tray = services.GetRequiredService<TrayIconService>();
             tray.Initialize();
+            BootTrace.Stage("tray.Initialize");
 
             var main = services.GetRequiredService<MainWindow>();
             desktop.MainWindow = main;
+            BootTrace.Stage("MainWindow constructed");
+            main.Opened += (_, _) => BootTrace.Stage("MainWindow.Opened fired");
 
             var prefs = services.GetRequiredService<LinuxPreferencesService>();
 
@@ -110,6 +117,7 @@ public class App : Application
             var dictation = services.GetRequiredService<DictationOrchestrator>();
             dictation.Initialize();
             tray.DictationToggleRequested += (_, _) => _ = dictation.ToggleAsync();
+            BootTrace.Stage("dictation.Initialize");
 
             var sessionResults = services.GetRequiredService<DictationSessionResultStore>();
             dictation.SessionCompleted += sessionResults.Record;
@@ -138,8 +146,11 @@ public class App : Application
                 Debug.WriteLine($"[App] Control socket start failed: {ex.Message}");
             }
 
+            BootTrace.Stage("controlSocket.Start");
+
             var overlay = services.GetRequiredService<DictationOverlayWindow>();
             overlay.Initialize();
+            BootTrace.Stage("overlay.Initialize");
 
             // Sync the hotkey service's mode + binding with AppSettings. The
             // handler re-runs on every settings change so flipping the mode
@@ -248,6 +259,7 @@ public class App : Application
                 main.Opened += (_, _) => HideToTray(main);
             }
 
+            BootTrace.Stage("synchronous init complete; starting BootstrapDeferredAsync");
             var bootstrapTask = BootstrapDeferredAsync(services);
 
             // First-run onboarding wizard. Wait for bootstrap so bundled
@@ -262,7 +274,9 @@ public class App : Application
             }
         }
 
+        BootTrace.Stage("OnFrameworkInitializationCompleted end (about to call base)");
         base.OnFrameworkInitializationCompleted();
+        BootTrace.Stage("base.OnFrameworkInitializationCompleted returned");
     }
 
     private static void ReconcileHotkeyOnStartup(HotkeyService hotkey, ISettingsService settings)
@@ -478,22 +492,27 @@ public class App : Application
 
     private static async Task BootstrapAsync(IServiceProvider services)
     {
+        BootTrace.Stage("BootstrapAsync begin");
         var settings = services.GetRequiredService<ISettingsService>();
 
         var history = services.GetRequiredService<IHistoryService>();
         await history.EnsureLoadedAsync();
+        BootTrace.Stage("history.EnsureLoadedAsync");
 
         var sessionAudio = services.GetRequiredService<SessionAudioFileService>();
         sessionAudio.DeleteSessionCaptures();
 
         var audio = services.GetRequiredService<AudioRecordingService>();
         ApplyConfiguredMicrophone(audio, settings);
+        BootTrace.Stage("audio configured");
 
         var deployer = services.GetRequiredService<BundledPluginDeployer>();
         deployer.DeployIfMissing();
+        BootTrace.Stage("BundledPluginDeployer.DeployIfMissing");
 
         var pluginManager = services.GetRequiredService<PluginManager>();
         await pluginManager.InitializeAsync();
+        BootTrace.Stage("PluginManager.InitializeAsync");
 
         // The remote plugin registry (PluginRegistryService) targets the
         // upstream Windows registry, which serves Windows-built plugin
