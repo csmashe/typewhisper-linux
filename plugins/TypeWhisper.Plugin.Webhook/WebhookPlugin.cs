@@ -356,6 +356,10 @@ public sealed class WebhookPlugin
     {
         _subscription?.Dispose();
         _subscription = null;
+        // Dispose the service so its HttpClient is released; otherwise a
+        // reactivation would observe stale state and leak the previous client.
+        Service?.Dispose();
+        Service = null;
         return Task.CompletedTask;
     }
 

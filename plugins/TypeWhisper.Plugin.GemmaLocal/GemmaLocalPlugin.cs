@@ -14,31 +14,31 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private static readonly IReadOnlyList<GemmaModelDefinition> Models =
     [
         new(
-            "gemma4-4b-q4",
-            "Gemma 4 4B (Q4_K_M)",
+            "gemma4-e2b-it-q4",
+            "Gemma 4 E2B (Q4_K_M)",
             "~3 GB",
-            3000,
+            3100,
             true,
-            "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
-            "gemma-3-4b-it-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+            "gemma-4-E2B-it-Q4_K_M.gguf"
         ),
         new(
-            "gemma4-12b-q4",
-            "Gemma 4 12B (Q4_K_M)",
-            "~8 GB",
-            8000,
+            "gemma4-e4b-it-q4",
+            "Gemma 4 E4B (Q4_K_M)",
+            "~5 GB",
+            5000,
             false,
-            "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
-            "gemma-3-12b-it-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+            "gemma-4-E4B-it-Q4_K_M.gguf"
         ),
         new(
-            "gemma4-27b-q4",
-            "Gemma 4 27B (Q4_K_M)",
+            "gemma4-26b-a4b-it-q4",
+            "Gemma 4 26B A4B (Q4_K_M)",
             "~17 GB",
             17000,
             false,
-            "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/main/gemma-3-27b-it-Q4_K_M.gguf",
-            "gemma-3-27b-it-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+            "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
         ),
     ];
 
@@ -472,7 +472,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     private static string FormatGemmaPrompt(string systemPrompt, string userText)
     {
-        // Gemma 3 instruction-tuned chat format with proper system turn
+        // Gemma instruction-tuned chat format with proper system turn
         var sb = new System.Text.StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -531,7 +531,18 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
         startupCts?.Dispose();
 
-        UnloadModel();
+        // Mirror DeactivateAsync: serialize teardown with any in-flight
+        // ProcessAsync so we don't dispose _context/_weights mid-inference.
+        _inferenceLock.Wait();
+        try
+        {
+            UnloadModel();
+        }
+        finally
+        {
+            _inferenceLock.Release();
+        }
+
         _inferenceLock.Dispose();
         _httpClient.Dispose();
     }

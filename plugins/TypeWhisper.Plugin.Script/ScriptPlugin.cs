@@ -234,16 +234,19 @@ public sealed class ScriptService
         using var process = new Process { StartInfo = psi };
         process.Start();
 
+        // Create the 5s watchdog BEFORE the stdin write so a wedged child
+        // (e.g. one that never drains its stdin) can't block WriteAsync
+        // indefinitely. The same token also bounds the concurrent reads.
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+
         // Write text to stdin and close it so the script knows input is complete
-        await process.StandardInput.WriteAsync(text);
+        await process.StandardInput.WriteAsync(text.AsMemory(), timeoutCts.Token);
         process.StandardInput.Close();
 
         // Read stdout and stderr concurrently to avoid deadlocks
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
 
         try
         {

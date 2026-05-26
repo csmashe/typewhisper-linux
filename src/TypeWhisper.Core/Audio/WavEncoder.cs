@@ -11,6 +11,14 @@ public static class WavEncoder
         int bitsPerSample = 16
     )
     {
+        // The data-write loop below hardcodes Int16 PCM conversion, so accepting
+        // other bit depths here would silently produce a malformed WAV.
+        if (bitsPerSample != 16)
+            throw new ArgumentException(
+                "Only 16-bit PCM is supported.",
+                nameof(bitsPerSample)
+            );
+
         var bytesPerSample = bitsPerSample / 8;
         var dataLength = samples.Length * bytesPerSample;
         var buffer = new byte[44 + dataLength];

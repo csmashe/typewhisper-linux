@@ -210,7 +210,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, ct);
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
@@ -299,7 +299,27 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
             Directory.CreateDirectory(dir);
 
         var json = JsonSerializer.Serialize(_entries, JsonOptions);
-        await File.WriteAllTextAsync(_filePath, json, ct);
+
+        // Write to a sibling temp file and atomically replace, so a crash
+        // mid-write can't leave the vector store truncated.
+        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, json, ct);
+            if (File.Exists(_filePath))
+                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _filePath);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 
     private void EnsureConfigured()
