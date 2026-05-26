@@ -120,12 +120,20 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? "cuda"
             : "cpu";
-        if (_computeBackend == normalized)
-            return Task.CompletedTask;
 
-        _computeBackend = normalized;
-        if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
-            UnloadRecognizer();
+        // Serialize backend switches with model load/unload: without the lock,
+        // a LoadModelAsync running on another thread could observe the old
+        // backend, pass its check, and then load against a recognizer that's
+        // been unloaded mid-flight.
+        lock (_sync)
+        {
+            if (_computeBackend == normalized)
+                return Task.CompletedTask;
+
+            _computeBackend = normalized;
+            if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
+                UnloadRecognizerUnsafe();
+        }
 
         return Task.CompletedTask;
     }
@@ -246,7 +254,11 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
 
-        if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+        string backend;
+        lock (_sync)
+            backend = _computeBackend;
+
+        if (!string.Equals(backend, "cpu", StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException(
                 "CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA."
             );

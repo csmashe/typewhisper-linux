@@ -283,16 +283,21 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
 
             if (_ws.State == WebSocketState.Open)
             {
+                // Bound the handshake: an unresponsive peer with CancellationToken.None
+                // would otherwise hang Dispose indefinitely. Abort is the fallback
+                // when the close handshake fails or times out.
+                using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 try
                 {
                     await _ws.CloseAsync(
                         WebSocketCloseStatus.NormalClosure,
                         null,
-                        CancellationToken.None
+                        closeCts.Token
                     );
                 }
                 catch
-                { /* best effort */
+                {
+                    try { _ws.Abort(); } catch { /* best effort */ }
                 }
             }
 

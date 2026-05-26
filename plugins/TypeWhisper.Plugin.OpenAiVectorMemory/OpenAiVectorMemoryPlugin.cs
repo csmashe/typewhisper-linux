@@ -30,7 +30,11 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     {
         _host = host;
         _filePath = Path.Combine(host.PluginDataDirectory, "vector-memories.json");
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Normalize on load: legacy stored keys may carry trailing whitespace
+        // from before SetSettingValueAsync started trimming.
+        var stored = await host.LoadSecretAsync("api-key");
+        var trimmed = stored?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         host.Log(PluginLogLevel.Info, $"Activated (configured={!string.IsNullOrEmpty(_apiKey)})");
     }
 

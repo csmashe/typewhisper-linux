@@ -338,7 +338,9 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
         var buffer = new byte[81920];
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        var tempPath = filePath + ".tmp";
+        // Per-invocation temp name so a concurrent duplicate download can't
+        // collide with an in-flight writer's FileShare.None open.
+        var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         var completed = false;
         try
         {
@@ -426,8 +428,23 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                         Threads = Math.Max(1, Environment.ProcessorCount / 2),
                     };
 
-                    _weights = LLamaWeights.LoadFromFile(modelParams);
-                    _context = _weights.CreateContext(modelParams);
+                    // Load into a local first: if CreateContext throws, the
+                    // already-loaded native weights would otherwise be stranded
+                    // on the field with no owner to dispose them.
+                    var newWeights = LLamaWeights.LoadFromFile(modelParams);
+                    LLamaContext newContext;
+                    try
+                    {
+                        newContext = newWeights.CreateContext(modelParams);
+                    }
+                    catch
+                    {
+                        newWeights.Dispose();
+                        throw;
+                    }
+
+                    _weights = newWeights;
+                    _context = newContext;
 
                     // The heavy load runs without the lock blocking SelectModel,
                     // so the user can switch selections while we're loading. If

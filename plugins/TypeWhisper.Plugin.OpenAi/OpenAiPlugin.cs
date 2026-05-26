@@ -47,7 +47,12 @@ public sealed partial class OpenAiPlugin
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Normalize on load: legacy stored keys may carry trailing whitespace
+        // from before SetSettingValueAsync started trimming, which keeps
+        // IsConfigured true while breaking the Authorization header.
+        var stored = await host.LoadSecretAsync("api-key");
+        var trimmed = stored?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
