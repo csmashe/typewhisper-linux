@@ -50,6 +50,7 @@ public class SettingsServiceTests : IDisposable
             OverlayCustomTop = 87.25,
             SelectedIndustryPresetId = "real-estate",
             LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
+            LiveTranscriptionStreamingEnabled = true,
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
                 ["kitty"] = TextInsertionStrategy.DirectTyping,
@@ -73,6 +74,7 @@ public class SettingsServiceTests : IDisposable
             AppSettings.LocalModelAccelerationNvidiaCuda,
             sut2.Current.LocalModelAcceleration
         );
+        Assert.True(sut2.Current.LiveTranscriptionStreamingEnabled);
         Assert.Equal(
             TextInsertionStrategy.DirectTyping,
             sut2.Current.AppInsertionStrategies["kitty"]

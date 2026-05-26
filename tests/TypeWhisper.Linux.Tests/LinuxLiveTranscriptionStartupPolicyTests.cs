@@ -85,13 +85,12 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
     [Fact]
     public void Select_StreamingCapableCloudPluginWithoutOptIn_ReturnsNone()
     {
-        // The Linux fork has no real websocket streaming path: it polls
-        // SupportsStreaming plugins with full-buffer batch uploads, exactly as
-        // costly as any other cloud provider. So SupportsStreaming is not a
-        // free pass — the opt-in is still required.
+        // Without the streaming opt-in, a SupportsStreaming plugin falls
+        // through to the cloud branch and stays gated on the batch opt-in.
         var settings = AppSettings.Default with
         {
             LiveTranscriptionEnabled = true,
+            LiveTranscriptionStreamingEnabled = false,
             OnlineAsrBatchLiveTranscriptionEnabled = false
         };
 
@@ -100,6 +99,111 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = false,
+                SupportsStreaming = true
+            });
+
+        Assert.Equal(LiveTranscriptionMode.None, mode);
+    }
+
+    [Fact]
+    public void Select_WhenStreamingCapableAndOptedIn_ReturnsStreaming()
+    {
+        var settings = AppSettings.Default with
+        {
+            LiveTranscriptionEnabled = true,
+            LiveTranscriptionStreamingEnabled = true
+        };
+
+        var mode = LinuxLiveTranscriptionStartupPolicy.Select(
+            settings,
+            new FakeTranscriptionEnginePlugin
+            {
+                SupportsModelDownload = false,
+                SupportsStreaming = true
+            });
+
+        Assert.Equal(LiveTranscriptionMode.Streaming, mode);
+    }
+
+    [Fact]
+    public void Select_WhenStreamingCapableButOptedOut_FallsThroughToPolling()
+    {
+        var settings = AppSettings.Default with
+        {
+            LiveTranscriptionEnabled = true,
+            LiveTranscriptionStreamingEnabled = false
+        };
+
+        var mode = LinuxLiveTranscriptionStartupPolicy.Select(
+            settings,
+            new FakeTranscriptionEnginePlugin
+            {
+                SupportsModelDownload = true,
+                SupportsStreaming = true
+            });
+
+        Assert.Equal(LiveTranscriptionMode.Polling, mode);
+    }
+
+    [Fact]
+    public void Select_WhenStreamingNotCapableButOptedIn_FallsThroughToPolling()
+    {
+        var settings = AppSettings.Default with
+        {
+            LiveTranscriptionEnabled = true,
+            LiveTranscriptionStreamingEnabled = true,
+            OnlineAsrBatchLiveTranscriptionEnabled = true
+        };
+
+        var mode = LinuxLiveTranscriptionStartupPolicy.Select(
+            settings,
+            new FakeTranscriptionEnginePlugin
+            {
+                SupportsModelDownload = false,
+                SupportsStreaming = false
+            });
+
+        Assert.Equal(LiveTranscriptionMode.Polling, mode);
+    }
+
+    [Fact]
+    public void Select_WhenStreamingWinsOverLocalModel_ReturnsStreaming()
+    {
+        // Pins precedence: the streaming branch sits before the local-model
+        // branch, so a plugin that advertises both still gets Streaming when
+        // the user opts in.
+        var settings = AppSettings.Default with
+        {
+            LiveTranscriptionEnabled = true,
+            LiveTranscriptionStreamingEnabled = true
+        };
+
+        var mode = LinuxLiveTranscriptionStartupPolicy.Select(
+            settings,
+            new FakeTranscriptionEnginePlugin
+            {
+                SupportsModelDownload = true,
+                SupportsStreaming = true
+            });
+
+        Assert.Equal(LiveTranscriptionMode.Streaming, mode);
+    }
+
+    [Fact]
+    public void Select_WhenLiveTranscriptionDisabled_BeatsEverything()
+    {
+        var settings = AppSettings.Default with
+        {
+            LiveTranscriptionEnabled = false,
+            LiveTranscriptionStreamingEnabled = true,
+            OnlineAsrBatchLiveTranscriptionEnabled = true
+        };
+
+        var mode = LinuxLiveTranscriptionStartupPolicy.Select(
+            settings,
+            new FakeTranscriptionEnginePlugin
+            {
+                SupportsModelDownload = true,
                 SupportsStreaming = true
             });
 

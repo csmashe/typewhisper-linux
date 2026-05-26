@@ -65,6 +65,7 @@ public record AppSettings
 
     // Live transcription (streaming preview while recording)
     public bool LiveTranscriptionEnabled { get; init; } = true;
+    public bool LiveTranscriptionStreamingEnabled { get; init; }
     public bool OnlineAsrBatchLiveTranscriptionEnabled { get; init; }
 
     // Silence detection
