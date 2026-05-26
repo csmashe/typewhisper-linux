@@ -187,8 +187,17 @@ exec "$HERE/usr/bin/typewhisper" "$@"
 EOF
   chmod +x "$APPDIR/AppRun"
 
+  # Pin to a tagged release and verify SHA256 before executing — the previous
+  # "continuous" URL was a moving target, which is a supply-chain risk for
+  # release artifacts built from it. SHA matches the asset digest exposed by
+  # GitHub's release API for AppImage/appimagetool 1.9.1.
+  APPIMAGETOOL_VERSION="1.9.1"
+  APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+  APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
   APPIMAGETOOL="$STAGE_ROOT/appimagetool"
-  wget -qO "$APPIMAGETOOL" "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+  wget -qO "$APPIMAGETOOL" "$APPIMAGETOOL_URL"
+  echo "${APPIMAGETOOL_SHA256}  ${APPIMAGETOOL}" | sha256sum --check --status \
+    || { echo "ERROR: appimagetool checksum mismatch — aborting AppImage build" >&2; exit 1; }
   chmod +x "$APPIMAGETOOL"
 
   APPIMAGE_OUT="$OUTPUT_DIR/${APP_NAME}-${VERSION}-x86_64.AppImage"

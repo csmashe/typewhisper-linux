@@ -88,7 +88,11 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
 
     private static string AugmentReason(string compositor, string reason)
     {
-        return compositor switch
+        // Normalize so future callers that pass e.g. "KWin" or " gnome-shell "
+        // still hit the right branch. All current production strings are
+        // already lowercase, but the cost of being defensive here is trivial.
+        var key = compositor.Trim().ToLowerInvariant();
+        return key switch
         {
             // Modern GNOME (41+) restricts the built-in org.gnome.Shell.Introspect
             // API to trusted clients, so unprivileged apps see AccessDenied. The

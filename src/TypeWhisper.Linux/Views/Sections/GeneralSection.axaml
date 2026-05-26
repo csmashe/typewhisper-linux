@@ -28,12 +28,13 @@
             <Border Classes="panel">
                 <Grid RowDefinitions="Auto,Auto">
                     <Border Padding="18,14">
-                        <Grid ColumnDefinitions="*,320"
+                        <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <TextBlock Text="Interface Language"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      VerticalAlignment="Center"
                                       ItemsSource="{Binding UiLanguageChoices}"
                                       SelectedItem="{Binding SelectedUiLanguageOption}"
                                       IsEnabled="{Binding IsUiLanguageSupported}">

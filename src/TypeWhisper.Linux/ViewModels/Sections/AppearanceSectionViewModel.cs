@@ -9,12 +9,20 @@ public partial class AppearanceSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PreviewLeftIsIndicator))]
+    [NotifyPropertyChangedFor(nameof(PreviewLeftIsWaveform))]
+    [NotifyPropertyChangedFor(nameof(PreviewLeftIsText))]
+    [NotifyPropertyChangedFor(nameof(PreviewLeftText))]
     private OverlayWidgetOption? _selectedLeftWidget;
 
     [ObservableProperty]
     private OverlayPositionOption? _selectedOverlayPosition;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PreviewRightIsIndicator))]
+    [NotifyPropertyChangedFor(nameof(PreviewRightIsWaveform))]
+    [NotifyPropertyChangedFor(nameof(PreviewRightIsText))]
+    [NotifyPropertyChangedFor(nameof(PreviewRightText))]
     private OverlayWidgetOption? _selectedRightWidget;
 
     public AppearanceSectionViewModel(ISettingsService settings)
@@ -39,6 +47,16 @@ public partial class AppearanceSectionViewModel : ObservableObject
         new(OverlayWidget.AppName, "App name")
     ];
 
+    public bool PreviewLeftIsIndicator => SelectedLeftWidget?.Value == OverlayWidget.Indicator;
+    public bool PreviewLeftIsWaveform => SelectedLeftWidget?.Value == OverlayWidget.Waveform;
+    public bool PreviewLeftIsText => IsTextWidget(SelectedLeftWidget?.Value);
+    public string PreviewLeftText => SampleText(SelectedLeftWidget?.Value);
+
+    public bool PreviewRightIsIndicator => SelectedRightWidget?.Value == OverlayWidget.Indicator;
+    public bool PreviewRightIsWaveform => SelectedRightWidget?.Value == OverlayWidget.Waveform;
+    public bool PreviewRightIsText => IsTextWidget(SelectedRightWidget?.Value);
+    public string PreviewRightText => SampleText(SelectedRightWidget?.Value);
+
     private void Refresh(AppSettings settings)
     {
         SelectedOverlayPosition =
@@ -50,7 +68,37 @@ public partial class AppearanceSectionViewModel : ObservableObject
         SelectedRightWidget =
             OverlayWidgets.FirstOrDefault(option => option.Value == settings.OverlayRightWidget)
             ?? OverlayWidgets[0];
+
+        // Mode changes elsewhere don't flip the selected widget, but HotkeyMode
+        // preview text still needs to refresh.
+        OnPropertyChanged(nameof(PreviewLeftText));
+        OnPropertyChanged(nameof(PreviewRightText));
     }
+
+    private static bool IsTextWidget(OverlayWidget? widget) =>
+        widget
+            is OverlayWidget.Timer
+                or OverlayWidget.Clock
+                or OverlayWidget.Profile
+                or OverlayWidget.HotkeyMode
+                or OverlayWidget.AppName;
+
+    private string SampleText(OverlayWidget? widget) =>
+        widget switch
+        {
+            OverlayWidget.Timer => "0:05",
+            OverlayWidget.Clock => "10:24",
+            OverlayWidget.Profile => "Default profile",
+            OverlayWidget.HotkeyMode => _settings.Current.Mode switch
+            {
+                RecordingMode.Toggle => "Toggle",
+                RecordingMode.PushToTalk => "Push to talk",
+                RecordingMode.Hybrid => "Hybrid",
+                _ => ""
+            },
+            OverlayWidget.AppName => "Sample app",
+            _ => ""
+        };
 
     partial void OnSelectedOverlayPositionChanged(OverlayPositionOption? value)
     {

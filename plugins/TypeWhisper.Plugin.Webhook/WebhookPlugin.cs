@@ -127,10 +127,10 @@ public sealed class WebhookService
     public ObservableCollection<WebhookConfig> Webhooks { get; } = [];
     public ObservableCollection<DeliveryLogEntry> DeliveryLog { get; } = [];
 
-    public WebhookService(IPluginHostServices host)
+    public WebhookService(IPluginHostServices host, string dataDirectory)
     {
         _host = host;
-        _store = new WebhookStore(host.PluginDataDirectory);
+        _store = new WebhookStore(dataDirectory);
         Load();
     }
 
@@ -345,7 +345,14 @@ public sealed class WebhookPlugin
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        Service = new WebhookService(host);
+        // Single canonical data dir: prefer the one set via SetDataDirectory
+        // (called by the loader before ActivateAsync); fall back to the host's
+        // value for hosts that don't drive IPluginDataLocationAware. Threading
+        // the same string through WebhookService and ResolveDataDir() keeps
+        // the live service and any on-disk fallback path reading/writing the
+        // same webhooks.json.
+        _dataDirectory ??= host.PluginDataDirectory;
+        Service = new WebhookService(host, _dataDirectory);
         _subscription = host.EventBus.Subscribe<TranscriptionCompletedEvent>(
             OnTranscriptionCompleted
         );

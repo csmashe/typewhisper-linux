@@ -8,10 +8,16 @@ namespace TypeWhisper.Linux.ViewModels;
 
 public partial class DictationOverlayViewModel : ObservableObject
 {
+    // 5 samples of audio-level history feed the waveform dots; chosen to match
+    // the bubble's footprint and give a perceptible rolling motion at the
+    // ~10 Hz cadence of LevelChanged.
+    private const int WaveformSampleCount = 5;
+
     private readonly AudioRecordingService _audio;
     private readonly DispatcherTimer _feedbackTimer;
     private readonly DispatcherTimer _recordingTimer;
     private readonly ISettingsService _settings;
+    private readonly float[] _waveformLevels = new float[WaveformSampleCount];
 
     [ObservableProperty]
     private string? _activeAppName;
@@ -80,7 +86,10 @@ public partial class DictationOverlayViewModel : ObservableObject
         transformSelection.OverlayStateChanged += (_, state) =>
             Dispatcher.UIThread.Post(() => ApplyState(state));
 
-        _audio.LevelChanged += (_, level) => Dispatcher.UIThread.Post(() => AudioLevel = level);
+        // Raw RMS is typically well below 0.1 for speech, so amplify ×8 to drive a
+        // visible meter — same scaling the recorder and wizard VMs apply.
+        _audio.LevelChanged += (_, level) =>
+            Dispatcher.UIThread.Post(() => AudioLevel = Math.Clamp(level * 8, 0f, 1f));
 
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(RefreshOverlaySlots);
 
@@ -114,25 +123,47 @@ public partial class DictationOverlayViewModel : ObservableObject
         }
     }
 
-    // 18px minimum (static indicator pip) + up to 54px of live meter fill.
-    public double AudioMeterWidth => 18 + Math.Clamp(AudioLevel, 0f, 1f) * 54;
+    // Single pulsing dot: 10px at silence, grows to 18px at peak level.
+    public double IndicatorSize => 10 + PerceptualLevel(AudioLevel) * 8;
+
+    // Each waveform bar's height reflects one slot of the rolling buffer.
+    // Idle slots collapse to 4px so the row reads as five-dots-at-rest;
+    // loud slots climb to 18px so the wave is clearly moving up and down.
+    public double WaveformBar0Height => BarHeight(_waveformLevels[0]);
+    public double WaveformBar1Height => BarHeight(_waveformLevels[1]);
+    public double WaveformBar2Height => BarHeight(_waveformLevels[2]);
+    public double WaveformBar3Height => BarHeight(_waveformLevels[3]);
+    public double WaveformBar4Height => BarHeight(_waveformLevels[4]);
+
     public string FeedbackForeground => FeedbackIsError ? "#FF8888" : "#66E3A2";
 
-    public bool ShowLeftMeter =>
-        ResolveWidget(_settings.Current.OverlayLeftWidget) == OverlaySlotKind.Meter;
+    public bool ShowLeftIndicator =>
+        _settings.Current.OverlayLeftWidget == OverlayWidget.Indicator;
 
-    public bool ShowLeftText =>
-        ResolveWidget(_settings.Current.OverlayLeftWidget) == OverlaySlotKind.Text;
+    public bool ShowLeftWaveform =>
+        _settings.Current.OverlayLeftWidget == OverlayWidget.Waveform;
+
+    public bool ShowLeftText => IsTextWidget(_settings.Current.OverlayLeftWidget);
 
     public string LeftText => ResolveText(_settings.Current.OverlayLeftWidget);
 
-    public bool ShowRightMeter =>
-        ResolveWidget(_settings.Current.OverlayRightWidget) == OverlaySlotKind.Meter;
+    public bool ShowRightIndicator =>
+        _settings.Current.OverlayRightWidget == OverlayWidget.Indicator;
 
-    public bool ShowRightText =>
-        ResolveWidget(_settings.Current.OverlayRightWidget) == OverlaySlotKind.Text;
+    public bool ShowRightWaveform =>
+        _settings.Current.OverlayRightWidget == OverlayWidget.Waveform;
+
+    public bool ShowRightText => IsTextWidget(_settings.Current.OverlayRightWidget);
 
     public string RightText => ResolveText(_settings.Current.OverlayRightWidget);
+
+    private static double BarHeight(float level) =>
+        4 + PerceptualLevel(level) * 14;
+
+    // sqrt curve pulls quiet/medium levels closer to the top of the range so
+    // the meter reads as responsive without requiring shouting.
+    private static double PerceptualLevel(float level) =>
+        Math.Sqrt(Math.Clamp(level, 0f, 1f));
 
     partial void OnIsOverlayVisibleChanged(bool value)
     {
@@ -163,7 +194,18 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     partial void OnAudioLevelChanged(float value)
     {
-        OnPropertyChanged(nameof(AudioMeterWidth));
+        for (var i = 0; i < WaveformSampleCount - 1; i++)
+        {
+            _waveformLevels[i] = _waveformLevels[i + 1];
+        }
+        _waveformLevels[WaveformSampleCount - 1] = value;
+
+        OnPropertyChanged(nameof(IndicatorSize));
+        OnPropertyChanged(nameof(WaveformBar0Height));
+        OnPropertyChanged(nameof(WaveformBar1Height));
+        OnPropertyChanged(nameof(WaveformBar2Height));
+        OnPropertyChanged(nameof(WaveformBar3Height));
+        OnPropertyChanged(nameof(WaveformBar4Height));
         OnPropertyChanged(nameof(LeftText));
         OnPropertyChanged(nameof(RightText));
     }
@@ -196,6 +238,12 @@ public partial class DictationOverlayViewModel : ObservableObject
             _recordingTimer.Stop();
             RecordingSeconds = 0;
             AudioLevel = 0f;
+            Array.Clear(_waveformLevels);
+            OnPropertyChanged(nameof(WaveformBar0Height));
+            OnPropertyChanged(nameof(WaveformBar1Height));
+            OnPropertyChanged(nameof(WaveformBar2Height));
+            OnPropertyChanged(nameof(WaveformBar3Height));
+            OnPropertyChanged(nameof(WaveformBar4Height));
         }
 
         RefreshOverlaySlots();
@@ -214,29 +262,23 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     private void RefreshOverlaySlots()
     {
-        OnPropertyChanged(nameof(ShowLeftMeter));
+        OnPropertyChanged(nameof(ShowLeftIndicator));
+        OnPropertyChanged(nameof(ShowLeftWaveform));
         OnPropertyChanged(nameof(ShowLeftText));
         OnPropertyChanged(nameof(LeftText));
-        OnPropertyChanged(nameof(ShowRightMeter));
+        OnPropertyChanged(nameof(ShowRightIndicator));
+        OnPropertyChanged(nameof(ShowRightWaveform));
         OnPropertyChanged(nameof(ShowRightText));
         OnPropertyChanged(nameof(RightText));
     }
 
-    private OverlaySlotKind ResolveWidget(OverlayWidget widget)
-    {
-        return widget switch
-        {
-            OverlayWidget.None => OverlaySlotKind.None,
-            OverlayWidget.Indicator => OverlaySlotKind.Meter,
-            OverlayWidget.Waveform => OverlaySlotKind.Meter,
-            OverlayWidget.Timer => OverlaySlotKind.Text,
-            OverlayWidget.Clock => OverlaySlotKind.Text,
-            OverlayWidget.Profile => OverlaySlotKind.Text,
-            OverlayWidget.HotkeyMode => OverlaySlotKind.Text,
-            OverlayWidget.AppName => OverlaySlotKind.Text,
-            _ => OverlaySlotKind.None
-        };
-    }
+    private static bool IsTextWidget(OverlayWidget widget) =>
+        widget
+            is OverlayWidget.Timer
+                or OverlayWidget.Clock
+                or OverlayWidget.Profile
+                or OverlayWidget.HotkeyMode
+                or OverlayWidget.AppName;
 
     private string ResolveText(OverlayWidget widget)
     {
@@ -259,11 +301,4 @@ public partial class DictationOverlayViewModel : ObservableObject
             _ => ""
         };
     }
-}
-
-internal enum OverlaySlotKind
-{
-    None,
-    Meter,
-    Text
 }
