@@ -112,11 +112,7 @@ public static class Program
         try
         {
             BootTrace.Stage("StartWithClassicDesktopLifetime begin");
-            var exitCode = BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
-
-            Services.Dispose();
-
-            return exitCode;
+            return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
             when (ex is SocketException sx && sx.SocketErrorCode == SocketError.AddressAlreadyInUse)
@@ -125,6 +121,13 @@ public static class Program
             // as the early probe finding a live peer.
             Console.Error.WriteLine("TypeWhisper is already running.");
             return 0;
+        }
+        finally
+        {
+            // Dispose on every exit path so unhandled exceptions and the
+            // AddressAlreadyInUse early-return both flush logs/sockets the
+            // same way as the success path.
+            Services.Dispose();
         }
     }
 

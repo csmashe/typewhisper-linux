@@ -24,6 +24,15 @@ set -euo pipefail
 
 CONFIG="${1:-Release}"
 VERSION="${2:-}"
+
+# Reject anything that isn't a real msbuild Configuration before letting it
+# feed into OUT — the script does rm -rf "$OUT" and we don't want "../.."
+# slipping through that.
+if [ "$CONFIG" != "Release" ] && [ "$CONFIG" != "Debug" ]; then
+  echo "ERROR: CONFIG must be 'Release' or 'Debug' (got '$CONFIG')." >&2
+  exit 2
+fi
+
 RID="linux-x64"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins"

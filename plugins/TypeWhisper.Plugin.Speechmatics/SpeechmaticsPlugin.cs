@@ -103,9 +103,18 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         var submitJson = await submitResponse.Content.ReadAsStringAsync(ct);
 
         if (!submitResponse.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"Speechmatics API error {(int)submitResponse.StatusCode}: {submitJson}"
+        {
+            // Exception messages flow into user-visible logs; the raw body
+            // can echo upload metadata or partial transcripts on a retry,
+            // so route the payload to the plugin log instead.
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Speechmatics submit error {(int)submitResponse.StatusCode}: {submitJson}"
             );
+            throw new HttpRequestException(
+                $"Speechmatics API error {(int)submitResponse.StatusCode}: {submitResponse.ReasonPhrase}"
+            );
+        }
 
         using var submitDoc = JsonDocument.Parse(submitJson);
         var jobId =
@@ -140,9 +149,15 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             var statusJson = await statusResponse.Content.ReadAsStringAsync(ct);
 
             if (!statusResponse.IsSuccessStatusCode)
-                throw new HttpRequestException(
-                    $"Speechmatics status error {(int)statusResponse.StatusCode}: {statusJson}"
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"Speechmatics status error {(int)statusResponse.StatusCode} for job {jobId}: {statusJson}"
                 );
+                throw new HttpRequestException(
+                    $"Speechmatics status error {(int)statusResponse.StatusCode} for job {jobId}: {statusResponse.ReasonPhrase}"
+                );
+            }
 
             using var statusDoc = JsonDocument.Parse(statusJson);
             var job = statusDoc.RootElement.GetProperty("job");
@@ -164,9 +179,15 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 var transcriptJson = await transcriptResponse.Content.ReadAsStringAsync(ct);
 
                 if (!transcriptResponse.IsSuccessStatusCode)
-                    throw new HttpRequestException(
-                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode}: {transcriptJson}"
+                {
+                    _host?.Log(
+                        PluginLogLevel.Warning,
+                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} for job {jobId}: {transcriptJson}"
                     );
+                    throw new HttpRequestException(
+                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} for job {jobId}: {transcriptResponse.ReasonPhrase}"
+                    );
+                }
 
                 return ParseTranscript(transcriptJson, job);
             }

@@ -88,9 +88,18 @@ public sealed partial class CloudflareAsrPlugin
         var json = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"Cloudflare API error {(int)response.StatusCode}: {json}"
+        {
+            // Exception messages bubble into logs and user-facing error UI.
+            // Keep only the stable HTTP status + reason; the raw response
+            // body may echo request fragments or token-bearing identifiers.
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Cloudflare API error {(int)response.StatusCode} ({response.ReasonPhrase}): {json}"
             );
+            throw new HttpRequestException(
+                $"Cloudflare API error {(int)response.StatusCode}: {response.ReasonPhrase}"
+            );
+        }
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;

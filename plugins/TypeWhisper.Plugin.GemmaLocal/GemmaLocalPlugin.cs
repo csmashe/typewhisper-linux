@@ -62,6 +62,21 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _selectedModelId = host.GetSetting<string>("selectedModel");
         host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
 
+        // A persisted ID may name a model that no longer exists in Models
+        // (e.g. after a release that drops a quant). IsModelDownloaded calls
+        // GetModelDefinition, which throws — that would surface as a plugin
+        // activation failure. Clear the stale setting instead.
+        if (!string.IsNullOrEmpty(_selectedModelId)
+            && Models.All(m => m.Id != _selectedModelId))
+        {
+            host.Log(
+                PluginLogLevel.Warning,
+                $"Persisted model '{_selectedModelId}' is no longer available; clearing selection."
+            );
+            _selectedModelId = null;
+            host.SetSetting("selectedModel", string.Empty);
+        }
+
         // Auto-load previously selected model in background (don't block app startup).
         // Track the task + CTS so DeactivateAsync can cancel and await it instead of
         // letting it race back to life and recreate _weights/_context after teardown.

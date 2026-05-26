@@ -151,13 +151,17 @@ public sealed partial class OpenAiPlugin
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        // Trim defensively at the internal entry too: SetSettingValueAsync
+        // already trims, but a future direct caller could re-introduce
+        // trailing whitespace that breaks the Authorization header.
+        var trimmed = apiKey?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", apiKey);
+                await _host.StoreSecretAsync("api-key", trimmed);
 
             _host.NotifyCapabilitiesChanged();
         }
