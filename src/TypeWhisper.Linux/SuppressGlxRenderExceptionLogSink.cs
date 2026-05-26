@@ -64,16 +64,9 @@ internal sealed class SuppressGlxRenderExceptionLogSink : ILogSink
 
     private static bool IsHarmlessGlxDisposeException(object?[] propertyValues)
     {
-        foreach (var value in propertyValues)
-        {
-            if (value is SynchronizationLockException ex
-                && ex.StackTrace is { } trace
-                && trace.Contains(GlxDisposeFrame, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return propertyValues.Any(value =>
+            value is SynchronizationLockException ex
+            && ex.StackTrace is { } trace
+            && trace.Contains(GlxDisposeFrame, StringComparison.Ordinal));
     }
 }

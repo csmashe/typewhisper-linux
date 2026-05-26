@@ -96,10 +96,13 @@ public sealed partial class CloudflareAsrPlugin
         var root = doc.RootElement;
 
         var text = "";
-        if (root.TryGetProperty("result", out var result))
+        if (
+            root.TryGetProperty("result", out var result)
+            && result.ValueKind == JsonValueKind.Object
+            && result.TryGetProperty("text", out var textEl)
+        )
         {
-            if (result.TryGetProperty("text", out var textEl))
-                text = textEl.GetString() ?? "";
+            text = textEl.GetString() ?? "";
         }
 
         // Language and duration are nested under result.language / result.duration;

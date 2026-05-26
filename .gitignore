@@ -13,8 +13,9 @@ TestResults/
 *.swp
 *~
 .DS_Store
-releases/
-docs/
+/releases/
+docs/local/
+docs/plans/
 publish/
 .agents/
 .claude/

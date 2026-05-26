@@ -99,7 +99,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         submitRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
         submitRequest.Content = submitContent;
 
-        var submitResponse = await _httpClient.SendAsync(submitRequest, ct);
+        using var submitResponse = await _httpClient.SendAsync(submitRequest, ct);
         var submitJson = await submitResponse.Content.ReadAsStringAsync(ct);
 
         if (!submitResponse.IsSuccessStatusCode)
@@ -136,7 +136,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             );
             statusRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-            var statusResponse = await _httpClient.SendAsync(statusRequest, ct);
+            using var statusResponse = await _httpClient.SendAsync(statusRequest, ct);
             var statusJson = await statusResponse.Content.ReadAsStringAsync(ct);
 
             if (!statusResponse.IsSuccessStatusCode)
@@ -160,7 +160,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                     _apiKey
                 );
 
-                var transcriptResponse = await _httpClient.SendAsync(transcriptRequest, ct);
+                using var transcriptResponse = await _httpClient.SendAsync(transcriptRequest, ct);
                 var transcriptJson = await transcriptResponse.Content.ReadAsStringAsync(ct);
 
                 if (!transcriptResponse.IsSuccessStatusCode)
