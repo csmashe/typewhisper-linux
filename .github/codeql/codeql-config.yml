@@ -1,0 +1,8 @@
+name: TypeWhisper CodeQL config
+
+paths-ignore:
+  - '**/obj/**'
+  - '**/bin/**'
+  - '**/*.g.cs'
+  - '**/*.Designer.cs'
+  - '**/Generated/**'

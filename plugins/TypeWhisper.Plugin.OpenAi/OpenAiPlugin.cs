@@ -201,7 +201,10 @@ public sealed partial class OpenAiPlugin
         if (key != "api-key")
             return;
 
-        await SetApiKeyAsync(value ?? string.Empty);
+        // Normalize whitespace once — pasted keys often pick up trailing
+        // newlines or spaces that break the Authorization header.
+        var normalized = value?.Trim() ?? string.Empty;
+        await SetApiKeyAsync(normalized);
     }
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)

@@ -88,12 +88,12 @@ internal static class HttpApiRequestParser
     {
         var contentType = Header(request.Headers, "content-type") ?? "";
         byte[] audioData;
-        var fileExtension = "wav";
+        string fileExtension;
         string? language = null;
         var languageHints = new List<string>();
         var task = TranscriptionTask.Transcribe;
         string? targetLanguage = null;
-        var responseFormat = "json";
+        string responseFormat;
         string? prompt = null;
         string? engine = null;
         string? model = null;

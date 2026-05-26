@@ -168,7 +168,6 @@ public class PluginEventBusTests
     public async Task ConcurrentPublishAndSubscribe_DoesNotThrow()
     {
         var received = 0;
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         var subscriptions = new List<IDisposable>();
         var subscribeTasks = Enumerable

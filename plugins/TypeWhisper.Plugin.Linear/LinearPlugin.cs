@@ -51,8 +51,12 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
                     JsonSerializer.Deserialize<List<LinearTeam>>(cachedTeamsJson, s_jsonOptions)
                     ?? [];
             }
-            catch
+            catch (JsonException ex)
             {
+                host.Log(
+                    PluginLogLevel.Warning,
+                    $"Failed to deserialize cached teams; resetting cache: {ex.Message}"
+                );
                 _cachedTeams = [];
             }
         }

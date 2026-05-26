@@ -198,7 +198,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         var buffer = new byte[8192];
-        var messageBuffer = new MemoryStream();
+        using var messageBuffer = new MemoryStream();
 
         try
         {

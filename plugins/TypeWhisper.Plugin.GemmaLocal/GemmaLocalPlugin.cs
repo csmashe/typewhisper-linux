@@ -423,7 +423,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     {
                         ContextSize = 4096,
                         GpuLayerCount = 0, // CPU only (Backend.Cpu)
-                        Threads = (int)Math.Max(1, Environment.ProcessorCount / 2),
+                        Threads = Math.Max(1, Environment.ProcessorCount / 2),
                     };
 
                     _weights = LLamaWeights.LoadFromFile(modelParams);
@@ -510,6 +510,27 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     public void Dispose()
     {
+        // Cancel and await the background startup task before disposing
+        // _inferenceLock/_httpClient so a late finish can't run against
+        // disposed resources. Mirrors DeactivateAsync's teardown order.
+        var startupCts = _startupCts;
+        var startupTask = _startupTask;
+        _startupCts = null;
+        _startupTask = null;
+
+        if (startupCts is not null)
+        {
+            try { startupCts.Cancel(); } catch (ObjectDisposedException) { }
+        }
+
+        if (startupTask is not null)
+        {
+            try { startupTask.GetAwaiter().GetResult(); }
+            catch { /* errors already logged inside the task */ }
+        }
+
+        startupCts?.Dispose();
+
         UnloadModel();
         _inferenceLock.Dispose();
         _httpClient.Dispose();

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -155,10 +156,14 @@ public sealed class DictionaryService : IDictionaryService
                 var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
                     ? @"\b"
                     : @"(?=\W|$)";
+                // Use the MatchEvaluator overload so dollar sequences in
+                // user-supplied replacements (e.g. "$1", "$&") are inserted
+                // verbatim rather than interpreted as regex substitution tokens.
+                var replacement = entry.Replacement!;
                 var replaced = Regex.Replace(
                     text,
                     prefix + pattern + suffix,
-                    entry.Replacement!,
+                    _ => replacement,
                     options
                 );
                 if (string.Equals(replaced, text, StringComparison.Ordinal))
@@ -553,21 +558,25 @@ public sealed class DictionaryService : IDictionaryService
 
     private void EnsureCacheLoaded()
     {
-        if (_cacheLoaded)
+        // Volatile reads/writes pair the unsynchronized fast-path check with the
+        // in-lock state mutation: without them, a reader could see
+        // _cacheLoaded == true while _cache hasn't been published yet on weaker
+        // memory architectures (ARM/AArch64).
+        if (Volatile.Read(ref _cacheLoaded))
         {
             return;
         }
 
         lock (_gate)
         {
-            if (_cacheLoaded)
+            if (Volatile.Read(ref _cacheLoaded))
             {
                 return;
             }
 
             if (!File.Exists(_filePath))
             {
-                _cacheLoaded = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
 
@@ -581,8 +590,8 @@ public sealed class DictionaryService : IDictionaryService
                 Trace.WriteLine(
                     $"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}"
                 );
-                _cacheLoaded = true;
                 _cacheLoadFailed = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
             catch (UnauthorizedAccessException ex)
@@ -590,8 +599,8 @@ public sealed class DictionaryService : IDictionaryService
                 Trace.WriteLine(
                     $"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}"
                 );
-                _cacheLoaded = true;
                 _cacheLoadFailed = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
 
@@ -605,7 +614,7 @@ public sealed class DictionaryService : IDictionaryService
                 _cache = [];
             }
 
-            _cacheLoaded = true;
+            Volatile.Write(ref _cacheLoaded, true);
         }
     }
 

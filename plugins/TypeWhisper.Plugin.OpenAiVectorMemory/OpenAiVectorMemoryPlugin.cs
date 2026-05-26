@@ -274,8 +274,11 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
             }
             catch (Exception ex)
             {
+                // Surface the failure instead of swallowing it: callers like
+                // StoreAsync/DeleteAsync would otherwise write back an empty
+                // list and clobber a corrupt-but-recoverable file.
                 _host?.Log(PluginLogLevel.Warning, $"Failed to load vector memories: {ex.Message}");
-                _entries = [];
+                throw;
             }
         }
         else
