@@ -53,9 +53,11 @@ public class OpenAiPluginTests
         Assert.Equal("gpt-5.5", sut.SupportedModels.First().Id);
         Assert.Equal("whisper-1", sut.SelectedModelId);
         Assert.Equal("marin", sut.SelectedVoiceId);
-        // Realtime streaming is deferred to checklist item C5 — the plugin
-        // leaves ITranscriptionEnginePlugin.SupportsStreaming at its false
-        // default and never references OpenAiRealtimeStreamingSession.
+        // Default model is whisper-1 (non-streaming), so SupportsStreaming
+        // is false even though the realtime model is now wired up
+        // (C5 Phase 7). The flag flips true only when the user selects
+        // gpt-realtime-whisper — see
+        // SupportsStreaming_RequiresRealtimeModelAndApiKeyMode.
         Assert.False(((ITranscriptionEnginePlugin)sut).SupportsStreaming);
     }
 
@@ -862,6 +864,356 @@ public class OpenAiPluginTests
         Assert.Equal(0, requestCount);
         Assert.NotEmpty(models);
         Assert.Equal("gpt-5.5", models.First().Id);
+    }
+
+    // C5 Phase 7 — realtime streaming session
+    // ----------------------------------------
+    // Four tests ported verbatim from upstream `8683551` exercise the
+    // session's pure functions; the remaining two cover the fork-specific
+    // model + auth-mode gating in OpenAiPlugin itself.
+
+    [Fact]
+    public void RealtimeUri_UsesGAEndpointWithoutBetaHeader()
+    {
+        var headers = OpenAiRealtimeStreamingSession.CreateRealtimeHeaders("sk-test");
+        var uri = OpenAiRealtimeStreamingSession.BuildRealtimeUri();
+
+        Assert.Equal("wss://api.openai.com/v1/realtime?intent=transcription", uri.AbsoluteUri);
+        Assert.Equal("Bearer sk-test", headers["Authorization"]);
+        Assert.DoesNotContain(
+            headers.Keys,
+            header => header.Equals("OpenAI-Beta", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RealtimeSessionUpdatePayload_BatchMode_DisablesTurnDetection()
+    {
+        // Batch (TranscribeWavAsync) sends an explicit input_audio_buffer.commit
+        // at end. turn_detection must be null so the server doesn't auto-commit
+        // on internal silences and return early before all audio is processed.
+        var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
+            "de", "TypeWhisper, OpenAI", useServerVad: false);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var session = root.GetProperty("session");
+        var input = session.GetProperty("audio").GetProperty("input");
+        var transcription = input.GetProperty("transcription");
+
+        Assert.Equal("session.update", root.GetProperty("type").GetString());
+        Assert.Equal("transcription", session.GetProperty("type").GetString());
+        Assert.Equal("audio/pcm", input.GetProperty("format").GetProperty("type").GetString());
+        Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
+        Assert.Equal("gpt-realtime-whisper", transcription.GetProperty("model").GetString());
+        Assert.Equal("de", transcription.GetProperty("language").GetString());
+        // Caller-supplied prompt forwards to the server so realtime gets the
+        // same guidance the batch whisper path uses — the HTTP transcription
+        // API and dictation pipeline both merge prompt + dictionary terms
+        // before calling TranscribeAsync.
+        Assert.Equal("TypeWhisper, OpenAI", transcription.GetProperty("prompt").GetString());
+        Assert.Equal(JsonValueKind.Null, input.GetProperty("turn_detection").ValueKind);
+    }
+
+    [Fact]
+    public void RealtimeSessionUpdatePayload_NullPrompt_OmitsPromptField()
+    {
+        // When no prompt is supplied (e.g. live streaming path with
+        // prompt: null), the field is omitted entirely rather than sent
+        // as null or empty — keeps the session.update minimal.
+        var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
+            "en", prompt: null, useServerVad: true);
+
+        using var doc = JsonDocument.Parse(json);
+        var transcription = doc.RootElement
+            .GetProperty("session")
+            .GetProperty("audio")
+            .GetProperty("input")
+            .GetProperty("transcription");
+
+        Assert.False(transcription.TryGetProperty("prompt", out _));
+    }
+
+    [Fact]
+    public void RealtimeSessionUpdatePayload_StreamingMode_EnablesServerVad()
+    {
+        // Live streaming relies on server VAD to auto-commit per utterance —
+        // without it the server buffers audio until our FinalizeAsync sends
+        // commit, which happens only when the user stops dictating, so the
+        // live coordinator would receive zero partials/finals during a
+        // multi-second dictation.
+        var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
+            "en", prompt: null, useServerVad: true);
+
+        using var doc = JsonDocument.Parse(json);
+        var input = doc.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input");
+        var turnDetection = input.GetProperty("turn_detection");
+
+        Assert.Equal(JsonValueKind.Object, turnDetection.ValueKind);
+        Assert.Equal("server_vad", turnDetection.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void RealtimeAudioPayload_Resamples16kPcmTo24kPcm()
+    {
+        var oneSecond16kPcm = new byte[16_000 * sizeof(short)];
+
+        var payload = OpenAiRealtimeStreamingSession.CreateAudioAppendPayload(oneSecond16kPcm);
+
+        using var doc = JsonDocument.Parse(payload);
+        var bytes = Convert.FromBase64String(doc.RootElement.GetProperty("audio").GetString()!);
+        Assert.Equal("input_audio_buffer.append", doc.RootElement.GetProperty("type").GetString());
+        Assert.Equal(24_000 * sizeof(short), bytes.Length);
+    }
+
+    [Fact]
+    public void RealtimeTranscriptCollector_PublishesDeltaAndCompletedText()
+    {
+        var collector = new OpenAiRealtimeTranscriptCollector();
+
+        var delta = collector.ApplyEvent(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_1","delta":"Hello"}""",
+            out var deltaEvent);
+        var completed = collector.ApplyEvent(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_1","transcript":"Hello world"}""",
+            out var completedEvent);
+
+        Assert.True(delta);
+        Assert.Equal(new StreamingTranscriptEvent("Hello", false), deltaEvent);
+        Assert.True(completed);
+        Assert.Equal(new StreamingTranscriptEvent("Hello world", true), completedEvent);
+        Assert.Equal("Hello world", collector.CurrentText);
+    }
+
+    [Fact]
+    public void RealtimeTranscriptCollector_MultipleCompletedItems_EmitsPerSegmentFinals()
+    {
+        // The fork's StreamingTranscriptionCoordinator appends each IsFinal
+        // event's text to _finalSegments separated by newlines. If this
+        // collector emitted cumulative CurrentText on each completed item,
+        // two segments "hello" then "world" would become "hello\nhello world"
+        // in the host's final transcript. Per-segment emission keeps the
+        // host's final output as "hello\nworld" while CurrentText still
+        // exposes the cumulative "hello world" for TranscribeWavAsync.
+        var collector = new OpenAiRealtimeTranscriptCollector();
+
+        collector.ApplyEvent(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_1","transcript":"hello"}""",
+            out var firstFinal);
+        collector.ApplyEvent(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_2","transcript":"world"}""",
+            out var secondFinal);
+
+        Assert.Equal(new StreamingTranscriptEvent("hello", true), firstFinal);
+        Assert.Equal(new StreamingTranscriptEvent("world", true), secondFinal);
+        // CurrentText stays cumulative so batch TranscribeWavAsync returns
+        // the joined transcript.
+        Assert.Equal("hello world", collector.CurrentText);
+    }
+
+    [Fact]
+    public void RealtimeTranscriptCollector_PartialDelta_IsPerItemNotCumulative()
+    {
+        // After one completed item, an interim delta on the NEXT item must
+        // emit only that item's running text — not the prior completed item
+        // concatenated with the new delta. Otherwise the orchestrator's
+        // StreamingTranscriptState would treat the next utterance as an
+        // extension of the prior finalized one and corrupt the live UI.
+        var collector = new OpenAiRealtimeTranscriptCollector();
+
+        collector.ApplyEvent(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_1","transcript":"hello"}""",
+            out _);
+        collector.ApplyEvent(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_2","delta":"wo"}""",
+            out var partial);
+        collector.ApplyEvent(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_2","delta":"rld"}""",
+            out var partial2);
+
+        Assert.Equal(new StreamingTranscriptEvent("wo", false), partial);
+        Assert.Equal(new StreamingTranscriptEvent("world", false), partial2);
+    }
+
+    [Fact]
+    public void RealtimeExtractPcm16Data_HandlesOddSizedChunkBeforeData()
+    {
+        // RIFF spec: odd-sized chunks are followed by a 1-byte pad so the
+        // next chunk header lands on a word boundary. The verbatim upstream
+        // ExtractPcm16Data didn't account for this, so a WAV with an odd
+        // 'INFO'/'bext'/etc. chunk before 'data' would miss the data chunk
+        // and fall back to wavAudio[44..] — sending header/metadata bytes
+        // as PCM to the realtime endpoint.
+        //
+        // Construct a minimal RIFF: header (12) + fmt (8+16) + LIST chunk
+        // with odd size 3 + pad (1) + data chunk with 4 PCM bytes.
+        var fmtData = new byte[]
+        {
+            1, 0,      // format = PCM
+            1, 0,      // channels = 1
+            0x80, 0x3e, 0, 0,  // sample rate 16000
+            0, 0x7d, 0, 0,     // byte rate
+            2, 0,      // block align
+            16, 0,     // bits per sample
+        };
+        var listData = new byte[] { 0x49, 0x4e, 0x46, 0x4f };  // 4 bytes ("INFO")
+        var oddListPayload = new byte[] { 1, 2, 3 };  // odd size triggers pad
+        var pcmPayload = new byte[] { 0x11, 0x22, 0x33, 0x44 };
+
+        var wav = new List<byte>();
+        wav.AddRange("RIFF"u8.ToArray());
+        wav.AddRange(BitConverter.GetBytes(0));   // placeholder file size
+        wav.AddRange("WAVE"u8.ToArray());
+        wav.AddRange("fmt "u8.ToArray());
+        wav.AddRange(BitConverter.GetBytes(fmtData.Length));
+        wav.AddRange(fmtData);
+        wav.AddRange("LIST"u8.ToArray());
+        wav.AddRange(BitConverter.GetBytes(listData.Length + oddListPayload.Length));
+        wav.AddRange(listData);
+        wav.AddRange(oddListPayload);
+        wav.Add(0x00);  // RIFF pad byte for odd chunk size
+        wav.AddRange("data"u8.ToArray());
+        wav.AddRange(BitConverter.GetBytes(pcmPayload.Length));
+        wav.AddRange(pcmPayload);
+
+        var pcm = OpenAiRealtimeStreamingSession.ExtractPcm16Data(wav.ToArray());
+
+        Assert.Equal(pcmPayload, pcm);
+    }
+
+    [Fact]
+    public void RealtimeExtractPcm16Data_NegativeChunkSize_DoesNotSpin()
+    {
+        // Malformed RIFF with a negative chunkSize would, without
+        // bounds validation, drive the offset-advance loop to either
+        // stand still or go backwards — hanging transcription. Verify
+        // the parser breaks out and falls through to the header-skip
+        // fallback in bounded time.
+        var wav = new List<byte>();
+        wav.AddRange("RIFF"u8.ToArray());
+        wav.AddRange(BitConverter.GetBytes(0));
+        wav.AddRange("WAVE"u8.ToArray());
+        // First chunk header with chunkSize = -8 (the value that would
+        // pin offset at the same byte under the previous formula).
+        wav.AddRange("LIST"u8.ToArray());
+        wav.AddRange(BitConverter.GetBytes(-8));
+        // Padding so the file is > 44 bytes (the early-return guard).
+        wav.AddRange(new byte[40]);
+
+        var pcm = OpenAiRealtimeStreamingSession.ExtractPcm16Data(wav.ToArray());
+
+        // Header-skip fallback returns wavAudio[44..]; the test passes
+        // by virtue of completing instead of spinning.
+        Assert.NotNull(pcm);
+    }
+
+    [Fact]
+    public void RealtimeExtractPcm16Data_OversizedChunkSize_DoesNotThrow()
+    {
+        // chunkSize = int.MaxValue overflows `dataStart + chunkSize`
+        // to a large negative, sneaking past the `<=` bounds check
+        // and crashing wavAudio[dataStart..(dataStart + chunkSize)]
+        // with ArgumentOutOfRangeException. Fixed by clamping against
+        // the buffer remainder before indexing.
+        var wav = new List<byte>();
+        wav.AddRange("RIFF"u8.ToArray());
+        wav.AddRange(BitConverter.GetBytes(0));
+        wav.AddRange("WAVE"u8.ToArray());
+        wav.AddRange("data"u8.ToArray());
+        wav.AddRange(BitConverter.GetBytes(int.MaxValue));
+        wav.AddRange(new byte[40]);
+
+        var pcm = OpenAiRealtimeStreamingSession.ExtractPcm16Data(wav.ToArray());
+
+        // Header-skip fallback is fine; the contract is "doesn't throw".
+        Assert.NotNull(pcm);
+    }
+
+    [Fact]
+    public void RealtimeTranscriptCollector_EmptyCompletion_MarksHasCompletedTranscript()
+    {
+        // Silent audio: OpenAI emits a completed event with an empty
+        // transcript. The collector must still record the completion so
+        // TranscribeWavAsync's WaitForCompletedTranscriptAsync poll
+        // observes HasCompletedTranscript and returns immediately —
+        // otherwise batch transcription of silence hangs for the full
+        // 10s timeout and then throws.
+        var collector = new OpenAiRealtimeTranscriptCollector();
+
+        var applied = collector.ApplyEvent(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_1","transcript":""}""",
+            out var evt);
+
+        Assert.False(applied);
+        Assert.Null(evt);
+        Assert.True(collector.HasCompletedTranscript);
+        Assert.Equal("", collector.CurrentText);
+    }
+
+    [Fact]
+    public void RealtimeTranscriptCollector_ErrorEvent_CapturesErrorMessage()
+    {
+        // Provider error events set Error and return false — the receive
+        // loop promotes Error to a captured fault that SendAudioAsync /
+        // FinalizeAsync then throw, triggering batch fallback in the
+        // orchestrator. Without this contract a server-side error after a
+        // good final segment would silently ship a truncated transcript.
+        var collector = new OpenAiRealtimeTranscriptCollector();
+
+        var applied = collector.ApplyEvent(
+            """{"type":"error","error":{"message":"invalid_audio_format"}}""",
+            out var evt);
+
+        Assert.False(applied);
+        Assert.Null(evt);
+        Assert.Equal("invalid_audio_format", collector.Error);
+    }
+
+    [Fact]
+    public async Task SupportsStreaming_RequiresRealtimeModelAndApiKeyMode()
+    {
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "sk-test";
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+        var asPlugin = (ITranscriptionEnginePlugin)sut;
+
+        // Default model is whisper-1 — non-streaming.
+        Assert.Equal("whisper-1", sut.SelectedModelId);
+        Assert.False(asPlugin.SupportsStreaming);
+
+        sut.SelectModel("gpt-realtime-whisper");
+        Assert.True(asPlugin.SupportsStreaming);
+
+        // ChatGPT-OAuth mode can't authenticate the realtime endpoint —
+        // streaming must report unavailable even with the realtime model
+        // picked, so the orchestrator falls through to polling rather
+        // than surfacing a 401 at connect time.
+        await sut.SetSettingValueAsync("authMode", "chatgpt");
+        Assert.False(asPlugin.SupportsStreaming);
+    }
+
+    [Fact]
+    public async Task StartStreamingAsync_ThrowsWhenModelOrAuthModeIsWrong()
+    {
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "sk-test";
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+        var asPlugin = (ITranscriptionEnginePlugin)sut;
+
+        // Non-realtime model selected → NotSupportedException with the
+        // actionable "select GPT Realtime Whisper" message.
+        var modelEx = await Assert.ThrowsAsync<NotSupportedException>(
+            () => asPlugin.StartStreamingAsync("en", CancellationToken.None));
+        Assert.Contains("GPT Realtime Whisper", modelEx.Message);
+
+        // ChatGPT-OAuth mode → InvalidOperationException with the API-key
+        // requirement, even if the realtime model is selected.
+        sut.SelectModel("gpt-realtime-whisper");
+        await sut.SetSettingValueAsync("authMode", "chatgpt");
+        var authEx = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => asPlugin.StartStreamingAsync("en", CancellationToken.None));
+        Assert.Contains("API key", authEx.Message);
     }
 
     private static JsonElement LoadManifest()

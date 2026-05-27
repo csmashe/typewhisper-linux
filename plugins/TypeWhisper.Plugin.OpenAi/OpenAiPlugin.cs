@@ -80,6 +80,14 @@ public sealed class OpenAiPlugin
             "json",
             SupportsTranslation: false
         ),
+        new(
+            OpenAiRealtimeStreamingSession.ModelId,
+            "GPT Realtime Whisper",
+            OpenAiRealtimeStreamingSession.ModelId,
+            "json",
+            SupportsTranslation: false,
+            SupportsStreaming: true
+        ),
     ];
 
     private static readonly IReadOnlyList<PluginModelInfo> FallbackLlmModels =
@@ -129,7 +137,7 @@ public sealed class OpenAiPlugin
 
     public string PluginId => "com.typewhisper.openai";
     public string PluginName => "OpenAI / ChatGPT";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => "1.2.0";
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -177,6 +185,15 @@ public sealed class OpenAiPlugin
     public bool SupportsTranslation =>
         IsConfigured && SelectedModelEntry is { SupportsTranslation: true };
 
+    // Realtime streaming uses an API-key-authenticated WebSocket. ChatGPT
+    // OAuth tokens are scoped for the consumer chat backend and 401 at
+    // wss://api.openai.com/v1/realtime, so we gate streaming off when the
+    // user is in OAuth mode even with the realtime model selected.
+    public bool SupportsStreaming =>
+        IsConfigured
+        && _authMode != OpenAiAuthMode.ChatGpt
+        && SelectedModelEntry is { SupportsStreaming: true };
+
     public void SelectModel(string modelId) => SelectModelCore(modelId, persist: true);
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -192,6 +209,22 @@ public sealed class OpenAiPlugin
                 "Plugin not configured. API key and model required."
             );
 
+        if (_selectedModelId == OpenAiRealtimeStreamingSession.ModelId)
+        {
+            if (translate)
+                throw new InvalidOperationException(
+                    "GPT Realtime Whisper does not support translation."
+                );
+
+            return await OpenAiRealtimeStreamingSession.TranscribeWavAsync(
+                _apiKey!,
+                wavAudio,
+                NormalizeLanguage(language),
+                prompt,
+                ct
+            );
+        }
+
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             BaseUrl,
@@ -203,6 +236,29 @@ public sealed class OpenAiPlugin
             _selectedResponseFormat,
             ct,
             prompt
+        );
+    }
+
+    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    {
+        if (_authMode == OpenAiAuthMode.ChatGpt)
+            throw new InvalidOperationException(
+                "OpenAI realtime streaming requires an API key. "
+                + "ChatGPT login can't authenticate the realtime endpoint."
+            );
+        if (!IsConfigured)
+            throw new InvalidOperationException("API key not configured");
+        if (_selectedModelId != OpenAiRealtimeStreamingSession.ModelId)
+            throw new NotSupportedException(
+                "Select GPT Realtime Whisper to use OpenAI realtime streaming."
+            );
+
+        return await OpenAiRealtimeStreamingSession.ConnectAsync(
+            _apiKey!,
+            NormalizeLanguage(language),
+            prompt: null,
+            useServerVad: true,
+            ct
         );
     }
 
@@ -1126,7 +1182,8 @@ public sealed class OpenAiPlugin
         string DisplayName,
         string ApiModelName,
         string ResponseFormat,
-        bool SupportsTranslation
+        bool SupportsTranslation,
+        bool SupportsStreaming = false
     );
 
     private sealed record OpenAiModelsResponse(List<OpenAiFetchedModel> Data);
