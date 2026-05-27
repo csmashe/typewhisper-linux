@@ -124,10 +124,10 @@ public static class Program
         }
         finally
         {
-            // Dispose on every exit path so unhandled exceptions and the
-            // AddressAlreadyInUse early-return both flush logs/sockets the
-            // same way as the success path.
-            Services.Dispose();
+            // DisposeAsync because the DI container holds IAsyncDisposable-only
+            // services (e.g. XdgPortalGlobalShortcutsBackend); the sync
+            // Dispose() path throws InvalidOperationException for those.
+            Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
