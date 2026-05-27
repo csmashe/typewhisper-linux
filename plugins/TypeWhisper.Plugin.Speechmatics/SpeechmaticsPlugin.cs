@@ -103,12 +103,12 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
         if (!submitResponse.IsSuccessStatusCode)
         {
-            // Exception messages flow into user-visible logs; the raw body
-            // can echo upload metadata or partial transcripts on a retry,
-            // so route the payload to the plugin log instead.
+            // Log only the stable HTTP status; the response body can echo
+            // upload metadata (and on retries, partial transcripts) which
+            // we don't want persisted in the plugin log.
             _host?.Log(
                 PluginLogLevel.Warning,
-                $"Speechmatics submit error {(int)submitResponse.StatusCode}: {submitJson}"
+                $"Speechmatics submit error {(int)submitResponse.StatusCode} ({submitResponse.ReasonPhrase})"
             );
             throw new HttpRequestException(
                 $"Speechmatics API error {(int)submitResponse.StatusCode}: {submitResponse.ReasonPhrase}"
@@ -150,7 +150,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             {
                 _host?.Log(
                     PluginLogLevel.Warning,
-                    $"Speechmatics status error {(int)statusResponse.StatusCode} for job {jobId}: {statusJson}"
+                    $"Speechmatics status error {(int)statusResponse.StatusCode} ({statusResponse.ReasonPhrase}) for job {jobId}"
                 );
                 throw new HttpRequestException(
                     $"Speechmatics status error {(int)statusResponse.StatusCode} for job {jobId}: {statusResponse.ReasonPhrase}"
@@ -179,7 +179,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 {
                     _host?.Log(
                         PluginLogLevel.Warning,
-                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} for job {jobId}: {transcriptJson}"
+                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} ({transcriptResponse.ReasonPhrase}) for job {jobId}"
                     );
                     throw new HttpRequestException(
                         $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} for job {jobId}: {transcriptResponse.ReasonPhrase}"

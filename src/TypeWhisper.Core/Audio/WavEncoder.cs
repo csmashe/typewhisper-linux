@@ -48,12 +48,31 @@ public static class WavEncoder
         }
 
         var bytesPerSample = bitsPerSample / 8;
-        var dataLength = samples.Length * bytesPerSample;
-        var buffer = new byte[44 + dataLength];
+
+        // Compute sizes in long to avoid silent Int32 wrap on extreme inputs
+        // (e.g. ~1B+ samples, or sampleRate*channels*bytesPerSample which can
+        // exceed Int32 at max channels). The RIFF header stores chunk sizes as
+        // little-endian Int32, so anything past Int32.MaxValue is unrepresentable
+        // — fail fast with a clear message instead of writing a corrupt header.
+        var dataLengthLong = (long)samples.Length * bytesPerSample;
+        var totalSizeLong = 44L + dataLengthLong;
+        var riffSizeLong = 36L + dataLengthLong;
+        var byteRateLong = (long)sampleRate * channels * bytesPerSample;
+
+        if (dataLengthLong < 0 || totalSizeLong > int.MaxValue || byteRateLong > int.MaxValue)
+        {
+            throw new ArgumentException(
+                $"Sample buffer too large for a 32-bit RIFF/WAVE header (samples={samples.Length}, channels={channels}, sampleRate={sampleRate}).",
+                nameof(samples)
+            );
+        }
+
+        var dataLength = (int)dataLengthLong;
+        var buffer = new byte[(int)totalSizeLong];
 
         // RIFF/WAVE header (44 bytes total, PCM format type 1)
         "RIFF"u8.CopyTo(buffer.AsSpan(0));
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(4), 36 + dataLength);
+        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(4), (int)riffSizeLong);
         "WAVE"u8.CopyTo(buffer.AsSpan(8));
 
         // fmt sub-chunk
@@ -62,10 +81,7 @@ public static class WavEncoder
         BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(20), 1); // audio format: 1 = PCM
         BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(22), (short)channels);
         BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(24), sampleRate);
-        BinaryPrimitives.WriteInt32LittleEndian(
-            buffer.AsSpan(28),
-            sampleRate * channels * bytesPerSample
-        ); // byte rate
+        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(28), (int)byteRateLong); // byte rate
         BinaryPrimitives.WriteInt16LittleEndian(
             buffer.AsSpan(32),
             (short)(channels * bytesPerSample)

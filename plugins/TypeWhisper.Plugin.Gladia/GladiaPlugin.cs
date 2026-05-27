@@ -27,7 +27,11 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Trim on load to mirror SetApiKeyAsync: legacy secrets saved before
+        // the save-side trim could otherwise leave the x-gladia-key header
+        // with trailing whitespace while IsConfigured still reports true.
+        var loaded = await host.LoadSecretAsync("api-key");
+        _apiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
         _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }

@@ -28,8 +28,13 @@ public sealed partial class CloudflareAsrPlugin
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiToken = await host.LoadSecretAsync("api-token");
-        _accountId = await host.LoadSecretAsync("account-id");
+        // Normalize on load: legacy values saved before SetApiTokenAsync trimmed
+        // could otherwise reach the Bearer header with trailing whitespace and
+        // 401 every request while IsConfigured still reports true.
+        var loadedToken = await host.LoadSecretAsync("api-token");
+        _apiToken = string.IsNullOrWhiteSpace(loadedToken) ? null : loadedToken.Trim();
+        var loadedAccount = await host.LoadSecretAsync("account-id");
+        _accountId = string.IsNullOrWhiteSpace(loadedAccount) ? null : loadedAccount.Trim();
         _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -164,13 +169,14 @@ public sealed partial class CloudflareAsrPlugin
 
     internal async Task SetApiTokenAsync(string apiToken)
     {
-        _apiToken = string.IsNullOrWhiteSpace(apiToken) ? null : apiToken;
+        var trimmed = apiToken?.Trim();
+        _apiToken = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiToken))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-token");
             else
-                await _host.StoreSecretAsync("api-token", apiToken);
+                await _host.StoreSecretAsync("api-token", trimmed);
 
             _host.NotifyCapabilitiesChanged();
         }
