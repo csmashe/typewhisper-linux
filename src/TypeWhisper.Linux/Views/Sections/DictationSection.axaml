@@ -241,7 +241,7 @@
             <TextBlock Text="Settings"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
@@ -465,6 +465,28 @@
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding OnlineAsrBatchLiveTranscriptionEnabled}"
+                                          IsEnabled="{Binding LiveTranscriptionEnabled}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="21"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="22"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Real-time streaming live preview"
+                                           Classes="row-label" />
+                                <TextBlock
+                                    Text="Use the provider's WebSocket streaming API for partials (lower latency, lower bandwidth than batch re-upload). Falls back to batch transcription if the connection drops."
+                                    FontSize="11"
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding LiveTranscriptionStreamingEnabled}"
                                           IsEnabled="{Binding LiveTranscriptionEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
