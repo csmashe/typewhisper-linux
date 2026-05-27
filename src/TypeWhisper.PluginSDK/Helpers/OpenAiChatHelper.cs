@@ -39,6 +39,30 @@ public static class OpenAiChatHelper
     ///     reject the parameter outright.
     /// </param>
     /// <returns>The assistant's response content text.</returns>
+    public static Task<string> SendChatCompletionAsync(
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        string systemPrompt,
+        string userText,
+        CancellationToken ct
+    ) =>
+        SendChatCompletionAsync(
+            httpClient,
+            baseUrl,
+            apiKey,
+            model,
+            systemPrompt,
+            userText,
+            ct,
+            maxOutputTokens: 2048,
+            maxOutputTokenParameter: "max_tokens",
+            reasoningEffort: null,
+            temperature: 0.1
+        );
+
+    /// <inheritdoc cref="SendChatCompletionAsync(HttpClient, string, string, string, string, string, CancellationToken)" />
     public static async Task<string> SendChatCompletionAsync(
         HttpClient httpClient,
         string baseUrl,
