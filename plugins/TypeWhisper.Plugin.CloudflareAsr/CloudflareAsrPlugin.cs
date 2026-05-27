@@ -89,12 +89,13 @@ public sealed partial class CloudflareAsrPlugin
 
         if (!response.IsSuccessStatusCode)
         {
-            // Exception messages bubble into logs and user-facing error UI.
-            // Keep only the stable HTTP status + reason; the raw response
-            // body may echo request fragments or token-bearing identifiers.
+            // Keep only the stable HTTP status + reason in both the plugin log
+            // and the thrown exception; the raw response body may echo request
+            // fragments or token-bearing identifiers that we don't want in any
+            // diagnostic surface.
             _host?.Log(
                 PluginLogLevel.Warning,
-                $"Cloudflare API error {(int)response.StatusCode} ({response.ReasonPhrase}): {json}"
+                $"Cloudflare API error {(int)response.StatusCode} ({response.ReasonPhrase})"
             );
             throw new HttpRequestException(
                 $"Cloudflare API error {(int)response.StatusCode}: {response.ReasonPhrase}"

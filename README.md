@@ -270,7 +270,7 @@ The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayl
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/TypeWhisper/typewhisper-linux.git
+   git clone https://github.com/csmashe/typewhisper-linux.git
    cd typewhisper-linux
    ```
 

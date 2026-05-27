@@ -123,6 +123,11 @@ publish_plugin() {
 
   {
     echo "==> $id ($project)"
+    # Wipe the per-plugin publish output before each run so a removed source
+    # file (e.g. a deleted reference, renamed embedded resource) doesn't
+    # survive in the publish dir and get copied into the final bundle.
+    # dotnet publish copies new outputs over the old but does not prune.
+    rm -rf "$pub_dir"
     dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" \
       --self-contained false -p:BuildProjectReferences=false --no-restore \
       "${VERSION_ARG[@]}" --nologo -v quiet

@@ -137,7 +137,7 @@ public sealed class DictionaryService : IDictionaryService
         // Accumulate usage increments and persist once at the end. A per-match
         // SaveToDisk would mean N file writes for a transcript with N
         // corrections, which adds noticeable I/O to every dictation.
-        var usedIds = new List<string>();
+        var usedCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (var entry in corrections)
         {
@@ -164,26 +164,36 @@ public sealed class DictionaryService : IDictionaryService
                 // Use the MatchEvaluator overload so dollar sequences in
                 // user-supplied replacements (e.g. "$1", "$&") are inserted
                 // verbatim rather than interpreted as regex substitution tokens.
+                // Count each match so UsageCount/TimesApplied reflect the
+                // actual number of replacements — not just whether any
+                // replacement happened for the entry.
                 var replacement = entry.Replacement!;
+                var matchCount = 0;
                 var replaced = Regex.Replace(
                     text,
                     prefix + pattern + suffix,
-                    _ => replacement,
+                    _ =>
+                    {
+                        matchCount++;
+                        return replacement;
+                    },
                     options
                 );
-                if (string.Equals(replaced, text, StringComparison.Ordinal))
+                if (matchCount == 0 || string.Equals(replaced, text, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 text = replaced;
-                usedIds.Add(entry.Id);
+                usedCounts[entry.Id] = usedCounts.TryGetValue(entry.Id, out var prior)
+                    ? prior + matchCount
+                    : matchCount;
             }
         }
 
-        if (usedIds.Count > 0)
+        if (usedCounts.Count > 0)
         {
-            IncrementUsageCounts(usedIds);
+            IncrementUsageCounts(usedCounts);
         }
 
         return text;
@@ -535,7 +545,7 @@ public sealed class DictionaryService : IDictionaryService
         }
     }
 
-    private void IncrementUsageCounts(IReadOnlyList<string> ids)
+    private void IncrementUsageCounts(IReadOnlyDictionary<string, int> deltas)
     {
         lock (_gate)
         {
@@ -543,8 +553,13 @@ public sealed class DictionaryService : IDictionaryService
             var now = DateTime.UtcNow;
             var changed = false;
 
-            foreach (var id in ids)
+            foreach (var (id, delta) in deltas)
             {
+                if (delta <= 0)
+                {
+                    continue;
+                }
+
                 var idx = newCache.FindIndex(e => e.Id == id);
                 if (idx < 0)
                 {
@@ -553,8 +568,8 @@ public sealed class DictionaryService : IDictionaryService
 
                 newCache[idx] = newCache[idx] with
                 {
-                    UsageCount = newCache[idx].UsageCount + 1,
-                    TimesApplied = newCache[idx].TimesApplied + 1,
+                    UsageCount = newCache[idx].UsageCount + delta,
+                    TimesApplied = newCache[idx].TimesApplied + delta,
                     LastUsedAt = now
                 };
                 changed = true;
@@ -580,7 +595,7 @@ public sealed class DictionaryService : IDictionaryService
                 // Drop the increments so memory stays consistent with disk and
                 // swallow the exception.
                 Trace.WriteLine(
-                    $"[DictionaryService] Could not persist usage counts for {ids.Count} entries: {ex.Message}"
+                    $"[DictionaryService] Could not persist usage counts for {deltas.Count} entries: {ex.Message}"
                 );
             }
         }

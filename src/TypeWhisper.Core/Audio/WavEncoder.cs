@@ -19,6 +19,22 @@ public static class WavEncoder
                 nameof(bitsPerSample)
             );
 
+        // Validate before any header writes so an invalid sampleRate doesn't
+        // land in the WAV as a wrap-around value, and an out-of-range
+        // channels can't silently truncate when cast to (short).
+        if (sampleRate <= 0 || sampleRate > 192000)
+            throw new ArgumentOutOfRangeException(
+                nameof(sampleRate),
+                sampleRate,
+                "sampleRate must be between 1 and 192000 Hz."
+            );
+        if (channels < 1 || channels > short.MaxValue)
+            throw new ArgumentOutOfRangeException(
+                nameof(channels),
+                channels,
+                $"channels must be between 1 and {short.MaxValue}."
+            );
+
         var bytesPerSample = bitsPerSample / 8;
         var dataLength = samples.Length * bytesPerSample;
         var buffer = new byte[44 + dataLength];

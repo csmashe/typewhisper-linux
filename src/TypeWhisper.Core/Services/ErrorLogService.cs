@@ -152,7 +152,27 @@ public sealed class ErrorLogService : IErrorLogService
                 Directory.CreateDirectory(dir);
             }
 
-            File.WriteAllText(_logFilePath, json);
+            // Write to a sibling temp file and atomically replace the target,
+            // so a crash or kill mid-write can't leave error-log.json
+            // truncated and unreadable on the next start.
+            var tempPath = _logFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(tempPath, json);
+                if (File.Exists(_logFilePath))
+                    File.Replace(tempPath, _logFilePath, destinationBackupFileName: null);
+                else
+                    File.Move(tempPath, _logFilePath);
+            }
+            catch
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); }
+                    catch { /* best effort */ }
+                }
+                throw;
+            }
         }
         catch
         {

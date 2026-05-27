@@ -102,13 +102,17 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        // Trim defensively at the internal entry too: SetSettingValueAsync
+        // already trims, but a future direct caller could re-introduce
+        // trailing whitespace that breaks the x-api-key header.
+        var trimmed = apiKey?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", apiKey);
+                await _host.StoreSecretAsync("api-key", trimmed);
 
             _host.NotifyCapabilitiesChanged();
         }
@@ -147,7 +151,10 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         if (key != "api-key")
             return;
 
-        await SetApiKeyAsync(value ?? string.Empty);
+        // Normalize whitespace once — pasted keys often pick up trailing
+        // newlines or spaces that break the x-api-key header.
+        var normalized = value?.Trim() ?? string.Empty;
+        await SetApiKeyAsync(normalized);
     }
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
