@@ -283,6 +283,55 @@ public sealed class StreamingTranscriptionCoordinatorTests
     }
 
     [Fact]
+    public async Task FinalizeAsync_RethrowsSessionFinalizeFault_ForOrchestratorFallback()
+    {
+        // Regression: the coordinator used to swallow exceptions from
+        // session.FinalizeAsync, which left DictationOrchestrator unable to
+        // detect provider errors that arrive AFTER the last audio chunk is
+        // sent (no more SendAudioAsync calls trigger the sender-side fault
+        // path). The orchestrator's TeardownStreamingSessionAsync ORs
+        // coordinator.Faulted with finalizeThrew — rethrowing here lights
+        // finalizeThrew so batch fallback runs.
+        var session = new FakeStreamingSession();
+        session.OnFinalize = _ => throw new InvalidOperationException("simulated provider error event");
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, null, 1, (_, _) => { }, _ => { });
+
+        await coord.StartAsync(CancellationToken.None);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => coord.FinalizeAsync(CancellationToken.None));
+        Assert.Contains("faulted during finalize", ex.Message);
+        Assert.NotNull(ex.InnerException);
+        Assert.Contains("simulated provider error event", ex.InnerException!.Message);
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_SessionFinalizeTimeoutIsNotAFault()
+    {
+        // OperationCanceledException from the FinalizeSessionTimeoutMs bound
+        // is a bounded wait, not a session fault — coordinator must swallow
+        // it and return the snapshot, matching the existing sender-task
+        // timeout behavior.
+        var session = new FakeStreamingSession();
+        session.OnFinalize = async ct => await Task.Delay(Timeout.Infinite, ct);
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, null, 1, (_, _) => { }, _ => { });
+
+        await coord.StartAsync(CancellationToken.None);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+
+        var text = await coord.FinalizeAsync(CancellationToken.None);
+        Assert.Equal(string.Empty, text);
+        Assert.False(coord.Faulted);
+    }
+
+    [Fact]
     public async Task FinalizeAsync_DrainsChannel_BeforeSessionFinalize()
     {
         var session = new FakeStreamingSession();

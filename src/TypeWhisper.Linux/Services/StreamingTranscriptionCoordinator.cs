@@ -216,14 +216,29 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             catch { /* best effort */ }
         }
 
+        Exception? sessionFinalizeFault = null;
         if (session is not null)
         {
             using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             sessionCts.CancelAfter(FinalizeSessionTimeoutMs);
             try { await session.FinalizeAsync(sessionCts.Token); }
+            catch (OperationCanceledException ex)
+            {
+                // Bounded-wait timeout or caller cancel — not a session fault.
+                Trace.WriteLine($"[StreamingCoordinator] FinalizeAsync session canceled: {ex.Message}");
+            }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[StreamingCoordinator] FinalizeAsync session: {ex.Message}");
+                // Real session fault during finalize (provider error event,
+                // transport error, etc). Capture and rethrow after the grace
+                // window so any late finals still land in _finalSegments — but
+                // surface the throw to the caller so
+                // DictationOrchestrator.TeardownStreamingSessionAsync's
+                // finalizeThrew flips and triggers batch fallback. Without
+                // this, the orchestrator would treat a partial streaming
+                // transcript as success when the session actually faulted.
+                Trace.WriteLine($"[StreamingCoordinator] FinalizeAsync session fault: {ex.Message}");
+                sessionFinalizeFault = ex;
             }
         }
 
@@ -242,6 +257,13 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             }
             try { await Task.Delay(FinalizeGracePollMs, ct); }
             catch (OperationCanceledException) { break; }
+        }
+
+        if (sessionFinalizeFault is not null)
+        {
+            throw new InvalidOperationException(
+                $"Streaming session faulted during finalize: {sessionFinalizeFault.Message}",
+                sessionFinalizeFault);
         }
 
         return SnapshotFinalSegments();

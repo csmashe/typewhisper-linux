@@ -79,7 +79,7 @@ public sealed class XaiPlugin
 
     public string PluginId => "com.typewhisper.xai";
     public string PluginName => "xAI / Grok";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => "1.1.0";
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -115,6 +115,7 @@ public sealed class XaiPlugin
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => SttModels;
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
+    public bool SupportsStreaming => true;
     public IReadOnlyList<string> SupportedLanguages => Languages;
 
     public void SelectModel(string modelId)
@@ -155,6 +156,17 @@ public sealed class XaiPlugin
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
         var json = await response.Content.ReadAsStringAsync(ct);
         return ParseSttResponse(json, normalizedLanguage);
+    }
+
+    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("Plugin not configured. API key required.");
+
+        // Run through the same normalization the batch TranscribeAsync uses
+        // so a setting value like " de " or "auto" doesn't propagate into the
+        // streaming URI as %20de%20 or language=auto.
+        return await XaiStreamingSession.ConnectAsync(_apiKey!, NormalizeLanguage(language), ct);
     }
 
     // ILlmProviderPlugin
