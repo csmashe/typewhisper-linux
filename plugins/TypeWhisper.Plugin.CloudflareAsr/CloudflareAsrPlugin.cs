@@ -21,8 +21,6 @@ public sealed partial class CloudflareAsrPlugin
         new("whisper", "Whisper (Cloudflare)"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.cloudflare-asr";
     public string PluginName => "Cloudflare ASR";
     public string PluginVersion => "1.0.0";
@@ -41,8 +39,6 @@ public sealed partial class CloudflareAsrPlugin
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "cloudflare-asr";
     public string ProviderDisplayName => "Cloudflare ASR";

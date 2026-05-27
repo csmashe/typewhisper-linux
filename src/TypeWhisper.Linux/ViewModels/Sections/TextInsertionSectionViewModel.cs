@@ -6,14 +6,8 @@ using TypeWhisper.Linux.Services.Insertion;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
-/// <summary>
-///     Backs the "Text insertion" settings panel. The panel mirrors the
-///     Shortcuts panel shape: per-backend status rows + a one-click
-///     "Set up automatically" flow, but for the ydotool stack instead of
-///     a DE keyboard binding. The interesting state lives on
-///     <see cref="LinuxCapabilitySnapshot" /> already; this VM is largely
-///     a façade so the UI can bind status strings and run the helper.
-/// </summary>
+// Façade over LinuxCapabilitySnapshot + YdotoolSetupHelper so the panel
+// can bind status strings and run the one-click setup.
 public partial class TextInsertionSectionViewModel : ObservableObject
 {
     private readonly SystemCommandAvailabilityService _commands;
@@ -41,22 +35,10 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     public string CompositorDisplayName => DesktopDetector.DisplayName();
     public string ClipboardToolStatus => Snapshot.ClipboardStatus;
 
-    /// <summary>
-    ///     True when the running compositor is known to reject wtype
-    ///     (GNOME / KDE Wayland). Drives the wtype row's warning tone and the
-    ///     "ydotool recommended" framing.
-    /// </summary>
     public bool CompositorRejectsWtype => Snapshot.CompositorRejectsWtype;
 
-    /// <summary>
-    ///     True when ydotool is a sensible thing to surface: we're
-    ///     on Wayland AND there's something the user can actually do here
-    ///     (install manually, run the one-click setup, or revert a setup we
-    ///     previously installed). Hides the whole section on X11 and also
-    ///     hides it once ydotool is fully configured and we don't own any
-    ///     integration — at that point the page would be all-status,
-    ///     no-action, which is just noise.
-    /// </summary>
+    // Hide on X11; hide once ydotool is fully configured and we own no
+    // integration — otherwise the panel is all-status, no-action.
     public bool ShowYdotoolSetup =>
         Snapshot.SessionType == "Wayland"
         && (ShowManualInstructions || CanSetUpAutomatically || CanRemoveIntegration);
@@ -154,22 +136,12 @@ public partial class TextInsertionSectionViewModel : ObservableObject
 
     public bool ShowManualInstructions => !YdotoolStatus.BinaryInstalled;
 
-    /// <summary>
-    ///     True whenever there is anything to revert: either the
-    ///     udev rule is on disk or the systemd user unit is active. Drives
-    ///     a separate "Remove integration" block in the view so the button
-    ///     stays usable after a successful setup — otherwise
-    ///     <see cref="CanSetUpAutomatically" /> flips false and the entire
-    ///     set-up panel (including Remove) disappears.
-    /// </summary>
+    // Rendered as a separate "Remove integration" block so the button
+    // stays reachable after a successful setup — otherwise the whole
+    // set-up panel (which gates Remove on CanSetUpAutomatically) vanishes.
     public bool CanRemoveIntegration =>
         YdotoolStatus.UdevRulePresent || YdotoolStatus.SystemdUnitActive;
 
-    /// <summary>
-    ///     Distro-specific install hint. We default to dnf / apt since
-    ///     those cover the majority of users; advanced distros (Arch, Alpine)
-    ///     will recognise the command shape regardless.
-    /// </summary>
     public string ManualInstallCommand =>
         "Fedora:        sudo dnf install ydotool\n"
         + "Debian/Ubuntu: sudo apt install ydotool\n"
@@ -225,13 +197,9 @@ public partial class TextInsertionSectionViewModel : ObservableObject
         StatusMessage = "Status refreshed.";
     }
 
-    /// <summary>
-    ///     Snapshot-derived properties don't auto-notify because the
-    ///     underlying <see cref="LinuxCapabilitySnapshot" /> is a value
-    ///     type rebuilt out-of-band. After any action that could change
-    ///     the snapshot, raise PropertyChanged for everything the view
-    ///     binds to so the rows repaint without an app restart.
-    /// </summary>
+    // LinuxCapabilitySnapshot is a value type rebuilt out-of-band, so the
+    // snapshot-derived properties can't auto-notify. After actions that
+    // mutate it, raise PropertyChanged on everything the view binds to.
     private void RefreshDerivedProperties()
     {
         OnPropertyChanged(nameof(SessionType));

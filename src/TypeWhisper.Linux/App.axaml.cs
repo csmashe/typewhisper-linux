@@ -227,9 +227,6 @@ public class App : Application
             var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
             recentTranscriptions.FeedbackRequested += (message, isError) =>
             {
-                // Feed this through the overlay feedback path by reusing
-                // dictation status events rather than creating a second toast
-                // implementation.
                 Debug.WriteLine(
                     $"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}"
                 );

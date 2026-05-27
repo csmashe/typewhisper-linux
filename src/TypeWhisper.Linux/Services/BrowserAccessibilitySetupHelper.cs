@@ -708,8 +708,7 @@ public sealed class BrowserAccessibilitySetupHelper
             }
             catch
             {
-                // Skip profiles we can't write to; the summary will note
-                // what we managed to clean up.
+                /* best effort — summary reports what we managed */
             }
         }
 
@@ -1004,7 +1003,7 @@ public sealed class BrowserAccessibilitySetupHelper
                     }
                     catch
                     {
-                        //nada
+                        /* best effort */
                     }
 
                     removed.Add(name + " (restored)");
@@ -1017,7 +1016,7 @@ public sealed class BrowserAccessibilitySetupHelper
             }
             catch
             {
-                // Best effort — leave files we can't process and report what we managed to clean.
+                /* best effort */
             }
         }
 
@@ -1033,7 +1032,7 @@ public sealed class BrowserAccessibilitySetupHelper
         }
         catch
         {
-            //nada
+            /* best effort */
         }
 
         return removed;

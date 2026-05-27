@@ -502,17 +502,25 @@ public sealed class HistoryService : IHistoryService
         {
             File.WriteAllText(tempPath, json);
             if (File.Exists(_filePath))
-                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            {
+                File.Replace(tempPath, _filePath, null);
+            }
             else
+            {
                 File.Move(tempPath, _filePath);
+            }
         }
         catch
         {
             if (File.Exists(tempPath))
             {
                 try { File.Delete(tempPath); }
-                catch { /* best effort */ }
+                catch
+                {
+                    /* best effort */
+                }
             }
+
             throw;
         }
     }

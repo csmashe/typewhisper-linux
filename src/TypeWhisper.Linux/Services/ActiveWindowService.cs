@@ -153,7 +153,7 @@ public sealed class ActiveWindowService : IActiveWindowService
                 }
                 catch
                 {
-                    // Skip processes we can't read.
+                    /* best effort */
                 }
                 finally
                 {
@@ -199,7 +199,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             }
             catch
             {
-                // Providers should never throw, but defensively skip any that do.
+                /* provider misbehaved — skip to next */
             }
         }
 
@@ -439,7 +439,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             }
             catch
             {
-                // Skip misbehaving providers — orchestration must never throw.
+                /* provider misbehaved — skip to next */
             }
         }
 
@@ -479,8 +479,10 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     private static bool SendBrowserAddressBarCaptureKeys(string windowId)
     {
-        // Linux adaptation: browsers reliably expose Ctrl+L / Ctrl+C on X11,
-        // so we can capture the address bar without adding a full AT-SPI stack.
+        // X11 fallback path: AT-SPI walk and title inference already
+        // failed, so synthesize Ctrl+L (focus address bar) + Ctrl+C
+        // (copy) and read the clipboard. Escape afterwards drops focus
+        // back out of the address bar so the user's caret isn't moved.
         if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+l"))
         {
             return false;

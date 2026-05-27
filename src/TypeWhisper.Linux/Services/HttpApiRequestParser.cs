@@ -45,6 +45,15 @@ internal sealed record MultipartPart(
     byte[] Data
 );
 
+/// <summary>
+///     Hand-rolled multipart/form-data parser for the local HTTP API. Custom
+///     because HttpListener has no multipart support and System.Net.Http's
+///     parser is server-side only in MultipartReader on netfx-style streams;
+///     pulling in ASP.NET Core just for boundary scanning is overkill for a
+///     single localhost-only endpoint. Body size is capped via
+///     <see cref="LimitedReadStream" /> so a malicious / runaway client
+///     cannot OOM the dictation host.
+/// </summary>
 internal static class HttpApiRequestParser
 {
     public static async Task<HttpApiRequest> FromListenerRequestAsync(

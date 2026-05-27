@@ -6,19 +6,19 @@ using System.Net.Sockets;
 using TypeWhisper.Core;
 using TypeWhisper.Linux.Cli;
 using TypeWhisper.Linux.Cli.Commands;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Ipc;
 
 namespace TypeWhisper.Linux;
 
 public static class Program
 {
-    public static ServiceProvider Services { get; private set; } = null!;
-    public static bool StartMinimized { get; private set; }
-
     // Boot-time profiling stopwatch. Single instance, started at the top of
     // Main; BootTrace.Stage(name) writes "+Xms: name" so we can see where
     // startup time goes. Lightweight enough to leave on in release builds.
     public static readonly Stopwatch BootStopwatch = Stopwatch.StartNew();
+    public static ServiceProvider Services { get; private set; } = null!;
+    public static bool StartMinimized { get; private set; }
 
     public static int Main(string[] args)
     {
@@ -34,7 +34,7 @@ public static class Program
         // GNOME launches menu-clicked apps at nice 6 / ionice idle for shell
         // responsiveness. That throttles cold start ~60× for a CPU+IO-heavy
         // .NET app. Restore defaults so menu launch matches terminal launch.
-        var priorityResult = TypeWhisper.Linux.Services.ProcessPriority.ResetToDefaults();
+        var priorityResult = ProcessPriority.ResetToDefaults();
         BootTrace.Stage($"ProcessPriority reset ({priorityResult})");
 
         var action = CommandLineParser.Parse(args);
@@ -88,6 +88,7 @@ public static class Program
                 {
                     Trace.WriteLine($"[Program] Control socket probe: {probeError}");
                 }
+
                 BootTrace.Stage("ControlSocketClient.TrySendToggle (no live peer)");
             }
             else if (ControlSocketClient.IsLivePeer(socketPath))

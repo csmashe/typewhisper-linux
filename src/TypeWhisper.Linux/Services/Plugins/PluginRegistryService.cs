@@ -78,10 +78,6 @@ public sealed class PluginRegistryService
         _httpClient = httpClient ?? new HttpClient();
     }
 
-    /// <summary>
-    ///     Fetches the plugin registry from the remote URL. Results are cached for 5 minutes.
-    ///     Filters out incompatible host versions and plugins not supported on Linux.
-    /// </summary>
     public async Task<IReadOnlyList<RegistryPlugin>> FetchRegistryAsync(
         CancellationToken ct = default
     )
@@ -116,9 +112,6 @@ public sealed class PluginRegistryService
         }
     }
 
-    /// <summary>
-    ///     Determines the install state of a registry plugin by comparing it with locally loaded plugins.
-    /// </summary>
     public PluginInstallState GetInstallState(RegistryPlugin registryPlugin)
     {
         var local = _pluginManager.GetPlugin(registryPlugin.Id);
@@ -139,9 +132,6 @@ public sealed class PluginRegistryService
         return PluginInstallState.Installed;
     }
 
-    /// <summary>
-    ///     Downloads and installs a plugin from the registry.
-    /// </summary>
     public async Task InstallPluginAsync(
         RegistryPlugin registryPlugin,
         IProgress<double>? progress = null,
@@ -226,9 +216,6 @@ public sealed class PluginRegistryService
         }
     }
 
-    /// <summary>
-    ///     Uninstalls a plugin by unloading it and deleting its directory.
-    /// </summary>
     public async Task UninstallPluginAsync(string pluginId)
     {
         await _pluginManager.UnloadPluginAsync(pluginId);
@@ -251,7 +238,8 @@ public sealed class PluginRegistryService
     }
 
     /// <summary>
-    ///     Checks for available plugin updates. Respects a 24-hour interval.
+    ///     Throttled to one network probe per 24h — this runs at startup so a
+    ///     repeated launch loop won't hammer the registry endpoint.
     /// </summary>
     public async Task CheckForUpdatesAsync(CancellationToken ct = default)
     {
@@ -276,8 +264,10 @@ public sealed class PluginRegistryService
     }
 
     /// <summary>
-    ///     On first run, auto-installs all compatible registry plugins.
-    ///     Sets the PluginFirstRunCompleted flag to prevent re-running.
+    ///     First-launch bootstrap: pulls every Linux-compatible plugin from the
+    ///     registry so the app is usable out of the box. Guarded by the
+    ///     PluginFirstRunCompleted flag so subsequent launches respect any
+    ///     uninstalls the user has performed.
     /// </summary>
     public async Task FirstRunAutoInstallAsync(CancellationToken ct = default)
     {

@@ -160,17 +160,25 @@ public sealed class ErrorLogService : IErrorLogService
             {
                 File.WriteAllText(tempPath, json);
                 if (File.Exists(_logFilePath))
-                    File.Replace(tempPath, _logFilePath, destinationBackupFileName: null);
+                {
+                    File.Replace(tempPath, _logFilePath, null);
+                }
                 else
+                {
                     File.Move(tempPath, _logFilePath);
+                }
             }
             catch
             {
                 if (File.Exists(tempPath))
                 {
                     try { File.Delete(tempPath); }
-                    catch { /* best effort */ }
+                    catch
+                    {
+                        /* best effort */
+                    }
                 }
+
                 throw;
             }
         }

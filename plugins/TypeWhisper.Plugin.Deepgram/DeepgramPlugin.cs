@@ -21,8 +21,6 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         new("nova-2", "Nova-2"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.deepgram";
     public string PluginName => "Deepgram";
     public string PluginVersion => "1.0.0";
@@ -40,8 +38,6 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "deepgram";
     public string ProviderDisplayName => "Deepgram";
@@ -137,8 +133,6 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
             NoSpeechProbability: null
         );
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;

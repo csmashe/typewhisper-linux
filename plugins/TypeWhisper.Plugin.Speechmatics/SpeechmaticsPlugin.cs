@@ -80,7 +80,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
         var lang = string.IsNullOrEmpty(normalized) ? "en" : normalized;
 
-        // Step 1: Submit batch transcription job
         var config = JsonSerializer.Serialize(
             new
             {
@@ -121,7 +120,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             submitDoc.RootElement.GetProperty("id").GetString()
             ?? throw new InvalidOperationException("No job ID in Speechmatics response");
 
-        // Step 2: Poll for completion
         var transcript = await PollForTranscriptAsync(jobId, ct);
         return transcript;
     }
@@ -165,7 +163,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
             if (status == "done")
             {
-                // Fetch transcript
                 using var transcriptRequest = new HttpRequestMessage(
                     HttpMethod.Get,
                     $"{BaseUrl}/jobs/{jobId}/transcript?format=json-v2"

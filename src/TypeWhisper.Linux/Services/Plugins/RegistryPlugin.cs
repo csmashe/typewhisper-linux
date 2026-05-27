@@ -2,9 +2,6 @@ using System.Text.Json.Serialization;
 
 namespace TypeWhisper.Linux.Services.Plugins;
 
-/// <summary>
-///     A plugin entry from the remote plugin registry.
-/// </summary>
 public sealed record RegistryPlugin
 {
     public string Id { get; init; } = "";
@@ -21,9 +18,6 @@ public sealed record RegistryPlugin
     public Dictionary<string, string>? Descriptions { get; init; }
 }
 
-/// <summary>
-///     Installation state of a registry plugin relative to the local system.
-/// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PluginInstallState
 {

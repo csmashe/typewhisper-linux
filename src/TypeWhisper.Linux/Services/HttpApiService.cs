@@ -9,6 +9,15 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+///     Local HTTP API exposing dictation/transcription/history endpoints to
+///     CLI tools and browser scripts. Binds only to <c>http://localhost/</c>
+///     prefixes (loopback host + loopback origin checks) — there is no
+///     plaintext-over-LAN deployment story for the bearer auth scheme used
+///     here. CORS is echoed only for the listener's own loopback origin and
+///     port, so a remote page cannot induce a localhost-origin request to
+///     leak the API.
+/// </summary>
 public sealed class HttpApiService : IDisposable
 {
     private const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;

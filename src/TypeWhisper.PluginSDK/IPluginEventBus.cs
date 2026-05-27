@@ -3,7 +3,9 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-///     Publish/subscribe event bus for plugin communication.
+///     Publish/subscribe event bus for plugin communication. Handlers are invoked on
+///     background threads, so subscribers must not assume UI-thread affinity and must
+///     keep work short — a slow handler blocks delivery to the rest of the chain.
 /// </summary>
 public interface IPluginEventBus
 {

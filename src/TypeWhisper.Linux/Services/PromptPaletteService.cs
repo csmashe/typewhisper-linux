@@ -107,7 +107,7 @@ public sealed class PromptPaletteService
         }
         catch (OperationCanceledException)
         {
-            // Timeout or cancellation.
+            /* best effort */
         }
         catch (Exception ex)
         {

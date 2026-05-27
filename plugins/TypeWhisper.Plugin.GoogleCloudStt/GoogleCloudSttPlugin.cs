@@ -64,12 +64,15 @@ public sealed partial class GoogleCloudSttPlugin
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
 
-        // Strip WAV header (first 44 bytes) to get raw PCM16 data
+        // Google STT's LINEAR16 encoding wants raw PCM, not a WAV container —
+        // strip the standard 44-byte header. (TypeWhisper always emits the
+        // simple PCM-WAV layout, so the fixed offset is safe here.)
         var pcmData = wavAudio.Length > 44 ? wavAudio[44..] : wavAudio;
         var audioBase64 = Convert.ToBase64String(pcmData);
 
         var langCode = !string.IsNullOrEmpty(language) && language != "auto" ? language : "en-US";
-        // Google expects BCP-47 codes; convert short ISO codes (e.g. "en" -> "en-US", "de" -> "de-DE")
+        // Google requires BCP-47; the rest of the app uses ISO-639-1 ("en"),
+        // so expand 2-letter codes to a regional variant before sending.
         if (langCode.Length == 2)
             langCode = MapToGoogleLanguageCode(langCode);
 
@@ -128,13 +131,12 @@ public sealed partial class GoogleCloudSttPlugin
             }
         }
 
-        // Google STT v1 does not return audio duration in the response;
-        // extract from totalBilledTime if available, otherwise default to 0.
+        // v1 has no audio_duration field; totalBilledTime ("15s" / "15.500s")
+        // is the closest proxy. Falls back to 0 when absent.
         double duration = 0;
         if (root.TryGetProperty("totalBilledTime", out var billedTime))
         {
             var billedStr = billedTime.GetString() ?? "";
-            // Format: "15s" or "15.500s"
             if (
                 billedStr.EndsWith("s")
                 && double.TryParse(
@@ -149,7 +151,6 @@ public sealed partial class GoogleCloudSttPlugin
             }
         }
 
-        // Extract language from the first result's languageCode if present
         string? detectedLang = null;
         if (
             root.TryGetProperty("results", out var resultsForLang)

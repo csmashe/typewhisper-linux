@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -696,17 +695,25 @@ public sealed class DictionaryService : IDictionaryService
         {
             File.WriteAllText(tempPath, json);
             if (File.Exists(_filePath))
-                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            {
+                File.Replace(tempPath, _filePath, null);
+            }
             else
+            {
                 File.Move(tempPath, _filePath);
+            }
         }
         catch
         {
             if (File.Exists(tempPath))
             {
                 try { File.Delete(tempPath); }
-                catch { /* best effort */ }
+                catch
+                {
+                    /* best effort */
+                }
             }
+
             throw;
         }
     }

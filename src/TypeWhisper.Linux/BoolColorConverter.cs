@@ -4,10 +4,6 @@ using System.Globalization;
 
 namespace TypeWhisper.Linux;
 
-/// <summary>
-///     Maps a bool to a red (true) or gray (false) Color, used by the
-///     recording indicator dot.
-/// </summary>
 public sealed class BoolColorConverter : IValueConverter
 {
     public static readonly BoolColorConverter Instance = new();
