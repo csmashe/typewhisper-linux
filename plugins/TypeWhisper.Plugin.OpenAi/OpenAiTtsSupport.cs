@@ -212,16 +212,10 @@ internal sealed class OpenAiPcmTtsPlaybackSession : ITtsPlaybackSession, IDispos
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        foreach (
-            var dir in path.Split(
+        return path.Split(
                 Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (File.Exists(Path.Combine(dir, name)))
-                return true;
-        }
-
-        return false;
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(dir => File.Exists(Path.Combine(dir, name)));
     }
 
     private static void TryDeleteFile(string path)

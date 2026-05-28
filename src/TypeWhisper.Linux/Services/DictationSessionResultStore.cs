@@ -69,12 +69,9 @@ public sealed class DictationSessionResultStore : IDisposable
 
     private void EvictExpired(DateTime asOfUtc)
     {
-        foreach (var pair in _entries)
+        foreach (var pair in _entries.Where(pair => IsExpired(pair.Value, asOfUtc)))
         {
-            if (IsExpired(pair.Value, asOfUtc))
-            {
-                _entries.TryRemove(pair.Key, out _);
-            }
+            _entries.TryRemove(pair.Key, out _);
         }
     }
 

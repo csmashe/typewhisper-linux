@@ -145,15 +145,8 @@ internal static class ShortcutMatcher
             return true;
         }
 
-        foreach (var entry in set.PromptActionHotkeys)
-        {
-            if (key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return set.PromptActionHotkeys.Any(
+            entry => key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers));
     }
 
     /// <summary>
