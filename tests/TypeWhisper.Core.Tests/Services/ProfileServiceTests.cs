@@ -14,6 +14,14 @@ public class ProfileServiceTests : IDisposable
         _sut = new ProfileService(_filePath);
     }
 
+    public void Dispose()
+    {
+        if (File.Exists(_filePath))
+        {
+            File.Delete(_filePath);
+        }
+    }
+
     [Fact]
     public void PromptActionId_RoundTrips()
     {
@@ -86,11 +94,7 @@ public class ProfileServiceTests : IDisposable
     [Fact]
     public void HotkeyData_NullByDefault()
     {
-        var profile = new Profile
-        {
-            Id = Guid.NewGuid().ToString(),
-            Name = "No Hotkey"
-        };
+        var profile = new Profile { Id = Guid.NewGuid().ToString(), Name = "No Hotkey" };
 
         _sut.AddProfile(profile);
 
@@ -119,14 +123,17 @@ public class ProfileServiceTests : IDisposable
     [Fact]
     public void StylePreset_DefaultsToRawForLegacyJson()
     {
-        File.WriteAllText(_filePath, """
+        File.WriteAllText(
+            _filePath,
+            """
             [
               {
                 "Id": "legacy",
                 "Name": "Legacy"
               }
             ]
-            """);
+            """
+        );
 
         var freshService = new ProfileService(_filePath);
 
@@ -152,10 +159,5 @@ public class ProfileServiceTests : IDisposable
         Assert.Equal(CleanupLevel.Light, result.CleanupLevel);
         Assert.True(result.SmartFormattingEnabled);
         Assert.False(result.TerminalSafe);
-    }
-
-    public void Dispose()
-    {
-        if (File.Exists(_filePath)) File.Delete(_filePath);
     }
 }

@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -7,26 +10,29 @@ namespace TypeWhisper.Core.Services;
 public sealed class ErrorLogService : IErrorLogService
 {
     private const int MaxEntries = 200;
-
-    private readonly string _logFilePath;
     private readonly List<ErrorLogEntry> _entries = [];
     private readonly Lock _lock = new();
 
-    public IReadOnlyList<ErrorLogEntry> Entries
-    {
-        get
-        {
-            lock (_lock) return _entries.ToList();
-        }
-    }
-
-    public event Action? EntriesChanged;
+    private readonly string _logFilePath;
 
     public ErrorLogService(string dataDirectory)
     {
         _logFilePath = Path.Combine(dataDirectory, "error-log.json");
         LoadFromDisk();
     }
+
+    public IReadOnlyList<ErrorLogEntry> Entries
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _entries.ToList();
+            }
+        }
+    }
+
+    public event Action? EntriesChanged;
 
     public void AddEntry(string message, string category = "general")
     {
@@ -37,36 +43,51 @@ public sealed class ErrorLogService : IErrorLogService
             _entries.Insert(0, entry);
 
             while (_entries.Count > MaxEntries)
+            {
                 _entries.RemoveAt(_entries.Count - 1);
+            }
+
+            // Persist inside the lock so two near-simultaneous AddEntry calls
+            // can't have the older snapshot overwrite the newer one on disk.
+            SaveToDisk();
         }
 
-        SaveToDisk();
         EntriesChanged?.Invoke();
     }
 
     public void ClearAll()
     {
-        lock (_lock) _entries.Clear();
-        SaveToDisk();
+        lock (_lock)
+        {
+            _entries.Clear();
+            SaveToDisk();
+        }
+
         EntriesChanged?.Invoke();
     }
 
     public string ExportDiagnostics()
     {
+        List<ErrorLogEntry> snapshot;
+        lock (_lock)
+        {
+            snapshot = [.. _entries];
+        }
+
         var report = new
         {
             exported_at = DateTime.UtcNow.ToString("o"),
             app = new
             {
                 version = GetAppVersion(),
-                platform = "Windows",
+                platform = RuntimeInformation.OSDescription,
                 os_version = Environment.OSVersion.VersionString,
                 dotnet_version = Environment.Version.ToString(),
-                locale = System.Globalization.CultureInfo.CurrentCulture.Name,
+                locale = CultureInfo.CurrentCulture.Name,
                 timezone = TimeZoneInfo.Local.Id
             },
-            error_count = _entries.Count,
-            errors = _entries.Select(e => new
+            error_count = snapshot.Count,
+            errors = snapshot.Select(e => new
             {
                 timestamp = e.Timestamp.ToString("o"),
                 category = e.Category,
@@ -81,12 +102,24 @@ public sealed class ErrorLogService : IErrorLogService
     {
         try
         {
-            if (!File.Exists(_logFilePath)) return;
+            if (!File.Exists(_logFilePath))
+            {
+                return;
+            }
 
             var json = File.ReadAllText(_logFilePath);
             var entries = JsonSerializer.Deserialize<List<ErrorLogEntry>>(json);
             if (entries is not null)
             {
+                // Entries are persisted newest-first (AddEntry inserts at index 0).
+                // Trim to MaxEntries on load so a file written by an older build
+                // with a higher cap — or hand-edited — doesn't leave the in-memory
+                // cache permanently over budget until the next AddEntry trims it down.
+                if (entries.Count > MaxEntries)
+                {
+                    entries = entries.GetRange(0, MaxEntries);
+                }
+
                 lock (_lock)
                 {
                     _entries.Clear();
@@ -96,34 +129,68 @@ public sealed class ErrorLogService : IErrorLogService
         }
         catch
         {
-            // Corrupted log file - start fresh
+            // Corrupted or unreadable log — start fresh rather than surfacing an error about the error log
         }
     }
 
     private void SaveToDisk()
     {
+        // Caller must hold _lock. Serializing while holding the lock keeps
+        // the on-disk file in step with the in-memory list — without this
+        // contract, two writers could interleave snapshot + write and the
+        // older snapshot would land last.
         try
         {
-            List<ErrorLogEntry> snapshot;
-            lock (_lock) snapshot = [.. _entries];
-
-            var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(
+                _entries,
+                new JsonSerializerOptions { WriteIndented = true }
+            );
 
             var dir = Path.GetDirectoryName(_logFilePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
                 Directory.CreateDirectory(dir);
+            }
 
-            File.WriteAllText(_logFilePath, json);
+            // Write to a sibling temp file and atomically replace the target,
+            // so a crash or kill mid-write can't leave error-log.json
+            // truncated and unreadable on the next start.
+            var tempPath = _logFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(tempPath, json);
+                if (File.Exists(_logFilePath))
+                {
+                    File.Replace(tempPath, _logFilePath, null);
+                }
+                else
+                {
+                    File.Move(tempPath, _logFilePath);
+                }
+            }
+            catch
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); }
+                    catch
+                    {
+                        /* best effort */
+                    }
+                }
+
+                throw;
+            }
         }
         catch
         {
-            // Ignore save failures
+            // Best-effort persistence — silently discard save failures so callers are unaffected
         }
     }
 
     private static string GetAppVersion()
     {
-        var asm = System.Reflection.Assembly.GetEntryAssembly();
+        var asm = Assembly.GetEntryAssembly();
         return asm?.GetName().Version?.ToString() ?? "unknown";
     }
 }

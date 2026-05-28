@@ -1,7 +1,7 @@
-using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
@@ -10,30 +10,73 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class PromptsSectionViewModel : ObservableObject
 {
-    private readonly IPromptActionService _prompts;
     private readonly PluginManager _pluginManager;
+    private readonly IPromptActionService _prompts;
     private readonly ISettingsService _settings;
+
+    [ObservableProperty]
+    private string _editIcon = "\u2728";
+
     private string? _editingActionId;
+
+    [ObservableProperty]
+    private string _editName = "";
+
+    [ObservableProperty]
+    private string? _editProviderOverride;
+
+    [ObservableProperty]
+    private string _editSystemPrompt = "";
+
+    [ObservableProperty]
+    private string? _editTargetActionPluginId;
+
+    [ObservableProperty]
+    private bool _isCreatingNew;
+
+    // Prevents SelectedEditProvider's setter from persisting the provider
+    // override while RefreshPluginOptions is rebuilding the provider list —
+    // the setter fires when the ComboBox re-selects the current value.
     private bool _isRefreshingProviders;
+
+    [ObservableProperty]
+    private PromptAction? _selectedAction;
+
+    [ObservableProperty]
+    private bool _showEditor;
+
+    public PromptsSectionViewModel(
+        IPromptActionService prompts,
+        PluginManager pluginManager,
+        ISettingsService settings
+    )
+    {
+        _prompts = prompts;
+        _pluginManager = pluginManager;
+        _settings = settings;
+
+        _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
+        _pluginManager.PluginStateChanged += (_, _) =>
+            Dispatcher.UIThread.Post(RefreshPluginOptions);
+        _settings.SettingsChanged += _ =>
+            Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(DefaultLlmProvider)));
+
+        RefreshPluginOptions();
+        RefreshActions();
+    }
 
     public ObservableCollection<PromptAction> Actions { get; } = [];
     public ObservableCollection<ProviderOption> AvailableProviders { get; } = [];
     public ObservableCollection<ActionPluginOption> ActionPluginOptions { get; } = [];
 
-    [ObservableProperty] private PromptAction? _selectedAction;
-    [ObservableProperty] private bool _isCreatingNew;
-    [ObservableProperty] private string _editName = "";
-    [ObservableProperty] private string _editSystemPrompt = "";
-    [ObservableProperty] private string _editIcon = "\u2728";
-    [ObservableProperty] private string? _editProviderOverride;
-    [ObservableProperty] private string? _editTargetActionPluginId;
-    [ObservableProperty] private bool _showEditor;
-
     public bool HasSelectedAction => SelectedAction is not null || IsCreatingNew;
     public int ActionCount => Actions.Count;
     public int EnabledActionCount => Actions.Count(static action => action.IsEnabled);
     public string Summary => $"{ActionCount} prompts, {EnabledActionCount} enabled";
-    public string PromptsHint => "AI prompts for the Prompt Palette. Select text + hotkey = AI processes the text.";
+
+    public string PromptsHint =>
+        "AI prompts for the Prompt Palette. Select text + hotkey = AI processes the text.";
+
     public bool ShowProviderWarning => AvailableProviders.Count <= 1;
     public string ProviderWarningText => "Enable OpenAI or Groq in Extensions.";
     public bool ShowEmptyState => ActionCount == 0;
@@ -45,8 +88,12 @@ public partial class PromptsSectionViewModel : ObservableObject
         get => _settings.Current.DefaultLlmProvider;
         set
         {
-            if (string.Equals(_settings.Current.DefaultLlmProvider, value, StringComparison.Ordinal))
+            if (
+                string.Equals(_settings.Current.DefaultLlmProvider, value, StringComparison.Ordinal)
+            )
+            {
                 return;
+            }
 
             _settings.Save(_settings.Current with { DefaultLlmProvider = value });
             OnPropertyChanged();
@@ -55,35 +102,23 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     public ProviderOption? SelectedEditProvider
     {
-        get => AvailableProviders.FirstOrDefault(option => option.Value == EditProviderOverride)
+        get =>
+            AvailableProviders.FirstOrDefault(option => option.Value == EditProviderOverride)
             ?? AvailableProviders.FirstOrDefault();
         set
         {
             if (_isRefreshingProviders)
+            {
                 return;
+            }
 
             if (string.Equals(EditProviderOverride, value?.Value, StringComparison.Ordinal))
+            {
                 return;
+            }
 
             EditProviderOverride = value?.Value;
         }
-    }
-
-    public PromptsSectionViewModel(
-        IPromptActionService prompts,
-        PluginManager pluginManager,
-        ISettingsService settings)
-    {
-        _prompts = prompts;
-        _pluginManager = pluginManager;
-        _settings = settings;
-
-        _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
-        _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshPluginOptions);
-        _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(DefaultLlmProvider)));
-
-        RefreshPluginOptions();
-        RefreshActions();
     }
 
     partial void OnSelectedActionChanged(PromptAction? value)
@@ -91,7 +126,10 @@ public partial class PromptsSectionViewModel : ObservableObject
         if (value is null)
         {
             if (!IsCreatingNew)
+            {
                 ClearEditor();
+            }
+
             NotifyStateChanged();
             return;
         }
@@ -126,7 +164,9 @@ public partial class PromptsSectionViewModel : ObservableObject
     private void SaveAction()
     {
         if (string.IsNullOrWhiteSpace(EditName) || string.IsNullOrWhiteSpace(EditSystemPrompt))
+        {
             return;
+        }
 
         if (IsCreatingNew)
         {
@@ -149,20 +189,26 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         if (_editingActionId is null)
+        {
             return;
+        }
 
         var existing = _prompts.Actions.FirstOrDefault(action => action.Id == _editingActionId);
         if (existing is null)
-            return;
-
-        _prompts.UpdateAction(existing with
         {
-            Name = EditName.Trim(),
-            SystemPrompt = EditSystemPrompt.Trim(),
-            Icon = EditIcon,
-            ProviderOverride = EditProviderOverride,
-            TargetActionPluginId = EditTargetActionPluginId
-        });
+            return;
+        }
+
+        _prompts.UpdateAction(
+            existing with
+            {
+                Name = EditName.Trim(),
+                SystemPrompt = EditSystemPrompt.Trim(),
+                Icon = EditIcon,
+                ProviderOverride = EditProviderOverride,
+                TargetActionPluginId = EditTargetActionPluginId
+            }
+        );
         RefreshActions();
         SelectById(existing.Id);
     }
@@ -171,7 +217,9 @@ public partial class PromptsSectionViewModel : ObservableObject
     private void EditAction(PromptAction? action)
     {
         if (action is null)
+        {
             return;
+        }
 
         SelectedAction = action;
     }
@@ -180,7 +228,9 @@ public partial class PromptsSectionViewModel : ObservableObject
     private void DeleteSelectedAction()
     {
         if (SelectedAction is null || SelectedAction.IsPreset)
+        {
             return;
+        }
 
         _prompts.DeleteAction(SelectedAction.Id);
         RefreshActions();
@@ -192,7 +242,9 @@ public partial class PromptsSectionViewModel : ObservableObject
     private void ToggleEnabled(PromptAction? action)
     {
         if (action is null)
+        {
             return;
+        }
 
         _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled });
         RefreshActions();
@@ -202,12 +254,19 @@ public partial class PromptsSectionViewModel : ObservableObject
     private void MoveUp(PromptAction? action)
     {
         if (action is null)
+        {
             return;
+        }
 
-        var orderedIds = _prompts.Actions.OrderBy(prompt => prompt.SortOrder).Select(prompt => prompt.Id).ToList();
+        var orderedIds = _prompts
+            .Actions.OrderBy(prompt => prompt.SortOrder)
+            .Select(prompt => prompt.Id)
+            .ToList();
         var index = orderedIds.IndexOf(action.Id);
         if (index <= 0)
+        {
             return;
+        }
 
         (orderedIds[index], orderedIds[index - 1]) = (orderedIds[index - 1], orderedIds[index]);
         _prompts.Reorder(orderedIds);
@@ -218,12 +277,19 @@ public partial class PromptsSectionViewModel : ObservableObject
     private void MoveDown(PromptAction? action)
     {
         if (action is null)
+        {
             return;
+        }
 
-        var orderedIds = _prompts.Actions.OrderBy(prompt => prompt.SortOrder).Select(prompt => prompt.Id).ToList();
+        var orderedIds = _prompts
+            .Actions.OrderBy(prompt => prompt.SortOrder)
+            .Select(prompt => prompt.Id)
+            .ToList();
         var index = orderedIds.IndexOf(action.Id);
         if (index < 0 || index >= orderedIds.Count - 1)
+        {
             return;
+        }
 
         (orderedIds[index], orderedIds[index + 1]) = (orderedIds[index + 1], orderedIds[index]);
         _prompts.Reorder(orderedIds);
@@ -252,7 +318,9 @@ public partial class PromptsSectionViewModel : ObservableObject
         var selectedId = SelectedAction?.Id ?? _editingActionId;
         Actions.Clear();
         foreach (var action in _prompts.Actions.OrderBy(action => action.SortOrder))
+        {
             Actions.Add(action);
+        }
 
         if (selectedId is not null && ShowEditor)
         {
@@ -273,21 +341,34 @@ public partial class PromptsSectionViewModel : ObservableObject
         {
             AvailableProviders.Clear();
             AvailableProviders.Add(new ProviderOption(null, "Use default provider"));
-            foreach (var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable))
+            foreach (
+                var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
+            )
             {
-                var plugin = _pluginManager.AllPlugins.FirstOrDefault(candidate => ReferenceEquals(candidate.Instance, provider));
+                var plugin = _pluginManager.AllPlugins.FirstOrDefault(candidate =>
+                    ReferenceEquals(candidate.Instance, provider)
+                );
                 if (plugin is null)
+                {
                     continue;
+                }
 
                 foreach (var model in provider.SupportedModels)
                 {
-                    AvailableProviders.Add(new ProviderOption(
-                        $"plugin:{plugin.Manifest.Id}:{model.Id}",
-                        $"{provider.ProviderName} / {model.DisplayName}"));
+                    AvailableProviders.Add(
+                        new ProviderOption(
+                            $"plugin:{plugin.Manifest.Id}:{model.Id}",
+                            $"{provider.ProviderName} / {model.DisplayName}"
+                        )
+                    );
                 }
             }
 
-            EditProviderOverride = AvailableProviders.Any(option => option.Value == selectedProvider) ? selectedProvider : null;
+            EditProviderOverride = AvailableProviders.Any(option =>
+                option.Value == selectedProvider
+            )
+                ? selectedProvider
+                : null;
         }
         finally
         {
@@ -296,10 +377,20 @@ public partial class PromptsSectionViewModel : ObservableObject
 
         ActionPluginOptions.Clear();
         ActionPluginOptions.Add(new ActionPluginOption(null, "Insert text normally"));
-        foreach (var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName))
-            ActionPluginOptions.Add(new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName));
+        foreach (
+            var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
+        )
+        {
+            ActionPluginOptions.Add(
+                new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
+            );
+        }
 
-        EditTargetActionPluginId = ActionPluginOptions.Any(option => option.Value == selectedActionPlugin) ? selectedActionPlugin : null;
+        EditTargetActionPluginId = ActionPluginOptions.Any(option =>
+            option.Value == selectedActionPlugin
+        )
+            ? selectedActionPlugin
+            : null;
         OnPropertyChanged(nameof(SelectedEditProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
@@ -308,9 +399,13 @@ public partial class PromptsSectionViewModel : ObservableObject
     {
         var match = Actions.FirstOrDefault(action => action.Id == id);
         if (match is not null)
+        {
             SelectedAction = match;
+        }
         else
+        {
             NotifyStateChanged();
+        }
     }
 
     private void ClearEditor()

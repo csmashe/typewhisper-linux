@@ -1,7 +1,7 @@
 namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>
-/// Context passed to an action plugin when executing an action.
+///     Context passed to an action plugin when executing an action.
 /// </summary>
 /// <param name="AppName">Display name of the active foreground application, or null.</param>
 /// <param name="ProcessName">Process name of the active foreground application, or null.</param>
@@ -13,4 +13,5 @@ public sealed record ActionContext(
     string? ProcessName,
     string? Url,
     string? Language,
-    string? OriginalText);
+    string? OriginalText
+);

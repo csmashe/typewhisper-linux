@@ -1,114 +1,266 @@
-using System.Diagnostics;
-using SharpHook;
 using SharpHook.Native;
+using System.Diagnostics;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Hotkey;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Global hotkey binding for the Linux shell. Uses SharpHook (libuiohook)
-/// which works reliably on X11. Wayland support varies by compositor — a
-/// future path is the XDG portal GlobalShortcuts protocol (GNOME 45+,
-/// KDE Plasma 6+).
-///
-/// Three modes, matching the Windows shell:
-///   - Toggle: press the hotkey to start recording, press again to stop.
-///   - PushToTalk: hold the hotkey to record, release to stop.
-///   - Hybrid: starts immediately on press. A short press stays active like
+///     Coordinator for global hotkeys. Owns the configured-binding state (the
+///     eight shortcuts plus mode), parses user-supplied hotkey strings, and
+///     resolves an <see cref="IGlobalShortcutBackend" /> at <see cref="Initialize" />
+///     time. The backend handles actual key-event delivery and raises the typed
+///     events that this coordinator re-raises to the rest of the app.
+///     Three modes, matching the Windows shell:
+///     - Toggle: press the hotkey to start recording, press again to stop.
+///     - PushToTalk: hold the hotkey to record, release to stop.
+///     - Hybrid: starts immediately on press. A short press stays active like
 ///     Toggle; holding past a threshold (600 ms) stops on release.
-///
-/// Callers subscribe to DictationStartRequested / DictationStopRequested /
-/// DictationToggleRequested as they need. The orchestrator handles all
-/// three with start-if-idle / stop-if-recording semantics.
 /// </summary>
 public sealed class HotkeyService : IDisposable
 {
-    private enum HotkeyBinding
-    {
-        Dictation,
-        PromptPalette,
-        RecentTranscriptions,
-        CopyLastTranscription,
-        TransformSelection
-    }
-
-    private const int PushToTalkThresholdMs = 600;
-
-    private readonly TaskPoolGlobalHook _hook = new();
+    private readonly KeyCode _cancelKey = KeyCode.VcEscape;
+    private readonly ModifierMask _cancelModifiers = ModifierMask.None;
     private readonly object _lock = new();
 
+    private readonly BackendSelector _selector;
+
+    private IGlobalShortcutBackend? _backend;
+
+    // Last registration result observed from the backend. Used so callers can
+    // discover that the active backend can't deliver release events (i.e.
+    // portal/CLI fallbacks) and adjust the UI mode picker accordingly.
+    private volatile bool _backendRequiresToggleMode;
+    private volatile bool _cancelShortcutEnabled;
+    private KeyCode? _copyLastTranscriptionKey;
+    private ModifierMask _copyLastTranscriptionModifiers = ModifierMask.None;
+    private int _disposed;
+
     private KeyCode _key = KeyCode.VcSpace;
+    private RecordingMode _mode = RecordingMode.Toggle;
     private ModifierMask _modifiers = ModifierMask.LeftCtrl | ModifierMask.LeftShift;
+    private EventHandler<string>? _onBackendFailed;
+    private EventHandler? _onCancelRequested;
+    private EventHandler? _onCopyLastTranscriptionRequested;
+    private EventHandler? _onDictationStartRequested;
+    private EventHandler? _onDictationStopRequested;
+    private EventHandler? _onDictationToggleRequested;
+    private EventHandler? _onPromptPaletteRequested;
+    private EventHandler? _onRecentTranscriptionsRequested;
+    private EventHandler? _onTransformSelectionRequested;
+
+    // Serializes backend updates so a burst of TrySet*/Mode= calls can't apply
+    // out of order and leave the backend listening for stale bindings.
+    private Task _pendingBackendUpdate = Task.CompletedTask;
     private KeyCode? _promptPaletteKey;
     private ModifierMask _promptPaletteModifiers = ModifierMask.None;
     private KeyCode? _recentTranscriptionsKey;
     private ModifierMask _recentTranscriptionsModifiers = ModifierMask.None;
-    private KeyCode? _copyLastTranscriptionKey;
-    private ModifierMask _copyLastTranscriptionModifiers = ModifierMask.None;
     private KeyCode? _transformSelectionKey;
     private ModifierMask _transformSelectionModifiers = ModifierMask.None;
-    private readonly KeyCode _cancelKey = KeyCode.VcEscape;
-    private readonly ModifierMask _cancelModifiers = ModifierMask.None;
-    private RecordingMode _mode = RecordingMode.Toggle;
-    private bool _keyIsDown;
-    private bool _promptKeyIsDown;
-    private bool _recentKeyIsDown;
-    private bool _copyLastKeyIsDown;
-    private bool _transformSelectionKeyIsDown;
-    private bool _cancelKeyIsDown;
-    private volatile bool _cancelShortcutEnabled;
-    private DateTime _keyDownTime;
-    private bool _running;
-    private int _disposed;
-    private Task? _hookTask;
 
-    public event EventHandler? DictationToggleRequested;
-    public event EventHandler? DictationStartRequested;
-    public event EventHandler? DictationStopRequested;
-    public event EventHandler? PromptPaletteRequested;
-    public event EventHandler? RecentTranscriptionsRequested;
-    public event EventHandler? CopyLastTranscriptionRequested;
-    public event EventHandler? TransformSelectionRequested;
-    public event EventHandler? CancelRequested;
-    public event EventHandler<string>? HookFailed;
+    public HotkeyService()
+        : this(new BackendSelector())
+    {
+    }
+
+    public HotkeyService(BackendSelector selector)
+    {
+        _selector = selector;
+    }
 
     /// <summary>
-    /// Gates the Escape cancel shortcut. Only true while a dictation is active
-    /// (recording or transcription in flight) — outside that window Escape
-    /// passes through to the foreground app so we don't shadow modal dialogs,
-    /// vim, etc.
+    ///     True when the active backend can't deliver release events (portal or
+    ///     CLI-only). The coordinator preserves the user's chosen <see cref="Mode" />
+    ///     but downstream UI may surface a hint that only Toggle is effective.
+    /// </summary>
+    public bool BackendRequiresToggleMode => _backendRequiresToggleMode;
+
+    /// <summary>
+    ///     Stable identifier of the currently active backend (e.g.
+    ///     "linux-sharphook", "linux-evdev", "linux-xdg-portal"). Null until
+    ///     <see cref="Initialize" /> has resolved a backend.
+    /// </summary>
+    public string? ActiveBackendId => _backend?.Id;
+
+    /// <summary>Human-readable name of the active backend, e.g. "Linux evdev".</summary>
+    public string? ActiveBackendDisplayName => _backend?.DisplayName;
+
+    /// <summary>
+    ///     True if the active backend can deliver both press and release events
+    ///     (so PushToTalk and Hybrid modes are functional). Null while no
+    ///     backend is resolved.
+    /// </summary>
+    public bool? ActiveBackendSupportsPressRelease => _backend?.SupportsPressRelease;
+
+    /// <summary>
+    ///     True if the active backend captures shortcuts regardless of which
+    ///     window owns focus. Null while no backend is resolved.
+    /// </summary>
+    public bool? ActiveBackendIsGlobalScope => _backend?.IsGlobalScope;
+
+    /// <summary>
+    ///     Gates the Escape cancel shortcut. Only true while a dictation is active
+    ///     (recording or transcription in flight) — outside that window Escape
+    ///     passes through to the foreground app so we don't shadow modal dialogs,
+    ///     vim, etc.
     /// </summary>
     public bool IsCancelShortcutEnabled
     {
         get => _cancelShortcutEnabled;
-        set => _cancelShortcutEnabled = value;
+        set
+        {
+            _cancelShortcutEnabled = value;
+            PushShortcutsIfRunning();
+        }
     }
 
     public RecordingMode Mode
     {
         get => _mode;
-        set => _mode = value;
+        set
+        {
+            _mode = value;
+            PushShortcutsIfRunning();
+        }
+    }
+
+    /// <summary>Human-friendly form of the currently-bound hotkey, e.g. "Ctrl+Shift+Space".</summary>
+    public string CurrentHotkeyString => FormatHotkey(_key, _modifiers);
+
+    public string CurrentPromptPaletteHotkeyString =>
+        _promptPaletteKey is null
+            ? ""
+            : FormatHotkey(_promptPaletteKey.Value, _promptPaletteModifiers);
+
+    public string CurrentRecentTranscriptionsHotkeyString =>
+        _recentTranscriptionsKey is null
+            ? ""
+            : FormatHotkey(_recentTranscriptionsKey.Value, _recentTranscriptionsModifiers);
+
+    public string CurrentCopyLastTranscriptionHotkeyString =>
+        _copyLastTranscriptionKey is null
+            ? ""
+            : FormatHotkey(_copyLastTranscriptionKey.Value, _copyLastTranscriptionModifiers);
+
+    public string CurrentTransformSelectionHotkeyString =>
+        _transformSelectionKey is null
+            ? ""
+            : FormatHotkey(_transformSelectionKey.Value, _transformSelectionModifiers);
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        {
+            return;
+        }
+
+        IGlobalShortcutBackend? backend;
+        lock (_lock)
+        {
+            backend = _backend;
+            _backend = null;
+            UnsubscribeBackendHandlers(backend);
+        }
+
+        if (backend is null)
+        {
+            return;
+        }
+
+        var disposeTask = Task.Run(async () =>
+        {
+            try
+            {
+                await backend.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[HotkeyService] Backend dispose threw: {ex.Message}");
+            }
+        });
+        disposeTask.Wait(TimeSpan.FromSeconds(1));
+    }
+
+    /// <summary>
+    ///     Disposes the current backend and asks the selector to resolve a
+    ///     fresh one — used when a setting that influences backend selection
+    ///     flips at runtime (e.g. the Wayland evdev opt-out toggle). Without
+    ///     this hot-swap path, flipping that toggle would only take effect on
+    ///     the next app launch, leaving the user's keyboard reads active in
+    ///     the interim.
+    /// </summary>
+    public async Task SwitchBackendAsync(CancellationToken ct = default)
+    {
+        IGlobalShortcutBackend? previous;
+        lock (_lock)
+        {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return;
+            }
+
+            previous = _backend;
+            _backend = null;
+            _backendRequiresToggleMode = false;
+            UnsubscribeBackendHandlers(previous);
+        }
+
+        if (previous is not null)
+        {
+            try
+            {
+                await previous.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[HotkeyService] Dispose previous backend threw: {ex.Message}");
+            }
+        }
+
+        Initialize();
+        OnPropertyChangedHook();
     }
 
     public void Initialize()
     {
         lock (_lock)
         {
-            if (_running || Volatile.Read(ref _disposed) == 1) return;
-            _hook.KeyPressed += OnKeyPressed;
-            _hook.KeyReleased += OnKeyReleased;
-            _hookTask = _hook.RunAsync();
-            _hookTask.ContinueWith(task =>
+            if (_backend is not null || Volatile.Read(ref _disposed) == 1)
             {
-                if (Volatile.Read(ref _disposed) == 1 || task.IsCanceled)
-                    return;
+                return;
+            }
 
-                var error = task.Exception?.GetBaseException().Message ?? "Global hotkey hook stopped unexpectedly.";
-                Trace.WriteLine($"[HotkeyService] Hook failed: {error}");
-                HookFailed?.Invoke(this, error);
-            }, TaskContinuationOptions.NotOnRanToCompletion);
-            _running = true;
+            var backend = _selector.Resolve();
+            _onDictationToggleRequested = (_, _) =>
+                DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+            _onDictationStartRequested = (_, _) =>
+                DictationStartRequested?.Invoke(this, EventArgs.Empty);
+            _onDictationStopRequested = (_, _) =>
+                DictationStopRequested?.Invoke(this, EventArgs.Empty);
+            _onPromptPaletteRequested = (_, _) =>
+                PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
+            _onRecentTranscriptionsRequested = (_, _) =>
+                RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
+            _onCopyLastTranscriptionRequested = (_, _) =>
+                CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            _onTransformSelectionRequested = (_, _) =>
+                TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
+            _onCancelRequested = (_, _) => CancelRequested?.Invoke(this, EventArgs.Empty);
+            _onBackendFailed = (_, message) => HookFailed?.Invoke(this, message);
+            backend.DictationToggleRequested += _onDictationToggleRequested;
+            backend.DictationStartRequested += _onDictationStartRequested;
+            backend.DictationStopRequested += _onDictationStopRequested;
+            backend.PromptPaletteRequested += _onPromptPaletteRequested;
+            backend.RecentTranscriptionsRequested += _onRecentTranscriptionsRequested;
+            backend.CopyLastTranscriptionRequested += _onCopyLastTranscriptionRequested;
+            backend.TransformSelectionRequested += _onTransformSelectionRequested;
+            backend.CancelRequested += _onCancelRequested;
+            backend.Failed += _onBackendFailed;
+            _backend = backend;
         }
+
+        PushShortcutsIfRunning();
     }
 
     public void SetHotkey(KeyCode key, ModifierMask modifiers)
@@ -119,53 +271,56 @@ public sealed class HotkeyService : IDisposable
         // sites don't need try/catch.
         if (HotkeyMatchesAny(key, modifiers, GetBoundHotkeys(HotkeyBinding.Dictation)))
         {
-            Trace.WriteLine("[HotkeyService] Refusing dictation hotkey that collides with another shortcut.");
+            Trace.WriteLine(
+                "[HotkeyService] Refusing dictation hotkey that collides with another shortcut."
+            );
             return;
         }
 
         _key = key;
         _modifiers = modifiers;
+        PushShortcutsIfRunning();
     }
 
     public void SetPromptPaletteHotkey(KeyCode? key, ModifierMask modifiers)
     {
-        if (key is not null && HotkeyMatchesAny(key.Value, modifiers, GetBoundHotkeys(HotkeyBinding.PromptPalette)))
+        if (
+            key is not null
+            && HotkeyMatchesAny(key.Value, modifiers, GetBoundHotkeys(HotkeyBinding.PromptPalette))
+        )
         {
-            Trace.WriteLine("[HotkeyService] Refusing prompt palette hotkey that collides with another shortcut.");
+            Trace.WriteLine(
+                "[HotkeyService] Refusing prompt palette hotkey that collides with another shortcut."
+            );
             return;
         }
 
         _promptPaletteKey = key;
         _promptPaletteModifiers = key is null ? ModifierMask.None : modifiers;
+        PushShortcutsIfRunning();
     }
 
-    /// <summary>Human-friendly form of the currently-bound hotkey, e.g. "Ctrl+Shift+Space".</summary>
-    public string CurrentHotkeyString => FormatHotkey(_key, _modifiers);
-    public string CurrentPromptPaletteHotkeyString =>
-        _promptPaletteKey is null ? "" : FormatHotkey(_promptPaletteKey.Value, _promptPaletteModifiers);
-    public string CurrentRecentTranscriptionsHotkeyString =>
-        _recentTranscriptionsKey is null ? "" : FormatHotkey(_recentTranscriptionsKey.Value, _recentTranscriptionsModifiers);
-    public string CurrentCopyLastTranscriptionHotkeyString =>
-        _copyLastTranscriptionKey is null ? "" : FormatHotkey(_copyLastTranscriptionKey.Value, _copyLastTranscriptionModifiers);
-    public string CurrentTransformSelectionHotkeyString =>
-        _transformSelectionKey is null ? "" : FormatHotkey(_transformSelectionKey.Value, _transformSelectionModifiers);
-
     /// <summary>
-    /// Parses strings like "Ctrl+Shift+Space", "Alt+F9", "Ctrl+K" and binds
-    /// them. Returns true on success. Accepts modifier tokens (Ctrl, Shift,
-    /// Alt, Meta/Win/Super) and either a single letter, a digit, a function
-    /// key (F1-F24), or a named key (Space, Enter, Tab, Escape, arrows, etc.).
-    /// Invalid input leaves the current binding unchanged.
+    ///     Parses strings like "Ctrl+Shift+Space", "Alt+F9", "Ctrl+K" and binds
+    ///     them. Returns true on success. Accepts modifier tokens (Ctrl, Shift,
+    ///     Alt, Meta/Win/Super) and either a single letter, a digit, a function
+    ///     key (F1-F24), or a named key (Space, Enter, Tab, Escape, arrows, etc.).
+    ///     Invalid input leaves the current binding unchanged.
     /// </summary>
     public bool TrySetHotkeyFromString(string text)
     {
         if (!TryParseHotkey(text, out var key, out var modifiers))
+        {
             return false;
+        }
 
-        // Don't let the dictation hotkey collide with the prompt palette — the
-        // palette handler runs first in OnKeyPressed and would shadow this key.
+        // Don't let the dictation hotkey collide with another configured
+        // binding — the matcher orders cancel/palette/etc. ahead of dictation
+        // so a collision would shadow this key.
         if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.Dictation)))
+        {
             return false;
+        }
 
         SetHotkey(key.Value, modifiers);
         return true;
@@ -180,11 +335,14 @@ public sealed class HotkeyService : IDisposable
         }
 
         if (!TryParseHotkey(text, out var key, out var modifiers))
+        {
             return false;
+        }
 
-        // Don't let the prompt palette collide with the dictation hotkey.
         if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.PromptPalette)))
+        {
             return false;
+        }
 
         SetPromptPaletteHotkey(key, modifiers);
         return true;
@@ -196,17 +354,29 @@ public sealed class HotkeyService : IDisposable
         {
             _recentTranscriptionsKey = null;
             _recentTranscriptionsModifiers = ModifierMask.None;
+            PushShortcutsIfRunning();
             return true;
         }
 
         if (!TryParseHotkey(text, out var key, out var modifiers))
+        {
             return false;
+        }
 
-        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.RecentTranscriptions)))
+        if (
+            HotkeyMatchesAny(
+                key!.Value,
+                modifiers,
+                GetBoundHotkeys(HotkeyBinding.RecentTranscriptions)
+            )
+        )
+        {
             return false;
+        }
 
         _recentTranscriptionsKey = key;
         _recentTranscriptionsModifiers = modifiers;
+        PushShortcutsIfRunning();
         return true;
     }
 
@@ -216,17 +386,29 @@ public sealed class HotkeyService : IDisposable
         {
             _copyLastTranscriptionKey = null;
             _copyLastTranscriptionModifiers = ModifierMask.None;
+            PushShortcutsIfRunning();
             return true;
         }
 
         if (!TryParseHotkey(text, out var key, out var modifiers))
+        {
             return false;
+        }
 
-        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.CopyLastTranscription)))
+        if (
+            HotkeyMatchesAny(
+                key!.Value,
+                modifiers,
+                GetBoundHotkeys(HotkeyBinding.CopyLastTranscription)
+            )
+        )
+        {
             return false;
+        }
 
         _copyLastTranscriptionKey = key;
         _copyLastTranscriptionModifiers = modifiers;
+        PushShortcutsIfRunning();
         return true;
     }
 
@@ -236,53 +418,272 @@ public sealed class HotkeyService : IDisposable
         {
             _transformSelectionKey = null;
             _transformSelectionModifiers = ModifierMask.None;
+            PushShortcutsIfRunning();
             return true;
         }
 
         if (!TryParseHotkey(text, out var key, out var modifiers))
+        {
             return false;
+        }
 
-        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.TransformSelection)))
+        if (
+            HotkeyMatchesAny(
+                key!.Value,
+                modifiers,
+                GetBoundHotkeys(HotkeyBinding.TransformSelection)
+            )
+        )
+        {
             return false;
+        }
 
         _transformSelectionKey = key;
         _transformSelectionModifiers = modifiers;
+        PushShortcutsIfRunning();
         return true;
     }
 
-    private static bool HotkeyMatches(KeyCode key, ModifierMask modifiers, KeyCode? otherKey, ModifierMask otherModifiers)
+    /// <summary>
+    ///     Compatibility shim for callers (notably tests) — forwards to
+    ///     <see cref="ShortcutMatcher.ModifiersMatch" />.
+    /// </summary>
+    internal static bool ModifiersMatch(ModifierMask pressed, ModifierMask required)
     {
-        if (otherKey is null) return false;
+        return ShortcutMatcher.ModifiersMatch(pressed, required);
+    }
+
+    public event EventHandler? DictationToggleRequested;
+    public event EventHandler? DictationStartRequested;
+    public event EventHandler? DictationStopRequested;
+    public event EventHandler? PromptPaletteRequested;
+    public event EventHandler? RecentTranscriptionsRequested;
+    public event EventHandler? CopyLastTranscriptionRequested;
+    public event EventHandler? TransformSelectionRequested;
+    public event EventHandler? CancelRequested;
+    public event EventHandler<string>? HookFailed;
+
+    // Placeholder for instrumentation on backend switch; left as a named
+    // call site so future hooks (telemetry, tests) have an obvious anchor.
+    private static void OnPropertyChangedHook() { }
+
+    private void UnsubscribeBackendHandlers(IGlobalShortcutBackend? backend)
+    {
+        if (backend is null)
+        {
+            return;
+        }
+
+        if (_onDictationToggleRequested is not null)
+        {
+            backend.DictationToggleRequested -= _onDictationToggleRequested;
+        }
+
+        if (_onDictationStartRequested is not null)
+        {
+            backend.DictationStartRequested -= _onDictationStartRequested;
+        }
+
+        if (_onDictationStopRequested is not null)
+        {
+            backend.DictationStopRequested -= _onDictationStopRequested;
+        }
+
+        if (_onPromptPaletteRequested is not null)
+        {
+            backend.PromptPaletteRequested -= _onPromptPaletteRequested;
+        }
+
+        if (_onRecentTranscriptionsRequested is not null)
+        {
+            backend.RecentTranscriptionsRequested -= _onRecentTranscriptionsRequested;
+        }
+
+        if (_onCopyLastTranscriptionRequested is not null)
+        {
+            backend.CopyLastTranscriptionRequested -= _onCopyLastTranscriptionRequested;
+        }
+
+        if (_onTransformSelectionRequested is not null)
+        {
+            backend.TransformSelectionRequested -= _onTransformSelectionRequested;
+        }
+
+        if (_onCancelRequested is not null)
+        {
+            backend.CancelRequested -= _onCancelRequested;
+        }
+
+        if (_onBackendFailed is not null)
+        {
+            backend.Failed -= _onBackendFailed;
+        }
+
+        _onDictationToggleRequested = null;
+        _onDictationStartRequested = null;
+        _onDictationStopRequested = null;
+        _onPromptPaletteRequested = null;
+        _onRecentTranscriptionsRequested = null;
+        _onCopyLastTranscriptionRequested = null;
+        _onTransformSelectionRequested = null;
+        _onCancelRequested = null;
+        _onBackendFailed = null;
+    }
+
+    private GlobalShortcutSet BuildShortcutSet()
+    {
+        return new GlobalShortcutSet(
+            _key,
+            _modifiers,
+            _promptPaletteKey,
+            _promptPaletteModifiers,
+            _recentTranscriptionsKey,
+            _recentTranscriptionsModifiers,
+            _copyLastTranscriptionKey,
+            _copyLastTranscriptionModifiers,
+            _transformSelectionKey,
+            _transformSelectionModifiers,
+            _cancelKey,
+            _cancelModifiers,
+            _mode,
+            _cancelShortcutEnabled
+        );
+    }
+
+    private void PushShortcutsIfRunning()
+    {
+        IGlobalShortcutBackend? backend;
+        GlobalShortcutSet snapshot;
+        lock (_lock)
+        {
+            backend = _backend;
+            if (backend is null)
+            {
+                return;
+            }
+
+            snapshot = BuildShortcutSet();
+            // Chain on the previous registration so a burst of changes applies
+            // in order. Each link observes the result and surfaces failures
+            // through HookFailed; the chain itself never throws because every
+            // exception is caught inside the continuation.
+            _pendingBackendUpdate = _pendingBackendUpdate
+                .ContinueWith(
+                    async _ =>
+                    {
+                        try
+                        {
+                            var result = await backend
+                                .RegisterAsync(snapshot, CancellationToken.None)
+                                .ConfigureAwait(false);
+                            _backendRequiresToggleMode = result.RequiresToggleMode;
+                            if (!result.Success)
+                            {
+                                var message =
+                                    result.UserMessage
+                                    ?? $"Backend '{result.BackendId}' rejected the shortcut registration.";
+                                HookFailed?.Invoke(this, message);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.WriteLine(
+                                $"[HotkeyService] Backend registration threw: {ex.Message}"
+                            );
+                            HookFailed?.Invoke(this, ex.Message);
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default
+                )
+                .Unwrap();
+        }
+    }
+
+    private static bool HotkeyMatches(
+        KeyCode key,
+        ModifierMask modifiers,
+        KeyCode? otherKey,
+        ModifierMask otherModifiers
+    )
+    {
+        if (otherKey is null)
+        {
+            return false;
+        }
+
         return key == otherKey.Value && modifiers == otherModifiers;
     }
 
-    private IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> GetBoundHotkeys(HotkeyBinding? exclude = null)
+    private IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> GetBoundHotkeys(
+        HotkeyBinding? exclude = null
+    )
     {
         if (exclude != HotkeyBinding.Dictation)
+        {
             yield return (_key, _modifiers);
+        }
+
         if (exclude != HotkeyBinding.PromptPalette)
+        {
             yield return (_promptPaletteKey, _promptPaletteModifiers);
+        }
+
         if (exclude != HotkeyBinding.RecentTranscriptions)
+        {
             yield return (_recentTranscriptionsKey, _recentTranscriptionsModifiers);
+        }
+
         if (exclude != HotkeyBinding.CopyLastTranscription)
+        {
             yield return (_copyLastTranscriptionKey, _copyLastTranscriptionModifiers);
+        }
+
         if (exclude != HotkeyBinding.TransformSelection)
+        {
             yield return (_transformSelectionKey, _transformSelectionModifiers);
+        }
     }
 
-    private static bool HotkeyMatchesAny(KeyCode key, ModifierMask modifiers, IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> others) =>
-        others.Any(other => HotkeyMatches(key, modifiers, other.Key, other.Modifiers));
+    private static bool HotkeyMatchesAny(
+        KeyCode key,
+        ModifierMask modifiers,
+        IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> others
+    )
+    {
+        return others.Any(other => HotkeyMatches(key, modifiers, other.Key, other.Modifiers));
+    }
 
     private static string FormatHotkey(KeyCode key, ModifierMask mods)
     {
         var parts = new List<string>();
-        if (mods.HasFlag(ModifierMask.LeftCtrl) || mods.HasFlag(ModifierMask.RightCtrl)) parts.Add("Ctrl");
-        if (mods.HasFlag(ModifierMask.LeftShift) || mods.HasFlag(ModifierMask.RightShift)) parts.Add("Shift");
-        if (mods.HasFlag(ModifierMask.LeftAlt) || mods.HasFlag(ModifierMask.RightAlt)) parts.Add("Alt");
-        if (mods.HasFlag(ModifierMask.LeftMeta) || mods.HasFlag(ModifierMask.RightMeta)) parts.Add("Meta");
+        if (mods.HasFlag(ModifierMask.LeftCtrl) || mods.HasFlag(ModifierMask.RightCtrl))
+        {
+            parts.Add("Ctrl");
+        }
+
+        if (mods.HasFlag(ModifierMask.LeftShift) || mods.HasFlag(ModifierMask.RightShift))
+        {
+            parts.Add("Shift");
+        }
+
+        if (mods.HasFlag(ModifierMask.LeftAlt) || mods.HasFlag(ModifierMask.RightAlt))
+        {
+            parts.Add("Alt");
+        }
+
+        if (mods.HasFlag(ModifierMask.LeftMeta) || mods.HasFlag(ModifierMask.RightMeta))
+        {
+            parts.Add("Meta");
+        }
 
         var keyName = key.ToString();
-        if (keyName.StartsWith("Vc", StringComparison.Ordinal)) keyName = keyName[2..];
+        if (keyName.StartsWith("Vc", StringComparison.Ordinal))
+        {
+            keyName = keyName[2..];
+        }
+
         parts.Add(keyName);
         return string.Join('+', parts);
     }
@@ -291,32 +692,57 @@ public sealed class HotkeyService : IDisposable
     {
         key = null;
         modifiers = ModifierMask.None;
-        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
 
-        var parts = text.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 0) return false;
+        var parts = text.Split(
+            '+',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+        );
+        if (parts.Length == 0)
+        {
+            return false;
+        }
 
         foreach (var raw in parts)
         {
             var part = raw.ToLowerInvariant();
             switch (part)
             {
-                case "ctrl" or "control": modifiers |= ModifierMask.LeftCtrl; continue;
-                case "shift": modifiers |= ModifierMask.LeftShift; continue;
-                case "alt": modifiers |= ModifierMask.LeftAlt; continue;
-                case "meta" or "super" or "win": modifiers |= ModifierMask.LeftMeta; continue;
+                case "ctrl" or "control":
+                    modifiers |= ModifierMask.LeftCtrl;
+                    continue;
+                case "shift":
+                    modifiers |= ModifierMask.LeftShift;
+                    continue;
+                case "alt":
+                    modifiers |= ModifierMask.LeftAlt;
+                    continue;
+                case "meta" or "super" or "win":
+                    modifiers |= ModifierMask.LeftMeta;
+                    continue;
             }
 
             if (part.Length == 1 && part[0] is >= 'a' and <= 'z')
             {
-                if (key is not null) return false;
+                if (key is not null)
+                {
+                    return false;
+                }
+
                 key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{char.ToUpperInvariant(part[0])}");
                 continue;
             }
 
             if (part.Length == 1 && part[0] is >= '0' and <= '9')
             {
-                if (key is not null) return false;
+                if (key is not null)
+                {
+                    return false;
+                }
+
                 key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{part[0]}");
                 continue;
             }
@@ -337,19 +763,31 @@ public sealed class HotkeyService : IDisposable
                 "right" => KeyCode.VcRight,
                 "up" => KeyCode.VcUp,
                 "down" => KeyCode.VcDown,
-                _ => (KeyCode?)null,
+                _ => (KeyCode?)null
             };
             if (named is not null)
             {
-                if (key is not null) return false;
+                if (key is not null)
+                {
+                    return false;
+                }
+
                 key = named.Value;
                 continue;
             }
 
-            if (part.Length is >= 2 and <= 3 && part[0] == 'f' &&
-                int.TryParse(part[1..], out var fNum) && fNum is >= 1 and <= 24)
+            if (
+                part.Length is >= 2 and <= 3
+                && part[0] == 'f'
+                && int.TryParse(part[1..], out var fNum)
+                && fNum is >= 1 and <= 24
+            )
             {
-                if (key is not null) return false;
+                if (key is not null)
+                {
+                    return false;
+                }
+
                 key = (KeyCode)Enum.Parse(typeof(KeyCode), $"VcF{fNum}");
                 continue;
             }
@@ -361,223 +799,12 @@ public sealed class HotkeyService : IDisposable
         return key is not null;
     }
 
-    private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
+    private enum HotkeyBinding
     {
-        // Cancel hotkey is only honored while a dictation is in flight. We also
-        // defer to any user-configured binding that happens to share the same
-        // key+modifiers so we don't silently convert a stop-and-transcribe
-        // press into a discard. The fallthrough lets the regular matcher
-        // handle this press as it would have without cancel support.
-        if (MatchesCancelHotkey(e))
-        {
-            if (!_cancelKeyIsDown)
-            {
-                _cancelKeyIsDown = true;
-                if (_cancelShortcutEnabled && !CancelHotkeyCollidesWithAnotherBinding())
-                {
-                    try { CancelRequested?.Invoke(this, EventArgs.Empty); }
-                    catch (Exception ex)
-                    {
-                        Trace.WriteLine($"[HotkeyService] Cancel handler threw: {ex.Message}");
-                    }
-                    return;
-                }
-            }
-        }
-
-        if (MatchesRecentTranscriptionsHotkey(e))
-        {
-            if (_recentKeyIsDown) return;
-            _recentKeyIsDown = true;
-            RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
-            return;
-        }
-
-        if (MatchesCopyLastTranscriptionHotkey(e))
-        {
-            if (_copyLastKeyIsDown) return;
-            _copyLastKeyIsDown = true;
-            CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
-            return;
-        }
-
-        if (MatchesTransformSelectionHotkey(e))
-        {
-            if (_transformSelectionKeyIsDown) return;
-            _transformSelectionKeyIsDown = true;
-            TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
-            return;
-        }
-
-        if (MatchesPromptPaletteHotkey(e))
-        {
-            // Same repeat-guard as the dictation key so OS auto-repeat doesn't
-            // spam PromptPaletteRequested.
-            if (_promptKeyIsDown) return;
-            _promptKeyIsDown = true;
-            PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
-            return;
-        }
-
-        if (e.Data.KeyCode != _key) return;
-        if (!ModifiersMatch(e.RawEvent.Mask, _modifiers)) return;
-
-        // Ignore key-repeat: treat only the first press of a hold as the event.
-        if (_keyIsDown) return;
-
-        _keyIsDown = true;
-        _keyDownTime = DateTime.UtcNow;
-
-        try
-        {
-            switch (_mode)
-            {
-                case RecordingMode.Toggle:
-                    DictationToggleRequested?.Invoke(this, EventArgs.Empty);
-                    break;
-                case RecordingMode.PushToTalk:
-                    DictationStartRequested?.Invoke(this, EventArgs.Empty);
-                    break;
-                case RecordingMode.Hybrid:
-                    DictationToggleRequested?.Invoke(this, EventArgs.Empty);
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[HotkeyService] Press handler threw: {ex.Message}");
-        }
-    }
-
-    private bool MatchesPromptPaletteHotkey(KeyboardHookEventArgs e)
-    {
-        if (_promptPaletteKey is null) return false;
-        return e.Data.KeyCode == _promptPaletteKey.Value
-            && ModifiersMatch(e.RawEvent.Mask, _promptPaletteModifiers);
-    }
-
-    private bool MatchesRecentTranscriptionsHotkey(KeyboardHookEventArgs e)
-    {
-        if (_recentTranscriptionsKey is null) return false;
-        return e.Data.KeyCode == _recentTranscriptionsKey.Value
-            && ModifiersMatch(e.RawEvent.Mask, _recentTranscriptionsModifiers);
-    }
-
-    private bool MatchesCopyLastTranscriptionHotkey(KeyboardHookEventArgs e)
-    {
-        if (_copyLastTranscriptionKey is null) return false;
-        return e.Data.KeyCode == _copyLastTranscriptionKey.Value
-            && ModifiersMatch(e.RawEvent.Mask, _copyLastTranscriptionModifiers);
-    }
-
-    private bool MatchesTransformSelectionHotkey(KeyboardHookEventArgs e)
-    {
-        if (_transformSelectionKey is null) return false;
-        return e.Data.KeyCode == _transformSelectionKey.Value
-            && ModifiersMatch(e.RawEvent.Mask, _transformSelectionModifiers);
-    }
-
-    private bool MatchesCancelHotkey(KeyboardHookEventArgs e) =>
-        e.Data.KeyCode == _cancelKey && ModifiersMatch(e.RawEvent.Mask, _cancelModifiers);
-
-    private bool CancelHotkeyCollidesWithAnotherBinding() =>
-        HotkeyMatchesAny(_cancelKey, _cancelModifiers, GetBoundHotkeys());
-
-    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
-    {
-        // Clear the prompt-palette repeat guard on its own key release so the
-        // next press fires again.
-        if (_promptPaletteKey is not null && e.Data.KeyCode == _promptPaletteKey.Value)
-            _promptKeyIsDown = false;
-        if (_recentTranscriptionsKey is not null && e.Data.KeyCode == _recentTranscriptionsKey.Value)
-            _recentKeyIsDown = false;
-        if (_copyLastTranscriptionKey is not null && e.Data.KeyCode == _copyLastTranscriptionKey.Value)
-            _copyLastKeyIsDown = false;
-        if (_transformSelectionKey is not null && e.Data.KeyCode == _transformSelectionKey.Value)
-            _transformSelectionKeyIsDown = false;
-        if (e.Data.KeyCode == _cancelKey)
-            _cancelKeyIsDown = false;
-
-        // We only care about the release of the main key; modifier releases
-        // are ignored so the user can let go of Ctrl/Shift first.
-        if (e.Data.KeyCode != _key) return;
-        if (!_keyIsDown) return;
-
-        _keyIsDown = false;
-        var heldMs = (DateTime.UtcNow - _keyDownTime).TotalMilliseconds;
-
-        try
-        {
-            switch (_mode)
-            {
-                case RecordingMode.PushToTalk:
-                    DictationStopRequested?.Invoke(this, EventArgs.Empty);
-                    break;
-                case RecordingMode.Hybrid:
-                    if (heldMs >= PushToTalkThresholdMs)
-                        DictationStopRequested?.Invoke(this, EventArgs.Empty);
-                    break;
-                case RecordingMode.Toggle:
-                    // No-op — Toggle handled on press.
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[HotkeyService] Release handler threw: {ex.Message}");
-        }
-    }
-
-    internal static bool ModifiersMatch(ModifierMask pressed, ModifierMask required)
-    {
-        // Exact match on the four modifier groups (Ctrl/Shift/Alt/Meta). We
-        // only compare these four — other bits like NumLock/CapsLock in
-        // `pressed` must be ignored since the user might have them latched.
-        return HasCtrl(pressed) == RequiresCtrl(required)
-            && HasShift(pressed) == RequiresShift(required)
-            && HasAlt(pressed) == RequiresAlt(required)
-            && HasMeta(pressed) == RequiresMeta(required);
-    }
-
-    private static bool RequiresCtrl(ModifierMask mask) =>
-        mask.HasFlag(ModifierMask.LeftCtrl) || mask.HasFlag(ModifierMask.RightCtrl);
-
-    private static bool RequiresShift(ModifierMask mask) =>
-        mask.HasFlag(ModifierMask.LeftShift) || mask.HasFlag(ModifierMask.RightShift);
-
-    private static bool RequiresAlt(ModifierMask mask) =>
-        mask.HasFlag(ModifierMask.LeftAlt) || mask.HasFlag(ModifierMask.RightAlt);
-
-    private static bool RequiresMeta(ModifierMask mask) =>
-        mask.HasFlag(ModifierMask.LeftMeta) || mask.HasFlag(ModifierMask.RightMeta);
-
-    private static bool HasCtrl(ModifierMask mask) =>
-        mask.HasFlag(ModifierMask.LeftCtrl) || mask.HasFlag(ModifierMask.RightCtrl);
-
-    private static bool HasShift(ModifierMask mask) =>
-        mask.HasFlag(ModifierMask.LeftShift) || mask.HasFlag(ModifierMask.RightShift);
-
-    private static bool HasAlt(ModifierMask mask) =>
-        mask.HasFlag(ModifierMask.LeftAlt) || mask.HasFlag(ModifierMask.RightAlt);
-
-    private static bool HasMeta(ModifierMask mask) =>
-        mask.HasFlag(ModifierMask.LeftMeta) || mask.HasFlag(ModifierMask.RightMeta);
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
-        lock (_lock)
-        {
-            _hook.KeyPressed -= OnKeyPressed;
-            _hook.KeyReleased -= OnKeyReleased;
-            _running = false;
-        }
-
-        var disposeTask = Task.Run(() =>
-        {
-            try { _hook.Dispose(); }
-            catch (Exception ex) { Trace.WriteLine($"[HotkeyService] Dispose threw: {ex.Message}"); }
-        });
-        disposeTask.Wait(TimeSpan.FromSeconds(1));
+        Dictation,
+        PromptPalette,
+        RecentTranscriptions,
+        CopyLastTranscription,
+        TransformSelection
     }
 }

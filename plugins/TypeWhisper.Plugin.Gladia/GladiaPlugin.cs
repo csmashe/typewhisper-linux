@@ -20,8 +20,6 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         new("default", "Gladia (Auto)"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.gladia";
     public string PluginName => "Gladia";
     public string PluginVersion => "1.0.0";
@@ -29,7 +27,11 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Trim on load to mirror SetApiKeyAsync: legacy secrets saved before
+        // the save-side trim could otherwise leave the x-gladia-key header
+        // with trailing whitespace while IsConfigured still reports true.
+        var loaded = await host.LoadSecretAsync("api-key");
+        _apiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
         _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -39,8 +41,6 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "gladia";
     public string ProviderDisplayName => "Gladia";
@@ -61,12 +61,16 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
 
-        // Gladia pre-recorded endpoint with multipart form data
         using var content = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(wavAudio);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
@@ -88,27 +92,55 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var transcript = root
-            .GetProperty("result")
-            .GetProperty("transcription")
-            .GetProperty("full_transcript")
-            .GetString() ?? "";
+        // Require result.transcription.full_transcript: a missing or wrong-typed
+        // value means the response shape isn't what we expect (API drift, status
+        // payload, error body). Surface that as a failure rather than returning a
+        // blank successful transcription. Duration/languages stay optional —
+        // they're metadata that legitimately may be absent.
+        if (
+            !root.TryGetProperty("result", out var result)
+            || result.ValueKind != JsonValueKind.Object
+            || !result.TryGetProperty("transcription", out var transcription)
+            || transcription.ValueKind != JsonValueKind.Object
+            || !transcription.TryGetProperty("full_transcript", out var fullEl)
+            || fullEl.ValueKind != JsonValueKind.String
+        )
+        {
+            // Do not include `json` in the exception — Gladia error/partial
+            // payloads can contain transcript fragments that would then leak
+            // into any logger that records the exception message.
+            throw new InvalidOperationException(
+                "Gladia response missing 'result.transcription.full_transcript' string."
+            );
+        }
 
+        var transcript = fullEl.GetString() ?? "";
         double duration = 0;
-        if (root.GetProperty("result").GetProperty("transcription")
-            .TryGetProperty("duration", out var durEl))
-            duration = durEl.GetDouble();
-
         string? detectedLanguage = null;
-        if (root.GetProperty("result").GetProperty("transcription")
-            .TryGetProperty("languages", out var langsEl)
+
+        if (
+            transcription.TryGetProperty("duration", out var durEl)
+            && durEl.ValueKind == JsonValueKind.Number
+            && durEl.TryGetDouble(out var parsedDuration)
+        )
+            duration = parsedDuration;
+
+        if (
+            transcription.TryGetProperty("languages", out var langsEl)
             && langsEl.ValueKind == JsonValueKind.Array
-            && langsEl.GetArrayLength() > 0)
+            && langsEl.GetArrayLength() > 0
+            && langsEl[0].ValueKind == JsonValueKind.String
+        )
         {
             detectedLanguage = langsEl[0].GetString();
         }
 
-        return new PluginTranscriptionResult(transcript, detectedLanguage, duration, NoSpeechProbability: null);
+        return new PluginTranscriptionResult(
+            transcript,
+            detectedLanguage,
+            duration,
+            NoSpeechProbability: null
+        );
     }
 
     public void Dispose()
@@ -118,42 +150,55 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        // Trim defensively at the internal entry too: SetSettingValueAsync
+        // already trims, but a future direct caller could re-introduce
+        // trailing whitespace that breaks the x-gladia-key header.
+        var trimmed = apiKey?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", apiKey);
+                await _host.StoreSecretAsync("api-key", trimmed);
 
             _host.NotifyCapabilitiesChanged();
         }
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, null, "Required for Gladia transcription."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Gladia model.",
-            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new("api-key", "API key", true, null, "Required for Gladia transcription."),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Gladia model.",
+                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {
             case "api-key":
-                await SetApiKeyAsync(value ?? string.Empty);
+                // Normalize whitespace once — pasted keys often pick up
+                // trailing newlines or spaces that break the request header.
+                await SetApiKeyAsync(value?.Trim() ?? string.Empty);
                 break;
             case "selectedModel":
                 if (!string.IsNullOrWhiteSpace(value))

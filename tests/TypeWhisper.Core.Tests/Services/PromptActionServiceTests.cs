@@ -14,16 +14,26 @@ public class PromptActionServiceTests : IDisposable
         _sut = new PromptActionService(_filePath);
     }
 
+    public void Dispose()
+    {
+        if (File.Exists(_filePath))
+        {
+            File.Delete(_filePath);
+        }
+    }
+
     [Fact]
     public void AddAction_PersistsAndLoads()
     {
-        _sut.AddAction(new PromptAction
-        {
-            Id = "1",
-            Name = "Test Prompt",
-            SystemPrompt = "Do something",
-            Icon = "\U0001F680"
-        });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "Test Prompt",
+                SystemPrompt = "Do something",
+                Icon = "\U0001F680"
+            }
+        );
 
         var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
@@ -35,19 +45,23 @@ public class PromptActionServiceTests : IDisposable
     [Fact]
     public void UpdateAction_PersistsChanges()
     {
-        _sut.AddAction(new PromptAction
-        {
-            Id = "1",
-            Name = "Original",
-            SystemPrompt = "Original prompt"
-        });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "Original",
+                SystemPrompt = "Original prompt"
+            }
+        );
 
-        _sut.UpdateAction(new PromptAction
-        {
-            Id = "1",
-            Name = "Updated",
-            SystemPrompt = "Updated prompt"
-        });
+        _sut.UpdateAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "Updated",
+                SystemPrompt = "Updated prompt"
+            }
+        );
 
         var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
@@ -58,8 +72,22 @@ public class PromptActionServiceTests : IDisposable
     [Fact]
     public void DeleteAction_RemovesFromStorage()
     {
-        _sut.AddAction(new PromptAction { Id = "1", Name = "A", SystemPrompt = "a" });
-        _sut.AddAction(new PromptAction { Id = "2", Name = "B", SystemPrompt = "b" });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "A",
+                SystemPrompt = "a"
+            }
+        );
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "2",
+                Name = "B",
+                SystemPrompt = "b"
+            }
+        );
 
         _sut.DeleteAction("1");
 
@@ -94,9 +122,36 @@ public class PromptActionServiceTests : IDisposable
     [Fact]
     public void EnabledActions_FiltersAndSorts()
     {
-        _sut.AddAction(new PromptAction { Id = "1", Name = "C", SystemPrompt = "c", SortOrder = 2, IsEnabled = true });
-        _sut.AddAction(new PromptAction { Id = "2", Name = "A", SystemPrompt = "a", SortOrder = 0, IsEnabled = true });
-        _sut.AddAction(new PromptAction { Id = "3", Name = "B", SystemPrompt = "b", SortOrder = 1, IsEnabled = false });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "C",
+                SystemPrompt = "c",
+                SortOrder = 2,
+                IsEnabled = true
+            }
+        );
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "2",
+                Name = "A",
+                SystemPrompt = "a",
+                SortOrder = 0,
+                IsEnabled = true
+            }
+        );
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "3",
+                Name = "B",
+                SystemPrompt = "b",
+                SortOrder = 1,
+                IsEnabled = false
+            }
+        );
 
         var enabled = _sut.EnabledActions;
         Assert.Equal(2, enabled.Count);
@@ -107,9 +162,33 @@ public class PromptActionServiceTests : IDisposable
     [Fact]
     public void Reorder_UpdatesSortOrder()
     {
-        _sut.AddAction(new PromptAction { Id = "1", Name = "First", SystemPrompt = "a", SortOrder = 0 });
-        _sut.AddAction(new PromptAction { Id = "2", Name = "Second", SystemPrompt = "b", SortOrder = 1 });
-        _sut.AddAction(new PromptAction { Id = "3", Name = "Third", SystemPrompt = "c", SortOrder = 2 });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "First",
+                SystemPrompt = "a",
+                SortOrder = 0
+            }
+        );
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "2",
+                Name = "Second",
+                SystemPrompt = "b",
+                SortOrder = 1
+            }
+        );
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "3",
+                Name = "Third",
+                SystemPrompt = "c",
+                SortOrder = 2
+            }
+        );
 
         _sut.Reorder(["3", "1", "2"]);
 
@@ -126,7 +205,14 @@ public class PromptActionServiceTests : IDisposable
         var fired = false;
         _sut.ActionsChanged += () => fired = true;
 
-        _sut.AddAction(new PromptAction { Id = "1", Name = "Test", SystemPrompt = "test" });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "Test",
+                SystemPrompt = "test"
+            }
+        );
 
         Assert.True(fired);
     }
@@ -134,14 +220,16 @@ public class PromptActionServiceTests : IDisposable
     [Fact]
     public void ProviderOverride_PersistsCorrectly()
     {
-        _sut.AddAction(new PromptAction
-        {
-            Id = "1",
-            Name = "With Provider",
-            SystemPrompt = "test",
-            ProviderOverride = "plugin:com.test:model-1",
-            ModelOverride = "model-1"
-        });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "With Provider",
+                SystemPrompt = "test",
+                ProviderOverride = "plugin:com.test:model-1",
+                ModelOverride = "model-1"
+            }
+        );
 
         var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
@@ -152,14 +240,16 @@ public class PromptActionServiceTests : IDisposable
     [Fact]
     public void TargetActionPluginId_PersistsCorrectly()
     {
-        _sut.AddAction(new PromptAction
-        {
-            Id = "1",
-            Name = "With Target",
-            SystemPrompt = "test",
-            TargetActionPluginId = "com.test.linear",
-            HotkeyKey = "Ctrl+Shift+L"
-        });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "With Target",
+                SystemPrompt = "test",
+                TargetActionPluginId = "com.test.linear",
+                HotkeyKey = "Ctrl+Shift+L"
+            }
+        );
 
         var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
@@ -170,21 +260,18 @@ public class PromptActionServiceTests : IDisposable
     [Fact]
     public void TargetActionPluginId_NullByDefault()
     {
-        _sut.AddAction(new PromptAction
-        {
-            Id = "1",
-            Name = "Normal",
-            SystemPrompt = "test"
-        });
+        _sut.AddAction(
+            new PromptAction
+            {
+                Id = "1",
+                Name = "Normal",
+                SystemPrompt = "test"
+            }
+        );
 
         var freshService = new PromptActionService(_filePath);
         var action = Assert.Single(freshService.Actions);
         Assert.Null(action.TargetActionPluginId);
         Assert.Null(action.HotkeyKey);
-    }
-
-    public void Dispose()
-    {
-        if (File.Exists(_filePath)) File.Delete(_filePath);
     }
 }

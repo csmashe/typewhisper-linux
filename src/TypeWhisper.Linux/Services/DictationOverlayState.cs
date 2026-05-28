@@ -1,5 +1,12 @@
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+///     Immutable snapshot of the dictation overlay's visual state. Published
+///     by <c>DictationOrchestrator</c> and <c>TransformSelectionService</c>
+///     via <c>OverlayStateChanged</c>; consumed by the overlay window and
+///     the tray tooltip. Only carry UI-relevant fields here — business logic
+///     lives in the orchestrator.
+/// </summary>
 public sealed record DictationOverlayState
 {
     public static DictationOverlayState Hidden { get; } = new();

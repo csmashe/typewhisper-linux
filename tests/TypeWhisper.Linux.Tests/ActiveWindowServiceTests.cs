@@ -32,9 +32,12 @@ public sealed class ActiveWindowServiceTests
     [Fact]
     public void IsSupportedBrowserWindow_RecognizesZenBrowserTitleWhenProcessUnknown()
     {
-        Assert.True(ActiveWindowService.IsSupportedBrowserWindow(
-            null,
-            "Hey Ryan - chris@example.com - Mail — Zen Browser"));
+        Assert.True(
+            ActiveWindowService.IsSupportedBrowserWindow(
+                null,
+                "Hey Ryan - chris@example.com - Mail — Zen Browser"
+            )
+        );
     }
 
     [Fact]
@@ -42,7 +45,8 @@ public sealed class ActiveWindowServiceTests
     {
         Assert.Equal(
             "zen",
-            ActiveWindowService.TryInferBrowserProcessNameFromTitle("Inbox - Mail — Zen Browser"));
+            ActiveWindowService.TryInferBrowserProcessNameFromTitle("Inbox - Mail — Zen Browser")
+        );
     }
 
     [Fact]
@@ -51,7 +55,9 @@ public sealed class ActiveWindowServiceTests
         Assert.Equal(
             "https://mail.google.com",
             ActiveWindowService.TryInferBrowserUrlFromTitle(
-                "Hey Ryan - chris@example.com - Excel On The Web Mail — Zen Browser"));
+                "Hey Ryan - chris@example.com - Excel On The Web Mail — Zen Browser"
+            )
+        );
     }
 
     [Fact]
@@ -76,18 +82,20 @@ public sealed class ActiveWindowServiceTests
     public void ScoreBrowserUrlCandidate_PrefersFocusedEditBarOverGenericEntry()
     {
         var focusedEditBarScore = ActiveWindowService.ScoreBrowserUrlCandidate(
-            role: 77,
-            states: [1u << 11, 1u << 18],
-            name: "Address and search bar",
-            candidateText: "https://example.com/path",
-            interfaces: ["org.a11y.atspi.Text"]);
+            77,
+            [1u << 11, 1u << 18],
+            "Address and search bar",
+            "https://example.com/path",
+            ["org.a11y.atspi.Text"]
+        );
 
         var entryScore = ActiveWindowService.ScoreBrowserUrlCandidate(
-            role: 79,
-            states: [1u << 18],
-            name: "Search",
-            candidateText: "example.com",
-            interfaces: ["org.a11y.atspi.Text"]);
+            79,
+            [1u << 18],
+            "Search",
+            "example.com",
+            ["org.a11y.atspi.Text"]
+        );
 
         Assert.True(focusedEditBarScore > entryScore);
     }

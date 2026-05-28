@@ -131,236 +131,241 @@
                           HorizontalScrollBarVisibility="Disabled"
                           IsVisible="{Binding ShowTimeline}">
                 <ItemsControl ItemsSource="{Binding Groups}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:HistoryGroupViewModel">
-                        <StackPanel>
-                            <Grid Margin="42,14,0,7"
-                                  ColumnDefinitions="Auto,*">
-                                <TextBlock Text="{Binding Name}"
-                                           FontSize="12"
-                                           FontWeight="SemiBold"
-                                           Foreground="#8A9AAE"
-                                           Margin="0,0,10,0" />
-                                <Border Grid.Column="1"
-                                        Height="1"
-                                        Background="#1AFFFFFF"
-                                        VerticalAlignment="Center" />
-                            </Grid>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:HistoryGroupViewModel">
+                            <StackPanel>
+                                <Grid Margin="42,14,0,7"
+                                      ColumnDefinitions="Auto,*">
+                                    <TextBlock Text="{Binding Name}"
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Foreground="#8A9AAE"
+                                               Margin="0,0,10,0" />
+                                    <Border Grid.Column="1"
+                                            Height="1"
+                                            Background="#1AFFFFFF"
+                                            VerticalAlignment="Center" />
+                                </Grid>
 
-                            <ItemsControl ItemsSource="{Binding Entries}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:HistoryRecordRow">
-                                        <Grid Margin="0,0,0,1"
-                                              ColumnDefinitions="42,*">
-                                            <Grid Grid.Column="0">
-                                                <Border Width="2"
-                                                        Background="#1AFFFFFF"
-                                                        HorizontalAlignment="Center" />
-                                                <Ellipse Width="10"
-                                                         Height="10"
-                                                         Fill="#2E8FFF"
-                                                         Stroke="#0E1620"
-                                                         StrokeThickness="2"
-                                                         VerticalAlignment="Top"
-                                                         HorizontalAlignment="Center"
-                                                         Margin="0,14,0,0" />
-                                            </Grid>
+                                <ItemsControl ItemsSource="{Binding Entries}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:HistoryRecordRow">
+                                            <Grid Margin="0,0,0,1"
+                                                  ColumnDefinitions="42,*">
+                                                <Grid Grid.Column="0">
+                                                    <Border Width="2"
+                                                            Background="#1AFFFFFF"
+                                                            HorizontalAlignment="Center" />
+                                                    <Ellipse Width="10"
+                                                             Height="10"
+                                                             Fill="#2E8FFF"
+                                                             Stroke="#0E1620"
+                                                             StrokeThickness="2"
+                                                             VerticalAlignment="Top"
+                                                             HorizontalAlignment="Center"
+                                                             Margin="0,14,0,0" />
+                                                </Grid>
 
-                                            <Border Grid.Column="1"
-                                                    Classes="timeline-card"
-                                                    Margin="0,3,10,3">
-                                                <StackPanel>
-                                                    <Button Classes="card-toggle"
-                                                            Command="{Binding ToggleExpandCommand}">
-                                                        <Grid ColumnDefinitions="Auto,*,Auto">
-                                                            <TextBlock Grid.Column="0"
-                                                                       Text="{Binding TimeLabel}"
-                                                                       Foreground="#8A9AAE"
-                                                                       FontSize="12"
-                                                                       VerticalAlignment="Top"
-                                                                       Margin="0,1,10,0" />
-
-                                                            <TextBlock Grid.Column="1"
-                                                                       Text="{Binding Record.Preview}"
-                                                                       FontSize="13"
-                                                                       TextTrimming="CharacterEllipsis"
-                                                                       VerticalAlignment="Top"
-                                                                       MaxLines="2" />
-
-                                                            <WrapPanel Grid.Column="2"
-                                                                       Orientation="Horizontal"
-                                                                       HorizontalAlignment="Right"
-                                                                       VerticalAlignment="Top"
-                                                                       Margin="8,0,0,0">
-                                                                <Border Classes="badge"
-                                                                        IsVisible="{Binding HasProfileName}">
-                                                                    <TextBlock Text="{Binding Record.ProfileName}"
-                                                                               Foreground="#8FC0FF"
-                                                                               FontSize="11" />
-                                                                </Border>
-                                                                <Border Classes="badge"
-                                                                        IsVisible="{Binding HasAppProcessName}">
-                                                                    <TextBlock Text="{Binding Record.AppProcessName}"
-                                                                               Foreground="#8A9AAE"
-                                                                               FontSize="11" />
-                                                                </Border>
-                                                                <Border Classes="badge">
-                                                                    <TextBlock Text="{Binding DurationLabel}"
-                                                                               Foreground="#8A9AAE"
-                                                                               FontSize="11" />
-                                                                </Border>
-                                                            </WrapPanel>
-                                                        </Grid>
-                                                    </Button>
-
-                                                    <StackPanel IsVisible="{Binding IsExpanded}">
-                                                        <Border Height="1"
-                                                                Background="#1AFFFFFF"
-                                                                Margin="0,8,0,7" />
-
-                                                        <TextBlock Text="{Binding Record.FinalText}"
-                                                                   TextWrapping="Wrap"
-                                                                   FontSize="13"
-                                                                   LineHeight="19"
-                                                                   Margin="0,0,0,7"
-                                                                   IsVisible="{Binding ShowReadOnlyText}" />
-
-                                                        <StackPanel IsVisible="{Binding ShowEditPanel}">
-                                                            <TextBox Text="{Binding EditText}"
-                                                                     TextWrapping="Wrap"
-                                                                     AcceptsReturn="True"
-                                                                     MinHeight="60"
-                                                                     MaxHeight="200"
-                                                                     Margin="0,0,0,8" />
-                                                            <StackPanel Orientation="Horizontal"
-                                                                        Spacing="8">
-                                                                <Button Content="Save"
-                                                                        Padding="12,6"
-                                                                        Command="{Binding SaveEditCommand}" />
-                                                                <Button Content="Cancel"
-                                                                        Padding="12,6"
-                                                                        Command="{Binding CancelEditCommand}" />
-                                                            </StackPanel>
-                                                        </StackPanel>
-
-                                                        <StackPanel Orientation="Horizontal"
-                                                                    Margin="0,2,0,4"
-                                                                    IsVisible="{Binding ShowExpandedMeta}">
-                                                            <TextBlock Foreground="#8A9AAE"
-                                                                       FontSize="11">
-                                                                <Run Text="{Binding Record.Timestamp, StringFormat='{}{0:MM/dd/yyyy HH:mm}'}" />
-                                                                <Run Text=" · " />
-                                                                <Run Text="{Binding Record.WordCount, StringFormat='{}{0} words'}" />
-                                                            </TextBlock>
-                                                            <TextBlock Foreground="#8A9AAE"
-                                                                       FontSize="11"
-                                                                       Margin="8,0,0,0"
-                                                                       IsVisible="{Binding HasLanguage}">
-                                                                <Run Text="· " />
-                                                                <Run Text="{Binding Record.Language}" />
-                                                            </TextBlock>
-                                                        </StackPanel>
-
-                                                        <Border Classes="suggestion-panel"
-                                                                IsVisible="{Binding HasCorrectionSuggestions}">
-                                                            <StackPanel Spacing="8">
-                                                                <TextBlock Text="Suggested dictionary corrections"
+                                                <Border Grid.Column="1"
+                                                        Classes="timeline-card"
+                                                        Margin="0,3,10,3">
+                                                    <StackPanel>
+                                                        <Button Classes="card-toggle"
+                                                                Command="{Binding ToggleExpandCommand}">
+                                                            <Grid ColumnDefinitions="Auto,*,Auto">
+                                                                <TextBlock Grid.Column="0"
+                                                                           Text="{Binding TimeLabel}"
+                                                                           Foreground="#8A9AAE"
                                                                            FontSize="12"
-                                                                           FontWeight="SemiBold"
-                                                                           Foreground="#D8E6F7" />
+                                                                           VerticalAlignment="Top"
+                                                                           Margin="0,1,10,0" />
 
-                                                                <ItemsControl ItemsSource="{Binding CorrectionSuggestions}">
-                                                                    <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:CorrectionSuggestionRow">
-                                                                            <Grid ColumnDefinitions="Auto,*,Auto,*"
-                                                                                  RowDefinitions="Auto,Auto"
-                                                                                  ColumnSpacing="8"
-                                                                                  Margin="0,0,0,6">
-                                                                                <CheckBox Grid.Row="0"
-                                                                                          Grid.Column="0"
-                                                                                          Grid.RowSpan="2"
-                                                                                          IsChecked="{Binding IsApproved}"
-                                                                                          VerticalAlignment="Center" />
+                                                                <TextBlock Grid.Column="1"
+                                                                           Text="{Binding Record.Preview}"
+                                                                           FontSize="13"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           VerticalAlignment="Top"
+                                                                           MaxLines="2" />
 
-                                                                                <TextBlock Grid.Row="0"
-                                                                                           Grid.Column="1"
-                                                                                           Text="Original"
-                                                                                           Classes="label" />
-                                                                                <TextBlock Grid.Row="0"
-                                                                                           Grid.Column="2"
-                                                                                           Text="->"
-                                                                                           Foreground="#8A9AAE"
-                                                                                           VerticalAlignment="Bottom" />
-                                                                                <TextBlock Grid.Row="0"
-                                                                                           Grid.Column="3"
-                                                                                           Text="Replacement"
-                                                                                           Classes="label" />
+                                                                <WrapPanel Grid.Column="2"
+                                                                           Orientation="Horizontal"
+                                                                           HorizontalAlignment="Right"
+                                                                           VerticalAlignment="Top"
+                                                                           Margin="8,0,0,0">
+                                                                    <Border Classes="badge"
+                                                                            IsVisible="{Binding HasProfileName}">
+                                                                        <TextBlock Text="{Binding Record.ProfileName}"
+                                                                                Foreground="#8FC0FF"
+                                                                                FontSize="11" />
+                                                                    </Border>
+                                                                    <Border Classes="badge"
+                                                                            IsVisible="{Binding HasAppProcessName}">
+                                                                        <TextBlock
+                                                                            Text="{Binding Record.AppProcessName}"
+                                                                            Foreground="#8A9AAE"
+                                                                            FontSize="11" />
+                                                                    </Border>
+                                                                    <Border Classes="badge">
+                                                                        <TextBlock Text="{Binding DurationLabel}"
+                                                                                Foreground="#8A9AAE"
+                                                                                FontSize="11" />
+                                                                    </Border>
+                                                                </WrapPanel>
+                                                            </Grid>
+                                                        </Button>
 
-                                                                                <TextBox Grid.Row="1"
-                                                                                         Grid.Column="1"
-                                                                                         Text="{Binding Original}"
-                                                                                         MinWidth="170" />
-                                                                                <TextBlock Grid.Row="1"
-                                                                                           Grid.Column="2"
-                                                                                           Text="{Binding ConfidenceLabel}"
-                                                                                           Foreground="#8A9AAE"
-                                                                                           FontSize="11"
-                                                                                           VerticalAlignment="Center" />
-                                                                                <TextBox Grid.Row="1"
-                                                                                         Grid.Column="3"
-                                                                                         Text="{Binding Replacement}"
-                                                                                         MinWidth="170" />
-                                                                            </Grid>
-                                                                        </DataTemplate>
-                                                                    </ItemsControl.ItemTemplate>
-                                                                </ItemsControl>
+                                                        <StackPanel IsVisible="{Binding IsExpanded}">
+                                                            <Border Height="1"
+                                                                    Background="#1AFFFFFF"
+                                                                    Margin="0,8,0,7" />
 
+                                                            <TextBlock Text="{Binding Record.FinalText}"
+                                                                       TextWrapping="Wrap"
+                                                                       FontSize="13"
+                                                                       LineHeight="19"
+                                                                       Margin="0,0,0,7"
+                                                                       IsVisible="{Binding ShowReadOnlyText}" />
+
+                                                            <StackPanel IsVisible="{Binding ShowEditPanel}">
+                                                                <TextBox Text="{Binding EditText}"
+                                                                         TextWrapping="Wrap"
+                                                                         AcceptsReturn="True"
+                                                                         MinHeight="60"
+                                                                         MaxHeight="200"
+                                                                         Margin="0,0,0,8" />
                                                                 <StackPanel Orientation="Horizontal"
                                                                             Spacing="8">
-                                                                    <Button Content="Learn approved"
+                                                                    <Button Content="Save"
                                                                             Padding="12,6"
-                                                                            Command="{Binding SaveApprovedCorrectionsCommand}" />
-                                                                    <Button Content="Dismiss"
+                                                                            Command="{Binding SaveEditCommand}" />
+                                                                    <Button Content="Cancel"
                                                                             Padding="12,6"
-                                                                            Command="{Binding DismissCorrectionSuggestionsCommand}" />
+                                                                            Command="{Binding CancelEditCommand}" />
                                                                 </StackPanel>
                                                             </StackPanel>
-                                                        </Border>
 
-                                                        <StackPanel Orientation="Horizontal"
-                                                                    Spacing="12"
-                                                                    Margin="0,2,0,0"
-                                                                    IsVisible="{Binding ShowExpandedActions}">
-                                                            <Button Classes="link-button"
-                                                                    Content="Edit"
-                                                                    Command="{Binding StartEditCommand}" />
-                                                            <Button Classes="link-button"
-                                                                    Content="Copy"
-                                                                    Click="OnCopyRecord"
-                                                                    Tag="{Binding Record.FinalText}" />
-                                                            <Button Classes="link-button"
-                                                                    Content="Add term"
-                                                                    Command="{Binding AddToDictionaryCommand}" />
-                                                            <Button Classes="link-button"
-                                                                    Content="{Binding PlaybackButtonText}"
-                                                                    Command="{Binding TogglePlaybackCommand}"
-                                                                    IsVisible="{Binding HasSessionAudio}" />
-                                                            <Button Classes="link-button"
-                                                                    Content="Delete"
-                                                                    Click="OnDeleteRecord"
-                                                                    Tag="{Binding}"
-                                                                    Foreground="#F06A6A" />
+                                                            <StackPanel Orientation="Horizontal"
+                                                                        Margin="0,2,0,4"
+                                                                        IsVisible="{Binding ShowExpandedMeta}">
+                                                                <TextBlock Foreground="#8A9AAE"
+                                                                           FontSize="11">
+                                                                    <Run
+                                                                        Text="{Binding Record.Timestamp, StringFormat='{}{0:MM/dd/yyyy HH:mm}'}" />
+                                                                    <Run Text=" · " />
+                                                                    <Run
+                                                                        Text="{Binding Record.WordCount, StringFormat='{}{0} words'}" />
+                                                                </TextBlock>
+                                                                <TextBlock Foreground="#8A9AAE"
+                                                                           FontSize="11"
+                                                                           Margin="8,0,0,0"
+                                                                           IsVisible="{Binding HasLanguage}">
+                                                                    <Run Text="· " />
+                                                                    <Run Text="{Binding Record.Language}" />
+                                                                </TextBlock>
+                                                            </StackPanel>
+
+                                                            <Border Classes="suggestion-panel"
+                                                                    IsVisible="{Binding HasCorrectionSuggestions}">
+                                                                <StackPanel Spacing="8">
+                                                                    <TextBlock Text="Suggested dictionary corrections"
+                                                                               FontSize="12"
+                                                                               FontWeight="SemiBold"
+                                                                               Foreground="#D8E6F7" />
+
+                                                                    <ItemsControl
+                                                                        ItemsSource="{Binding CorrectionSuggestions}">
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate
+                                                                                x:DataType="vm:CorrectionSuggestionRow">
+                                                                                <Grid ColumnDefinitions="Auto,*,Auto,*"
+                                                                                    RowDefinitions="Auto,Auto"
+                                                                                    ColumnSpacing="8"
+                                                                                    Margin="0,0,0,6">
+                                                                                    <CheckBox Grid.Row="0"
+                                                                                        Grid.Column="0"
+                                                                                        Grid.RowSpan="2"
+                                                                                        IsChecked="{Binding IsApproved}"
+                                                                                        VerticalAlignment="Center" />
+
+                                                                                    <TextBlock Grid.Row="0"
+                                                                                        Grid.Column="1"
+                                                                                        Text="Original"
+                                                                                        Classes="label" />
+                                                                                    <TextBlock Grid.Row="0"
+                                                                                        Grid.Column="2"
+                                                                                        Text="->"
+                                                                                        Foreground="#8A9AAE"
+                                                                                        VerticalAlignment="Bottom" />
+                                                                                    <TextBlock Grid.Row="0"
+                                                                                        Grid.Column="3"
+                                                                                        Text="Replacement"
+                                                                                        Classes="label" />
+
+                                                                                    <TextBox Grid.Row="1"
+                                                                                        Grid.Column="1"
+                                                                                        Text="{Binding Original}"
+                                                                                        MinWidth="170" />
+                                                                                    <TextBlock Grid.Row="1"
+                                                                                        Grid.Column="2"
+                                                                                        Text="{Binding ConfidenceLabel}"
+                                                                                        Foreground="#8A9AAE"
+                                                                                        FontSize="11"
+                                                                                        VerticalAlignment="Center" />
+                                                                                    <TextBox Grid.Row="1"
+                                                                                        Grid.Column="3"
+                                                                                        Text="{Binding Replacement}"
+                                                                                        MinWidth="170" />
+                                                                                </Grid>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+
+                                                                    <StackPanel Orientation="Horizontal"
+                                                                            Spacing="8">
+                                                                        <Button Content="Learn approved"
+                                                                                Padding="12,6"
+                                                                                Command="{Binding SaveApprovedCorrectionsCommand}" />
+                                                                        <Button Content="Dismiss"
+                                                                                Padding="12,6"
+                                                                                Command="{Binding DismissCorrectionSuggestionsCommand}" />
+                                                                    </StackPanel>
+                                                                </StackPanel>
+                                                            </Border>
+
+                                                            <StackPanel Orientation="Horizontal"
+                                                                        Spacing="12"
+                                                                        Margin="0,2,0,0"
+                                                                        IsVisible="{Binding ShowExpandedActions}">
+                                                                <Button Classes="link-button"
+                                                                        Content="Edit"
+                                                                        Command="{Binding StartEditCommand}" />
+                                                                <Button Classes="link-button"
+                                                                        Content="Copy"
+                                                                        Click="OnCopyRecord"
+                                                                        Tag="{Binding Record.FinalText}" />
+                                                                <Button Classes="link-button"
+                                                                        Content="Add term"
+                                                                        Command="{Binding AddToDictionaryCommand}" />
+                                                                <Button Classes="link-button"
+                                                                        Content="{Binding PlaybackButtonText}"
+                                                                        Command="{Binding TogglePlaybackCommand}"
+                                                                        IsVisible="{Binding HasSessionAudio}" />
+                                                                <Button Classes="link-button"
+                                                                        Content="Delete"
+                                                                        Click="OnDeleteRecord"
+                                                                        Tag="{Binding}"
+                                                                        Foreground="#F06A6A" />
+                                                            </StackPanel>
                                                         </StackPanel>
                                                     </StackPanel>
-                                                </StackPanel>
-                                            </Border>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
+                                                </Border>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </ScrollViewer>
         </StackPanel>

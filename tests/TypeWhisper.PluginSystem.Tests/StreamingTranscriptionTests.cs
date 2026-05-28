@@ -1,7 +1,7 @@
 using Moq;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
-using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -11,15 +11,14 @@ public class StreamingTranscriptionTests
     public void SupportsStreaming_DefaultIsFalse()
     {
         var mock = new Mock<ITranscriptionEnginePlugin>();
-        // DIMs return default values — SupportsStreaming defaults to false
         Assert.False(mock.Object.SupportsStreaming);
     }
 
     [Fact]
     public void SupportedLanguages_DefaultIsEmpty()
     {
+        // CallBase required so Moq invokes the default interface implementation.
         var mock = new Mock<ITranscriptionEnginePlugin> { CallBase = true };
-        // CallBase invokes the DIM — SupportedLanguages defaults to empty
         var languages = mock.Object.SupportedLanguages;
         Assert.Empty(languages);
     }
@@ -34,9 +33,14 @@ public class StreamingTranscriptionTests
         mock.Setup(e => e.TranscribeAsync(audio, "en", false, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedResult);
 
-        // TranscribeStreamingAsync should delegate to TranscribeAsync by default
-        // Since Moq doesn't call DIMs directly, we verify the TranscribeAsync call
-        var result = await mock.Object.TranscribeAsync(audio, "en", false, null, CancellationToken.None);
+        // Moq doesn't call DIMs — verify the underlying TranscribeAsync, which the DIM delegates to.
+        var result = await mock.Object.TranscribeAsync(
+            audio,
+            "en",
+            false,
+            null,
+            CancellationToken.None
+        );
 
         Assert.Equal("Hello world", result.Text);
         Assert.Equal("en", result.DetectedLanguage);
@@ -82,19 +86,28 @@ public class StreamingTranscriptionTests
     {
         var expectedResult = new PluginTranscriptionResult("Streamed text", "de", 5.0);
         var audio = new byte[] { 1, 2, 3, 4, 5 };
-        var progressCalls = new List<string>();
 
         var mock = new Mock<ITranscriptionEnginePlugin>();
-        mock.Setup(e => e.TranscribeStreamingAsync(
-            audio, "de", false, null,
-            It.IsAny<Func<string, bool>>(),
-            It.IsAny<CancellationToken>()))
+        mock.Setup(e =>
+                e.TranscribeStreamingAsync(
+                    audio,
+                    "de",
+                    false,
+                    null,
+                    It.IsAny<Func<string, bool>>(),
+                    It.IsAny<CancellationToken>()
+                )
+            )
             .ReturnsAsync(expectedResult);
 
         var result = await mock.Object.TranscribeStreamingAsync(
-            audio, "de", false, null,
-            partial => { progressCalls.Add(partial); return true; },
-            CancellationToken.None);
+            audio,
+            "de",
+            false,
+            null,
+            partial => true,
+            CancellationToken.None
+        );
 
         Assert.Equal("Streamed text", result.Text);
         Assert.Equal("de", result.DetectedLanguage);
@@ -135,7 +148,10 @@ public class StabilizeTextTests
     public void PartialPrefixMatch_KeepsConfirmedAndAppends()
     {
         // "Hello worl" matches >50% of "Hello world", so confirmed + new tail
-        var result = StreamingTranscriptState.StabilizeText("Hello world", "Hello world, how are you?");
+        var result = StreamingTranscriptState.StabilizeText(
+            "Hello world",
+            "Hello world, how are you?"
+        );
         Assert.Equal("Hello world, how are you?", result);
     }
 
@@ -185,7 +201,8 @@ public class StreamingTranscriptStateTests
             sessionVersion,
             "Hello world",
             text => text,
-            out var displayBeforeStop);
+            out var displayBeforeStop
+        );
 
         Assert.True(appliedBeforeStop);
         Assert.Equal("Hello world", displayBeforeStop);
@@ -198,7 +215,8 @@ public class StreamingTranscriptStateTests
             sessionVersion,
             "Should be ignored",
             text => text,
-            out var displayAfterStop);
+            out var displayAfterStop
+        );
 
         Assert.False(appliedAfterStop);
         Assert.Equal("", displayAfterStop);
@@ -214,12 +232,14 @@ public class StreamingTranscriptStateTests
             firstSession,
             "Hello world",
             text => text,
-            out var firstDisplay);
+            out var firstDisplay
+        );
         var secondApplied = sut.TryApplyPolling(
             firstSession,
             "Hello world, how are you?",
             text => text,
-            out var secondDisplay);
+            out var secondDisplay
+        );
 
         Assert.True(firstApplied);
         Assert.Equal("Hello world", firstDisplay);
@@ -231,12 +251,14 @@ public class StreamingTranscriptStateTests
             firstSession,
             "Old session text",
             text => text,
-            out _);
+            out _
+        );
         var currentApplied = sut.TryApplyPolling(
             secondSession,
             "Fresh session text",
             text => text,
-            out var currentDisplay);
+            out var currentDisplay
+        );
 
         Assert.False(staleApplied);
         Assert.True(currentApplied);

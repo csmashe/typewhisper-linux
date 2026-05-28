@@ -10,7 +10,10 @@ public sealed class VoiceCommandParserTests
     [InlineData("Hello world press enter", "Hello world")]
     [InlineData("Hello world, press enter.", "Hello world")]
     [InlineData("Hello world PRESS ENTER!", "Hello world")]
-    public void Parse_PressEnterSuffix_RemovesCommandAndSetsAutoEnter(string input, string expectedText)
+    public void Parse_PressEnterSuffix_RemovesCommandAndSetsAutoEnter(
+        string input,
+        string expectedText
+    )
     {
         var result = _sut.Parse(input);
 

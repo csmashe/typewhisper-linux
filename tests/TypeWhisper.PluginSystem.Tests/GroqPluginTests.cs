@@ -1,6 +1,4 @@
-using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Plugin.Groq;
@@ -14,13 +12,23 @@ public class GroqPluginTests
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
-        var manifestPath = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..", "..",
-            "plugins", "TypeWhisper.Plugin.Groq", "manifest.json"));
+        var manifestPath = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "plugins",
+                "TypeWhisper.Plugin.Groq",
+                "manifest.json"
+            )
+        );
         var manifest = JsonSerializer.Deserialize<PluginManifest>(
             File.ReadAllText(manifestPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+        );
 
         var sut = new GroqPlugin();
 
@@ -58,11 +66,14 @@ public class GroqPluginTests
     {
         var host = new TestPluginHostServices();
         host.Secrets["api-key"] = "groq-key";
-        host.SetSetting("fetchedLlmModels", new List<FetchedLlmModel>
-        {
-            new("openai/gpt-oss-120b", "OpenAI"),
-            new("llama-3.1-8b-instant", "Meta"),
-        });
+        host.SetSetting(
+            "fetchedLlmModels",
+            new List<FetchedLlmModel>
+            {
+                new("openai/gpt-oss-120b", "OpenAI"),
+                new("llama-3.1-8b-instant", "Meta")
+            }
+        );
         host.SetSetting("selectedLlmModel", "whisper-large-v3");
 
         var sut = new GroqPlugin();
@@ -71,7 +82,8 @@ public class GroqPluginTests
         Assert.Equal("llama-3.1-8b-instant", sut.SelectedLlmModelId);
         Assert.Equal(
             ["llama-3.1-8b-instant", "openai/gpt-oss-120b"],
-            sut.SupportedModels.Select(m => m.Id).ToArray());
+            sut.SupportedModels.Select(m => m.Id).ToArray()
+        );
         Assert.Equal("llama-3.1-8b-instant", host.GetSetting<string>("selectedLlmModel"));
     }
 
@@ -92,21 +104,24 @@ public class GroqPluginTests
     public async Task FetchLlmModelsAsync_FiltersAndSortsGroqResults()
     {
         var handler = new CapturingHandler((request, _) =>
-        {
-            Assert.Equal(HttpMethod.Get, request.Method);
-            Assert.Equal("Bearer groq-key", request.Headers.Authorization?.ToString());
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("Bearer groq-key", request.Headers.Authorization?.ToString());
 
-            return JsonResponse("""
-                {
-                  "data": [
-                    { "id": "whisper-large-v3", "owned_by": "OpenAI" },
-                    { "id": "openai/gpt-oss-120b", "owned_by": "OpenAI" },
-                    { "id": "llama-3.1-8b-instant", "owned_by": "Meta" },
-                    { "id": "orpheus-tts-1", "owned_by": "Groq" }
-                  ]
-                }
-                """);
-        });
+                return JsonResponse(
+                    """
+                    {
+                      "data": [
+                        { "id": "whisper-large-v3", "owned_by": "OpenAI" },
+                        { "id": "openai/gpt-oss-120b", "owned_by": "OpenAI" },
+                        { "id": "llama-3.1-8b-instant", "owned_by": "Meta" },
+                        { "id": "orpheus-tts-1", "owned_by": "Groq" }
+                      ]
+                    }
+                    """
+                );
+            }
+        );
 
         var host = new TestPluginHostServices();
         host.Secrets["api-key"] = "groq-key";
@@ -120,29 +135,38 @@ public class GroqPluginTests
         Assert.NotNull(models);
         Assert.Equal(
             ["llama-3.1-8b-instant", "openai/gpt-oss-120b"],
-            models!.Select(m => m.Id).ToArray());
+            models!.Select(m => m.Id).ToArray()
+        );
     }
 
     [Fact]
     public async Task ProcessAsync_UsesSelectedLlmModelWhenCallerDoesNotOverride()
     {
         var handler = new CapturingHandler((_, body) =>
-        {
-            using var doc = JsonDocument.Parse(body ?? throw new InvalidOperationException("Missing request body."));
-            Assert.Equal("openai/gpt-oss-120b", doc.RootElement.GetProperty("model").GetString());
+            {
+                using var doc = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing request body.")
+                );
+                Assert.Equal(
+                    "openai/gpt-oss-120b",
+                    doc.RootElement.GetProperty("model").GetString()
+                );
 
-            return JsonResponse("""
-                {
-                  "choices": [
+                return JsonResponse(
+                    """
                     {
-                      "message": {
-                        "content": "done"
-                      }
+                      "choices": [
+                        {
+                          "message": {
+                            "content": "done"
+                          }
+                        }
+                      ]
                     }
-                  ]
-                }
-                """);
-        });
+                    """
+                );
+            }
+        );
 
         var host = new TestPluginHostServices();
         host.Secrets["api-key"] = "groq-key";
@@ -161,22 +185,30 @@ public class GroqPluginTests
     public async Task ProcessAsync_UsesFallbackLlmModelWhenSelectionMissing()
     {
         var handler = new CapturingHandler((_, body) =>
-        {
-            using var doc = JsonDocument.Parse(body ?? throw new InvalidOperationException("Missing request body."));
-            Assert.Equal("llama-3.3-70b-versatile", doc.RootElement.GetProperty("model").GetString());
+            {
+                using var doc = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing request body.")
+                );
+                Assert.Equal(
+                    "llama-3.3-70b-versatile",
+                    doc.RootElement.GetProperty("model").GetString()
+                );
 
-            return JsonResponse("""
-                {
-                  "choices": [
+                return JsonResponse(
+                    """
                     {
-                      "message": {
-                        "content": "fallback"
-                      }
+                      "choices": [
+                        {
+                          "message": {
+                            "content": "fallback"
+                          }
+                        }
+                      ]
                     }
-                  ]
-                }
-                """);
-        });
+                    """
+                );
+            }
+        );
 
         var host = new TestPluginHostServices();
         host.Secrets["api-key"] = "groq-key";
@@ -222,10 +254,10 @@ public class GroqPluginTests
     {
         var host = new TestPluginHostServices();
         host.Secrets["api-key"] = "old-key";
-        host.SetSetting("fetchedLlmModels", new List<FetchedLlmModel>
-        {
-            new("custom-model-from-old-account", "Old"),
-        });
+        host.SetSetting(
+            "fetchedLlmModels",
+            new List<FetchedLlmModel> { new("custom-model-from-old-account", "Old") }
+        );
         host.SetSetting("selectedLlmModel", "custom-model-from-old-account");
 
         var sut = new GroqPlugin();
@@ -240,18 +272,22 @@ public class GroqPluginTests
         Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
     }
 
-    private static HttpResponseMessage JsonResponse(string json) =>
-        new(HttpStatusCode.OK)
+    private static HttpResponseMessage JsonResponse(string json)
+    {
+        return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
+    }
 
     private sealed class CapturingHandler(
-        Func<HttpRequestMessage, string?, HttpResponseMessage> responder) : HttpMessageHandler
+        Func<HttpRequestMessage, string?, HttpResponseMessage> responder
+    ) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var body = request.Content is null
                 ? null
@@ -277,8 +313,10 @@ public class GroqPluginTests
             return Task.CompletedTask;
         }
 
-        public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+        public Task<string?> LoadSecretAsync(string key)
+        {
+            return Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+        }
 
         public Task DeleteSecretAsync(string key)
         {
@@ -286,21 +324,29 @@ public class GroqPluginTests
             return Task.CompletedTask;
         }
 
-        public T? GetSetting<T>(string key) =>
-            _settings.TryGetValue(key, out var value)
-                ? value.Deserialize<T>(JsonOptions)
-                : default;
+        public T? GetSetting<T>(string key)
+        {
+            return _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(JsonOptions) : default;
+        }
 
-        public void SetSetting<T>(string key, T value) =>
+        public void SetSetting<T>(string key, T value)
+        {
             _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+        }
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
         public IReadOnlyList<string> AvailableProfileNames => [];
+
         public void Log(PluginLogLevel level, string message) { }
-        public void NotifyCapabilitiesChanged() => NotifyCapabilitiesChangedCount++;
+
+        public void NotifyCapabilitiesChanged()
+        {
+            NotifyCapabilitiesChangedCount++;
+        }
+
         public IPluginLocalization Localization { get; } = new TestPluginLocalization();
     }
 
@@ -308,16 +354,30 @@ public class GroqPluginTests
     {
         public string CurrentLanguage => "en";
         public IReadOnlyList<string> AvailableLanguages => ["en"];
-        public string GetString(string key) => key;
-        public string GetString(string key, params object[] args) => string.Format(key, args);
+
+        public string GetString(string key)
+        {
+            return key;
+        }
+
+        public string GetString(string key, params object[] args)
+        {
+            return string.Format(key, args);
+        }
     }
 
     private sealed class TestPluginEventBus : IPluginEventBus
     {
-        public void Publish<T>(T pluginEvent) where T : PluginEvent { }
+        public void Publish<T>(T pluginEvent)
+            where T : PluginEvent
+        {
+        }
 
-        public IDisposable Subscribe<T>(Func<T, Task> handler) where T : PluginEvent =>
-            new NoOpDisposable();
+        public IDisposable Subscribe<T>(Func<T, Task> handler)
+            where T : PluginEvent
+        {
+            return new NoOpDisposable();
+        }
     }
 
     private sealed class NoOpDisposable : IDisposable

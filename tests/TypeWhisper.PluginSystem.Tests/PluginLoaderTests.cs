@@ -1,7 +1,6 @@
-using System.IO;
 using System.Text.Json;
-using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -12,8 +11,26 @@ public class PluginLoaderTests : IDisposable
 
     public PluginLoaderTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisperTests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisperTests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup in tests
+        }
     }
 
     [Fact]
@@ -48,7 +65,6 @@ public class PluginLoaderTests : IDisposable
         var pluginDir = Path.Combine(_tempDir, "com.test.nomanifest");
         Directory.CreateDirectory(pluginDir);
 
-        // No manifest.json created
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);
     }
@@ -81,7 +97,8 @@ public class PluginLoaderTests : IDisposable
 
         File.WriteAllText(
             Path.Combine(pluginDir, "manifest.json"),
-            JsonSerializer.Serialize(manifest));
+            JsonSerializer.Serialize(manifest)
+        );
 
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);
@@ -97,15 +114,11 @@ public class PluginLoaderTests : IDisposable
     [Fact]
     public void DiscoverAndLoad_MixedValidAndInvalidDirs_SkipsBadOnes()
     {
-        // Create one dir with a bad manifest, one that doesn't exist
         var badPluginDir = Path.Combine(_tempDir, "com.test.bad");
         Directory.CreateDirectory(badPluginDir);
         File.WriteAllText(Path.Combine(badPluginDir, "manifest.json"), "null");
 
-        var result = _loader.DiscoverAndLoad([
-            _tempDir,
-            Path.Combine(_tempDir, "nonexistent")
-        ]);
+        var result = _loader.DiscoverAndLoad([_tempDir, Path.Combine(_tempDir, "nonexistent")]);
 
         Assert.Empty(result);
     }
@@ -119,20 +132,5 @@ public class PluginLoaderTests : IDisposable
 
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);
-    }
-
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-            {
-                Directory.Delete(_tempDir, recursive: true);
-            }
-        }
-        catch
-        {
-            // Best-effort cleanup in tests
-        }
     }
 }

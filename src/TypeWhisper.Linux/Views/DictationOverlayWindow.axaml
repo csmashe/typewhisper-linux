@@ -24,12 +24,34 @@
                 IsVisible="{Binding IsOverlayVisible}">
             <StackPanel Spacing="8">
                 <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                    <Border Width="{Binding AudioMeterWidth}"
-                            Height="10"
+                    <Border Width="{Binding IndicatorSize}"
+                            Height="{Binding IndicatorSize}"
                             CornerRadius="999"
-                            Background="#66E3A2"
+                            Background="#1593F5"
                             VerticalAlignment="Center"
-                            IsVisible="{Binding ShowLeftMeter}" />
+                            IsVisible="{Binding ShowLeftIndicator}" />
+
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="3"
+                                Height="18"
+                                VerticalAlignment="Center"
+                                IsVisible="{Binding ShowLeftWaveform}">
+                        <Border Width="4" Height="{Binding WaveformBar0Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                        <Border Width="4" Height="{Binding WaveformBar1Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                        <Border Width="4" Height="{Binding WaveformBar2Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                        <Border Width="4" Height="{Binding WaveformBar3Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                        <Border Width="4" Height="{Binding WaveformBar4Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                    </StackPanel>
 
                     <TextBlock Text="{Binding LeftText}"
                                VerticalAlignment="Center"
@@ -50,12 +72,35 @@
                                Foreground="#CCFFFFFF" />
 
                     <Border Grid.Column="2"
-                            Width="{Binding AudioMeterWidth}"
-                            Height="10"
+                            Width="{Binding IndicatorSize}"
+                            Height="{Binding IndicatorSize}"
                             CornerRadius="999"
-                            Background="#66E3A2"
+                            Background="#1593F5"
                             VerticalAlignment="Center"
-                            IsVisible="{Binding ShowRightMeter}" />
+                            IsVisible="{Binding ShowRightIndicator}" />
+
+                    <StackPanel Grid.Column="2"
+                                Orientation="Horizontal"
+                                Spacing="3"
+                                Height="18"
+                                VerticalAlignment="Center"
+                                IsVisible="{Binding ShowRightWaveform}">
+                        <Border Width="4" Height="{Binding WaveformBar0Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                        <Border Width="4" Height="{Binding WaveformBar1Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                        <Border Width="4" Height="{Binding WaveformBar2Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                        <Border Width="4" Height="{Binding WaveformBar3Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                        <Border Width="4" Height="{Binding WaveformBar4Height}"
+                                CornerRadius="999" Background="#1593F5"
+                                VerticalAlignment="Bottom" />
+                    </StackPanel>
 
                     <TextBlock Grid.Column="2"
                                Text="{Binding RightText}"

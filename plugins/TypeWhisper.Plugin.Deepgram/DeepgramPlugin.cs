@@ -21,8 +21,6 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         new("nova-2", "Nova-2"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.deepgram";
     public string PluginName => "Deepgram";
     public string PluginVersion => "1.0.0";
@@ -41,8 +39,6 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         return Task.CompletedTask;
     }
 
-    // ITranscriptionEnginePlugin
-
     public string ProviderId => "deepgram";
     public string ProviderDisplayName => "Deepgram";
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
@@ -57,8 +53,15 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
-        return await DeepgramStreamingSession.ConnectAsync(_apiKey!, _selectedModelId, language, ct);
+            throw new InvalidOperationException(
+                "Plugin not configured. API key and model required."
+            );
+        return await DeepgramStreamingSession.ConnectAsync(
+            _apiKey!,
+            _selectedModelId,
+            language,
+            ct
+        );
     }
 
     public void SelectModel(string modelId)
@@ -70,15 +73,24 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
+            throw new InvalidOperationException(
+                "Plugin not configured. API key and model required."
+            );
 
-        var langParam = string.IsNullOrEmpty(language) || language == "auto"
-            ? "&detect_language=true"
-            : $"&language={language}";
-        var url = $"{BaseUrl}/v1/listen?model={_selectedModelId}&smart_format=true&punctuate=true{langParam}";
+        var langParam =
+            string.IsNullOrEmpty(language) || language == "auto"
+                ? "&detect_language=true"
+                : $"&language={language}";
+        var url =
+            $"{BaseUrl}/v1/listen?model={_selectedModelId}&smart_format=true&punctuate=true{langParam}";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Token", _apiKey);
@@ -89,28 +101,38 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         var json = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"Deepgram API error {(int)response.StatusCode}: {json}");
+            throw new HttpRequestException(
+                $"Deepgram API error {(int)response.StatusCode}: {json}"
+            );
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var transcript = root
-            .GetProperty("results")
-            .GetProperty("channels")[0]
-            .GetProperty("alternatives")[0]
-            .GetProperty("transcript")
-            .GetString() ?? "";
+        var transcript =
+            root.GetProperty("results")
+                .GetProperty("channels")[0]
+                .GetProperty("alternatives")[0]
+                .GetProperty("transcript")
+                .GetString()
+            ?? "";
 
         var duration = root.GetProperty("metadata").GetProperty("duration").GetDouble();
 
         string? detectedLanguage = null;
-        if (root.GetProperty("results").GetProperty("channels")[0].TryGetProperty("detected_language", out var langEl))
+        if (
+            root.GetProperty("results")
+                .GetProperty("channels")[0]
+                .TryGetProperty("detected_language", out var langEl)
+        )
             detectedLanguage = langEl.GetString();
 
-        return new PluginTranscriptionResult(transcript, detectedLanguage, duration, NoSpeechProbability: null);
+        return new PluginTranscriptionResult(
+            transcript,
+            detectedLanguage,
+            duration,
+            NoSpeechProbability: null
+        );
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -150,24 +172,37 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, "dg...", "Required for Deepgram transcription and streaming."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Deepgram model.",
-            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new(
+                "api-key",
+                "API key",
+                true,
+                "dg...",
+                "Required for Deepgram transcription and streaming."
+            ),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Deepgram model.",
+                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {

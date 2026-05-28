@@ -7,31 +7,42 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class WatchFolderService : IDisposable
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly string _processedFingerprintsPath;
-    private readonly string _historyPath;
-    private readonly ConcurrentQueue<string> _pendingFiles = [];
-    private readonly ConcurrentDictionary<string, byte> _queuedFiles = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte> _activeFiles = new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _stateGate = new();
-    private readonly object _persistenceGate = new();
-    private readonly HashSet<string> _processedFingerprints = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _activeFiles = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+
     private readonly HashSet<string> _failedFingerprints = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<WatchFolderHistoryItem> _history = [];
+    private readonly string _historyPath;
+    private readonly ConcurrentQueue<string> _pendingFiles = [];
+    private readonly object _persistenceGate = new();
+    private readonly HashSet<string> _processedFingerprints = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly string _processedFingerprintsPath;
+
+    private readonly ConcurrentDictionary<string, byte> _queuedFiles = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+
+    private readonly object _stateGate = new();
+    private CancellationTokenSource? _cts;
+    private bool _disposed;
+    private WatchFolderOptions? _options;
+
+    private Func<
+        WatchFolderTranscriptionRequest,
+        CancellationToken,
+        Task<WatchFolderTranscriptionResult>
+    >? _transcribeHandler;
 
     private FileSystemWatcher? _watcher;
-    private CancellationTokenSource? _cts;
-    private Task? _processingTask;
-    private Task? _rescanTask;
-    private Func<WatchFolderTranscriptionRequest, CancellationToken, Task<WatchFolderTranscriptionResult>>? _transcribeHandler;
-    private WatchFolderOptions? _options;
-    private bool _disposed;
 
     public WatchFolderService()
         : this(TypeWhisperEnvironment.DataPath)
@@ -50,6 +61,7 @@ public sealed class WatchFolderService : IDisposable
     public string? WatchPath { get; private set; }
     public string? CurrentlyProcessing { get; private set; }
     public bool IsRunning => _watcher is not null;
+
     public IReadOnlyList<WatchFolderHistoryItem> History
     {
         get
@@ -61,22 +73,39 @@ public sealed class WatchFolderService : IDisposable
         }
     }
 
-    public event EventHandler? StateChanged;
-    public event EventHandler<WatchFolderHistoryItem>? FileProcessed;
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        Stop();
+    }
 
     public void Start(
         WatchFolderOptions options,
-        Func<WatchFolderTranscriptionRequest, CancellationToken, Task<WatchFolderTranscriptionResult>> transcribeHandler)
+        Func<
+            WatchFolderTranscriptionRequest,
+            CancellationToken,
+            Task<WatchFolderTranscriptionResult>
+        > transcribeHandler
+    )
     {
         ThrowIfDisposed();
         Stop();
 
         if (string.IsNullOrWhiteSpace(options.WatchPath))
+        {
             throw new ArgumentException("Watch folder path is required.", nameof(options));
+        }
 
         Directory.CreateDirectory(options.WatchPath);
         if (!string.IsNullOrWhiteSpace(options.OutputPath))
+        {
             Directory.CreateDirectory(options.OutputPath);
+        }
 
         _options = options;
         _transcribeHandler = transcribeHandler;
@@ -94,8 +123,10 @@ public sealed class WatchFolderService : IDisposable
         _watcher.Renamed += OnFileRenamed;
 
         ScanFolder(options.WatchPath);
-        _processingTask = Task.Run(() => ProcessQueueAsync(_cts.Token));
-        _rescanTask = Task.Run(() => RescanLoopAsync(options.WatchPath, _cts.Token));
+        Task.Run(() => ProcessQueueAsync(_cts.Token));
+        // Periodic rescan catches files dropped while the watcher buffer was
+        // full (the OS drops events when the internal buffer overflows).
+        Task.Run(() => RescanLoopAsync(options.WatchPath, _cts.Token));
         OnStateChanged();
     }
 
@@ -106,14 +137,13 @@ public sealed class WatchFolderService : IDisposable
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
-        _processingTask = null;
-        _rescanTask = null;
         _transcribeHandler = null;
         _options = null;
         WatchPath = null;
         CurrentlyProcessing = null;
 
         while (_pendingFiles.TryDequeue(out _)) { }
+
         _queuedFiles.Clear();
         _activeFiles.Clear();
         lock (_persistenceGate)
@@ -135,9 +165,23 @@ public sealed class WatchFolderService : IDisposable
         OnStateChanged();
     }
 
-    private void OnFileCreated(object sender, FileSystemEventArgs e) => TryScanEventFolder(e.FullPath);
-    private void OnFileChanged(object sender, FileSystemEventArgs e) => TryScanEventFolder(e.FullPath);
-    private void OnFileRenamed(object sender, RenamedEventArgs e) => TryScanEventFolder(e.FullPath);
+    public event EventHandler? StateChanged;
+    public event EventHandler<WatchFolderHistoryItem>? FileProcessed;
+
+    private void OnFileCreated(object sender, FileSystemEventArgs e)
+    {
+        TryScanEventFolder(e.FullPath);
+    }
+
+    private void OnFileChanged(object sender, FileSystemEventArgs e)
+    {
+        TryScanEventFolder(e.FullPath);
+    }
+
+    private void OnFileRenamed(object sender, RenamedEventArgs e)
+    {
+        TryScanEventFolder(e.FullPath);
+    }
 
     private void TryScanEventFolder(string filePath)
     {
@@ -145,7 +189,9 @@ public sealed class WatchFolderService : IDisposable
         {
             var folderPath = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrWhiteSpace(folderPath))
+            {
                 ScanFolder(folderPath);
+            }
         }
         catch (Exception ex) when (IsExpectedFolderScanException(ex))
         {
@@ -156,12 +202,21 @@ public sealed class WatchFolderService : IDisposable
     private void ScanFolder(string folderPath)
     {
         if (!Directory.Exists(folderPath))
+        {
             return;
+        }
 
         try
         {
-            foreach (var filePath in Directory.EnumerateFiles(folderPath).Where(AudioFileService.IsSupported).OrderBy(Path.GetFileName))
+            foreach (
+                var filePath in Directory
+                    .EnumerateFiles(folderPath)
+                    .Where(AudioFileService.IsSupported)
+                    .OrderBy(Path.GetFileName)
+            )
+            {
                 EnqueueFile(filePath);
+            }
         }
         catch (Exception ex) when (IsExpectedFolderScanException(ex))
         {
@@ -173,14 +228,20 @@ public sealed class WatchFolderService : IDisposable
     {
         var fullPath = Path.GetFullPath(filePath);
         if (_activeFiles.ContainsKey(fullPath))
+        {
             return;
+        }
 
         var fingerprint = CreateFingerprint(fullPath);
         if (fingerprint is null || IsKnownFingerprint(fingerprint))
+        {
             return;
+        }
 
         if (!_queuedFiles.TryAdd(fullPath, 0))
+        {
             return;
+        }
 
         _pendingFiles.Enqueue(fullPath);
     }
@@ -249,10 +310,18 @@ public sealed class WatchFolderService : IDisposable
             await WaitForFileReadyAsync(filePath, ct);
             fingerprint = CreateFingerprint(filePath);
             if (fingerprint is null || IsKnownFingerprint(fingerprint))
+            {
                 return;
+            }
 
-            var options = _options ?? throw new InvalidOperationException("Watch folder options are not available.");
-            var transcribeHandler = _transcribeHandler ?? throw new InvalidOperationException("Watch folder transcriber is not available.");
+            var options =
+                _options
+                ?? throw new InvalidOperationException("Watch folder options are not available.");
+            var transcribeHandler =
+                _transcribeHandler
+                ?? throw new InvalidOperationException(
+                    "Watch folder transcriber is not available."
+                );
             var result = await transcribeHandler(new WatchFolderTranscriptionRequest(filePath), ct);
 
             var outputFolder = string.IsNullOrWhiteSpace(options.OutputPath)
@@ -265,25 +334,31 @@ public sealed class WatchFolderService : IDisposable
                 result,
                 fileName,
                 ResolveEngineName(result),
-                DateTime.Now);
+                DateTime.Now
+            );
             var outputPath = Path.Combine(
                 outputFolder,
-                Path.GetFileNameWithoutExtension(filePath) + "." + artifact.FileExtension);
+                Path.GetFileNameWithoutExtension(filePath) + "." + artifact.FileExtension
+            );
 
             await File.WriteAllTextAsync(outputPath, artifact.Content, ct);
 
             if (options.DeleteSource)
+            {
                 File.Delete(filePath);
+            }
 
             AddProcessedFingerprint(fingerprint);
-            AddHistory(new WatchFolderHistoryItem
-            {
-                Id = Guid.NewGuid().ToString(),
-                FileName = fileName,
-                ProcessedAtUtc = DateTime.UtcNow,
-                OutputPath = outputPath,
-                Success = true
-            });
+            AddHistory(
+                new WatchFolderHistoryItem
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    FileName = fileName,
+                    ProcessedAtUtc = DateTime.UtcNow,
+                    OutputPath = outputPath,
+                    Success = true
+                }
+            );
         }
         catch (OperationCanceledException)
         {
@@ -297,17 +372,21 @@ public sealed class WatchFolderService : IDisposable
         {
             Debug.WriteLine($"WatchFolder transcription failed: {ex.Message}");
             if (fingerprint is not null)
-                AddFailedFingerprint(fingerprint);
-
-            AddHistory(new WatchFolderHistoryItem
             {
-                Id = Guid.NewGuid().ToString(),
-                FileName = fileName,
-                ProcessedAtUtc = DateTime.UtcNow,
-                OutputPath = "",
-                Success = false,
-                ErrorMessage = ex.Message
-            });
+                AddFailedFingerprint(fingerprint);
+            }
+
+            AddHistory(
+                new WatchFolderHistoryItem
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    FileName = fileName,
+                    ProcessedAtUtc = DateTime.UtcNow,
+                    OutputPath = "",
+                    Success = false,
+                    ErrorMessage = ex.Message
+                }
+            );
         }
         finally
         {
@@ -319,8 +398,13 @@ public sealed class WatchFolderService : IDisposable
 
     private static string ResolveEngineName(WatchFolderTranscriptionResult result)
     {
-        if (!string.IsNullOrWhiteSpace(result.EngineId) && !string.IsNullOrWhiteSpace(result.ModelId))
+        if (
+            !string.IsNullOrWhiteSpace(result.EngineId)
+            && !string.IsNullOrWhiteSpace(result.ModelId)
+        )
+        {
             return $"{result.EngineId} / {result.ModelId}";
+        }
 
         return result.EngineId ?? result.ModelId ?? "Default";
     }
@@ -330,7 +414,7 @@ public sealed class WatchFolderService : IDisposable
         lock (_persistenceGate)
         {
             return _processedFingerprints.Contains(fingerprint)
-                || _failedFingerprints.Contains(fingerprint);
+                   || _failedFingerprints.Contains(fingerprint);
         }
     }
 
@@ -358,7 +442,9 @@ public sealed class WatchFolderService : IDisposable
         {
             _history.Insert(0, item);
             if (_history.Count > 100)
+            {
                 _history.RemoveRange(100, _history.Count - 100);
+            }
         }
 
         SaveHistory();
@@ -368,6 +454,10 @@ public sealed class WatchFolderService : IDisposable
 
     private static async Task WaitForFileReadyAsync(string path, CancellationToken ct)
     {
+        // Poll until the file size and last-write timestamp are stable across
+        // two consecutive 250 ms reads and we can open it exclusively. This
+        // catches files still being written by an external recorder or copy
+        // operation. Up to 40 × 250 ms = 10 s before we give up.
         long? previousLength = null;
         DateTime? previousWrite = null;
         var stableReads = 0;
@@ -377,22 +467,30 @@ public sealed class WatchFolderService : IDisposable
             ct.ThrowIfCancellationRequested();
 
             if (!File.Exists(path))
+            {
                 throw new FileNotFoundException("Watch folder file no longer exists.", path);
+            }
 
             try
             {
                 var info = new FileInfo(path);
-                using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None);
+                await using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None);
                 var currentLength = info.Length;
                 var currentWrite = info.LastWriteTimeUtc;
 
                 if (previousLength == currentLength && previousWrite == currentWrite)
+                {
                     stableReads++;
+                }
                 else
+                {
                     stableReads = 0;
+                }
 
                 if (stableReads >= 1)
+                {
                     return;
+                }
 
                 previousLength = currentLength;
                 previousWrite = currentWrite;
@@ -414,15 +512,22 @@ public sealed class WatchFolderService : IDisposable
 
     private static string? CreateFingerprint(string path)
     {
+        // Fingerprint = full path + file size + last-write UTC ticks.
+        // A content hash would be more robust but is expensive for large
+        // audio files. The path+size+mtime tuple is stable once the file
+        // stops changing and is cheap to compute without reading the bytes.
         try
         {
             if (!File.Exists(path))
+            {
                 return null;
+            }
 
             var info = new FileInfo(path);
             return $"{Path.GetFullPath(path)}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FileNotFoundException)
+        catch (Exception ex)
+            when (ex is IOException or UnauthorizedAccessException or FileNotFoundException)
         {
             return null;
         }
@@ -433,15 +538,21 @@ public sealed class WatchFolderService : IDisposable
         try
         {
             if (!File.Exists(_processedFingerprintsPath))
+            {
                 return;
+            }
 
             var json = File.ReadAllText(_processedFingerprintsPath);
-            var loaded = JsonSerializer.Deserialize<HashSet<string>>(json, JsonOptions);
+            var loaded = JsonSerializer.Deserialize<HashSet<string>>(json, s_jsonOptions);
             if (loaded is null)
+            {
                 return;
+            }
 
             foreach (var fingerprint in loaded)
+            {
                 _processedFingerprints.Add(fingerprint);
+            }
         }
         catch (Exception ex) when (IsExpectedPersistenceException(ex))
         {
@@ -454,7 +565,7 @@ public sealed class WatchFolderService : IDisposable
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_processedFingerprintsPath)!);
-            var json = JsonSerializer.Serialize(_processedFingerprints, JsonOptions);
+            var json = JsonSerializer.Serialize(_processedFingerprints, s_jsonOptions);
             File.WriteAllText(_processedFingerprintsPath, json);
         }
         catch (Exception ex) when (IsExpectedPersistenceException(ex))
@@ -468,12 +579,19 @@ public sealed class WatchFolderService : IDisposable
         try
         {
             if (!File.Exists(_historyPath))
+            {
                 return;
+            }
 
             var json = File.ReadAllText(_historyPath);
-            var loaded = JsonSerializer.Deserialize<List<WatchFolderHistoryItem>>(json, JsonOptions);
+            var loaded = JsonSerializer.Deserialize<List<WatchFolderHistoryItem>>(
+                json,
+                s_jsonOptions
+            );
             if (loaded is null)
+            {
                 return;
+            }
 
             _history.Clear();
             _history.AddRange(loaded.Take(100));
@@ -495,7 +613,7 @@ public sealed class WatchFolderService : IDisposable
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(_historyPath)!);
-            var json = JsonSerializer.Serialize(snapshot, JsonOptions);
+            var json = JsonSerializer.Serialize(snapshot, s_jsonOptions);
             File.WriteAllText(_historyPath, json);
         }
         catch (Exception ex) when (IsExpectedPersistenceException(ex))
@@ -504,26 +622,28 @@ public sealed class WatchFolderService : IDisposable
         }
     }
 
-    private void OnStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);
+    private void OnStateChanged()
+    {
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
 
-    private static bool IsExpectedFolderScanException(Exception ex) =>
-        ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException;
+    private static bool IsExpectedFolderScanException(Exception ex)
+    {
+        return ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException;
+    }
 
-    private static bool IsExpectedPersistenceException(Exception ex) =>
-        ex is IOException
+    private static bool IsExpectedPersistenceException(Exception ex)
+    {
+        return ex
+            is IOException
             or UnauthorizedAccessException
             or DirectoryNotFoundException
             or JsonException
             or NotSupportedException;
+    }
 
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
-
-    public void Dispose()
+    private void ThrowIfDisposed()
     {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-        Stop();
+        ObjectDisposedException.ThrowIf(_disposed, this);
     }
 }

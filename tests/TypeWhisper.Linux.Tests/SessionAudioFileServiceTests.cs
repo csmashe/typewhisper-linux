@@ -1,3 +1,4 @@
+using TypeWhisper.Core;
 using TypeWhisper.Linux.Services;
 using Xunit;
 
@@ -8,10 +9,16 @@ public class SessionAudioFileServiceTests
     [Fact]
     public void DeleteSessionCaptures_RemovesOnlyDictationWavs()
     {
-        Directory.CreateDirectory(TypeWhisper.Core.TypeWhisperEnvironment.AudioPath);
+        Directory.CreateDirectory(TypeWhisperEnvironment.AudioPath);
 
-        var dictationFile = Path.Combine(TypeWhisper.Core.TypeWhisperEnvironment.AudioPath, $"dictation-{Guid.NewGuid():N}.wav");
-        var otherFile = Path.Combine(TypeWhisper.Core.TypeWhisperEnvironment.AudioPath, $"recording-{Guid.NewGuid():N}.wav");
+        var dictationFile = Path.Combine(
+            TypeWhisperEnvironment.AudioPath,
+            $"dictation-{Guid.NewGuid():N}.wav"
+        );
+        var otherFile = Path.Combine(
+            TypeWhisperEnvironment.AudioPath,
+            $"recording-{Guid.NewGuid():N}.wav"
+        );
 
         File.WriteAllText(dictationFile, "dictation");
         File.WriteAllText(otherFile, "other");

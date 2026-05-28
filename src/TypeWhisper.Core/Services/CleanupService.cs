@@ -14,7 +14,9 @@ public sealed partial class CleanupService
     public string Clean(string text, CleanupLevel level)
     {
         if (level == CleanupLevel.None || string.IsNullOrWhiteSpace(text))
+        {
             return text;
+        }
 
         return level switch
         {
@@ -26,13 +28,19 @@ public sealed partial class CleanupService
         };
     }
 
-    public static string GetLlmSystemPrompt(CleanupLevel level) =>
-        level switch
+    public static string GetLlmSystemPrompt(CleanupLevel level)
+    {
+        return level switch
         {
             CleanupLevel.Medium => MediumSystemPrompt,
             CleanupLevel.High => HighSystemPrompt,
-            _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Only Medium and High cleanup use LLM prompts.")
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(level),
+                level,
+                "Only Medium and High cleanup use LLM prompts."
+            )
         };
+    }
 
     private static string CleanLight(string text)
     {
@@ -43,6 +51,8 @@ public sealed partial class CleanupService
         cleaned = ApplyBacktrack(cleaned);
         cleaned = ApplySpokenPunctuation(cleaned);
         cleaned = ApplySmartFormatting(cleaned);
+        // Re-strip leading/trailing noise because spoken-punctuation and backtrack transforms
+        // can introduce new noise at the edges (e.g. a leading comma after "scratch that").
         cleaned = LeadingNoiseRegex().Replace(cleaned, "");
         cleaned = TrailingNoiseRegex().Replace(cleaned, "");
         cleaned = DuplicateCommaRegex().Replace(cleaned, ",");
@@ -65,7 +75,9 @@ public sealed partial class CleanupService
     {
         var bullets = TryFormatSpokenBulletList(text);
         if (bullets is not null)
+        {
             return bullets;
+        }
 
         var numbered = TryFormatSpokenNumberedList(text);
         return numbered ?? text;
@@ -73,23 +85,29 @@ public sealed partial class CleanupService
 
     private static string ApplySpokenPunctuation(string text)
     {
-        return SpokenPunctuationRegex().Replace(text, match =>
-        {
-            var mark = match.Groups["mark"].Value.ToLowerInvariant();
-            if (!ShouldApplySpokenPunctuation(text, match, mark))
-                return match.Value;
+        return SpokenPunctuationRegex()
+            .Replace(
+                text,
+                match =>
+                {
+                    var mark = match.Groups["mark"].Value.ToLowerInvariant();
+                    if (!ShouldApplySpokenPunctuation(text, match, mark))
+                    {
+                        return match.Value;
+                    }
 
-            return mark switch
-            {
-                "comma" => ",",
-                "period" or "full stop" => ".",
-                "question mark" => "?",
-                "exclamation mark" or "exclamation point" => "!",
-                "colon" => ":",
-                "semicolon" => ";",
-                _ => match.Value
-            };
-        });
+                    return mark switch
+                    {
+                        "comma" => ",",
+                        "period" or "full stop" => ".",
+                        "question mark" => "?",
+                        "exclamation mark" or "exclamation point" => "!",
+                        "colon" => ":",
+                        "semicolon" => ";",
+                        _ => match.Value
+                    };
+                }
+            );
     }
 
     private static bool ShouldApplySpokenPunctuation(string text, Match match, string mark)
@@ -101,7 +119,8 @@ public sealed partial class CleanupService
         {
             "period" or "full stop" => previousWordCount >= 2 && !hasWordAfter,
             "comma" or "colon" or "semicolon" => previousWordCount >= 1 && hasWordAfter,
-            "question mark" or "exclamation mark" or "exclamation point" => previousWordCount >= 1 && !hasWordAfter,
+            "question mark" or "exclamation mark" or "exclamation point" => previousWordCount >= 1
+                                                                            && !hasWordAfter,
             _ => false
         };
     }
@@ -111,28 +130,33 @@ public sealed partial class CleanupService
         var prefix = text[..endIndex];
         var boundary = Math.Max(
             Math.Max(prefix.LastIndexOf('.'), prefix.LastIndexOf('?')),
-            Math.Max(prefix.LastIndexOf('!'), prefix.LastIndexOf('\n')));
+            Math.Max(prefix.LastIndexOf('!'), prefix.LastIndexOf('\n'))
+        );
         var phrase = prefix[(boundary + 1)..];
         return WordRegex().Matches(phrase).Count;
     }
 
-    private static bool HasWordAfter(string text, int startIndex) =>
-        WordRegex().IsMatch(text[startIndex..]);
+    private static bool HasWordAfter(string text, int startIndex)
+    {
+        return WordRegex().IsMatch(text[startIndex..]);
+    }
 
     private static string? TryFormatSpokenBulletList(string text)
     {
         var match = BulletListTriggerRegex().Match(text);
         if (!match.Success)
+        {
             return null;
+        }
 
         var body = match.Groups["items"].Value.Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
         if (body.Length == 0)
+        {
             return null;
+        }
 
         var items = SplitBulletItems(body);
-        return items.Count < 2
-            ? null
-            : string.Join('\n', items.Select(item => $"- {item}"));
+        return items.Count < 2 ? null : string.Join('\n', items.Select(item => $"- {item}"));
     }
 
     private static IReadOnlyList<string> SplitBulletItems(string body)
@@ -143,7 +167,9 @@ public sealed partial class CleanupService
             .Where(item => item.Length > 0)
             .ToList();
         if (explicitItems.Count >= 2)
+        {
             return explicitItems;
+        }
 
         var punctuatedItems = BulletPunctuationSeparatorRegex()
             .Split(body)
@@ -151,10 +177,14 @@ public sealed partial class CleanupService
             .Where(item => item.Length > 0)
             .ToList();
         if (punctuatedItems.Count >= 2)
+        {
             return punctuatedItems;
+        }
 
-        var words = body
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var words = body.Split(
+                ' ',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+            )
             .Select(CleanListItem)
             .Where(item => item.Length > 0)
             .ToList();
@@ -165,18 +195,24 @@ public sealed partial class CleanupService
     private static bool IsConservativeSingleWordBulletList(IReadOnlyList<string> words)
     {
         if (words.Count is < 2 or > 9)
+        {
             return false;
+        }
 
         return words.All(word =>
             SingleWordListItemRegex().IsMatch(word)
-            && !BulletListStopWords().Contains(word, StringComparer.OrdinalIgnoreCase));
+            && !BulletListStopWords().Contains(word, StringComparer.OrdinalIgnoreCase)
+        );
     }
 
-    private static string CleanListItem(string item) =>
-        item.Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
+    private static string CleanListItem(string item)
+    {
+        return item.Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
+    }
 
-    private static IReadOnlySet<string> BulletListStopWords() =>
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    private static IReadOnlySet<string> BulletListStopWords()
+    {
+        return new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "a",
             "an",
@@ -191,12 +227,15 @@ public sealed partial class CleanupService
             "we",
             "with"
         };
+    }
 
     private static string? TryFormatSpokenNumberedList(string text)
     {
         var matches = NumberedListMarkerRegex().Matches(text);
         if (matches.Count < 2 || matches[0].Index != 0)
+        {
             return null;
+        }
 
         var expected = 1;
         var items = new List<string>();
@@ -205,26 +244,34 @@ public sealed partial class CleanupService
         {
             var number = SpokenNumberToInt(matches[i].Value);
             if (number != expected)
+            {
                 return null;
+            }
 
             var itemStart = matches[i].Index + matches[i].Length;
             var itemEnd = i + 1 < matches.Count ? matches[i + 1].Index : text.Length;
-            var item = text[itemStart..itemEnd].Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
+            var item = text[itemStart..itemEnd]
+                .Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
             if (item.Length == 0)
+            {
                 return null;
+            }
 
             items.Add(item);
             expected++;
         }
 
         if (items.Count < 2)
+        {
             return null;
+        }
 
         return string.Join('\n', items.Select((item, index) => $"{index + 1}. {item}"));
     }
 
-    private static int SpokenNumberToInt(string number) =>
-        number.ToLowerInvariant() switch
+    private static int SpokenNumberToInt(string number)
+    {
+        return number.ToLowerInvariant() switch
         {
             "one" => 1,
             "two" => 2,
@@ -237,19 +284,26 @@ public sealed partial class CleanupService
             "nine" => 9,
             _ => 0
         };
+    }
 
     private static string ApplyBasicSentenceCasing(string text)
     {
         if (text.Length == 0)
+        {
             return text;
+        }
 
         for (var i = 0; i < text.Length; i++)
         {
             if (!char.IsLetter(text[i]))
+            {
                 continue;
+            }
 
             if (char.IsUpper(text[i]))
+            {
                 return text;
+            }
 
             return text[..i] + char.ToUpperInvariant(text[i]) + text[(i + 1)..];
         }
@@ -281,16 +335,22 @@ public sealed partial class CleanupService
     [GeneratedRegex(@"(?i)^\s*scratch\s+that\s*$")]
     private static partial Regex ScratchThatWholeUtteranceRegex();
 
-    [GeneratedRegex(@"(?is)^.+?\bscratch\s+that\b[\s,.;:!?-]+(?<replacement>(?:i|we|let's|lets|please|the|a|an|this|that)\b.+)$")]
+    [GeneratedRegex(
+        @"(?is)^.+?\bscratch\s+that\b[\s,.;:!?-]+(?<replacement>(?:i|we|let's|lets|please|the|a|an|this|that)\b.+)$"
+    )]
     private static partial Regex ScratchThatReplacementRegex();
 
-    [GeneratedRegex(@"(?is)\b(?<prefix>.*\s)(?<original>[A-Za-z][A-Za-z'-]*)\s+(?:actually|i\s+mean)\s+(?<replacement>[A-Za-z][A-Za-z'-]*)(?<suffix>[.?!]?)$")]
+    [GeneratedRegex(
+        @"(?is)\b(?<prefix>.*\s)(?<original>[A-Za-z][A-Za-z'-]*)\s+(?:actually|i\s+mean)\s+(?<replacement>[A-Za-z][A-Za-z'-]*)(?<suffix>[.?!]?)$"
+    )]
     private static partial Regex OneWordCorrectionRegex();
 
     [GeneratedRegex(@"(?i)\b(?:one|two|three|four|five|six|seven|eight|nine)\b")]
     private static partial Regex NumberedListMarkerRegex();
 
-    [GeneratedRegex(@"(?i)\b(?<mark>comma|period|full\s+stop|question\s+mark|exclamation\s+(?:mark|point)|colon|semicolon)\b")]
+    [GeneratedRegex(
+        @"(?i)\b(?<mark>comma|period|full\s+stop|question\s+mark|exclamation\s+(?:mark|point)|colon|semicolon)\b"
+    )]
     private static partial Regex SpokenPunctuationRegex();
 
     [GeneratedRegex(@"(?is)^\s*bullet\s+list\s+(?<items>.+)$")]

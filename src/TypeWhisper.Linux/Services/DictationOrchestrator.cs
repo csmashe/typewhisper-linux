@@ -1,88 +1,97 @@
 using System.Diagnostics;
-using System.IO;
-using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-/// Glues hotkey, recorder, transcription engine, post-processing, and text
-/// injection into a single dictation loop:
-///   hotkey → start recording → hotkey → stop → save WAV → transcribe via
-///   the active transcription plugin → apply dictionary + snippets →
-///   the resolved input backend (wtype on Wayland, xdotool on X11/XWayland)
-///   types the result into the focused window → history record.
-///
-/// If no transcription plugin/model is loaded the WAV is still written so
-/// the user can inspect what was captured.
+///     Immutable snapshot of the per-recording context captured at stop time.
+///     Passed to the post-stop transcription / insertion pipeline so that
+///     the pipeline reads a stable view of the recording's profile, app, and
+///     timing even if a brand-new dictation has already started and overwritten
+///     the instance-level <c>_recording*</c> fields.
 /// </summary>
+internal sealed record RecordingContext(
+    int SessionId,
+    DateTime RecordingStart,
+    string? AppProcess,
+    string? AppTitle,
+    string? AppUrl,
+    string? WindowId,
+    Profile? Profile,
+    CancellationToken CancelToken
+);
+
 public sealed class DictationOrchestrator : IDisposable
 {
-    private readonly HotkeyService _hotkey;
+    private readonly ActiveWindowService _activeWindow;
     private readonly AudioRecordingService _audio;
+    private readonly IAudioDuckingService _audioDucking;
+    private readonly LlmCleanupService _cleanup;
+    private readonly SystemCommandAvailabilityService _commands;
+    private readonly DeveloperFormattingService _developerFormatting = new();
+    private readonly IDictionaryService _dictionary;
+    private readonly IDetectionFailureTracker _failureTracker;
+    private readonly IHistoryService _history;
+    private readonly HotkeyService _hotkey;
+    private readonly IdeFileReferenceService _ideFileReferences;
+    private readonly IMediaPauseService _mediaPause;
+    private readonly MemoryService _memory;
+    private readonly ModelManagerService _models;
+    private readonly object _overlayStateLock = new();
+    private readonly StreamingTranscriptState _partialTranscriptState = new();
+    private readonly IPostProcessingPipeline _pipeline;
+    private readonly IProfileService _profiles;
+    private readonly IPromptActionService _promptActions;
+    private readonly PromptProcessingService _promptProcessing;
+    private readonly RecentTranscriptionsService _recentTranscriptions;
+    private readonly object _recordingSessionLock = new();
     private readonly SessionAudioFileService _sessionAudioFiles;
+    private readonly ISettingsService _settings;
+    private readonly ISnippetService _snippets;
     private readonly SoundFeedbackService _soundFeedback;
     private readonly SpeechFeedbackService _speechFeedback;
     private readonly TextInsertionService _textInsertion;
-    private readonly IAudioDuckingService _audioDucking;
-    private readonly IMediaPauseService _mediaPause;
-    private readonly ModelManagerService _models;
-    private readonly IHistoryService _history;
-    private readonly ISettingsService _settings;
-    private readonly ActiveWindowService _activeWindow;
-    private readonly IProfileService _profiles;
-    private readonly IPromptActionService _promptActions;
-    private readonly IDictionaryService _dictionary;
-    private readonly ISnippetService _snippets;
-    private readonly IVocabularyBoostingService _vocabularyBoosting;
-    private readonly LlmCleanupService _cleanup;
-    private readonly IPostProcessingPipeline _pipeline;
-    private readonly ITranslationService _translation;
-    private readonly PromptProcessingService _promptProcessing;
-    private readonly MemoryService _memory;
-    private readonly RecentTranscriptionsService _recentTranscriptions;
-    private readonly IdeFileReferenceService _ideFileReferences;
-    private readonly SystemCommandAvailabilityService _commands;
-    private readonly StreamingTranscriptState _partialTranscriptState = new();
-    private readonly VoiceCommandParser _voiceCommands = new();
-    private readonly DeveloperFormattingService _developerFormatting = new();
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
-    private readonly object _overlayStateLock = new();
-    private DateTime _recordingStart;
-    private string? _recordingAppProcess;
-    private string? _recordingAppTitle;
-    private string? _recordingAppUrl;
-    private string? _recordingWindowId;
-    private Profile? _recordingProfile;
+    private readonly ITranslationService _translation;
+    private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly VoiceCommandParser _voiceCommands = new();
+    private CancellationTokenSource? _activeDictationCts;
+    private EventHandler? _cancelHandler;
+    private volatile bool _cancelRequested;
+    private bool _disposed;
+    private EventHandler<string>? _hookFailedHandler;
+    private bool _initialized;
+    private string? _lastPublishedPartialText;
+    private DateTime _lastSpeechDetectedAtUtc;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
     private CancellationTokenSource? _partialTranscriptionCts;
     private Task? _partialTranscriptionTask;
-    private Task? _recordingSnapshotTask;
-    private CancellationTokenSource? _activeDictationCts;
-    private volatile bool _cancelRequested;
-    private string? _lastPublishedPartialText;
-    private DateTime _lastSpeechDetectedAtUtc;
-    private bool _silenceStopRequested;
-    private bool _initialized;
-    private bool _disposed;
+    private string? _recordingAppProcess;
+    private string? _recordingAppTitle;
+    private string? _recordingAppUrl;
+    private Profile? _recordingProfile;
 
-    private EventHandler? _toggleHandler;
+    // Monotonically incremented for every StartAsync. The active-window
+    // snapshot Task.Run captures the value at start time, then guards every
+    // write to the shared _recording* fields and overlay/event publishes
+    // behind it. If StopAsync (or another StartAsync) has already advanced
+    // the counter — including the case where AwaitRecordingSnapshotAsync
+    // timed out and the snapshot wrote late — the stale snapshot's writes
+    // are dropped so they cannot corrupt the next dictation's context.
+    private int _recordingSession;
+    private Task? _recordingSnapshotTask;
+    private DateTime _recordingStart;
+    private string? _recordingWindowId;
+    private bool _silenceStopRequested;
     private EventHandler? _startHandler;
     private EventHandler? _stopHandler;
-    private EventHandler? _cancelHandler;
-    private EventHandler<string>? _hookFailedHandler;
 
-    public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
-    public event EventHandler<bool>? RecordingStateChanged;
-    public event EventHandler<string>? TranscriptionCompleted;
-    public event EventHandler<string>? StatusMessage;
-    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
-
-    public bool IsRecording => _audio.IsRecording;
+    private EventHandler? _toggleHandler;
 
     public DictationOrchestrator(
         HotkeyService hotkey,
@@ -109,7 +118,9 @@ public sealed class DictationOrchestrator : IDisposable
         MemoryService memory,
         RecentTranscriptionsService recentTranscriptions,
         IdeFileReferenceService ideFileReferences,
-        SystemCommandAvailabilityService commands)
+        SystemCommandAvailabilityService commands,
+        IDetectionFailureTracker failureTracker
+    )
     {
         _hotkey = hotkey;
         _audio = audio;
@@ -136,11 +147,133 @@ public sealed class DictationOrchestrator : IDisposable
         _recentTranscriptions = recentTranscriptions;
         _ideFileReferences = ideFileReferences;
         _commands = commands;
+        _failureTracker = failureTracker;
+    }
+
+    public bool IsRecording => _audio.IsRecording;
+
+    /// <summary>
+    ///     Snapshot of the current dictation pipeline phase, suitable for the
+    ///     <c>typewhisper status</c> JSON response. Derived from the audio
+    ///     capture state plus the live overlay state — no new mutable surface,
+    ///     just a read-only projection of state we already track.
+    /// </summary>
+    /// <remarks>
+    ///     The audio recorder is the source of truth for <c>recording</c>. Once
+    ///     recording stops, the overlay's StatusText drives transcribing /
+    ///     injecting / idle: "Processing…" / "Transcribing…" indicate the
+    ///     transcription engine is active; "Inserting…" means text is actively
+    ///     being typed/pasted into the target app. The completion messages
+    ///     ("Typed", "Pasted", "Copied") and anything else (Ready, Canceled,
+    ///     Too short, an error) fall through to idle.
+    /// </remarks>
+    public string CurrentStateLabel
+    {
+        get
+        {
+            if (_audio.IsRecording)
+            {
+                return "recording";
+            }
+
+            DictationOverlayState snapshot;
+            lock (_overlayStateLock)
+            {
+                snapshot = _overlayState;
+            }
+
+            return MapOverlayStatusToStateLabel(snapshot.StatusText);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
+        if (_toggleHandler is not null)
+        {
+            _hotkey.DictationToggleRequested -= _toggleHandler;
+        }
+
+        if (_startHandler is not null)
+        {
+            _hotkey.DictationStartRequested -= _startHandler;
+        }
+
+        if (_stopHandler is not null)
+        {
+            _hotkey.DictationStopRequested -= _stopHandler;
+        }
+
+        if (_cancelHandler is not null)
+        {
+            _hotkey.CancelRequested -= _cancelHandler;
+        }
+
+        if (_hookFailedHandler is not null)
+        {
+            _hotkey.HookFailed -= _hookFailedHandler;
+        }
+
+        // If we're shutting down mid-recording, the audio capture is still
+        // active and ducking/media-pause are still applied. Stop the capture
+        // and undo the playback effects before tearing down anything else,
+        // otherwise the user is left with a muted system after exit.
+        if (_audio.IsRecording)
+        {
+            try
+            {
+                _audio.StopRecording();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.Message}");
+            }
+
+            try
+            {
+                _audioDucking.RestoreAudio();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.Message}");
+            }
+
+            try
+            {
+                _mediaPause.ResumeMedia();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}");
+            }
+        }
+
+        ShutdownPartialTranscriptionSession();
+        try
+        {
+            _recordingSnapshotTask?.Wait(TimeSpan.FromMilliseconds(300));
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.Message}");
+        }
+
+        _toggleGate.Dispose();
     }
 
     public void Initialize()
     {
-        if (_initialized || _disposed) return;
+        if (_initialized || _disposed)
+        {
+            return;
+        }
+
         _toggleHandler = (_, _) => FireAndLog(ToggleAsync, nameof(ToggleAsync));
         _startHandler = (_, _) => FireAndLog(StartAsync, nameof(StartAsync));
         _stopHandler = (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
@@ -149,7 +282,10 @@ public sealed class DictationOrchestrator : IDisposable
         {
             Trace.WriteLine($"[Dictation] Hotkey hook unavailable: {message}");
             ReportStatus("Global hotkey disabled.");
-            ShowFeedback("Global hotkey disabled. Check libuiohook/X11 permissions.", isError: true);
+            ShowFeedback(
+                "Global hotkey disabled. Check libuiohook/X11 permissions.",
+                true
+            );
         };
         _hotkey.DictationToggleRequested += _toggleHandler;
         _hotkey.DictationStartRequested += _startHandler;
@@ -174,20 +310,27 @@ public sealed class DictationOrchestrator : IDisposable
             _hookFailedHandler = null;
             throw;
         }
+
         _initialized = true;
     }
 
     public async Task ToggleAsync()
     {
-        if (_audio.IsRecording) await StopAsync();
-        else await StartAsync();
+        if (_audio.IsRecording)
+        {
+            await StopAsync();
+        }
+        else
+        {
+            await StartAsync();
+        }
     }
 
     /// <summary>
-    /// Aborts the active dictation. While recording, triggers a stop that
-    /// discards the audio (no transcription). While transcribing or running
-    /// the post-processing pipeline, cancels the active token so the in-flight
-    /// async work bails out and "Canceled" is surfaced instead of "Failed".
+    ///     Aborts the active dictation. While recording, triggers a stop that
+    ///     discards the audio (no transcription). While transcribing or running
+    ///     the post-processing pipeline, cancels the active token so the in-flight
+    ///     async work bails out and "Canceled" is surfaced instead of "Failed".
     /// </summary>
     public async Task CancelAsync()
     {
@@ -197,8 +340,14 @@ public sealed class DictationOrchestrator : IDisposable
         var cts = _activeDictationCts;
         if (cts is not null)
         {
-            try { cts.Cancel(); }
-            catch (ObjectDisposedException) { /* StopAsync just disposed it — nothing to cancel. */ }
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                /* StopAsync just disposed it — nothing to cancel. */
+            }
         }
 
         // If we're still recording, route through StopAsync with the cancel
@@ -213,11 +362,17 @@ public sealed class DictationOrchestrator : IDisposable
 
     public async Task StartAsync()
     {
-        Task? recordingSnapshotTask = null;
-        if (!await _toggleGate.WaitAsync(0)) return;
+        if (!await _toggleGate.WaitAsync(0))
+        {
+            return;
+        }
+
         try
         {
-            if (_audio.IsRecording) return;
+            if (_audio.IsRecording)
+            {
+                return;
+            }
 
             _audio.WhisperModeEnabled = _settings.Current.WhisperModeEnabled;
 
@@ -235,7 +390,7 @@ public sealed class DictationOrchestrator : IDisposable
                 Trace.WriteLine($"[Dictation] Failed to start recording: {ex}");
                 var message = BuildRecordingStartFailureMessage(ex);
                 ReportStatus(message);
-                ShowFeedback(message, isError: true);
+                ShowFeedback(message, true);
                 return;
             }
 
@@ -243,33 +398,44 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 var message = BuildRecordingStartFailureMessage(null);
                 ReportStatus(message);
-                ShowFeedback(message, isError: true);
+                ShowFeedback(message, true);
                 return;
             }
 
             try
             {
                 if (_settings.Current.AudioDuckingEnabled)
+                {
                     _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
+                }
+
                 if (_settings.Current.PauseMediaDuringRecording)
+                {
                     _mediaPause.PauseMedia();
+                }
+
                 if (_settings.Current.SoundFeedbackEnabled)
+                {
                     _soundFeedback.PlayRecordingStarted();
+                }
+
                 _speechFeedback.AnnounceRecordingStarted();
                 RecordingStateChanged?.Invoke(this, true);
-                SetOverlayState(state => state with
-                {
-                    IsOverlayVisible = true,
-                    ShowFeedback = false,
-                    FeedbackIsError = false,
-                    FeedbackText = null,
-                    PartialText = null,
-                    IsRecording = true,
-                    StatusText = "Recording… press the hotkey again to stop.",
-                    ActiveProfileName = null,
-                    ActiveAppName = null,
-                    SessionStartedAtUtc = DateTime.UtcNow
-                });
+                SetOverlayState(state =>
+                    state with
+                    {
+                        IsOverlayVisible = true,
+                        ShowFeedback = false,
+                        FeedbackIsError = false,
+                        FeedbackText = null,
+                        PartialText = null,
+                        IsRecording = true,
+                        StatusText = "Recording… press the hotkey again to stop.",
+                        ActiveProfileName = null,
+                        ActiveAppName = null,
+                        SessionStartedAtUtc = DateTime.UtcNow
+                    }
+                );
                 StartPartialTranscriptionSession();
             }
             catch (Exception ex)
@@ -290,38 +456,216 @@ public sealed class DictationOrchestrator : IDisposable
 
             // Publish the snapshot task before releasing the toggle gate so a
             // near-immediate StopAsync can reliably observe and await it.
-            _recordingAppProcess = null;
-            _recordingAppTitle = null;
-            _recordingAppUrl = null;
-            _recordingWindowId = _activeWindow.GetActiveWindowId();
-            _recordingProfile = null;
-            recordingSnapshotTask = Task.Run(() =>
+            // Reserve a session id for this recording and pre-populate fields.
+            // The Task.Run below captures the id and only commits its results
+            // if the session is still active when it finishes — protecting the
+            // next dictation from late writes if AwaitRecordingSnapshotAsync's
+            // 500ms timeout elapses before the snapshot completes.
+            int sessionId;
+            lock (_recordingSessionLock)
             {
+                sessionId = ++_recordingSession;
+                _recordingAppProcess = null;
+                _recordingAppTitle = null;
+                _recordingAppUrl = null;
+                _recordingWindowId = _activeWindow.GetActiveWindowId();
+                _recordingProfile = null;
+            }
+
+            var recordingSnapshotTask = Task.Run(async () =>
+            {
+                ActiveWindowSnapshot? initialSnap = null;
+                string? appProcess = null;
+                string? appTitle = null;
+                string? appUrl = null;
+                var initialMatch = MatchResult.NoMatch;
+                Profile? matchedProfile = null;
                 try
                 {
-                    _recordingAppProcess = _activeWindow.GetActiveWindowProcessName();
-                    _recordingAppTitle = _activeWindow.GetActiveWindowTitle();
-                    _recordingAppUrl = _activeWindow.GetBrowserUrl(allowInteractiveCapture: false);
-                    _recordingProfile = _profiles.MatchProfile(_recordingAppProcess, _recordingAppUrl);
-                    _audio.WhisperModeEnabled =
-                        _recordingProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
+                    // 50 ms was too tight: the per-provider budget alone is
+                    // 150 ms, and xdotool's chain (window-id + title + pid →
+                    // ProcessName) is three sequential subprocesses that
+                    // together can exceed half a second under normal load.
+                    // The whole task runs in the background of audio
+                    // recording, so a half-second budget here doesn't add
+                    // user-visible latency — it just guarantees we get a
+                    // process+title hit before the deferred URL pass runs.
+                    using var initialCts = new CancellationTokenSource(
+                        TimeSpan.FromMilliseconds(500)
+                    );
+                    initialSnap = await _activeWindow
+                        .GetActiveWindowSnapshotAsync(initialCts.Token)
+                        .ConfigureAwait(false);
+                    appProcess = initialSnap?.ProcessName;
+                    appTitle = initialSnap?.Title;
+                    initialMatch = _profiles.MatchProfile(appProcess, null);
+                    matchedProfile = initialMatch.Profile;
+
+                    if (initialSnap is null)
+                    {
+                        _failureTracker.RecordFailure(
+                            DesktopDetector.DetectId() switch
+                            {
+                                "gnome" => "gnome-shell",
+                                "kde" => "kwin",
+                                "hyprland" => "hyprland",
+                                "sway" => "sway",
+                                _ => "xdotool"
+                            },
+                            "No active-window provider returned a snapshot"
+                        );
+                    }
+                    else
+                    {
+                        _failureTracker.RecordSuccess();
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[Dictation] Active-window snapshot failed: {ex.Message}");
+                    Trace.WriteLine(
+                        $"[Dictation] Initial active-window snapshot failed: {ex.Message}"
+                    );
                 }
-                finally
+
+                bool committed;
+                lock (_recordingSessionLock)
                 {
-                    SetOverlayState(state => state with
+                    committed = _recordingSession == sessionId;
+                    if (committed)
                     {
-                        ActiveProfileName = _recordingProfile?.Name,
-                        ActiveAppName = _recordingAppTitle
-                    });
-                    _models.PluginManager.EventBus.Publish(new RecordingStartedEvent
+                        _recordingAppProcess = appProcess;
+                        _recordingAppTitle = appTitle;
+                        _recordingAppUrl = appUrl;
+                        _recordingProfile = matchedProfile;
+                    }
+                }
+
+                if (!committed)
+                {
+                    Trace.WriteLine(
+                        $"[Dictation] Snapshot for session {sessionId} discarded — session no longer active."
+                    );
+                    return;
+                }
+
+                _audio.WhisperModeEnabled =
+                    matchedProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
+                SetOverlayState(state =>
+                    state with
                     {
-                        AppName = _recordingAppTitle,
-                        AppProcessName = _recordingAppProcess
-                    });
+                        ActiveProfileName = matchedProfile?.Name,
+                        ActiveAppName = appTitle
+                    }
+                );
+                _models.PluginManager.EventBus.Publish(
+                    new RecordingStartedEvent { AppName = appTitle, AppProcessName = appProcess }
+                );
+
+                try
+                {
+                    // AT-SPI URL walks on Wayland can take 2+ seconds on a
+                    // busy Gmail tree (busctl process spawn + D-Bus round
+                    // trip per node). Our orchestrator timeout has to
+                    // exceed the walker's own budget by a healthy margin —
+                    // otherwise this await cancels in the same window the
+                    // walker returns its result, and a perfectly good URL
+                    // gets discarded. Dictation has already finished by
+                    // this point, so the user isn't waiting on it.
+                    using var deferredCts = new CancellationTokenSource(
+                        TimeSpan.FromMilliseconds(4000)
+                    );
+                    var deferredUrl = await Task.Run(
+                            () => _activeWindow.GetBrowserUrl(false),
+                            deferredCts.Token
+                        )
+                        .ConfigureAwait(false);
+
+                    if (!string.IsNullOrWhiteSpace(deferredUrl))
+                    {
+                        // The URL came from whatever window is focused right now, which
+                        // may have changed since recording started. Re-snapshot and only
+                        // apply the rematch if we're still on the same window — otherwise
+                        // we'd bind this dictation to a URL from an unrelated tab/window.
+                        ActiveWindowSnapshot? verifySnap = null;
+                        try
+                        {
+                            // Match the initial-snapshot budget — 50 ms was
+                            // tighter than the per-provider 150 ms slice and
+                            // could return null on xdotool's multi-subprocess
+                            // chain, causing us to discard a valid URL just
+                            // because the same provider chain didn't finish
+                            // in time on the verification pass.
+                            using var verifyCts = new CancellationTokenSource(
+                                TimeSpan.FromMilliseconds(500)
+                            );
+                            verifySnap = await _activeWindow
+                                .GetActiveWindowSnapshotAsync(verifyCts.Token)
+                                .ConfigureAwait(false);
+                        }
+                        catch { }
+
+                        if (
+                            initialSnap is null
+                            || verifySnap is null
+                            || !IsSameWindow(initialSnap, verifySnap)
+                        )
+                        {
+                            Trace.WriteLine(
+                                "[Dictation] Deferred URL discarded — focused window changed mid-capture."
+                            );
+                        }
+                        else
+                        {
+                            // The URL is valid metadata regardless of whether it changes the
+                            // profile match — history records and downstream prompt processing
+                            // both consume _recordingAppUrl. Commit it once window identity is
+                            // verified, then separately decide whether the rematch should swap
+                            // the active profile (which we gate on a tier upgrade to avoid
+                            // churn/downgrade).
+                            lock (_recordingSessionLock)
+                            {
+                                if (_recordingSession != sessionId)
+                                {
+                                    return;
+                                }
+
+                                _recordingAppUrl = deferredUrl;
+                            }
+
+                            var rematch = _profiles.MatchProfile(appProcess, deferredUrl);
+                            if (
+                                rematch.Profile is not null
+                                && (int)rematch.Kind < (int)initialMatch.Kind
+                            )
+                            {
+                                lock (_recordingSessionLock)
+                                {
+                                    if (_recordingSession != sessionId)
+                                    {
+                                        return;
+                                    }
+
+                                    _recordingProfile = rematch.Profile;
+                                }
+
+                                SetOverlayState(state =>
+                                    state with
+                                    {
+                                        ActiveProfileName = rematch.Profile.Name
+                                    }
+                                );
+
+                                _audio.WhisperModeEnabled =
+                                    rematch.Profile.WhisperModeOverride
+                                    ?? _settings.Current.WhisperModeEnabled;
+                            }
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.Message}");
                 }
             });
             _recordingSnapshotTask = recordingSnapshotTask;
@@ -334,12 +678,22 @@ public sealed class DictationOrchestrator : IDisposable
 
     public async Task StopAsync()
     {
-        if (!await _toggleGate.WaitAsync(0)) return;
+        if (!await _toggleGate.WaitAsync(0))
+        {
+            return;
+        }
+
         var earlyCleanupDone = false;
         var wasRecording = false;
+        var gateReleased = false;
+        CancellationTokenSource? snapshotCts = null;
         try
         {
-            if (!_audio.IsRecording) return;
+            if (!_audio.IsRecording)
+            {
+                return;
+            }
+
             wasRecording = true;
 
             // Snapshot the cancel flag once we own the toggle gate. CancelAsync
@@ -355,79 +709,151 @@ public sealed class DictationOrchestrator : IDisposable
             _mediaPause.ResumeMedia();
             earlyCleanupDone = true;
             if (_settings.Current.SoundFeedbackEnabled)
+            {
                 _soundFeedback.PlayRecordingStopped();
+            }
+
             RecordingStateChanged?.Invoke(this, false);
+
+            // Snapshot the per-recording context into locals so the rest of
+            // this stop (transcription + insertion) reads a stable view even
+            // if a new StartAsync re-populates the instance fields. We also
+            // pull the active dictation CTS into a local so its token drives
+            // this dictation's transcription, then null the shared field.
+            //
+            // Cancel semantics after the gate release: CancelAsync uses
+            // `_activeDictationCts` to abort an in-flight dictation. Once we
+            // null it here, Escape can no longer cancel the transcription of
+            // this just-stopped dictation. If a new dictation starts before
+            // this transcription completes, the new StartAsync allocates a
+            // fresh CTS and CancelAsync targets the new (recording) dictation.
+            // The trade-off keeps Cancel's surface unambiguous: it always
+            // targets the live recording, never a background transcription.
+            snapshotCts = _activeDictationCts;
+            _activeDictationCts = null;
+            _hotkey.IsCancelShortcutEnabled = false;
+            _cancelRequested = false;
+
+            // Advance the recording session under the lock so any still-running
+            // active-window snapshot Task.Run (e.g. if AwaitRecordingSnapshotAsync
+            // timed out above) observes the new counter and drops its writes
+            // rather than clobbering a future dictation's _recording* fields.
+            // Capture the just-stopped session id in the context so the
+            // post-stop pipeline can suppress overlay/status writes once a
+            // newer dictation has taken ownership of the overlay.
+            RecordingContext recordingContext;
+            lock (_recordingSessionLock)
+            {
+                var stoppedSessionId = _recordingSession;
+                _recordingSession++;
+                recordingContext = new RecordingContext(
+                    stoppedSessionId,
+                    _recordingStart,
+                    _recordingAppProcess,
+                    _recordingAppTitle,
+                    _recordingAppUrl,
+                    _recordingWindowId,
+                    _recordingProfile,
+                    snapshotCts?.Token ?? CancellationToken.None
+                );
+
+                _recordingAppProcess = null;
+                _recordingAppTitle = null;
+                _recordingAppUrl = null;
+                _recordingWindowId = null;
+                _recordingProfile = null;
+                _recordingStart = default;
+            }
+
+            // Release the toggle gate now: audio capture is fully torn down
+            // and the per-recording context has been snapshotted. A new
+            // StartAsync can begin recording while transcription of the
+            // previous capture runs below.
+            _toggleGate.Release();
+            gateReleased = true;
 
             if (canceledThisStop)
             {
                 // User hit Escape while still recording: clean up audio/media
                 // (already done above) and surface "Canceled" without saving
                 // the WAV or running transcription.
-                SetOverlayState(state => state with
-                {
-                    IsOverlayVisible = true,
-                    ShowFeedback = true,
-                    FeedbackText = "Canceled",
-                    FeedbackIsError = false,
-                    IsRecording = false,
-                    StatusText = "Canceled",
-                    SessionStartedAtUtc = null
-                });
+                SetOverlayState(state =>
+                    state with
+                    {
+                        IsOverlayVisible = true,
+                        ShowFeedback = true,
+                        FeedbackText = "Canceled",
+                        FeedbackIsError = false,
+                        IsRecording = false,
+                        StatusText = "Canceled",
+                        SessionStartedAtUtc = null
+                    }
+                );
                 StatusMessage?.Invoke(this, "Canceled");
-                _models.PluginManager.EventBus.Publish(new RecordingStoppedEvent
-                {
-                    DurationSeconds = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav)
-                });
+                _models.PluginManager.EventBus.Publish(
+                    new RecordingStoppedEvent
+                    {
+                        DurationSeconds = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(
+                            wav
+                        )
+                    }
+                );
                 return;
             }
 
-            SetOverlayState(state => state with
-            {
-                IsOverlayVisible = true,
-                ShowFeedback = false,
-                FeedbackText = null,
-                FeedbackIsError = false,
-                IsRecording = false,
-                StatusText = "Processing…",
-                SessionStartedAtUtc = null
-            });
+            SetOverlayState(state =>
+                state with
+                {
+                    IsOverlayVisible = true,
+                    ShowFeedback = false,
+                    FeedbackText = null,
+                    FeedbackIsError = false,
+                    IsRecording = false,
+                    StatusText = "Processing…",
+                    SessionStartedAtUtc = null
+                }
+            );
             var duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
-            _models.PluginManager.EventBus.Publish(new RecordingStoppedEvent
-            {
-                DurationSeconds = duration
-            });
+            _models.PluginManager.EventBus.Publish(
+                new RecordingStoppedEvent { DurationSeconds = duration }
+            );
 
             var shortSpeechDecision = LinuxDictationShortSpeechPolicy.Classify(
                 duration,
                 LinuxDictationShortSpeechPolicy.ComputePeakLevel(wav),
-                _settings.Current.TranscribeShortQuietClipsAggressively);
+                _settings.Current.TranscribeShortQuietClipsAggressively
+            );
 
             if (shortSpeechDecision == LinuxShortSpeechDecision.DiscardTooShort)
             {
-                SetOverlayState(state => state with
-                {
-                    IsOverlayVisible = true,
-                    ShowFeedback = true,
-                    FeedbackText = "Too short",
-                    FeedbackIsError = true,
-                    IsRecording = false,
-                    StatusText = "Too short",
-                });
+                SetOverlayState(state =>
+                    state with
+                    {
+                        IsOverlayVisible = true,
+                        ShowFeedback = true,
+                        FeedbackText = "Too short",
+                        FeedbackIsError = true,
+                        IsRecording = false,
+                        StatusText = "Too short"
+                    }
+                );
                 StatusMessage?.Invoke(this, "Too short");
                 return;
             }
 
             if (shortSpeechDecision == LinuxShortSpeechDecision.DiscardNoSpeech)
             {
-                SetOverlayState(state => state with
-                {
-                    IsOverlayVisible = true,
-                    ShowFeedback = true,
-                    FeedbackText = "No speech detected",
-                    FeedbackIsError = true,
-                    IsRecording = false,
-                    StatusText = "No speech detected",
-                });
+                SetOverlayState(state =>
+                    state with
+                    {
+                        IsOverlayVisible = true,
+                        ShowFeedback = true,
+                        FeedbackText = "No speech detected",
+                        FeedbackIsError = true,
+                        IsRecording = false,
+                        StatusText = "No speech detected"
+                    }
+                );
                 StatusMessage?.Invoke(this, "No speech detected");
                 return;
             }
@@ -439,9 +865,7 @@ public sealed class DictationOrchestrator : IDisposable
             RecordingCaptured?.Invoke(this, path);
             Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
 
-            await TranscribeAndInsertAsync(
-                wav, path, duration,
-                _activeDictationCts?.Token ?? CancellationToken.None);
+            await TranscribeAndInsertAsync(wav, path, duration, recordingContext);
         }
         finally
         {
@@ -455,160 +879,235 @@ public sealed class DictationOrchestrator : IDisposable
                 _audioDucking.RestoreAudio();
                 _mediaPause.ResumeMedia();
             }
-            // Tear down per-dictation cancellation state. Disable the cancel
-            // shortcut FIRST so a late Escape press doesn't race with disposal
-            // of the CTS.
-            if (wasRecording)
+
+            // Dispose the snapshot CTS owned by this stop now that transcription
+            // has returned (or thrown). Disposal must happen AFTER
+            // TranscribeAndInsertAsync completes so any token registrations
+            // observed during the pipeline stay valid for its full lifetime.
+            if (snapshotCts is not null)
             {
-                _hotkey.IsCancelShortcutEnabled = false;
-                var cts = _activeDictationCts;
-                _activeDictationCts = null;
-                _cancelRequested = false;
-                if (cts is not null)
+                try
                 {
-                    try { cts.Dispose(); }
-                    catch (Exception ex)
-                    {
-                        Trace.WriteLine($"[Dictation] Active dictation CTS dispose failed: {ex.Message}");
-                    }
+                    snapshotCts.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[Dictation] Active dictation CTS dispose failed: {ex.Message}"
+                    );
                 }
             }
-            _toggleGate.Release();
+
+            if (!gateReleased)
+            {
+                _toggleGate.Release();
+            }
         }
     }
+
+    /// <summary>
+    ///     Projects an overlay StatusText string to one of the documented
+    ///     <c>typewhisper status</c> state labels (transcribing / injecting /
+    ///     idle). The <c>recording</c> label is sourced from the audio recorder,
+    ///     not StatusText, so it is not produced here. Kept pure and cheap —
+    ///     status reads must not block the UI thread.
+    /// </summary>
+    internal static string MapOverlayStatusToStateLabel(string? statusText)
+    {
+        if (statusText is null)
+        {
+            return "idle";
+        }
+
+        if (
+            statusText.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
+            || statusText.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return "transcribing";
+        }
+
+        // Overlay shows "Inserting…"; the documented CLI state is "injecting".
+        if (statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase))
+        {
+            return "injecting";
+        }
+
+        return "idle";
+    }
+
+    public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
+    public event EventHandler<bool>? RecordingStateChanged;
+    public event EventHandler<string>? TranscriptionCompleted;
+    public event EventHandler<string>? StatusMessage;
+    public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
     private async Task TranscribeAndInsertAsync(
         byte[] wav,
         string wavPath,
         double duration,
-        CancellationToken cancelToken)
+        RecordingContext context
+    )
     {
-        var effectiveModelId = _recordingProfile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
-        if (!string.IsNullOrWhiteSpace(effectiveModelId) && _models.ActiveModelId != effectiveModelId)
-        {
-            try
-            {
-                var loaded = await _models.EnsureModelLoadedAsync(effectiveModelId, cancelToken);
-                if (!loaded)
-                {
-                    ReportStatus($"Configured model '{effectiveModelId}' is not available.");
-                    ShowFeedback("Model unavailable.", isError: true);
-                    return;
-                }
-            }
-            catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
-            {
-                Trace.WriteLine($"[Dictation] Model load canceled by user ('{effectiveModelId}').");
-                ReportStatus("Canceled");
-                ShowFeedback("Canceled", isError: false);
-                return;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}");
-                ReportStatus($"Failed to load configured model: {ex.Message}");
-                ShowFeedback("Model load failed.", isError: true);
-                return;
-            }
-        }
+        var cancelToken = context.CancelToken;
+        var effectiveModelId =
+            context.Profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
 
-        var plugin = _models.ActiveTranscriptionPlugin;
-        if (plugin is null)
+        // Acquire an exclusive transcription lease: this serializes model-load +
+        // transcribe so a concurrently-starting dictation cannot swap the shared
+        // plugin's native model underneath this in-flight transcription. The
+        // lease is held for the whole method; `await using` releases it across
+        // every early return and exception below.
+        ModelManagerService.TranscriptionLease lease;
+        try
         {
-            ReportStatus("No transcription model loaded. WAV saved for review.");
-            ShowFeedback("No transcription model loaded.", isError: true);
+            lease = await _models.AcquireTranscriptionAsync(effectiveModelId, cancelToken);
+        }
+        catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
+        {
+            Trace.WriteLine($"[Dictation] Model load canceled by user ('{effectiveModelId}').");
+            ReportStatus(context, "Canceled");
+            ShowFeedback(context, "Canceled", false);
+            return;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}"
+            );
+            ReportStatus(context, $"Failed to load configured model: {ex.Message}");
+            ShowFeedback(context, "Model load failed.", true);
             return;
         }
 
-        ReportStatus($"Transcribing via {plugin.ProviderDisplayName}…");
+        await using var leaseScope = lease;
+        var plugin = lease.Plugin;
+
+        // Capture engine metadata while the lease is still held. The lease is
+        // released as soon as native transcription returns (see the finally
+        // below), so reading plugin.ProviderId / plugin.SelectedModelId during
+        // post-processing would race a concurrent dictation's model swap.
+        var engineProviderId = plugin.ProviderId;
+        var engineModelId = plugin.SelectedModelId;
+
+        ReportStatus(context, $"Transcribing via {plugin.ProviderDisplayName}…");
 
         var transcriptionCompletedPublished = false;
         try
         {
-            var effectiveLanguage = _recordingProfile?.InputLanguage ?? _settings.Current.Language;
-            var languageHint = effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
+            var effectiveLanguage = context.Profile?.InputLanguage ?? _settings.Current.Language;
+            var languageHint =
+                effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
             var translate = string.Equals(
-                _recordingProfile?.SelectedTask ?? _settings.Current.TranscriptionTask,
+                context.Profile?.SelectedTask ?? _settings.Current.TranscriptionTask,
                 "translate",
-                StringComparison.OrdinalIgnoreCase);
+                StringComparison.OrdinalIgnoreCase
+            );
 
             PluginTranscriptionResult? result;
             try
             {
                 result = await plugin.TranscribeAsync(
-                    wavAudio: wav, language: languageHint, translate: translate,
-                    prompt: null, ct: cancelToken);
+                    wav,
+                    languageHint,
+                    translate,
+                    null,
+                    cancelToken
+                );
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
                 Trace.WriteLine("[Dictation] Transcription canceled by user.");
-                ReportStatus("Canceled");
-                ShowFeedback("Canceled", isError: false);
+                ReportStatus(context, "Canceled");
+                ShowFeedback(context, "Canceled", false);
                 return;
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Dictation] Transcription failed: {ex}");
-                _models.PluginManager.EventBus.Publish(new TranscriptionFailedEvent
-                {
-                    ErrorMessage = ex.Message,
-                    ModelId = plugin.SelectedModelId,
-                    AppName = _recordingAppTitle
-                });
-                ReportStatus($"Transcription failed: {ex.Message}");
+                _models.PluginManager.EventBus.Publish(
+                    new TranscriptionFailedEvent
+                    {
+                        ErrorMessage = ex.Message,
+                        ModelId = engineModelId,
+                        AppName = context.AppTitle
+                    }
+                );
+                ReportStatus(context, $"Transcription failed: {ex.Message}");
                 _speechFeedback.AnnounceError(ex.Message);
-                ShowFeedback("Transcription failed.", isError: true);
+                ShowFeedback(context, "Transcription failed.", true);
                 return;
+            }
+            finally
+            {
+                // Native transcription is done — the shared plugin's model is
+                // no longer in use. Release _modelLock now so a concurrently
+                // starting dictation isn't blocked by the post-processing,
+                // insertion, and history work below. The scope-end dispose is
+                // a harmless idempotent no-op.
+                await leaseScope.DisposeAsync();
             }
 
             var rawText = result?.Text?.Trim();
             if (string.IsNullOrEmpty(rawText))
             {
-                ReportStatus("Transcription returned no text.");
-                ShowFeedback("Transcription returned no text.", isError: true);
+                ReportStatus(context, "Transcription returned no text.");
+                ShowFeedback(context, "Transcription returned no text.", true);
                 return;
             }
 
-            if (result?.NoSpeechProbability is > 0.8f && !_settings.Current.TranscribeShortQuietClipsAggressively)
+            if (
+                result?.NoSpeechProbability is > 0.8f
+                && !_settings.Current.TranscribeShortQuietClipsAggressively
+            )
             {
-                ReportStatus("No speech detected.");
-                ShowFeedback("No speech detected.", isError: true);
+                ReportStatus(context, "No speech detected.");
+                ShowFeedback(context, "No speech detected.", true);
                 return;
             }
 
             var pipelineContext = new PostProcessingContext
             {
                 SourceLanguage = result?.DetectedLanguage ?? languageHint,
-                ActiveAppName = _recordingAppTitle,
-                ActiveAppProcessName = _recordingAppProcess,
-                ProfileName = _recordingProfile?.Name,
+                ActiveAppName = context.AppTitle,
+                ActiveAppProcessName = context.AppProcess,
+                ProfileName = context.Profile?.Name,
                 AudioDurationSeconds = duration
             };
 
-            var promptAction = ResolvePromptAction();
-            if (_recordingProfile is not null)
+            var promptAction = ResolvePromptAction(context);
+            if (context.Profile is not null)
             {
                 Trace.WriteLine(
-                    $"[Dictation] Matched profile '{_recordingProfile.Name}' "
-                    + $"(process='{_recordingAppProcess ?? "<unknown>"}', "
-                    + $"url='{_recordingAppUrl ?? "<unknown>"}', "
-                    + $"promptAction='{promptAction?.Name ?? "<none>"}').");
+                    $"[Dictation] Matched profile '{context.Profile.Name}' "
+                    + $"(process='{context.AppProcess ?? "<unknown>"}', "
+                    + $"url='{context.AppUrl ?? "<unknown>"}', "
+                    + $"promptAction='{promptAction?.Name ?? "<none>"}')."
+                );
 
-                if (!string.IsNullOrWhiteSpace(_recordingProfile.PromptActionId) && promptAction is null)
+                if (
+                    !string.IsNullOrWhiteSpace(context.Profile.PromptActionId)
+                    && promptAction is null
+                )
                 {
-                    var message = $"Prompt action for profile '{_recordingProfile.Name}' is disabled or missing.";
-                    Trace.WriteLine($"[Dictation] {message} actionId='{_recordingProfile.PromptActionId}'.");
-                    ReportStatus(message);
+                    var message =
+                        $"Prompt action for profile '{context.Profile.Name}' is disabled or missing.";
+                    Trace.WriteLine(
+                        $"[Dictation] {message} actionId='{context.Profile.PromptActionId}'."
+                    );
+                    ReportStatus(context, message);
                 }
             }
 
-            var translationTarget = _recordingProfile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
-            var cleanupLevel = ResolveCleanupLevel(promptAction);
+            var translationTarget =
+                context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
+            var cleanupLevel = ResolveCleanupLevel(context, promptAction);
 
-            var pluginProcessors = _models.PluginManager.PostProcessors
-                .Select(processor => new PluginPostProcessor(
+            var pluginProcessors = _models
+                .PluginManager.PostProcessors.Select(processor => new PluginPostProcessor(
                     processor.Priority,
-                    (text, token) => processor.ProcessAsync(text, pipelineContext, token)))
+                    (text, token) => processor.ProcessAsync(text, pipelineContext, token)
+                ))
                 .ToList();
 
             var pipelineResult = await _pipeline.ProcessAsync(
@@ -616,87 +1115,128 @@ public sealed class DictationOrchestrator : IDisposable
                 new PipelineOptions
                 {
                     AppFormatter = AppFormatterService.Format,
-                    TargetProcessName = _recordingAppProcess,
+                    TargetProcessName = context.AppProcess,
                     DictionaryCorrector = _dictionary.ApplyCorrections,
                     VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
                         ? _vocabularyBoosting.Apply
                         : null,
-                    CleanupHandler = cleanupLevel == CleanupLevel.None
-                        ? null
-                        : (text, token) => _cleanup.CleanAsync(
-                            text,
-                            cleanupLevel,
-                            message =>
-                            {
-                                ReportStatus(message);
-                                return Task.CompletedTask;
-                            },
-                            token),
-                    SnippetExpander = text => _snippets.ApplySnippets(text, profileId: _recordingProfile?.Id),
+                    CleanupHandler =
+                        cleanupLevel == CleanupLevel.None
+                            ? null
+                            : (text, token) =>
+                                _cleanup.CleanAsync(
+                                    text,
+                                    cleanupLevel,
+                                    message =>
+                                    {
+                                        ReportStatus(context, message);
+                                        return Task.CompletedTask;
+                                    },
+                                    token
+                                ),
+                    SnippetExpander = text =>
+                        _snippets.ApplySnippets(text, profileId: context.Profile?.Id),
                     LlmHandler = promptAction is not null
-                        ? (text, token) => RunPromptActionAsync(promptAction, text, token)
+                        ? (text, token) => RunPromptActionAsync(context, promptAction, text, token)
                         : null,
                     TranslationHandler = !string.IsNullOrWhiteSpace(translationTarget)
-                        ? (text, source, target, token) => _translation.TranslateAsync(text, source, target, token)
+                        ? (text, source, target, token) =>
+                            _translation.TranslateAsync(text, source, target, token)
                         : null,
-                    TranslationTarget = string.IsNullOrWhiteSpace(translationTarget) ? null : translationTarget,
+                    TranslationTarget = string.IsNullOrWhiteSpace(translationTarget)
+                        ? null
+                        : translationTarget,
                     EffectiveSourceLanguage = languageHint,
                     DetectedLanguage = result?.DetectedLanguage,
                     PluginPostProcessors = pluginProcessors,
                     StatusCallback = status =>
                     {
-                        ReportStatus(status == "AI"
-                            ? "Processing prompt action…"
-                            : $"Processing {status}…");
+                        ReportStatus(
+                            context,
+                            status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
+                        );
                         return Task.CompletedTask;
                     }
                 },
-                cancelToken);
+                cancelToken
+            );
 
             var commandResult = _voiceCommands.Parse(pipelineResult.Text);
-            var finalText = ApplyProfileStyleFormatting(commandResult.Text);
+            var finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
 
             TranscriptionCompleted?.Invoke(this, finalText);
             _speechFeedback.AnnounceTranscriptionComplete(finalText);
-            _models.PluginManager.EventBus.Publish(new TranscriptionCompletedEvent
-            {
-                RawText = rawText,
-                Text = finalText,
-                DetectedLanguage = result?.DetectedLanguage,
-                DurationSeconds = duration,
-                EngineUsed = plugin.ProviderId,
-                ModelId = plugin.SelectedModelId,
-                ProfileName = _recordingProfile?.Name,
-                AppName = _recordingAppTitle,
-                AppProcessName = _recordingAppProcess,
-                Url = _recordingAppUrl
-            });
+            _models.PluginManager.EventBus.Publish(
+                new TranscriptionCompletedEvent
+                {
+                    RawText = rawText,
+                    Text = finalText,
+                    DetectedLanguage = result?.DetectedLanguage,
+                    DurationSeconds = duration,
+                    EngineUsed = engineProviderId,
+                    ModelId = engineModelId,
+                    ProfileName = context.Profile?.Name,
+                    AppName = context.AppTitle,
+                    AppProcessName = context.AppProcess,
+                    Url = context.AppUrl
+                }
+            );
             transcriptionCompletedPublished = true;
 
             var actionPlugin = ResolveActionPlugin(promptAction);
+
+            // Yield focus back to the user's target window before any
+            // synthesized keystroke fires. The dictation overlay is a
+            // Topmost / ShowActivated=False window, but on Wayland a
+            // visible app-owned surface can still hold keyboard focus —
+            // and when ydotool's virtual keyboard fires Ctrl+V it goes
+            // to whatever has focus, so a still-visible overlay would
+            // swallow the paste. wtype never sent a key on GNOME/KDE
+            // (compositor-rejected), so this path was latent until the
+            // ydotool backend went in.
+            if (actionPlugin is null && !commandResult.CancelInsertion)
+            {
+                // Surface the inject phase so `typewhisper status` reports
+                // `injecting` while a long transcript is still being typed.
+                ReportStatus(context, "Inserting…");
+                await YieldFocusForInsertionAsync().ConfigureAwait(false);
+            }
+
             InsertionResult insertion;
             try
             {
-                insertion = commandResult.CancelInsertion
-                    ? InsertionResult.NoText
-                    : actionPlugin is null
-                    ? await _textInsertion.InsertTextAsync(new TextInsertionRequest(
-                        Text: finalText,
-                        AutoPaste: _settings.Current.AutoPaste,
-                        TargetWindowId: _recordingWindowId,
-                        TargetProcessName: _recordingAppProcess,
-                        TargetWindowTitle: _recordingAppTitle,
-                        AutoEnter: commandResult.AutoEnter,
-                        Strategy: ResolveInsertionStrategy(_recordingAppProcess)))
-                    : await ExecuteActionPluginAsync(actionPlugin, finalText, rawText, result?.DetectedLanguage, cancelToken);
+                insertion =
+                    commandResult.CancelInsertion
+                        ? InsertionResult.NoText
+                        : actionPlugin is null
+                            ? await _textInsertion.InsertTextAsync(
+                                new TextInsertionRequest(
+                                    finalText,
+                                    _settings.Current.AutoPaste,
+                                    context.WindowId,
+                                    context.AppProcess,
+                                    context.AppTitle,
+                                    commandResult.AutoEnter,
+                                    ResolveInsertionStrategy(context.AppProcess)
+                                )
+                            )
+                            : await ExecuteActionPluginAsync(
+                                actionPlugin,
+                                context,
+                                finalText,
+                                rawText,
+                                result?.DetectedLanguage,
+                                cancelToken
+                            );
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
                 Trace.WriteLine(
                     $"[Dictation] Action canceled by user "
-                    + $"(action='{actionPlugin?.ActionId ?? "<none>"}').");
-                ReportStatus("Canceled");
-                ShowFeedback("Canceled", isError: false);
+                    + $"(action='{actionPlugin?.ActionId ?? "<none>"}')."
+                );
+                ReportStatus(context, "Canceled");
+                ShowFeedback(context, "Canceled", false);
                 return;
             }
             catch (Exception ex)
@@ -705,57 +1245,68 @@ public sealed class DictationOrchestrator : IDisposable
                 // as a transcription failure — TranscriptionCompletedEvent has
                 // already fired. Surface a separate insertion-failure status.
                 Trace.WriteLine(
-                    $"[Dictation] Text insertion/action failed (target='{_recordingAppProcess}', "
-                    + $"action='{actionPlugin?.ActionId ?? "<none>"}'): {ex}");
-                ReportStatus($"Insertion failed: {ex.Message}");
-                ShowFeedback("Insertion failed.", isError: true);
+                    $"[Dictation] Text insertion/action failed (target='{context.AppProcess}', "
+                    + $"action='{actionPlugin?.ActionId ?? "<none>"}'): {ex}"
+                );
+                ReportStatus(context, $"Insertion failed: {ex.Message}");
+                ShowFeedback(context, "Insertion failed.", true);
                 return;
             }
 
             var completionMessage = insertion switch
             {
-                InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 => "Pressed Enter.",
+                InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 =>
+                    "Pressed Enter.",
                 InsertionResult.Pasted => $"Typed {finalText.Length} char(s).",
                 InsertionResult.Typed => $"Typed {finalText.Length} char(s).",
-                InsertionResult.CopiedToClipboard => "Copied to clipboard (paste with Ctrl+V).",
+                InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
                 InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.ActionFailed => "Action failed.",
                 InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-                InsertionResult.MissingPasteTool => $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
-                InsertionResult.Failed => "Text insertion failed. Dictated text could not be copied or pasted.",
+                InsertionResult.MissingPasteTool =>
+                    $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
+                InsertionResult.Failed =>
+                    "Text insertion failed. Dictated text could not be copied or pasted.",
                 InsertionResult.NoText when commandResult.CancelInsertion => "Dictation canceled.",
-                _ => "Done.",
+                _ => "Done."
             };
-            var isError = insertion is InsertionResult.Failed
-                or InsertionResult.ActionFailed
-                or InsertionResult.MissingClipboardTool
-                or InsertionResult.MissingPasteTool;
-            ReportStatus(completionMessage);
-            ShowFeedback(
-                completionMessage,
-                isError: isError);
+            var isError =
+                insertion
+                    is InsertionResult.Failed
+                    or InsertionResult.ActionFailed
+                    or InsertionResult.MissingClipboardTool
+                    or InsertionResult.MissingPasteTool;
+            ReportStatus(context, completionMessage);
+            ShowFeedback(context, completionMessage, isError);
 
-            if (insertion is InsertionResult.Pasted or InsertionResult.Typed or InsertionResult.CopiedToClipboard)
+            if (
+                insertion
+                is InsertionResult.Pasted
+                or InsertionResult.Typed
+                or InsertionResult.CopiedToClipboard
+            )
             {
-                _models.PluginManager.EventBus.Publish(new TextInsertedEvent
-                {
-                    Text = finalText,
-                    TargetApp = _recordingAppProcess
-                });
+                _models.PluginManager.EventBus.Publish(
+                    new TextInsertedEvent { Text = finalText, TargetApp = context.AppProcess }
+                );
             }
 
             var transcriptionId = Guid.NewGuid().ToString();
-            var timestamp = _recordingStart == default ? DateTime.UtcNow : _recordingStart;
+            var timestamp =
+                context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
             _recentTranscriptions.RecordTranscription(
                 transcriptionId,
                 finalText,
                 timestamp,
-                _recordingAppTitle,
-                _recordingAppProcess);
+                context.AppTitle,
+                context.AppProcess
+            );
 
             // Write to history last so stats reflect the just-completed capture.
             if (_settings.Current.SaveToHistoryEnabled)
+            {
                 AddHistoryRecord(
+                    context,
                     transcriptionId,
                     timestamp,
                     rawText,
@@ -765,10 +1316,16 @@ public sealed class DictationOrchestrator : IDisposable
                     wavPath,
                     insertion,
                     pipelineResult,
-                    cleanupLevel);
+                    cleanupLevel,
+                    engineProviderId,
+                    engineModelId
+                );
+            }
 
             if (_settings.Current.MemoryEnabled)
+            {
                 FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
+            }
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
@@ -777,8 +1334,8 @@ public sealed class DictationOrchestrator : IDisposable
             // "Canceled" rather than a transcription failure regardless of
             // whether TranscriptionCompletedEvent had fired.
             Trace.WriteLine("[Dictation] Pipeline canceled by user.");
-            ReportStatus("Canceled");
-            ShowFeedback("Canceled", isError: false);
+            ReportStatus(context, "Canceled");
+            ShowFeedback(context, "Canceled", false);
         }
         catch (Exception ex) when (!transcriptionCompletedPublished)
         {
@@ -788,15 +1345,17 @@ public sealed class DictationOrchestrator : IDisposable
             // insertion try/catches above handle their own phases without
             // reaching here.
             Trace.WriteLine($"[Dictation] Post-transcription processing failed: {ex}");
-            _models.PluginManager.EventBus.Publish(new TranscriptionFailedEvent
-            {
-                ErrorMessage = ex.Message,
-                ModelId = plugin.SelectedModelId,
-                AppName = _recordingAppTitle
-            });
-            ReportStatus($"Transcription failed: {ex.Message}");
+            _models.PluginManager.EventBus.Publish(
+                new TranscriptionFailedEvent
+                {
+                    ErrorMessage = ex.Message,
+                    ModelId = engineModelId,
+                    AppName = context.AppTitle
+                }
+            );
+            ReportStatus(context, $"Transcription failed: {ex.Message}");
             _speechFeedback.AnnounceError(ex.Message);
-            ShowFeedback("Transcription failed.", isError: true);
+            ShowFeedback(context, "Transcription failed.", true);
         }
         catch (Exception ex)
         {
@@ -811,25 +1370,29 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private PromptAction? ResolvePromptAction()
+    private PromptAction? ResolvePromptAction(RecordingContext context)
     {
-        var promptActionId = _recordingProfile?.PromptActionId;
+        var promptActionId = context.Profile?.PromptActionId;
         if (string.IsNullOrWhiteSpace(promptActionId))
+        {
             return null;
+        }
 
         return _promptActions.EnabledActions.FirstOrDefault(action => action.Id == promptActionId);
     }
 
     private async Task<string> RunPromptActionAsync(
+        RecordingContext context,
         PromptAction promptAction,
         string text,
-        CancellationToken token)
+        CancellationToken token
+    )
     {
         try
         {
             var message = $"Running prompt action '{promptAction.Name}'...";
             Trace.WriteLine($"[Dictation] {message}");
-            ReportStatus(message);
+            ReportStatus(context, message);
             return await _promptProcessing.ProcessAsync(promptAction, text, token);
         }
         catch (OperationCanceledException)
@@ -840,18 +1403,20 @@ public sealed class DictationOrchestrator : IDisposable
         {
             var message = $"Prompt action '{promptAction.Name}' failed: {ex.Message}";
             Trace.WriteLine($"[Dictation] {message}");
-            ReportStatus(message);
+            ReportStatus(context, message);
             throw;
         }
     }
 
-    private CleanupLevel ResolveCleanupLevel(PromptAction? promptAction)
+    private CleanupLevel ResolveCleanupLevel(RecordingContext context, PromptAction? promptAction)
     {
-        if (_recordingProfile is null)
+        if (context.Profile is null)
+        {
             return _settings.Current.CleanupLevel;
+        }
 
-        var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
-        var cleanupLevel = _recordingProfile.CleanupLevelOverride ?? style.CleanupLevel;
+        var style = ProfileStylePresetService.Resolve(context.Profile.StylePreset);
+        var cleanupLevel = context.Profile.CleanupLevelOverride ?? style.CleanupLevel;
 
         // Profile prompt actions are already LLM transforms. Avoid running a
         // separate LLM cleanup pass first, because the action should receive
@@ -861,16 +1426,20 @@ public sealed class DictationOrchestrator : IDisposable
             : cleanupLevel;
     }
 
-    private string ApplyProfileStyleFormatting(string text)
+    private string ApplyProfileStyleFormatting(RecordingContext context, string text)
     {
-        if (_recordingProfile is null)
+        if (context.Profile is null)
+        {
             return text;
+        }
 
-        var style = ProfileStylePresetService.Resolve(_recordingProfile.StylePreset);
-        var developerFormattingEnabled = _recordingProfile.DeveloperFormattingOverride
-            ?? style.DeveloperFormattingEnabled;
+        var style = ProfileStylePresetService.Resolve(context.Profile.StylePreset);
+        var developerFormattingEnabled =
+            context.Profile.DeveloperFormattingOverride ?? style.DeveloperFormattingEnabled;
         if (!developerFormattingEnabled)
+        {
             return text;
+        }
 
         var fileReference = _ideFileReferences.TryFormatReferenceCommand(text);
         return fileReference ?? _developerFormatting.Format(text);
@@ -879,65 +1448,118 @@ public sealed class DictationOrchestrator : IDisposable
     private TextInsertionStrategy ResolveInsertionStrategy(string? processName)
     {
         if (string.IsNullOrWhiteSpace(processName))
+        {
             return TextInsertionStrategy.Auto;
+        }
 
         var strategies = _settings.Current.AppInsertionStrategies;
         if (strategies is null || strategies.Count == 0)
+        {
             return TextInsertionStrategy.Auto;
+        }
 
         var process = ProcessNameNormalizer.Normalize(processName);
         foreach (var entry in strategies)
         {
-            if (string.Equals(entry.Key, processName, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(entry.Key, process, StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(entry.Key, processName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(entry.Key, process, StringComparison.OrdinalIgnoreCase)
+            )
+            {
                 return entry.Value;
+            }
         }
 
         return TextInsertionStrategy.Auto;
     }
 
-    private static string ClipboardToolMissingMessage() =>
-        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+    private static string ClipboardToolMissingMessage()
+    {
+        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
             ? "Text insertion failed. Install wl-clipboard to enable clipboard insertion."
             : "Text insertion failed. Install xclip to enable clipboard insertion.";
+    }
+
+    /// <summary>
+    ///     Reason-aware fallback notification for the
+    ///     <see cref="InsertionResult.CopiedToClipboard" /> branch. The detail
+    ///     comes from <see cref="TextInsertionService.LastFailureReason" />,
+    ///     which the service sets on the same call that produced this result —
+    ///     so we can guide the user to the actual setup gap (e.g. ydotool not
+    ///     running) instead of the generic "paste with Ctrl+V" line.
+    /// </summary>
+    private string ClipboardFallbackMessage()
+    {
+        return _textInsertion.LastFailureReason switch
+        {
+            InsertionFailureReason.WtypeCompositorUnsupported =>
+                "Copied to clipboard. Compositor doesn't support direct typing — set up ydotool from Settings → Text insertion to enable auto-paste.",
+            InsertionFailureReason.YdotoolSocketUnreachable =>
+                "Copied to clipboard. ydotool socket not reachable — open Settings → Text insertion to check daemon status.",
+            InsertionFailureReason.NoWaylandTypingTool =>
+                $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
+            InsertionFailureReason.FocusFailed =>
+                "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
+            _ => "Copied to clipboard (paste with Ctrl+V)."
+        };
+    }
 
     private IActionPlugin? ResolveActionPlugin(PromptAction? promptAction)
     {
         if (string.IsNullOrWhiteSpace(promptAction?.TargetActionPluginId))
+        {
             return null;
+        }
 
         return _models.PluginManager.ActionPlugins.FirstOrDefault(plugin =>
-            string.Equals(plugin.PluginId, promptAction.TargetActionPluginId, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(plugin.ActionId, promptAction.TargetActionPluginId, StringComparison.OrdinalIgnoreCase));
+            string.Equals(
+                plugin.PluginId,
+                promptAction.TargetActionPluginId,
+                StringComparison.OrdinalIgnoreCase
+            )
+            || string.Equals(
+                plugin.ActionId,
+                promptAction.TargetActionPluginId,
+                StringComparison.OrdinalIgnoreCase
+            )
+        );
     }
 
     private async Task<InsertionResult> ExecuteActionPluginAsync(
         IActionPlugin actionPlugin,
+        RecordingContext context,
         string inputText,
         string rawText,
         string? detectedLanguage,
-        CancellationToken cancelToken)
+        CancellationToken cancelToken
+    )
     {
         var result = await actionPlugin.ExecuteAsync(
             inputText,
             new ActionContext(
-                _recordingAppTitle,
-                _recordingAppProcess,
-                _recordingAppUrl,
+                context.AppTitle,
+                context.AppProcess,
+                context.AppUrl,
                 detectedLanguage,
-                rawText),
-            cancelToken);
+                rawText
+            ),
+            cancelToken
+        );
 
-        _models.PluginManager.EventBus.Publish(new ActionCompletedEvent
-        {
-            ActionId = actionPlugin.ActionId,
-            Success = result.Success,
-            Message = result.Message,
-            AppName = _recordingAppTitle
-        });
+        _models.PluginManager.EventBus.Publish(
+            new ActionCompletedEvent
+            {
+                ActionId = actionPlugin.ActionId,
+                Success = result.Success,
+                Message = result.Message,
+                AppName = context.AppTitle
+            }
+        );
 
         if (!string.IsNullOrWhiteSpace(result.Message))
-            ReportStatus(result.Message);
+        {
+            ReportStatus(context, result.Message);
+        }
 
         return result.Success ? InsertionResult.ActionHandled : InsertionResult.ActionFailed;
     }
@@ -956,22 +1578,30 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         task.ContinueWith(
-            t => Trace.WriteLine($"[Dictation] {label} faulted: {t.Exception?.GetBaseException().Message}"),
+            t =>
+                Trace.WriteLine(
+                    $"[Dictation] {label} faulted: {t.Exception?.GetBaseException().Message}"
+                ),
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+            TaskScheduler.Default
+        );
     }
 
     private string BuildRecordingStartFailureMessage(Exception? ex)
     {
         var selectedDevice = ResolveSelectedInputDeviceForMessage();
         if (selectedDevice is null)
+        {
             return "Could not start recording. No microphone input device is available.";
+        }
 
         var baseMessage = $"Could not start recording from '{selectedDevice.Name}'.";
         var detail = ex?.Message;
         if (!string.IsNullOrWhiteSpace(detail))
+        {
             baseMessage += $" {detail}.";
+        }
 
         return IsBluetoothDeviceName(selectedDevice.Name)
             ? $"{baseMessage} Bluetooth headsets must be in a microphone-capable headset profile; switch the device input profile or choose another microphone."
@@ -984,7 +1614,8 @@ public sealed class DictationOrchestrator : IDisposable
         {
             return _audio.ResolveConfiguredDevice(
                 _settings.Current.SelectedMicrophoneDevice,
-                _settings.Current.SelectedMicrophoneDeviceId);
+                _settings.Current.SelectedMicrophoneDeviceId
+            );
         }
         catch
         {
@@ -992,13 +1623,16 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private static bool IsBluetoothDeviceName(string name) =>
-        name.Contains("airpod", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("bluetooth", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("bluez", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
+    private static bool IsBluetoothDeviceName(string name)
+    {
+        return name.Contains("airpod", StringComparison.OrdinalIgnoreCase)
+               || name.Contains("bluetooth", StringComparison.OrdinalIgnoreCase)
+               || name.Contains("bluez", StringComparison.OrdinalIgnoreCase)
+               || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
+    }
 
     private void AddHistoryRecord(
+        RecordingContext context,
         string id,
         DateTime timestamp,
         string rawText,
@@ -1008,39 +1642,60 @@ public sealed class DictationOrchestrator : IDisposable
         string wavPath,
         InsertionResult insertion,
         PostProcessingResult pipelineResult,
-        CleanupLevel cleanupLevel)
+        CleanupLevel cleanupLevel,
+        string engineUsed,
+        string? modelUsed
+    )
     {
         try
         {
-            var engine = _models.ActiveTranscriptionPlugin?.ProviderId ?? "unknown";
-            var model = _models.ActiveTranscriptionPlugin?.SelectedModelId;
-            var language = result?.DetectedLanguage
+            var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
+            var model = modelUsed;
+            var language =
+                result?.DetectedLanguage
                 ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
 
-            _history.AddRecord(new TranscriptionRecord
-            {
-                Id = id,
-                Timestamp = timestamp,
-                RawText = rawText,
-                FinalText = finalText,
-                AppName = _recordingAppTitle,
-                AppProcessName = _recordingAppProcess,
-                AppUrl = _recordingAppUrl,
-                DurationSeconds = duration,
-                Language = language,
-                ProfileName = _recordingProfile?.Name,
-                EngineUsed = engine,
-                ModelUsed = model,
-                AudioFileName = Path.GetFileName(wavPath),
-                InsertionStatus = ToTextInsertionStatus(insertion),
-                InsertionFailureReason = InsertionFailureReasonFor(insertion),
-                CleanupLevelUsed = cleanupLevel,
-                CleanupApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Cleanup),
-                SnippetApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Snippets),
-                DictionaryCorrectionApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Dictionary),
-                PromptActionApplied = WasPipelineStepSucceeded(pipelineResult, PostProcessingStepNames.Llm),
-                TranslationApplied = WasPipelineStepChanged(pipelineResult, PostProcessingStepNames.Translation),
-            });
+            _history.AddRecord(
+                new TranscriptionRecord
+                {
+                    Id = id,
+                    Timestamp = timestamp,
+                    RawText = rawText,
+                    FinalText = finalText,
+                    AppName = context.AppTitle,
+                    AppProcessName = context.AppProcess,
+                    AppUrl = context.AppUrl,
+                    DurationSeconds = duration,
+                    Language = language,
+                    ProfileName = context.Profile?.Name,
+                    EngineUsed = engine,
+                    ModelUsed = model,
+                    AudioFileName = Path.GetFileName(wavPath),
+                    InsertionStatus = ToTextInsertionStatus(insertion),
+                    InsertionFailureReason = InsertionFailureReasonFor(insertion),
+                    CleanupLevelUsed = cleanupLevel,
+                    CleanupApplied = WasPipelineStepChanged(
+                        pipelineResult,
+                        PostProcessingStepNames.Cleanup
+                    ),
+                    SnippetApplied = WasPipelineStepChanged(
+                        pipelineResult,
+                        PostProcessingStepNames.Snippets
+                    ),
+                    DictionaryCorrectionApplied = WasPipelineStepChanged(
+                        pipelineResult,
+                        PostProcessingStepNames.Dictionary
+                    ),
+                    PromptActionApplied = WasPipelineStepSucceeded(
+                        pipelineResult,
+                        PostProcessingStepNames.Llm
+                    ),
+                    TranslationApplied = WasPipelineStepChanged(
+                        pipelineResult,
+                        PostProcessingStepNames.Translation
+                    )
+                }
+            );
         }
         catch (Exception ex)
         {
@@ -1048,8 +1703,9 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private static TextInsertionStatus ToTextInsertionStatus(InsertionResult insertion) =>
-        insertion switch
+    private static TextInsertionStatus ToTextInsertionStatus(InsertionResult insertion)
+    {
+        return insertion switch
         {
             InsertionResult.Pasted => TextInsertionStatus.Pasted,
             InsertionResult.Typed => TextInsertionStatus.Typed,
@@ -1060,53 +1716,153 @@ public sealed class DictationOrchestrator : IDisposable
             InsertionResult.MissingClipboardTool => TextInsertionStatus.MissingClipboardTool,
             InsertionResult.MissingPasteTool => TextInsertionStatus.MissingPasteTool,
             InsertionResult.Failed => TextInsertionStatus.Failed,
-            _ => TextInsertionStatus.Unknown,
+            _ => TextInsertionStatus.Unknown
         };
+    }
 
-    private static bool WasPipelineStepChanged(PostProcessingResult result, string name) =>
-        result.Steps.Any(step =>
-            step.Changed && string.Equals(step.Name, name, StringComparison.OrdinalIgnoreCase));
+    private static bool WasPipelineStepChanged(PostProcessingResult result, string name)
+    {
+        return result.Steps.Any(step =>
+            step.Changed && string.Equals(step.Name, name, StringComparison.OrdinalIgnoreCase)
+        );
+    }
 
-    private static bool WasPipelineStepSucceeded(PostProcessingResult result, string name) =>
-        result.Steps.Any(step =>
-            step.Succeeded && string.Equals(step.Name, name, StringComparison.OrdinalIgnoreCase));
+    private static bool WasPipelineStepSucceeded(PostProcessingResult result, string name)
+    {
+        return result.Steps.Any(step =>
+            step.Succeeded && string.Equals(step.Name, name, StringComparison.OrdinalIgnoreCase)
+        );
+    }
 
-    private static string? InsertionFailureReasonFor(InsertionResult insertion) =>
-        insertion switch
+    private static string? InsertionFailureReasonFor(InsertionResult insertion)
+    {
+        return insertion switch
         {
             InsertionResult.ActionFailed => "Action plugin failed.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
             InsertionResult.Failed => "Text insertion failed.",
-            _ => null,
+            _ => null
         };
+    }
 
     private void ReportStatus(string message)
     {
         StatusMessage?.Invoke(this, message);
-        SetOverlayState(state => state with
+        SetOverlayState(state =>
+            state with
+            {
+                IsOverlayVisible = true,
+                StatusText = message,
+                ShowFeedback = false,
+                FeedbackText = null
+            }
+        );
+    }
+
+    // Wait a short beat before firing the synthesized paste/type so the
+    // compositor has time to settle any in-flight focus state. We
+    // deliberately do NOT mutate the overlay here — an earlier version
+    // hid the overlay via SetOverlayState, which flipped
+    // HasVisibleContent off and triggered Avalonia's Window.Hide().
+    // On Wayland with ShowActivated=False / Topmost=True, the matching
+    // Show() that fires on the next StartAsync can fail to re-display
+    // the window — the overlay "disappears" for every dictation after
+    // the first, even though dictation itself keeps working. The
+    // overlay is already configured to not grab keyboard focus, so
+    // there's no need to hide it for the paste to land correctly.
+    private static Task YieldFocusForInsertionAsync()
+    {
+        return Task.Delay(90);
+    }
+
+    private static bool IsSameWindow(ActiveWindowSnapshot a, ActiveWindowSnapshot b)
+    {
+        if (a.WindowId is not null && b.WindowId is not null)
         {
-            IsOverlayVisible = true,
-            StatusText = message,
-            ShowFeedback = false,
-            FeedbackText = null
-        });
+            return string.Equals(a.WindowId, b.WindowId, StringComparison.Ordinal);
+        }
+
+        return string.Equals(a.ProcessName, b.ProcessName, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(a.AppId, b.AppId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    ///     <see cref="ReportStatus" /> variant that suppresses overlay/status updates
+    ///     once a newer dictation has taken over the overlay. The
+    ///     <see cref="StatusMessage" /> event still fires for observers that care
+    ///     about completion (history/log surfaces), but the visible overlay is left
+    ///     alone so the live recording's "Recording…" status is not clobbered.
+    /// </summary>
+    private void ReportStatus(RecordingContext context, string message)
+    {
+        StatusMessage?.Invoke(this, message);
+        if (!IsContextStillOwningOverlay(context))
+        {
+            return;
+        }
+
+        SetOverlayState(state =>
+            state with
+            {
+                IsOverlayVisible = true,
+                StatusText = message,
+                ShowFeedback = false,
+                FeedbackText = null
+            }
+        );
     }
 
     private void ShowFeedback(string text, bool isError)
     {
-        SetOverlayState(state => state with
+        SetOverlayState(state =>
+            state with
+            {
+                IsOverlayVisible = false,
+                ShowFeedback = true,
+                FeedbackIsError = isError,
+                FeedbackText = text,
+                PartialText = null,
+                IsRecording = false,
+                ActiveProfileName = null,
+                ActiveAppName = null,
+                SessionStartedAtUtc = null
+            }
+        );
+    }
+
+    /// <summary>
+    ///     <see cref="ShowFeedback" /> variant that no-ops once a newer dictation has
+    ///     taken over the overlay. Prevents the previous recording's terminal
+    ///     feedback ("Typed N char(s)", "Transcription failed", "Canceled") from
+    ///     hiding the new recording's overlay.
+    /// </summary>
+    private void ShowFeedback(RecordingContext context, string text, bool isError)
+    {
+        if (!IsContextStillOwningOverlay(context))
         {
-            IsOverlayVisible = false,
-            ShowFeedback = true,
-            FeedbackIsError = isError,
-            FeedbackText = text,
-            PartialText = null,
-            IsRecording = false,
-            ActiveProfileName = null,
-            ActiveAppName = null,
-            SessionStartedAtUtc = null
-        });
+            return;
+        }
+
+        ShowFeedback(text, isError);
+    }
+
+    /// <summary>
+    ///     True if no newer dictation has started since the context was captured.
+    ///     StopAsync increments <c>_recordingSession</c> exactly once at the
+    ///     transition out of recording, so the just-stopped context is still
+    ///     "current" while <c>_recordingSession == context.SessionId + 1</c>. Any
+    ///     higher value means a subsequent StartAsync has claimed the overlay.
+    /// </summary>
+    private bool IsContextStillOwningOverlay(RecordingContext context)
+    {
+        int current;
+        lock (_recordingSessionLock)
+        {
+            current = _recordingSession;
+        }
+
+        return current <= context.SessionId + 1;
     }
 
     private void RollBackStartedRecording()
@@ -1114,33 +1870,55 @@ public sealed class DictationOrchestrator : IDisposable
         try
         {
             if (_audio.IsRecording)
+            {
                 _audio.StopRecording();
+            }
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Failed to stop recording during start rollback: {ex.Message}");
+            Trace.WriteLine(
+                $"[Dictation] Failed to stop recording during start rollback: {ex.Message}"
+            );
         }
 
-        try { _audioDucking.RestoreAudio(); }
-        catch (Exception ex) { Trace.WriteLine($"[Dictation] Failed to restore audio during start rollback: {ex.Message}"); }
+        try
+        {
+            _audioDucking.RestoreAudio();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[Dictation] Failed to restore audio during start rollback: {ex.Message}"
+            );
+        }
 
-        try { _mediaPause.ResumeMedia(); }
-        catch (Exception ex) { Trace.WriteLine($"[Dictation] Failed to resume media during start rollback: {ex.Message}"); }
+        try
+        {
+            _mediaPause.ResumeMedia();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[Dictation] Failed to resume media during start rollback: {ex.Message}"
+            );
+        }
 
         RecordingStateChanged?.Invoke(this, false);
-        SetOverlayState(state => state with
-        {
-            IsOverlayVisible = false,
-            ShowFeedback = false,
-            FeedbackIsError = false,
-            FeedbackText = null,
-            PartialText = null,
-            IsRecording = false,
-            StatusText = "Ready",
-            ActiveProfileName = null,
-            ActiveAppName = null,
-            SessionStartedAtUtc = null
-        });
+        SetOverlayState(state =>
+            state with
+            {
+                IsOverlayVisible = false,
+                ShowFeedback = false,
+                FeedbackIsError = false,
+                FeedbackText = null,
+                PartialText = null,
+                IsRecording = false,
+                StatusText = "Ready",
+                ActiveProfileName = null,
+                ActiveAppName = null,
+                SessionStartedAtUtc = null
+            }
+        );
     }
 
     private void SetOverlayState(Func<DictationOverlayState, DictationOverlayState> updater)
@@ -1157,45 +1935,6 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _disposed = true;
-
-        if (_toggleHandler is not null) _hotkey.DictationToggleRequested -= _toggleHandler;
-        if (_startHandler is not null) _hotkey.DictationStartRequested -= _startHandler;
-        if (_stopHandler is not null) _hotkey.DictationStopRequested -= _stopHandler;
-        if (_cancelHandler is not null) _hotkey.CancelRequested -= _cancelHandler;
-        if (_hookFailedHandler is not null) _hotkey.HookFailed -= _hookFailedHandler;
-
-        // If we're shutting down mid-recording, the audio capture is still
-        // active and ducking/media-pause are still applied. Stop the capture
-        // and undo the playback effects before tearing down anything else,
-        // otherwise the user is left with a muted system after exit.
-        if (_audio.IsRecording)
-        {
-            try { _audio.StopRecording(); }
-            catch (Exception ex) { Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.Message}"); }
-
-            try { _audioDucking.RestoreAudio(); }
-            catch (Exception ex) { Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.Message}"); }
-
-            try { _mediaPause.ResumeMedia(); }
-            catch (Exception ex) { Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}"); }
-        }
-
-        ShutdownPartialTranscriptionSession();
-        try
-        {
-            _recordingSnapshotTask?.Wait(TimeSpan.FromMilliseconds(300));
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.Message}");
-        }
-        _toggleGate.Dispose();
-    }
-
     private void StartPartialTranscriptionSession()
     {
         _partialTranscriptionCts?.Cancel();
@@ -1205,7 +1944,9 @@ public sealed class DictationOrchestrator : IDisposable
         var sessionVersion = _partialTranscriptState.StartSession();
         var cts = new CancellationTokenSource();
         _partialTranscriptionCts = cts;
-        _partialTranscriptionTask = Task.Run(() => RunPartialTranscriptionLoopAsync(sessionVersion, cts.Token));
+        _partialTranscriptionTask = Task.Run(() =>
+            RunPartialTranscriptionLoopAsync(sessionVersion, cts.Token)
+        );
     }
 
     private async Task StopPartialTranscriptionSessionAsync()
@@ -1243,11 +1984,31 @@ public sealed class DictationOrchestrator : IDisposable
         var snapshotTask = _recordingSnapshotTask;
         _recordingSnapshotTask = null;
         if (snapshotTask is null)
+        {
             return;
+        }
 
         try
         {
-            await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(500));
+            // Cover the deferred URL re-match's full background pipeline:
+            //   - initial snapshot         up to 500 ms
+            //   - AT-SPI URL walker        up to 2 500 ms (WalkBudget)
+            //   - verification snapshot    up to 500 ms (matches initial)
+            //   - rematch + lock overhead  small
+            // Worst case ~3.5 s, so 4 s gives margin without being absurd.
+            // Without this, any dictation shorter than the walker's runtime
+            // would advance _recordingSession before the late URL write
+            // lands, and the session-id guard would drop the write —
+            // silently dropping URL-based profile matches for short
+            // browser dictations.
+            //
+            // Cost: stop-to-transcription latency grows by up to ~4 s on
+            // browser tabs when the walker uses its full budget. Non-
+            // browser processes early-return from GetBrowserUrl in
+            // milliseconds and aren't affected. Long dictations (>3 s of
+            // recording) also aren't affected because the walker has
+            // already completed in the background by the time Stop fires.
+            await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(4000));
         }
         catch (TimeoutException)
         {
@@ -1280,7 +2041,9 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Partial transcription dispose wait failed: {ex.Message}");
+                Trace.WriteLine(
+                    $"[Dictation] Partial transcription dispose wait failed: {ex.Message}"
+                );
             }
         }
 
@@ -1298,7 +2061,9 @@ public sealed class DictationOrchestrator : IDisposable
             while (!ct.IsCancellationRequested && _audio.IsRecording)
             {
                 if (_audio.HasSpeechEnergy)
+                {
                     _lastSpeechDetectedAtUtc = DateTime.UtcNow;
+                }
                 else if (ShouldAutoStopForSilence())
                 {
                     _silenceStopRequested = true;
@@ -1310,13 +2075,33 @@ public sealed class DictationOrchestrator : IDisposable
                 if (DateTime.UtcNow >= nextPartialPollAtUtc)
                 {
                     var wav = _audio.GetCurrentBuffer();
-                    var plugin = _models.ActiveTranscriptionPlugin;
-                    if (wav is not null
+                    // Partials are best-effort/cosmetic. Only poll when a model is
+                    // already loaded (never *initiate* a load for a partial), and
+                    // use TryAcquire so a partial silently skips when a final
+                    // transcription holds the lease.
+                    if (
+                        wav is not null
                         && wav.Length > 44
-                        && plugin is not null
-                        && _audio.HasSpeechEnergy)
+                        && _audio.HasSpeechEnergy
+                        && _models.ActiveModelId is not null
+                    )
                     {
-                        await PollPartialTranscriptOnceAsync(plugin, wav, sessionVersion, ct);
+                        var partialModelId =
+                            _recordingProfile?.TranscriptionModelOverride
+                            ?? _settings.Current.SelectedModelId;
+                        await using var lease = await _models.TryAcquireTranscriptionAsync(
+                            partialModelId,
+                            ct
+                        );
+                        if (lease is not null)
+                        {
+                            await PollPartialTranscriptOnceAsync(
+                                lease.Plugin,
+                                wav,
+                                sessionVersion,
+                                ct
+                            );
+                        }
                     }
 
                     nextPartialPollAtUtc = DateTime.UtcNow + partialPollInterval;
@@ -1335,11 +2120,15 @@ public sealed class DictationOrchestrator : IDisposable
     private bool ShouldAutoStopForSilence()
     {
         if (_silenceStopRequested || !_settings.Current.SilenceAutoStopEnabled)
+        {
             return false;
+        }
 
         var timeoutSeconds = _settings.Current.SilenceAutoStopSeconds;
         if (timeoutSeconds <= 0)
+        {
             return false;
+        }
 
         return DateTime.UtcNow - _lastSpeechDetectedAtUtc >= TimeSpan.FromSeconds(timeoutSeconds);
     }
@@ -1348,14 +2137,17 @@ public sealed class DictationOrchestrator : IDisposable
         ITranscriptionEnginePlugin plugin,
         byte[] wav,
         int sessionVersion,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         var effectiveLanguage = _recordingProfile?.InputLanguage ?? _settings.Current.Language;
-        var languageHint = effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
+        var languageHint =
+            effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
         var translate = string.Equals(
             _recordingProfile?.SelectedTask ?? _settings.Current.TranscriptionTask,
             "translate",
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.OrdinalIgnoreCase
+        );
 
         try
         {
@@ -1363,13 +2155,14 @@ public sealed class DictationOrchestrator : IDisposable
                 wav,
                 languageHint,
                 translate,
-                prompt: null,
-                onProgress: partial =>
+                null,
+                partial =>
                 {
                     TryPublishPartialTranscript(sessionVersion, partial);
                     return !ct.IsCancellationRequested && _audio.IsRecording;
                 },
-                ct);
+                ct
+            );
 
             TryPublishPartialTranscript(sessionVersion, result.Text);
         }
@@ -1382,31 +2175,36 @@ public sealed class DictationOrchestrator : IDisposable
 
     private void TryPublishPartialTranscript(int sessionVersion, string? text)
     {
-        if (!_partialTranscriptState.TryApplyPolling(
+        if (
+            !_partialTranscriptState.TryApplyPolling(
                 sessionVersion,
                 text ?? "",
                 _dictionary.ApplyCorrections,
-                out var partialText))
+                out var partialText
+            )
+        )
         {
             return;
         }
 
         if (string.Equals(_lastPublishedPartialText, partialText, StringComparison.Ordinal))
+        {
             return;
+        }
 
         _lastPublishedPartialText = partialText;
-        _models.PluginManager.EventBus.Publish(new PartialTranscriptionUpdateEvent
-        {
-            PartialText = partialText,
-            IsRecording = _audio.IsRecording,
-            ElapsedSeconds = _recordingStart == default
-                ? 0
-                : Math.Max(0, (DateTime.UtcNow - _recordingStart).TotalSeconds)
-        });
+        _models.PluginManager.EventBus.Publish(
+            new PartialTranscriptionUpdateEvent
+            {
+                PartialText = partialText,
+                IsRecording = _audio.IsRecording,
+                ElapsedSeconds =
+                    _recordingStart == default
+                        ? 0
+                        : Math.Max(0, (DateTime.UtcNow - _recordingStart).TotalSeconds)
+            }
+        );
 
-        SetOverlayState(state => state with
-        {
-            PartialText = partialText
-        });
+        SetOverlayState(state => state with { PartialText = partialText });
     }
 }

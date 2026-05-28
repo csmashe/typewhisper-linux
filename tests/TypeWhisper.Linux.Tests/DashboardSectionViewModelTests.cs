@@ -11,17 +11,64 @@ public sealed class DashboardSectionViewModelTests : IDisposable
 
     public DashboardSectionViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.Dashboard.Tests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.Dashboard.Tests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     [Fact]
     public void Refresh_BuildsHistoryInsightsForSelectedRange()
     {
         var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
-        history.AddRecord(CreateRecord("one two three four", "code", 8, DateTime.UtcNow, TextInsertionStatus.Pasted, cleanupApplied: true));
-        history.AddRecord(CreateRecord("one two", "code", 4, DateTime.UtcNow, TextInsertionStatus.Typed, snippetApplied: true));
-        history.AddRecord(CreateRecord("one two three four five six", "browser", 12, DateTime.UtcNow, TextInsertionStatus.CopiedToClipboard, dictionaryApplied: true, promptApplied: true, translationApplied: true));
+        history.AddRecord(
+            CreateRecord(
+                "one two three four",
+                "code",
+                8,
+                DateTime.UtcNow,
+                TextInsertionStatus.Pasted,
+                true
+            )
+        );
+        history.AddRecord(
+            CreateRecord(
+                "one two",
+                "code",
+                4,
+                DateTime.UtcNow,
+                TextInsertionStatus.Typed,
+                snippetApplied: true
+            )
+        );
+        history.AddRecord(
+            CreateRecord(
+                "one two three four five six",
+                "browser",
+                12,
+                DateTime.UtcNow,
+                TextInsertionStatus.CopiedToClipboard,
+                dictionaryApplied: true,
+                promptApplied: true,
+                translationApplied: true
+            )
+        );
         var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
         var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
 
@@ -49,7 +96,9 @@ public sealed class DashboardSectionViewModelTests : IDisposable
     public void Refresh_CalculatesTimeSavedFromManualTypingBaseline()
     {
         var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
-        history.AddRecord(CreateRecord("one two three four five six seven eight", "code", 4, DateTime.UtcNow));
+        history.AddRecord(
+            CreateRecord("one two three four five six seven eight", "code", 4, DateTime.UtcNow)
+        );
         var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
         var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
 
@@ -62,7 +111,9 @@ public sealed class DashboardSectionViewModelTests : IDisposable
     public void Refresh_CountsWordsSeparatedByNewlines()
     {
         var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
-        history.AddRecord(CreateRecord("Hi Ryan,\n\nThis has spacing.", "browser", 1, DateTime.UtcNow));
+        history.AddRecord(
+            CreateRecord("Hi Ryan,\n\nThis has spacing.", "browser", 1, DateTime.UtcNow)
+        );
         var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
         var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
 
@@ -81,8 +132,10 @@ public sealed class DashboardSectionViewModelTests : IDisposable
         bool snippetApplied = false,
         bool dictionaryApplied = false,
         bool promptApplied = false,
-        bool translationApplied = false) =>
-        new()
+        bool translationApplied = false
+    )
+    {
+        return new TranscriptionRecord
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = timestamp,
@@ -97,17 +150,5 @@ public sealed class DashboardSectionViewModelTests : IDisposable
             PromptActionApplied = promptApplied,
             TranslationApplied = translationApplied
         };
-
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
     }
 }

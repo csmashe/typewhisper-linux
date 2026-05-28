@@ -7,17 +7,12 @@ namespace TypeWhisper.Plugin.FileMemory;
 
 public sealed class FileMemoryPlugin : IMemoryStoragePlugin
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private IPluginHostServices? _host;
     private string? _filePath;
     private List<MemoryEntry>? _entries;
     private readonly SemaphoreSlim _lock = new(1, 1);
-
-    // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.file-memory";
     public string PluginName => "File Memory";
@@ -37,8 +32,6 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         _entries = null;
         return Task.CompletedTask;
     }
-
-    // IMemoryStoragePlugin
 
     public async Task StoreAsync(string content, CancellationToken ct)
     {
@@ -63,7 +56,11 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         }
     }
 
-    public async Task<IReadOnlyList<string>> SearchAsync(string query, int maxResults = 5, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> SearchAsync(
+        string query,
+        int maxResults = 5,
+        CancellationToken ct = default
+    )
     {
         await _lock.WaitAsync(ct);
         try
@@ -143,8 +140,6 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
             _lock.Release();
         }
     }
-
-    // Private helpers
 
     private async Task<List<MemoryEntry>> LoadEntriesAsync(CancellationToken ct)
     {

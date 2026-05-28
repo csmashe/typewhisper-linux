@@ -48,7 +48,10 @@ public sealed class CleanupServiceTests
     [Theory]
     [InlineData("send it to John actually Jane", "Send it to Jane")]
     [InlineData("set the color to red I mean blue", "Set the color to blue")]
-    public void Clean_Light_AppliesConservativeOneWordBacktrackCorrections(string input, string expected)
+    public void Clean_Light_AppliesConservativeOneWordBacktrackCorrections(
+        string input,
+        string expected
+    )
     {
         var result = _sut.Clean(input, CleanupLevel.Light);
 
@@ -58,14 +61,20 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_Light_AppliesScratchThatReplacementWhenReplacementLooksLikeNewDictation()
     {
-        var result = _sut.Clean("send the first draft scratch that please send the final draft", CleanupLevel.Light);
+        var result = _sut.Clean(
+            "send the first draft scratch that please send the final draft",
+            CleanupLevel.Light
+        );
 
         Assert.Equal("Please send the final draft", result);
     }
 
     [Theory]
     [InlineData("please scratch that surface carefully", "Please scratch that surface carefully")]
-    [InlineData("we meet Tuesday actually Wednesday then review notes", "We meet Tuesday actually Wednesday then review notes")]
+    [InlineData(
+        "we meet Tuesday actually Wednesday then review notes",
+        "We meet Tuesday actually Wednesday then review notes"
+    )]
     public void Clean_Light_LeavesAmbiguousBacktrackTextAlone(string input, string expected)
     {
         var result = _sut.Clean(input, CleanupLevel.Light);
@@ -84,7 +93,10 @@ public sealed class CleanupServiceTests
     [Theory]
     [InlineData("bullet list apples bananas oranges", "- Apples\n- bananas\n- oranges")]
     [InlineData("bullet list apples comma bananas comma oranges", "- Apples\n- bananas\n- oranges")]
-    [InlineData("bullet list apples next bullet bananas next bullet oranges", "- Apples\n- bananas\n- oranges")]
+    [InlineData(
+        "bullet list apples next bullet bananas next bullet oranges",
+        "- Apples\n- bananas\n- oranges"
+    )]
     public void Clean_Light_FormatsClearSpokenBulletList(string input, string expected)
     {
         var result = _sut.Clean(input, CleanupLevel.Light);
@@ -103,7 +115,10 @@ public sealed class CleanupServiceTests
     [Theory]
     [InlineData("hello comma world period", "Hello, world.")]
     [InlineData("are you ready question mark", "Are you ready?")]
-    [InlineData("warning colon check disk semicolon restart later", "Warning: check disk; restart later")]
+    [InlineData(
+        "warning colon check disk semicolon restart later",
+        "Warning: check disk; restart later"
+    )]
     [InlineData("great work exclamation point", "Great work!")]
     public void Clean_Light_AppliesSpokenPunctuation(string input, string expected)
     {

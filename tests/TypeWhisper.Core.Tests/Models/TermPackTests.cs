@@ -20,12 +20,15 @@ public class TermPackTests
     [Fact]
     public void AllPacks_HaveTerms()
     {
-        Assert.All(TermPack.AllPacks, p =>
-        {
-            Assert.NotEmpty(p.Terms);
-            Assert.NotEmpty(p.Name);
-            Assert.NotEmpty(p.Icon);
-        });
+        Assert.All(
+            TermPack.AllPacks,
+            p =>
+            {
+                Assert.NotEmpty(p.Terms);
+                Assert.NotEmpty(p.Name);
+                Assert.NotEmpty(p.Icon);
+            }
+        );
     }
 
     [Theory]

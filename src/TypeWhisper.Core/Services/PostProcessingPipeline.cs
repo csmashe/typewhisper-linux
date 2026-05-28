@@ -1,17 +1,18 @@
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 
 namespace TypeWhisper.Core.Services;
 
 /// <summary>
-/// Priority-based post-processing pipeline. Steps are sorted by priority (ascending)
-/// and executed sequentially. Built-in priorities:
-///   Plugin PostProcessors: their own Priority value
-///   Cleanup: 250
-///   LLM Prompt Action: 300
-///   Snippet Expansion: 500
-///   Vocabulary Boosting: 550
-///   Dictionary Corrections: 600
-///   Translation: 900 (always last)
+///     Priority-based post-processing pipeline. Steps are sorted by priority (ascending)
+///     and executed sequentially. Built-in priorities:
+///     Plugin PostProcessors: their own Priority value
+///     Cleanup: 250
+///     LLM Prompt Action: 300
+///     Snippet Expansion: 500
+///     Vocabulary Boosting: 550
+///     Dictionary Corrections: 600
+///     Translation: 900 (always last)
 /// </summary>
 public sealed class PostProcessingPipeline : IPostProcessingPipeline
 {
@@ -26,7 +27,8 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
     public async Task<PostProcessingResult> ProcessAsync(
         string rawText,
         PipelineOptions options,
-        CancellationToken ct = default)
+        CancellationToken ct = default
+    )
     {
         var steps = BuildSteps(options);
         var text = rawText;
@@ -39,9 +41,12 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             {
                 var before = text;
                 text = await executor(text, ct);
-                stepResults.Add(new PostProcessingStepResult(
-                    name,
-                    !string.Equals(before, text, StringComparison.Ordinal)));
+                stepResults.Add(
+                    new PostProcessingStepResult(
+                        name,
+                        !string.Equals(before, text, StringComparison.Ordinal)
+                    )
+                );
             }
             catch (OperationCanceledException)
             {
@@ -49,38 +54,45 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"PostProcessingPipeline: Step '{name}' failed: {ex.Message}");
-                stepResults.Add(new PostProcessingStepResult(
-                    name,
-                    Changed: false,
-                    Succeeded: false,
-                    ErrorMessage: ex.Message));
+                Debug.WriteLine(
+                    $"PostProcessingPipeline: Step '{name}' failed: {ex.Message}"
+                );
+                stepResults.Add(
+                    new PostProcessingStepResult(
+                        name,
+                        false,
+                        false,
+                        ex.Message
+                    )
+                );
                 // Continue with current text — don't let one step break the pipeline
             }
         }
 
-        return new PostProcessingResult
-        {
-            Text = text,
-            Steps = stepResults
-        };
+        return new PostProcessingResult { Text = text, Steps = stepResults };
     }
 
-    private static List<(int Priority, string Name, Func<string, CancellationToken, Task<string>> Execute)>
-        BuildSteps(PipelineOptions options)
+    private static List<(
+        int Priority,
+        string Name,
+        Func<string, CancellationToken, Task<string>> Execute
+        )> BuildSteps(PipelineOptions options)
     {
         var steps = new List<(int, string, Func<string, CancellationToken, Task<string>>)>();
 
-        // App-aware formatting at priority 150 (before everything else)
         if (options.AppFormatter is not null)
         {
             var processName = options.TargetProcessName;
-            steps.Add((FormattingPriority, PostProcessingStepNames.Formatting,
-                (text, _) => Task.FromResult(options.AppFormatter(text, processName))));
+            steps.Add(
+                (
+                    FormattingPriority,
+                    PostProcessingStepNames.Formatting,
+                    (text, _) => Task.FromResult(options.AppFormatter(text, processName))
+                )
+            );
         }
 
-        // Plugin post-processors at their own priority (context captured in closure)
+        // Plugin post-processors insert at their own Priority; context is captured in each closure
         if (options.PluginPostProcessors is { Count: > 0 } processors)
         {
             foreach (var processor in processors)
@@ -90,66 +102,97 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             }
         }
 
-        // Deterministic cleanup at priority 250, before prompt actions/snippets.
+        // Cleanup runs before LLM/snippets so the AI prompt receives already-cleaned text
         if (options.CleanupHandler is not null)
         {
             steps.Add((CleanupPriority, PostProcessingStepNames.Cleanup, options.CleanupHandler));
         }
 
-        // LLM prompt action at priority 300
         if (options.LlmHandler is not null)
         {
-            steps.Add((LlmPriority, PostProcessingStepNames.Llm,
-                async (text, ct) =>
-                {
-                    if (options.StatusCallback is not null)
-                        await options.StatusCallback("AI");
-                    return await options.LlmHandler(text, ct);
-                }));
+            steps.Add(
+                (
+                    LlmPriority,
+                    PostProcessingStepNames.Llm,
+                    async (text, ct) =>
+                    {
+                        if (options.StatusCallback is not null)
+                        {
+                            await options.StatusCallback("AI");
+                        }
+
+                        return await options.LlmHandler(text, ct);
+                    }
+                )
+            );
         }
 
-        // Snippet expansion at priority 500
         if (options.SnippetExpander is not null)
         {
-            steps.Add((SnippetPriority, PostProcessingStepNames.Snippets,
-                (text, _) => Task.FromResult(options.SnippetExpander(text))));
+            steps.Add(
+                (
+                    SnippetPriority,
+                    PostProcessingStepNames.Snippets,
+                    (text, _) => Task.FromResult(options.SnippetExpander(text))
+                )
+            );
         }
 
-        // Vocabulary boosting at priority 550
         if (options.VocabularyBooster is not null)
         {
-            steps.Add((VocabularyBoostingPriority, PostProcessingStepNames.VocabularyBoosting,
-                (text, _) => Task.FromResult(options.VocabularyBooster(text))));
+            steps.Add(
+                (
+                    VocabularyBoostingPriority,
+                    PostProcessingStepNames.VocabularyBoosting,
+                    (text, _) => Task.FromResult(options.VocabularyBooster(text))
+                )
+            );
         }
 
-        // Dictionary corrections at priority 600
         if (options.DictionaryCorrector is not null)
         {
-            steps.Add((DictionaryPriority, PostProcessingStepNames.Dictionary,
-                (text, _) => Task.FromResult(options.DictionaryCorrector(text))));
+            steps.Add(
+                (
+                    DictionaryPriority,
+                    PostProcessingStepNames.Dictionary,
+                    (text, _) => Task.FromResult(options.DictionaryCorrector(text))
+                )
+            );
         }
 
-        // Translation at priority 900 (always last)
-        if (options.TranslationHandler is not null && !string.IsNullOrEmpty(options.TranslationTarget))
+        // Translation is always last (priority 900) so it operates on the fully post-processed text
+        if (
+            options.TranslationHandler is not null
+            && !string.IsNullOrEmpty(options.TranslationTarget)
+        )
         {
             var detectedLang = options.DetectedLanguage;
             var effectiveLang = options.EffectiveSourceLanguage;
             var targetLang = options.TranslationTarget;
 
-            steps.Add((TranslationPriority, PostProcessingStepNames.Translation,
-                async (text, ct) =>
-                {
-                    var sourceLang = detectedLang ?? effectiveLang ?? "auto";
-                    if (sourceLang == targetLang)
-                        return text;
+            steps.Add(
+                (
+                    TranslationPriority,
+                    PostProcessingStepNames.Translation,
+                    async (text, ct) =>
+                    {
+                        var sourceLang = detectedLang ?? effectiveLang ?? "auto";
+                        if (string.Equals(sourceLang, targetLang, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return text;
+                        }
 
-                    if (options.StatusCallback is not null)
-                        await options.StatusCallback("Translation");
-                    return await options.TranslationHandler(text, sourceLang, targetLang, ct);
-                }));
+                        if (options.StatusCallback is not null)
+                        {
+                            await options.StatusCallback("Translation");
+                        }
+
+                        return await options.TranslationHandler(text, sourceLang, targetLang, ct);
+                    }
+                )
+            );
         }
 
-        // Sort by priority ascending (lower = runs first)
         steps.Sort((a, b) => a.Item1.CompareTo(b.Item1));
         return steps;
     }

@@ -45,11 +45,12 @@
                                FontSize="12"
                                Foreground="#8A9AAE"
                                Margin="0,0,0,4" />
-                    <TextBlock Text="Placeholders: {date}, {time}, {datetime}, {day}, {year}, {clipboard}, {date:FORMAT}"
-                               FontSize="11.5"
-                               Foreground="#8A9AAE"
-                               TextWrapping="Wrap"
-                               Margin="0,0,0,4" />
+                    <TextBlock
+                        Text="Placeholders: {date}, {time}, {datetime}, {day}, {year}, {clipboard}, {date:FORMAT}"
+                        FontSize="11.5"
+                        Foreground="#8A9AAE"
+                        TextWrapping="Wrap"
+                        Margin="0,0,0,4" />
                     <TextBlock Text="Double-click a row to edit it. Use tags to keep reusable phrases organized."
                                FontSize="11.5"
                                Foreground="#8A9AAE"
@@ -125,17 +126,17 @@
                                 Orientation="Horizontal"
                                 Spacing="8"
                                 HorizontalAlignment="Right">
-                    <Button Content="{Binding EditorSaveText}"
-                            Command="{Binding SaveSnippetCommand}"
-                            Background="#2196F3"
-                            BorderBrush="#2196F3"
-                            Foreground="White"
-                            MinWidth="118"
-                            Padding="14,8" />
-                    <Button Content="Cancel"
-                            Command="{Binding CancelEditCommand}"
-                            MinWidth="82"
-                            Padding="14,8" />
+                        <Button Content="{Binding EditorSaveText}"
+                                Command="{Binding SaveSnippetCommand}"
+                                Background="#2196F3"
+                                BorderBrush="#2196F3"
+                                Foreground="White"
+                                MinWidth="118"
+                                Padding="14,8" />
+                        <Button Content="Cancel"
+                                Command="{Binding CancelEditCommand}"
+                                MinWidth="82"
+                                Padding="14,8" />
                     </StackPanel>
                 </Grid>
 
@@ -215,12 +216,13 @@
                                    FontWeight="SemiBold"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8" />
-                        <TextBlock Text="Create short triggers that expand into longer text automatically after transcription."
-                                   FontSize="12.5"
-                                   Foreground="#8A9AAE"
-                                   TextAlignment="Center"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,18" />
+                        <TextBlock
+                            Text="Create short triggers that expand into longer text automatically after transcription."
+                            FontSize="12.5"
+                            Foreground="#8A9AAE"
+                            TextAlignment="Center"
+                            TextWrapping="Wrap"
+                            Margin="0,0,0,18" />
                         <Button Content="+ Create first snippet"
                                 Command="{Binding BeginCreateCommand}"
                                 HorizontalAlignment="Center"

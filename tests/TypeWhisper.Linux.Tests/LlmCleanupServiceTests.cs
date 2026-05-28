@@ -60,7 +60,8 @@ public sealed class LlmCleanupServiceTests
             {
                 statuses.Add(message);
                 return Task.CompletedTask;
-            });
+            }
+        );
 
         Assert.Equal("Hello", result);
         Assert.Contains("Cleanup provider unavailable. Using Light cleanup.", statuses);
@@ -80,7 +81,8 @@ public sealed class LlmCleanupServiceTests
             {
                 statuses.Add(message);
                 return Task.CompletedTask;
-            });
+            }
+        );
 
         Assert.Equal("Hello", result);
         Assert.Contains("Cleanup failed. Using Light cleanup.", statuses);
@@ -94,7 +96,8 @@ public sealed class LlmCleanupServiceTests
         var result = await sut.CleanAsync(
             "um hello",
             CleanupLevel.Medium,
-            _ => throw new InvalidOperationException("Status failed."));
+            _ => throw new InvalidOperationException("Status failed.")
+        );
 
         Assert.Equal("Hello", result);
     }
@@ -108,17 +111,22 @@ public sealed class LlmCleanupServiceTests
         var result = await sut.CleanAsync(
             "um hello",
             CleanupLevel.Medium,
-            _ => throw new InvalidOperationException("Status failed."));
+            _ => throw new InvalidOperationException("Status failed.")
+        );
 
         Assert.Equal("Hello", result);
     }
 
     private static LlmCleanupService CreateService(IReadOnlyList<ILlmProviderPlugin> providers)
     {
-        var pluginManager = TestPluginManagerFactory.Create(llmProviders: providers);
+        var pluginManager = TestPluginManagerFactory.Create(providers);
         var settings = new Mock<ISettingsService>();
         settings.SetupGet(service => service.Current).Returns(new AppSettings());
-        var promptProcessing = new PromptProcessingService(pluginManager, settings.Object, new MemoryService(pluginManager));
+        var promptProcessing = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
         return new LlmCleanupService(new CleanupService(), promptProcessing);
     }
 
@@ -132,26 +140,41 @@ public sealed class LlmCleanupServiceTests
             SupportedModels = [new PluginModelInfo("model-a", "Model A")];
         }
 
+        public string? LastSystemPrompt { get; private set; }
+        public string? LastUserText { get; private set; }
+        public bool ThrowOnProcess { get; init; }
+
         public string PluginId => "com.test.cleanup";
         public string PluginName => "Cleanup Provider";
         public string PluginVersion => "1.0.0";
         public string ProviderName => "Cleanup Provider";
         public bool IsAvailable => true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
-        public string? LastSystemPrompt { get; private set; }
-        public string? LastUserText { get; private set; }
-        public bool ThrowOnProcess { get; init; }
 
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
-        public Task DeactivateAsync() => Task.CompletedTask;
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<string> ProcessAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        )
         {
             LastSystemPrompt = systemPrompt;
             LastUserText = userText;
 
             if (ThrowOnProcess)
+            {
                 throw new InvalidOperationException("Provider failed.");
+            }
 
             return Task.FromResult(_result);
         }

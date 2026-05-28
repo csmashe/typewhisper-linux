@@ -3,22 +3,17 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAiVectorMemory;
 
-public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSettingsProvider
 {
     private const string EmbeddingModel = "text-embedding-3-small";
     private const string EmbeddingUrl = "https://api.openai.com/v1/embeddings";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -26,8 +21,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
     private string? _apiKey;
     private string? _filePath;
     private List<VectorMemoryEntry>? _entries;
-
-    // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.openai-vector-memory";
     public string PluginName => "OpenAI Vector Memory";
@@ -37,7 +30,11 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
     {
         _host = host;
         _filePath = Path.Combine(host.PluginDataDirectory, "vector-memories.json");
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Normalize on load: legacy stored keys may carry trailing whitespace
+        // from before SetSettingValueAsync started trimming.
+        var stored = await host.LoadSecretAsync("api-key");
+        var trimmed = stored?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         host.Log(PluginLogLevel.Info, $"Activated (configured={!string.IsNullOrEmpty(_apiKey)})");
     }
 
@@ -48,57 +45,49 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
         return Task.CompletedTask;
     }
 
-    public UserControl? CreateSettingsView()
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "sk-...",
+                Description: "OpenAI API key used to generate embeddings for vector memory."
+            ),
+        ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "api-key" ? _apiKey : null);
+
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
-        var panel = new StackPanel { Margin = new Thickness(8) };
+        if (key != "api-key")
+            return;
 
-        var label = new TextBlock
+        // Normalize once and reuse so whitespace-padded keys aren't stored or
+        // treated as "configured" in memory, persistence, or validation.
+        var trimmed = value?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+
+        if (_host is not null)
         {
-            Text = "OpenAI API Key",
-            Margin = new Thickness(0, 0, 0, 4),
-        };
-
-        var box = new PasswordBox { MaxLength = 200 };
-        if (!string.IsNullOrEmpty(_apiKey))
-            box.Password = _apiKey;
-
-        var status = new TextBlock
-        {
-            Margin = new Thickness(0, 4, 0, 0),
-            FontSize = 12,
-        };
-
-        var btn = new Button
-        {
-            Content = "Save",
-            Margin = new Thickness(0, 8, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-
-        btn.Click += async (_, _) =>
-        {
-            var key = box.Password;
-            _apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
-
-            if (_host is not null)
-            {
-                if (string.IsNullOrWhiteSpace(key))
-                    await _host.DeleteSecretAsync("api-key");
-                else
-                    await _host.StoreSecretAsync("api-key", key);
-            }
-
-            status.Text = string.IsNullOrWhiteSpace(key) ? "API key cleared" : "API key saved";
-        };
-
-        panel.Children.Add(label);
-        panel.Children.Add(box);
-        panel.Children.Add(btn);
-        panel.Children.Add(status);
-        return new UserControl { Content = panel };
+            if (string.IsNullOrEmpty(trimmed))
+                await _host.DeleteSecretAsync("api-key");
+            else
+                await _host.StoreSecretAsync("api-key", trimmed);
+        }
     }
 
-    // IMemoryStoragePlugin
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
+        Task.FromResult<PluginSettingsValidationResult?>(
+            string.IsNullOrWhiteSpace(_apiKey)
+                ? new PluginSettingsValidationResult(false, "Enter an API key first.")
+                : new PluginSettingsValidationResult(true, "API key configured.")
+        );
 
     public async Task StoreAsync(string content, CancellationToken ct)
     {
@@ -126,7 +115,11 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
         }
     }
 
-    public async Task<IReadOnlyList<string>> SearchAsync(string query, int maxResults = 5, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> SearchAsync(
+        string query,
+        int maxResults = 5,
+        CancellationToken ct = default
+    )
     {
         EnsureConfigured();
 
@@ -172,10 +165,24 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
         try
         {
             var entries = await LoadEntriesAsync(ct);
+            // Snapshot before mutating so a SaveEntriesAsync failure doesn't
+            // leave the in-memory cache out of sync with the on-disk file —
+            // a later StoreAsync would otherwise persist the deleted state.
+            var snapshot = new List<VectorMemoryEntry>(entries);
             var removed = entries.RemoveAll(e => e.Content == content);
 
             if (removed > 0)
-                await SaveEntriesAsync(ct);
+            {
+                try
+                {
+                    await SaveEntriesAsync(ct);
+                }
+                catch
+                {
+                    _entries = snapshot;
+                    throw;
+                }
+            }
         }
         finally
         {
@@ -189,8 +196,19 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
         try
         {
             var entries = await LoadEntriesAsync(ct);
+            var snapshot = new List<VectorMemoryEntry>(entries);
             entries.Clear();
-            await SaveEntriesAsync(ct);
+
+            try
+            {
+                await SaveEntriesAsync(ct);
+            }
+            catch
+            {
+                _entries = snapshot;
+                throw;
+            }
+
             _host?.Log(PluginLogLevel.Info, "All vector memories cleared");
         }
         finally
@@ -213,34 +231,34 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
         }
     }
 
-    // Embedding API
-
     private async Task<float[]> GetEmbeddingAsync(string text, CancellationToken ct)
     {
-        var requestBody = JsonSerializer.Serialize(new
-        {
-            model = EmbeddingModel,
-            input = text,
-        });
+        var requestBody = JsonSerializer.Serialize(new { model = EmbeddingModel, input = text });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, EmbeddingUrl);
         request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, ct);
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
         {
-            _host?.Log(PluginLogLevel.Error, $"Embedding API error {response.StatusCode}: {responseBody}");
+            // Embedding requests carry transcribed user content; on rate-limit
+            // or content errors the response body can echo input fragments
+            // back. Keep both the plugin log and the thrown exception to a
+            // stable status + reason so neither surface leaks user text.
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Embedding API error {(int)response.StatusCode} ({response.ReasonPhrase})"
+            );
             throw new HttpRequestException(
-                $"OpenAI Embedding API returned {(int)response.StatusCode}: {responseBody}");
+                $"OpenAI Embedding API returned {(int)response.StatusCode}: {response.ReasonPhrase}"
+            );
         }
 
         using var doc = JsonDocument.Parse(responseBody);
-        var embeddingArray = doc.RootElement
-            .GetProperty("data")[0]
-            .GetProperty("embedding");
+        var embeddingArray = doc.RootElement.GetProperty("data")[0].GetProperty("embedding");
 
         var embedding = new float[embeddingArray.GetArrayLength()];
         var i = 0;
@@ -257,7 +275,9 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
         if (a.Length != b.Length)
             return 0;
 
-        double dot = 0, normA = 0, normB = 0;
+        double dot = 0,
+            normA = 0,
+            normB = 0;
         for (var i = 0; i < a.Length; i++)
         {
             dot += a[i] * (double)b[i];
@@ -268,8 +288,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
         var denominator = Math.Sqrt(normA) * Math.Sqrt(normB);
         return denominator == 0 ? 0 : dot / denominator;
     }
-
-    // Persistence
 
     private async Task<List<VectorMemoryEntry>> LoadEntriesAsync(CancellationToken ct)
     {
@@ -284,12 +302,16 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
             try
             {
                 var json = await File.ReadAllTextAsync(_filePath, ct);
-                _entries = JsonSerializer.Deserialize<List<VectorMemoryEntry>>(json, JsonOptions) ?? [];
+                _entries =
+                    JsonSerializer.Deserialize<List<VectorMemoryEntry>>(json, JsonOptions) ?? [];
             }
             catch (Exception ex)
             {
+                // Surface the failure instead of swallowing it: callers like
+                // StoreAsync/DeleteAsync would otherwise write back an empty
+                // list and clobber a corrupt-but-recoverable file.
                 _host?.Log(PluginLogLevel.Warning, $"Failed to load vector memories: {ex.Message}");
-                _entries = [];
+                throw;
             }
         }
         else
@@ -310,13 +332,37 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, TypeWhisper
             Directory.CreateDirectory(dir);
 
         var json = JsonSerializer.Serialize(_entries, JsonOptions);
-        await File.WriteAllTextAsync(_filePath, json, ct);
+
+        // Write to a sibling temp file and atomically replace, so a crash
+        // mid-write can't leave the vector store truncated.
+        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, json, ct);
+            if (File.Exists(_filePath))
+                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _filePath);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 
     private void EnsureConfigured()
     {
-        if (string.IsNullOrEmpty(_apiKey))
-            throw new InvalidOperationException("OpenAI API key not configured. Set it in plugin settings.");
+        // Match ValidateAsync's IsNullOrWhiteSpace check so a whitespace-only secret
+        // (e.g. legacy data in the secret store) is treated as missing in both paths.
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            throw new InvalidOperationException(
+                "OpenAI API key not configured. Set it in plugin settings."
+            );
     }
 
     public void Dispose()

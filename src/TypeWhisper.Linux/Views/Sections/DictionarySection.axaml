@@ -66,11 +66,12 @@
                         <TextBlock Text="Enable vocabulary boosting"
                                    FontSize="13"
                                    FontWeight="SemiBold" />
-                        <TextBlock Text="Improves recognition of active dictionary terms and packs for local transcriptions"
-                                   FontSize="12"
-                                   Foreground="#8A9AAE"
-                                   TextWrapping="Wrap"
-                                   Margin="0,4,0,0" />
+                        <TextBlock
+                            Text="Improves recognition of active dictionary terms and packs for local transcriptions"
+                            FontSize="12"
+                            Foreground="#8A9AAE"
+                            TextWrapping="Wrap"
+                            Margin="0,4,0,0" />
                         <TextBlock Text="{Binding VocabularyBoostingStatusText}"
                                    FontSize="12"
                                    Foreground="#8A9AAE"
@@ -136,12 +137,13 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="Packs add specialized terminology so speech recognition better understands domain vocabulary."
-                       FontSize="12.5"
-                       Foreground="#8A9AAE"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,12"
-                       IsVisible="{Binding ShowPacksHeader}" />
+            <TextBlock
+                Text="Packs add specialized terminology so speech recognition better understands domain vocabulary."
+                FontSize="12.5"
+                Foreground="#8A9AAE"
+                TextWrapping="Wrap"
+                Margin="0,0,0,12"
+                IsVisible="{Binding ShowPacksHeader}" />
 
             <Border Classes="panel"
                     Height="300"
@@ -163,7 +165,7 @@
                                    FontSize="12"
                                    Foreground="#8A9AAE"
                                    HorizontalAlignment="Center"
-                                    Margin="0,6,0,0" />
+                                   Margin="0,6,0,0" />
                     </StackPanel>
 
                     <ScrollViewer VerticalScrollBarVisibility="Auto"

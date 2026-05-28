@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
-using System.Windows.Controls;
 using LLama;
 using LLama.Common;
 using LLama.Sampling;
@@ -10,19 +9,37 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GemmaLocal;
 
-public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
     private static readonly IReadOnlyList<GemmaModelDefinition> Models =
     [
-        new("gemma4-4b-q4", "Gemma 4 4B (Q4_K_M)", "~3 GB", 3000, true,
-            "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
-            "gemma-3-4b-it-Q4_K_M.gguf"),
-        new("gemma4-12b-q4", "Gemma 4 12B (Q4_K_M)", "~8 GB", 8000, false,
-            "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
-            "gemma-3-12b-it-Q4_K_M.gguf"),
-        new("gemma4-27b-q4", "Gemma 4 27B (Q4_K_M)", "~17 GB", 17000, false,
-            "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/main/gemma-3-27b-it-Q4_K_M.gguf",
-            "gemma-3-27b-it-Q4_K_M.gguf"),
+        new(
+            "gemma4-e2b-it-q4",
+            "Gemma 4 E2B (Q4_K_M)",
+            "~3 GB",
+            3100,
+            true,
+            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+            "gemma-4-E2B-it-Q4_K_M.gguf"
+        ),
+        new(
+            "gemma4-e4b-it-q4",
+            "Gemma 4 E4B (Q4_K_M)",
+            "~5 GB",
+            5000,
+            false,
+            "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+            "gemma-4-E4B-it-Q4_K_M.gguf"
+        ),
+        new(
+            "gemma4-26b-a4b-it-q4",
+            "Gemma 4 26B A4B (Q4_K_M)",
+            "~17 GB",
+            17000,
+            false,
+            "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+            "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+        ),
     ];
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
@@ -32,8 +49,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
     private LLamaWeights? _weights;
     private LLamaContext? _context;
     private string? _loadedModelId;
-
-    // ITypeWhisperPlugin
+    private CancellationTokenSource? _startupCts;
+    private Task? _startupTask;
 
     public string PluginId => "com.typewhisper.gemma-local";
     public string PluginName => "Gemma 4 (Local)";
@@ -45,58 +62,219 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
         _selectedModelId = host.GetSetting<string>("selectedModel");
         host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
 
-        // Auto-load previously selected model in background (don't block app startup)
+        // A persisted ID may name a model that no longer exists in Models
+        // (e.g. after a release that drops a quant). IsModelDownloaded calls
+        // GetModelDefinition, which throws — that would surface as a plugin
+        // activation failure. Clear the stale setting instead.
+        if (!string.IsNullOrEmpty(_selectedModelId)
+            && Models.All(m => m.Id != _selectedModelId))
+        {
+            host.Log(
+                PluginLogLevel.Warning,
+                $"Persisted model '{_selectedModelId}' is no longer available; clearing selection."
+            );
+            _selectedModelId = null;
+            host.SetSetting("selectedModel", string.Empty);
+        }
+
+        // Auto-load previously selected model in background (don't block app startup).
+        // Track the task + CTS so DeactivateAsync can cancel and await it instead of
+        // letting it race back to life and recreate _weights/_context after teardown.
         if (!string.IsNullOrEmpty(_selectedModelId) && IsModelDownloaded(_selectedModelId))
         {
             var modelId = _selectedModelId;
-            _ = Task.Run(async () =>
+            _startupCts = new CancellationTokenSource();
+            var startupCt = _startupCts.Token;
+            _startupTask = Task.Run(async () =>
             {
                 try
                 {
-                    await LoadModelAsync(modelId, CancellationToken.None);
+                    await LoadModelAsync(modelId, startupCt);
                     host.Log(PluginLogLevel.Info, $"Auto-loaded model: {modelId}");
+                }
+                catch (OperationCanceledException)
+                {
+                    // Deactivated before startup load completed; nothing to log.
                 }
                 catch (Exception ex)
                 {
                     host.Log(PluginLogLevel.Warning, $"Failed to auto-load model: {ex.Message}");
                 }
-            });
+            }, startupCt);
         }
 
         return Task.CompletedTask;
     }
 
-    public Task DeactivateAsync()
+    public async Task DeactivateAsync()
     {
-        UnloadModel();
+        // Cancel and wait for the background startup task before tearing down
+        // _context/_weights, so it can't recreate them after we unload.
+        var startupCts = _startupCts;
+        var startupTask = _startupTask;
+        _startupCts = null;
+        _startupTask = null;
+
+        if (startupCts is not null)
+        {
+            try
+            {
+                startupCts.Cancel();
+            }
+            catch (ObjectDisposedException) { }
+        }
+
+        if (startupTask is not null)
+        {
+            try
+            {
+                await startupTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // Startup-task exceptions are already logged via its own catch.
+            }
+        }
+
+        startupCts?.Dispose();
+
+        // Acquire _inferenceLock so we can't dispose _context/_weights while
+        // ProcessAsync is mid-inference. Mirrors the unload path in
+        // SetSettingValueAsync and LoadModelAsync.
+        await _inferenceLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            UnloadModel();
+        }
+        finally
+        {
+            _inferenceLock.Release();
+        }
         _host = null;
-        return Task.CompletedTask;
     }
 
-    public UserControl? CreateSettingsView() => new GemmaLocalSettingsView(this);
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+        [
+            new(
+                Key: "selectedModel",
+                Label: "Model",
+                Description: "Local Gemma model used for LLM processing. "
+                    + "Selecting a model downloads it (if needed) and loads it; "
+                    + "downloads can be several gigabytes and progress is reported to the plugin log.",
+                Options: Models
+                    .Select(m => new PluginSettingOption(
+                        m.Id,
+                        $"{m.DisplayName} ({m.SizeDescription})"
+                    ))
+                    .ToList()
+            ),
+        ];
 
-    // ILlmProviderPlugin
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(key == "selectedModel" ? _selectedModelId : null);
+
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
+    {
+        if (key != "selectedModel")
+            return;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            // Hold _inferenceLock while disposing so an in-flight ProcessAsync
+            // can't be using _context/_weights when we tear them down. The
+            // load path below skips the lock here because EnsureModelReadyAsync
+            // may run a multi-gigabyte download — we acquire the lock inside
+            // LoadModelAsync instead, only around the actual state swap.
+            await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                _selectedModelId = null;
+                _host?.SetSetting("selectedModel", string.Empty);
+                UnloadModel();
+            }
+            finally
+            {
+                _inferenceLock.Release();
+            }
+            _host?.NotifyCapabilitiesChanged();
+            return;
+        }
+
+        SelectModel(value);
+        await EnsureModelReadyAsync(value, ct);
+    }
+
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_selectedModelId))
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(false, "Select a model first.")
+            );
+
+        return Task.FromResult<PluginSettingsValidationResult?>(
+            _loadedModelId == _selectedModelId
+                ? new PluginSettingsValidationResult(true, "Model loaded and ready.")
+                : new PluginSettingsValidationResult(false, "Model selected but not loaded yet.")
+        );
+    }
+
+    /// <summary>
+    /// Lazily downloads (if missing) and loads the given model. Progress is
+    /// reported to the plugin log since there is no progress-bar UI on Linux.
+    /// </summary>
+    internal async Task EnsureModelReadyAsync(string modelId, CancellationToken ct)
+    {
+        if (!IsModelDownloaded(modelId))
+        {
+            var lastPct = -1;
+            var progress = new Progress<double>(p =>
+            {
+                var pct = (int)(p * 100);
+                if (pct != lastPct && pct % 5 == 0)
+                {
+                    lastPct = pct;
+                    Log(PluginLogLevel.Info, $"Downloading model '{modelId}': {pct}%");
+                }
+            });
+
+            await DownloadModelAsync(modelId, progress, ct);
+        }
+
+        await LoadModelAsync(modelId, ct);
+    }
 
     public string ProviderName => "Gemma 4 (Local)";
     public bool IsAvailable => _loadedModelId is not null;
 
-    public IReadOnlyList<PluginModelInfo> SupportedModels { get; } = Models.Select(m =>
-        new PluginModelInfo(m.Id, m.DisplayName)
-        {
-            SizeDescription = m.SizeDescription,
-            EstimatedSizeMB = m.EstimatedSizeMB,
-            IsRecommended = m.IsRecommended,
-        }).ToList();
+    public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
+        Models
+            .Select(m => new PluginModelInfo(m.Id, m.DisplayName)
+            {
+                SizeDescription = m.SizeDescription,
+                EstimatedSizeMB = m.EstimatedSizeMB,
+                IsRecommended = m.IsRecommended,
+            })
+            .ToList();
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         await _inferenceLock.WaitAsync(ct);
         try
         {
             if (_context is null || _weights is null)
-                throw new InvalidOperationException("No model loaded. Download and load a model first.");
+                throw new InvalidOperationException(
+                    "No model loaded. Download and load a model first."
+                );
 
-            // Build Gemma chat prompt
             var prompt = FormatGemmaPrompt(systemPrompt, userText);
 
             var executor = new StatelessExecutor(_weights, _context.Params);
@@ -121,8 +299,6 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
         }
     }
 
-    // Model management (for settings view)
-
     internal string? SelectedModelId => _selectedModelId;
     internal string? LoadedModelId => _loadedModelId;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -143,7 +319,11 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
         return File.Exists(path);
     }
 
-    internal async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    internal async Task DownloadModelAsync(
+        string modelId,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
     {
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
@@ -159,35 +339,72 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
         Log(PluginLogLevel.Info, $"Downloading {model.DisplayName} from Hugging Face...");
 
         using var request = new HttpRequestMessage(HttpMethod.Get, model.DownloadUrl);
-        using var response = await _httpClient.SendAsync(request,
-            HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            ct
+        );
         response.EnsureSuccessStatusCode();
 
-        var totalBytes = response.Content.Headers.ContentLength ?? model.EstimatedSizeMB * 1024L * 1024;
+        var totalBytes =
+            response.Content.Headers.ContentLength ?? model.EstimatedSizeMB * 1024L * 1024;
         long bytesRead = 0;
         var lastReport = DateTime.UtcNow;
 
         var buffer = new byte[81920];
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        await using (var fileStream = new FileStream(filePath + ".tmp", FileMode.Create,
-            FileAccess.Write, FileShare.None, 81920, true))
+        // Per-invocation temp name so a concurrent duplicate download can't
+        // collide with an in-flight writer's FileShare.None open.
+        var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var completed = false;
+        try
         {
-            int read;
-            while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
+            await using (
+                var fileStream = new FileStream(
+                    tempPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    81920,
+                    true
+                )
+            )
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                bytesRead += read;
-
-                var now = DateTime.UtcNow;
-                if ((now - lastReport).TotalMilliseconds > 250)
+                int read;
+                while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
                 {
-                    progress?.Report((double)bytesRead / totalBytes);
-                    lastReport = now;
+                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                    bytesRead += read;
+
+                    var now = DateTime.UtcNow;
+                    if ((now - lastReport).TotalMilliseconds > 250)
+                    {
+                        progress?.Report((double)bytesRead / totalBytes);
+                        lastReport = now;
+                    }
+                }
+            }
+
+            File.Move(tempPath, filePath, overwrite: true);
+            completed = true;
+        }
+        finally
+        {
+            // A cancelled/failed download leaves a partial .tmp behind that
+            // confuses the next attempt (and wastes disk on multi-GB models).
+            if (!completed && File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // best effort
                 }
             }
         }
 
-        File.Move(filePath + ".tmp", filePath, overwrite: true);
         progress?.Report(1.0);
         Log(PluginLogLevel.Info, $"Download complete: {model.FileName}");
     }
@@ -200,26 +417,78 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"Model file not found: {filePath}");
 
-        return Task.Run(() =>
-        {
-            UnloadModel();
-
-            var modelParams = new ModelParams(filePath)
+        return Task.Run(
+            async () =>
             {
-                ContextSize = 4096,
-                GpuLayerCount = 0,  // CPU only (Backend.Cpu)
-                Threads = (int)Math.Max(1, Environment.ProcessorCount / 2),
-            };
+                // Serialize with ProcessAsync: unloading + swapping in new weights
+                // must not happen while an inference is reading _context/_weights.
+                // The lock covers the full unload-then-load window so callers can't
+                // observe a torn state (e.g. _weights set but _context still old).
+                await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
+                var loaded = false;
+                try
+                {
+                    // If the user has switched models OR cleared the selection while we
+                    // were queued behind the lock, abort: a late finish here would
+                    // overwrite the newer state and load a model the user no longer wants.
+                    if (_selectedModelId != modelId)
+                        return;
 
-            _weights = LLamaWeights.LoadFromFile(modelParams);
-            _context = _weights.CreateContext(modelParams);
-            _loadedModelId = modelId;
-            _selectedModelId = modelId;
-            _host?.SetSetting("selectedModel", modelId);
-            _host?.NotifyCapabilitiesChanged();
+                    UnloadModel();
 
-            Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
-        }, ct);
+                    var modelParams = new ModelParams(filePath)
+                    {
+                        ContextSize = 4096,
+                        GpuLayerCount = 0, // CPU only (Backend.Cpu)
+                        Threads = Math.Max(1, Environment.ProcessorCount / 2),
+                    };
+
+                    // Load into a local first: if CreateContext throws, the
+                    // already-loaded native weights would otherwise be stranded
+                    // on the field with no owner to dispose them.
+                    var newWeights = LLamaWeights.LoadFromFile(modelParams);
+                    LLamaContext newContext;
+                    try
+                    {
+                        newContext = newWeights.CreateContext(modelParams);
+                    }
+                    catch
+                    {
+                        newWeights.Dispose();
+                        throw;
+                    }
+
+                    _weights = newWeights;
+                    _context = newContext;
+
+                    // The heavy load runs without the lock blocking SelectModel,
+                    // so the user can switch selections while we're loading. If
+                    // that happened, drop what we just loaded instead of letting
+                    // the late finish silently roll back their newer choice.
+                    if (_selectedModelId != modelId)
+                    {
+                        UnloadModel();
+                        return;
+                    }
+
+                    _loadedModelId = modelId;
+                    _selectedModelId = modelId;
+                    _host?.SetSetting("selectedModel", modelId);
+                    loaded = true;
+                }
+                finally
+                {
+                    _inferenceLock.Release();
+                }
+
+                if (loaded)
+                {
+                    _host?.NotifyCapabilitiesChanged();
+                    Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
+                }
+            },
+            ct
+        );
     }
 
     internal void UnloadModel()
@@ -235,14 +504,16 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
 
     private static string FormatGemmaPrompt(string systemPrompt, string userText)
     {
-        // Gemma 3 instruction-tuned chat format with proper system turn
+        // Gemma instruction-tuned chat format with proper system turn
         var sb = new System.Text.StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
         {
             sb.Append("<start_of_turn>system\n");
             sb.Append(systemPrompt).Append('\n');
-            sb.Append("IMPORTANT: Respond ONLY in the same language as the user's input. Output ONLY the requested result, nothing else. No explanations, no extra text.");
+            sb.Append(
+                "IMPORTANT: Respond ONLY in the same language as the user's input. Output ONLY the requested result, nothing else. No explanations, no extra text."
+            );
             sb.Append("<end_of_turn>\n");
         }
 
@@ -271,7 +542,39 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, TypeWhisper.PluginSDK
 
     public void Dispose()
     {
-        UnloadModel();
+        // Cancel and await the background startup task before disposing
+        // _inferenceLock/_httpClient so a late finish can't run against
+        // disposed resources. Mirrors DeactivateAsync's teardown order.
+        var startupCts = _startupCts;
+        var startupTask = _startupTask;
+        _startupCts = null;
+        _startupTask = null;
+
+        if (startupCts is not null)
+        {
+            try { startupCts.Cancel(); } catch (ObjectDisposedException) { }
+        }
+
+        if (startupTask is not null)
+        {
+            try { startupTask.GetAwaiter().GetResult(); }
+            catch { /* errors already logged inside the task */ }
+        }
+
+        startupCts?.Dispose();
+
+        // Mirror DeactivateAsync: serialize teardown with any in-flight
+        // ProcessAsync so we don't dispose _context/_weights mid-inference.
+        _inferenceLock.Wait();
+        try
+        {
+            UnloadModel();
+        }
+        finally
+        {
+            _inferenceLock.Release();
+        }
+
         _inferenceLock.Dispose();
         _httpClient.Dispose();
     }
@@ -284,4 +587,5 @@ internal sealed record GemmaModelDefinition(
     int EstimatedSizeMB,
     bool IsRecommended,
     string DownloadUrl,
-    string FileName);
+    string FileName
+);

@@ -17,7 +17,6 @@ public class WavEncoderTests
         Assert.Equal("fmt ", Encoding.ASCII.GetString(result, 12, 4));
         Assert.Equal("data", Encoding.ASCII.GetString(result, 36, 4));
 
-        // Data size should be 0
         Assert.Equal(0, BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(40)));
     }
 
@@ -59,30 +58,18 @@ public class WavEncoderTests
     public void Encode_HeaderFields_Correct()
     {
         float[] samples = [0.1f, 0.2f, 0.3f, 0.4f];
-        var result = WavEncoder.Encode(samples, sampleRate: 16000);
+        var result = WavEncoder.Encode(samples);
 
-        // File size - 8
+        // RIFF chunk size = total file size - 8 (excludes "RIFF" tag + this field itself)
         Assert.Equal(36 + 8, BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(4)));
 
-        // PCM format
-        Assert.Equal(1, BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(20)));
-
-        // Channels
-        Assert.Equal(1, BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(22)));
-
-        // Sample rate
-        Assert.Equal(16000, BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(24)));
-
-        // Byte rate (16000 * 1 * 2)
-        Assert.Equal(32000, BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(28)));
-
-        // Block align
-        Assert.Equal(2, BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(32)));
-
-        // Bits per sample
-        Assert.Equal(16, BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(34)));
-
-        // Data length
-        Assert.Equal(8, BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(40)));
+        Assert.Equal(1, BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(20))); // PCM format
+        Assert.Equal(1, BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(22))); // channels
+        Assert.Equal(16000, BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(24))); // sample rate
+        Assert.Equal(32000, BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(28))); // byte rate (16000 * 1 * 2)
+        Assert.Equal(2, BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(32))); // block align
+        Assert.Equal(16, BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(34))); // bits per sample
+        Assert.Equal(8,
+            BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(40))); // data chunk size (4 samples * 2 bytes)
     }
 }

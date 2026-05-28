@@ -1,9 +1,10 @@
-using System.Collections.ObjectModel;
+using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FluentIcons.Common;
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections.ObjectModel;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
 
@@ -13,36 +14,18 @@ public partial class MainWindowViewModel : ObservableObject
 {
     private readonly IServiceProvider _services;
 
-    // All section VMs stay in memory so nav switches are instantaneous.
-    public DashboardSectionViewModel Dashboard { get; }
-    public DictationSectionViewModel Dictation { get; }
-    public ShortcutsSectionViewModel Shortcuts { get; }
-    public FileTranscriptionSectionViewModel FileTranscription { get; }
-    public RecorderSectionViewModel Recorder { get; }
-    public HistorySectionViewModel History { get; }
-    public DictionarySectionViewModel Dictionary { get; }
-    public SnippetsSectionViewModel Snippets { get; }
-    public ProfilesSectionViewModel Profiles { get; }
-    public PromptsSectionViewModel Prompts { get; }
-    public PluginsSectionViewModel Plugins { get; }
-    public GeneralSectionViewModel General { get; }
-    public AppearanceSectionViewModel Appearance { get; }
-    public AdvancedSectionViewModel Advanced { get; }
-    public AboutSectionViewModel About { get; }
+    [ObservableProperty]
+    private object? _currentSection;
 
-    public ObservableCollection<NavItem> NavItems { get; }
-
-    [ObservableProperty] private NavItem? _selectedItem;
-    [ObservableProperty] private object? _currentSection;
-
-    public string AppTitle => "TypeWhisper";
-    public string VersionLabel => About.Version == "dev" ? "dev" : $"v{About.Version}";
+    [ObservableProperty]
+    private NavItem? _selectedItem;
 
     public MainWindowViewModel(
         IServiceProvider services,
         DashboardSectionViewModel dashboard,
         DictationSectionViewModel dictation,
         ShortcutsSectionViewModel shortcuts,
+        TextInsertionSectionViewModel textInsertion,
         FileTranscriptionSectionViewModel fileTranscription,
         RecorderSectionViewModel recorder,
         HistorySectionViewModel history,
@@ -54,12 +37,14 @@ public partial class MainWindowViewModel : ObservableObject
         GeneralSectionViewModel general,
         AppearanceSectionViewModel appearance,
         AdvancedSectionViewModel advanced,
-        AboutSectionViewModel about)
+        AboutSectionViewModel about
+    )
     {
         _services = services;
         Dashboard = dashboard;
         Dictation = dictation;
         Shortcuts = shortcuts;
+        TextInsertion = textInsertion;
         FileTranscription = fileTranscription;
         Recorder = recorder;
         History = history;
@@ -80,6 +65,7 @@ public partial class MainWindowViewModel : ObservableObject
             new NavItem("Capture", null, null, true),
             new NavItem("Dictation", Symbol.Mic, Dictation, false),
             new NavItem("Shortcuts", Symbol.Keyboard, Shortcuts, false),
+            new NavItem("Text insertion", Symbol.TextAlignLeft, TextInsertion, false),
             new NavItem("File transcription", Symbol.DocumentText, FileTranscription, false),
             new NavItem("Recorder", Symbol.Record, Recorder, false),
             new NavItem("Library", null, null, true),
@@ -94,33 +80,44 @@ public partial class MainWindowViewModel : ObservableObject
             new NavItem("General", Symbol.Settings, General, false),
             new NavItem("Appearance", Symbol.Color, Appearance, false),
             new NavItem("Advanced", Symbol.AppsSettings, Advanced, false),
-            new NavItem("About", Symbol.Info, About, false),
+            new NavItem("About", Symbol.Info, About, false)
         ];
 
         SelectedItem = NavItems.First(i => i.Content is DashboardSectionViewModel);
         CurrentSection = SelectedItem.Content;
     }
 
-    partial void OnSelectedItemChanged(NavItem? value)
-    {
-        foreach (var item in NavItems)
-            item.IsSelected = item == value;
+    // All section VMs stay in memory so nav switches are instantaneous.
+    public DashboardSectionViewModel Dashboard { get; }
+    public DictationSectionViewModel Dictation { get; }
+    public ShortcutsSectionViewModel Shortcuts { get; }
+    public TextInsertionSectionViewModel TextInsertion { get; }
+    public FileTranscriptionSectionViewModel FileTranscription { get; }
+    public RecorderSectionViewModel Recorder { get; }
+    public HistorySectionViewModel History { get; }
+    public DictionarySectionViewModel Dictionary { get; }
+    public SnippetsSectionViewModel Snippets { get; }
+    public ProfilesSectionViewModel Profiles { get; }
+    public PromptsSectionViewModel Prompts { get; }
+    public PluginsSectionViewModel Plugins { get; }
+    public GeneralSectionViewModel General { get; }
+    public AppearanceSectionViewModel Appearance { get; }
+    public AdvancedSectionViewModel Advanced { get; }
+    public AboutSectionViewModel About { get; }
 
-        if (value is { IsHeader: false, Content: not null })
-            CurrentSection = value.Content;
-    }
+    public ObservableCollection<NavItem> NavItems { get; }
 
-    [RelayCommand]
-    private void NavigateToItem(NavItem? item)
-    {
-        if (item is { IsHeader: false })
-            SelectedItem = item;
-    }
+    public string AppTitle => "TypeWhisper";
+    public string VersionLabel => About.Version == "dev" ? "dev" : $"v{About.Version}";
 
-    public void Navigate<TSection>() where TSection : class
+    public void Navigate<TSection>()
+        where TSection : class
     {
         var target = NavItems.FirstOrDefault(i => i.Content is TSection);
-        if (target is not null) SelectedItem = target;
+        if (target is not null)
+        {
+            SelectedItem = target;
+        }
     }
 
     [RelayCommand]
@@ -129,8 +126,11 @@ public partial class MainWindowViewModel : ObservableObject
         var wizard = _services.GetRequiredService<WelcomeWizard>();
         wizard.DataContext = _services.GetRequiredService<WelcomeWizardViewModel>();
 
-        if (Avalonia.Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
-            && desktop.MainWindow is { } owner)
+        if (
+            Application.Current?.ApplicationLifetime
+                is IClassicDesktopStyleApplicationLifetime desktop
+            && desktop.MainWindow is { } owner
+        )
         {
             wizard.ShowDialog(owner);
         }
@@ -139,16 +139,34 @@ public partial class MainWindowViewModel : ObservableObject
             wizard.Show();
         }
     }
+
+    partial void OnSelectedItemChanged(NavItem? value)
+    {
+        foreach (var item in NavItems)
+        {
+            item.IsSelected = item == value;
+        }
+
+        if (value is { IsHeader: false, Content: not null })
+        {
+            CurrentSection = value.Content;
+        }
+    }
+
+    [RelayCommand]
+    private void NavigateToItem(NavItem? item)
+    {
+        if (item is { IsHeader: false })
+        {
+            SelectedItem = item;
+        }
+    }
 }
 
 public partial class NavItem : ObservableObject
 {
-    public string Label { get; }
-    public Symbol? Icon { get; }
-    public object? Content { get; }
-    public bool IsHeader { get; }
-
-    [ObservableProperty] private bool _isSelected;
+    [ObservableProperty]
+    private bool _isSelected;
 
     public NavItem(string label, Symbol? icon, object? content, bool isHeader)
     {
@@ -157,4 +175,9 @@ public partial class NavItem : ObservableObject
         Content = content;
         IsHeader = isHeader;
     }
+
+    public string Label { get; }
+    public Symbol? Icon { get; }
+    public object? Content { get; }
+    public bool IsHeader { get; }
 }

@@ -1,5 +1,5 @@
-using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -10,29 +10,86 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class AdvancedSectionViewModel : ObservableObject
 {
+    private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService _speechFeedback;
-    private readonly PluginManager _pluginManager;
 
-    [ObservableProperty] private bool _memoryEnabled;
-    [ObservableProperty] private AutoUnloadOption? _selectedAutoUnloadOption;
-    [ObservableProperty] private bool _spokenFeedbackEnabled;
-    [ObservableProperty] private bool _saveToHistoryEnabled;
-    [ObservableProperty] private HistoryRetentionOption? _selectedHistoryRetention;
-    [ObservableProperty] private string _selectedSpokenFeedbackProviderId = AppSettings.DefaultSpokenFeedbackProviderId;
-    [ObservableProperty] private string? _selectedSpokenFeedbackVoiceId;
+    [ObservableProperty]
+    private bool _memoryEnabled;
+
+    [ObservableProperty]
+    private bool _saveToHistoryEnabled;
+
+    [ObservableProperty]
+    private AutoUnloadOption? _selectedAutoUnloadOption;
+
+    [ObservableProperty]
+    private HistoryRetentionOption? _selectedHistoryRetention;
+
+    [ObservableProperty]
+    private string _selectedSpokenFeedbackProviderId = AppSettings.DefaultSpokenFeedbackProviderId;
+
+    [ObservableProperty]
+    private string? _selectedSpokenFeedbackVoiceId;
+
+    [ObservableProperty]
+    private bool _spokenFeedbackEnabled;
+
+    public AdvancedSectionViewModel(
+        ISettingsService settings,
+        SpeechFeedbackService speechFeedback,
+        PluginManager pluginManager
+    )
+    {
+        _settings = settings;
+        _speechFeedback = speechFeedback;
+        _pluginManager = pluginManager;
+        _speechFeedback.ProvidersChanged += (_, _) => RefreshSpokenFeedbackProviders();
+        Refresh(settings.Current);
+        RefreshSpokenFeedbackProviders();
+        _settings.SettingsChanged += Refresh;
+        _pluginManager.PluginStateChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(CanUseMemory));
+            OnPropertyChanged(nameof(ShowMemoryUnavailableReason));
+            OnPropertyChanged(nameof(MemoryHint));
+            OnPropertyChanged(nameof(CanUseSpokenFeedback));
+            OnPropertyChanged(nameof(ShowSpokenFeedbackUnavailableReason));
+            OnPropertyChanged(nameof(SpokenFeedbackHint));
+            RefreshSpokenFeedbackProviders();
+            if (!CanUseMemory && MemoryEnabled)
+            {
+                MemoryEnabled = false;
+            }
+        };
+    }
 
     public ObservableCollection<TtsProviderOption> SpokenFeedbackProviders { get; } = [];
     public ObservableCollection<TtsVoiceOption> SpokenFeedbackVoices { get; } = [];
 
     public TtsProviderOption? SelectedSpokenFeedbackProviderOption
     {
-        get => SpokenFeedbackProviders.FirstOrDefault(provider =>
-            string.Equals(provider.Id, SelectedSpokenFeedbackProviderId, StringComparison.Ordinal));
+        get =>
+            SpokenFeedbackProviders.FirstOrDefault(provider =>
+                string.Equals(
+                    provider.Id,
+                    SelectedSpokenFeedbackProviderId,
+                    StringComparison.Ordinal
+                )
+            );
         set
         {
-            if (value is null || string.Equals(value.Id, SelectedSpokenFeedbackProviderId, StringComparison.Ordinal))
+            if (
+                value is null
+                || string.Equals(
+                    value.Id,
+                    SelectedSpokenFeedbackProviderId,
+                    StringComparison.Ordinal
+                )
+            )
+            {
                 return;
+            }
 
             SelectedSpokenFeedbackProviderId = value.Id;
             OnPropertyChanged();
@@ -41,12 +98,19 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     public TtsVoiceOption? SelectedSpokenFeedbackVoiceOption
     {
-        get => SpokenFeedbackVoices.FirstOrDefault(voice =>
-            string.Equals(voice.Id, SelectedSpokenFeedbackVoiceId, StringComparison.Ordinal));
+        get =>
+            SpokenFeedbackVoices.FirstOrDefault(voice =>
+                string.Equals(voice.Id, SelectedSpokenFeedbackVoiceId, StringComparison.Ordinal)
+            );
         set
         {
-            if (value is null || string.Equals(value.Id, SelectedSpokenFeedbackVoiceId, StringComparison.Ordinal))
+            if (
+                value is null
+                || string.Equals(value.Id, SelectedSpokenFeedbackVoiceId, StringComparison.Ordinal)
+            )
+            {
                 return;
+            }
 
             SelectedSpokenFeedbackVoiceId = value.Id;
             OnPropertyChanged();
@@ -74,63 +138,57 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
     public bool ShowSpokenFeedbackUnavailableReason => !CanUseSpokenFeedback;
-    public string SpokenFeedbackUnavailableReason => "Unavailable: install espeak-ng, espeak, or speech-dispatcher.";
-    public string SpokenFeedbackHint => CanUseSpokenFeedback
-        ? $"Spoken feedback reads the final transcription aloud via {_speechFeedback.BackendName}."
-        : SpokenFeedbackUnavailableReason;
 
-    public bool CanUseMemory => _pluginManager.GetPlugins<IMemoryStoragePlugin>().Any()
-                                && _pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
+    private string SpokenFeedbackUnavailableReason =>
+        "Unavailable: install espeak-ng, espeak, or speech-dispatcher.";
+
+    public string SpokenFeedbackHint =>
+        CanUseSpokenFeedback
+            ? $"Spoken feedback reads the final transcription aloud via {_speechFeedback.BackendName}."
+            : SpokenFeedbackUnavailableReason;
+
+    public bool CanUseMemory =>
+        _pluginManager.GetPlugins<IMemoryStoragePlugin>().Any()
+        && _pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
+
     public bool ShowMemoryUnavailableReason => !CanUseMemory;
-    public string MemoryUnavailableReason => "Unavailable: enable a memory storage plugin and configure an LLM provider.";
-    public string MemoryHint => CanUseMemory
-        ? "Sends each eligible transcription to the configured LLM provider to extract lasting facts. With cloud providers, transcript text is uploaded off-device and stored as memory."
-        : MemoryUnavailableReason;
 
-    public AdvancedSectionViewModel(
-        ISettingsService settings,
-        SpeechFeedbackService speechFeedback,
-        PluginManager pluginManager)
-    {
-        _settings = settings;
-        _speechFeedback = speechFeedback;
-        _pluginManager = pluginManager;
-        _speechFeedback.ProvidersChanged += (_, _) => RefreshSpokenFeedbackProviders();
-        Refresh(settings.Current);
-        RefreshSpokenFeedbackProviders();
-        _settings.SettingsChanged += Refresh;
-        _pluginManager.PluginStateChanged += (_, _) =>
-        {
-            OnPropertyChanged(nameof(CanUseMemory));
-            OnPropertyChanged(nameof(ShowMemoryUnavailableReason));
-            OnPropertyChanged(nameof(MemoryHint));
-            OnPropertyChanged(nameof(CanUseSpokenFeedback));
-            OnPropertyChanged(nameof(ShowSpokenFeedbackUnavailableReason));
-            OnPropertyChanged(nameof(SpokenFeedbackHint));
-            RefreshSpokenFeedbackProviders();
-            if (!CanUseMemory && MemoryEnabled)
-                MemoryEnabled = false;
-        };
-    }
+    private string MemoryUnavailableReason =>
+        "Unavailable: enable a memory storage plugin and configure an LLM provider.";
+
+    public string MemoryHint =>
+        CanUseMemory
+            ? "Sends each eligible transcription to the configured LLM provider to extract lasting facts. With cloud providers, transcript text is uploaded off-device and stored as memory."
+            : MemoryUnavailableReason;
 
     private void Refresh(AppSettings settings)
     {
         MemoryEnabled = settings.MemoryEnabled && CanUseMemory;
         SpokenFeedbackEnabled = settings.SpokenFeedbackEnabled && CanUseSpokenFeedback;
         SaveToHistoryEnabled = settings.SaveToHistoryEnabled;
-        SelectedSpokenFeedbackProviderId = string.IsNullOrWhiteSpace(settings.SpokenFeedbackProviderId)
+        SelectedSpokenFeedbackProviderId = string.IsNullOrWhiteSpace(
+            settings.SpokenFeedbackProviderId
+        )
             ? AppSettings.DefaultSpokenFeedbackProviderId
             : settings.SpokenFeedbackProviderId;
-        SelectedSpokenFeedbackVoiceId = settings.SpokenFeedbackVoiceId ?? SpeechFeedbackService.DefaultVoiceOptionId;
-        SelectedAutoUnloadOption = AutoUnloadOptions.FirstOrDefault(option => option.Seconds == settings.ModelAutoUnloadSeconds)
-            ?? AutoUnloadOptions[0];
-        SelectedHistoryRetention = MatchRetention(settings.HistoryRetentionMode, settings.HistoryRetentionMinutes);
+        SelectedSpokenFeedbackVoiceId =
+            settings.SpokenFeedbackVoiceId ?? SpeechFeedbackService.DefaultVoiceOptionId;
+        SelectedAutoUnloadOption =
+            AutoUnloadOptions.FirstOrDefault(option =>
+                option.Seconds == settings.ModelAutoUnloadSeconds
+            ) ?? AutoUnloadOptions[0];
+        SelectedHistoryRetention = MatchRetention(
+            settings.HistoryRetentionMode,
+            settings.HistoryRetentionMinutes
+        );
     }
 
     partial void OnMemoryEnabledChanged(bool value)
     {
         if (_settings.Current.MemoryEnabled == value)
+        {
             return;
+        }
 
         if (value && !CanUseMemory)
         {
@@ -144,7 +202,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
     partial void OnSelectedAutoUnloadOptionChanged(AutoUnloadOption? value)
     {
         if (value is null || _settings.Current.ModelAutoUnloadSeconds == value.Seconds)
+        {
             return;
+        }
 
         _settings.Save(_settings.Current with { ModelAutoUnloadSeconds = value.Seconds });
     }
@@ -152,7 +212,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
     partial void OnSpokenFeedbackEnabledChanged(bool value)
     {
         if (_settings.Current.SpokenFeedbackEnabled == value)
+        {
             return;
+        }
 
         if (value && !CanUseSpokenFeedback)
         {
@@ -166,21 +228,29 @@ public partial class AdvancedSectionViewModel : ObservableObject
     partial void OnSelectedSpokenFeedbackProviderIdChanged(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
+        {
             value = AppSettings.DefaultSpokenFeedbackProviderId;
+        }
 
         RefreshSpokenFeedbackVoices();
 
         if (_settings.Current.SpokenFeedbackProviderId == value)
+        {
             return;
+        }
 
-        var selectedVoiceId = SpeechFeedbackService.IsDefaultVoiceOptionId(SelectedSpokenFeedbackVoiceId)
+        var selectedVoiceId = SpeechFeedbackService.IsDefaultVoiceOptionId(
+            SelectedSpokenFeedbackVoiceId
+        )
             ? null
             : SelectedSpokenFeedbackVoiceId;
-        _settings.Save(_settings.Current with
-        {
-            SpokenFeedbackProviderId = value,
-            SpokenFeedbackVoiceId = selectedVoiceId
-        });
+        _settings.Save(
+            _settings.Current with
+            {
+                SpokenFeedbackProviderId = value,
+                SpokenFeedbackVoiceId = selectedVoiceId
+            }
+        );
         OnPropertyChanged(nameof(SelectedSpokenFeedbackProviderOption));
     }
 
@@ -189,7 +259,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
         _speechFeedback.SelectVoice(SelectedSpokenFeedbackProviderId, value);
         var normalized = SpeechFeedbackService.IsDefaultVoiceOptionId(value) ? null : value;
         if (_settings.Current.SpokenFeedbackVoiceId == normalized)
+        {
             return;
+        }
 
         _settings.Save(_settings.Current with { SpokenFeedbackVoiceId = normalized });
         OnPropertyChanged(nameof(SelectedSpokenFeedbackVoiceOption));
@@ -198,7 +270,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
     partial void OnSaveToHistoryEnabledChanged(bool value)
     {
         if (_settings.Current.SaveToHistoryEnabled == value)
+        {
             return;
+        }
 
         _settings.Save(_settings.Current with { SaveToHistoryEnabled = value });
     }
@@ -206,40 +280,67 @@ public partial class AdvancedSectionViewModel : ObservableObject
     partial void OnSelectedHistoryRetentionChanged(HistoryRetentionOption? value)
     {
         if (value is null)
-            return;
-
-        if (_settings.Current.HistoryRetentionMode == value.Mode
-            && (value.Mode != HistoryRetentionMode.Duration
-                || _settings.Current.HistoryRetentionMinutes == value.Minutes))
-            return;
-
-        _settings.Save(_settings.Current with
         {
-            HistoryRetentionMode = value.Mode,
-            HistoryRetentionMinutes = value.Minutes ?? _settings.Current.HistoryRetentionMinutes
-        });
+            return;
+        }
+
+        if (
+            _settings.Current.HistoryRetentionMode == value.Mode
+            && (
+                value.Mode != HistoryRetentionMode.Duration
+                || _settings.Current.HistoryRetentionMinutes == value.Minutes
+            )
+        )
+        {
+            return;
+        }
+
+        _settings.Save(
+            _settings.Current with
+            {
+                HistoryRetentionMode = value.Mode,
+                HistoryRetentionMinutes =
+                value.Minutes ?? _settings.Current.HistoryRetentionMinutes
+            }
+        );
     }
 
-    private HistoryRetentionOption MatchRetention(HistoryRetentionMode mode, int minutes) =>
-        HistoryRetentionOptions.FirstOrDefault(option =>
-            option.Mode == mode && (mode != HistoryRetentionMode.Duration || option.Minutes == minutes))
-        ?? HistoryRetentionOptions.FirstOrDefault(option =>
-            option.Mode == AppSettings.Default.HistoryRetentionMode
-            && option.Minutes == AppSettings.Default.HistoryRetentionMinutes)
-        ?? HistoryRetentionOptions[0];
+    // First try exact match; if the stored minutes value no longer matches any
+    // option (e.g. a custom value from a future version), fall back to the
+    // app default, then to the first option as a last resort.
+    private HistoryRetentionOption MatchRetention(HistoryRetentionMode mode, int minutes)
+    {
+        return HistoryRetentionOptions.FirstOrDefault(option =>
+                   option.Mode == mode
+                   && (mode != HistoryRetentionMode.Duration || option.Minutes == minutes)
+               )
+               ?? HistoryRetentionOptions.FirstOrDefault(option =>
+                   option.Mode == AppSettings.Default.HistoryRetentionMode
+                   && option.Minutes == AppSettings.Default.HistoryRetentionMinutes
+               )
+               ?? HistoryRetentionOptions[0];
+    }
 
     private void RefreshSpokenFeedbackProviders()
     {
         ReplaceCollection(SpokenFeedbackProviders, _speechFeedback.AvailableProviders);
-        if (SpokenFeedbackProviders.All(provider => provider.Id != SelectedSpokenFeedbackProviderId))
+        if (
+            SpokenFeedbackProviders.All(provider => provider.Id != SelectedSpokenFeedbackProviderId)
+        )
+        {
             SelectedSpokenFeedbackProviderId = AppSettings.DefaultSpokenFeedbackProviderId;
+        }
+
         RefreshSpokenFeedbackVoices();
         OnPropertyChanged(nameof(SelectedSpokenFeedbackProviderOption));
     }
 
     private void RefreshSpokenFeedbackVoices()
     {
-        ReplaceCollection(SpokenFeedbackVoices, _speechFeedback.GetVoiceOptions(SelectedSpokenFeedbackProviderId));
+        ReplaceCollection(
+            SpokenFeedbackVoices,
+            _speechFeedback.GetVoiceOptions(SelectedSpokenFeedbackProviderId)
+        );
         var selected = _speechFeedback.GetSelectedVoiceId(SelectedSpokenFeedbackProviderId);
         SelectedSpokenFeedbackVoiceId = SpokenFeedbackVoices.Any(voice => voice.Id == selected)
             ? selected
@@ -251,11 +352,15 @@ public partial class AdvancedSectionViewModel : ObservableObject
     {
         var snapshot = items.ToList();
         if (target.SequenceEqual(snapshot))
+        {
             return;
+        }
 
         target.Clear();
         foreach (var item in snapshot)
+        {
             target.Add(item);
+        }
     }
 }
 
@@ -264,4 +369,5 @@ public sealed record AutoUnloadOption(int Seconds, string DisplayName);
 public sealed record HistoryRetentionOption(
     HistoryRetentionMode Mode,
     int? Minutes,
-    string DisplayName);
+    string DisplayName
+);

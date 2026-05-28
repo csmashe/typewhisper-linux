@@ -127,11 +127,14 @@ public class PostProcessingPipelineTests
         {
             PluginPostProcessors =
             [
-                new PluginPostProcessor(100, (text, _) =>
-                {
-                    executionOrder.Add("Plugin100");
-                    return Task.FromResult(text + "+P100");
-                })
+                new PluginPostProcessor(
+                    100,
+                    (text, _) =>
+                    {
+                        executionOrder.Add("Plugin100");
+                        return Task.FromResult(text + "+P100");
+                    }
+                )
             ],
             LlmHandler = (text, _) =>
             {
@@ -171,11 +174,14 @@ public class PostProcessingPipelineTests
         {
             PluginPostProcessors =
             [
-                new PluginPostProcessor(100, (text, _) =>
-                {
-                    executionOrder.Add("Plugin100");
-                    return Task.FromResult(text + "+P100");
-                })
+                new PluginPostProcessor(
+                    100,
+                    (text, _) =>
+                    {
+                        executionOrder.Add("Plugin100");
+                        return Task.FromResult(text + "+P100");
+                    }
+                )
             ],
             CleanupHandler = (text, _) =>
             {
@@ -209,21 +215,30 @@ public class PostProcessingPipelineTests
         {
             PluginPostProcessors =
             [
-                new PluginPostProcessor(700, (text, _) =>
-                {
-                    executionOrder.Add("Plugin700");
-                    return Task.FromResult(text + "+P700");
-                }),
-                new PluginPostProcessor(50, (text, _) =>
-                {
-                    executionOrder.Add("Plugin50");
-                    return Task.FromResult(text + "+P50");
-                }),
-                new PluginPostProcessor(400, (text, _) =>
-                {
-                    executionOrder.Add("Plugin400");
-                    return Task.FromResult(text + "+P400");
-                })
+                new PluginPostProcessor(
+                    700,
+                    (text, _) =>
+                    {
+                        executionOrder.Add("Plugin700");
+                        return Task.FromResult(text + "+P700");
+                    }
+                ),
+                new PluginPostProcessor(
+                    50,
+                    (text, _) =>
+                    {
+                        executionOrder.Add("Plugin50");
+                        return Task.FromResult(text + "+P50");
+                    }
+                ),
+                new PluginPostProcessor(
+                    400,
+                    (text, _) =>
+                    {
+                        executionOrder.Add("Plugin400");
+                        return Task.FromResult(text + "+P400");
+                    }
+                )
             ]
         };
 
@@ -243,11 +258,14 @@ public class PostProcessingPipelineTests
         {
             PluginPostProcessors =
             [
-                new PluginPostProcessor(400, (text, _) =>
-                {
-                    executionOrder.Add("Plugin400");
-                    return Task.FromResult(text);
-                })
+                new PluginPostProcessor(
+                    400,
+                    (text, _) =>
+                    {
+                        executionOrder.Add("Plugin400");
+                        return Task.FromResult(text);
+                    }
+                )
             ],
             LlmHandler = (text, _) =>
             {
@@ -274,8 +292,10 @@ public class PostProcessingPipelineTests
         {
             PluginPostProcessors =
             [
-                new PluginPostProcessor(100, (_, _) =>
-                    throw new InvalidOperationException("Plugin failed"))
+                new PluginPostProcessor(
+                    100,
+                    (_, _) => throw new InvalidOperationException("Plugin failed")
+                )
             ],
             DictionaryCorrector = text => text + "+DICT"
         };
@@ -284,7 +304,10 @@ public class PostProcessingPipelineTests
 
         // Plugin failed but dictionary still applied
         Assert.Equal("hello+DICT", result.Text);
-        Assert.Contains(result.Steps, step => !step.Succeeded && step.ErrorMessage == "Plugin failed");
+        Assert.Contains(
+            result.Steps,
+            step => !step.Succeeded && step.ErrorMessage == "Plugin failed"
+        );
     }
 
     [Fact]
@@ -312,13 +335,11 @@ public class PostProcessingPipelineTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var options = new PipelineOptions
-        {
-            DictionaryCorrector = text => text
-        };
+        var options = new PipelineOptions { DictionaryCorrector = text => text };
 
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => _sut.ProcessAsync("test", options, cts.Token));
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            _sut.ProcessAsync("test", options, cts.Token)
+        );
     }
 
     [Fact]
@@ -400,10 +421,7 @@ public class PostProcessingPipelineTests
     [Fact]
     public async Task ProcessAsync_VocabularyBoostingDisabled_LeavesTextUnchanged()
     {
-        var options = new PipelineOptions
-        {
-            DictionaryCorrector = text => text
-        };
+        var options = new PipelineOptions { DictionaryCorrector = text => text };
 
         var result = await _sut.ProcessAsync("type whisper", options);
 

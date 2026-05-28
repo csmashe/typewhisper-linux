@@ -10,7 +10,8 @@ public sealed record CliInstallState(
     string InstallPath,
     string LauncherPath,
     bool LauncherDirectoryInPath,
-    string StatusText);
+    string StatusText
+);
 
 public sealed class CliInstallService
 {
@@ -27,7 +28,8 @@ public sealed class CliInstallService
     internal CliInstallService(
         Func<string?> bundledPathProvider,
         Func<string> installDirectoryProvider,
-        Func<string> launcherDirectoryProvider)
+        Func<string> launcherDirectoryProvider
+    )
     {
         _bundledPathProvider = bundledPathProvider;
         _installDirectoryProvider = installDirectoryProvider;
@@ -41,7 +43,8 @@ public sealed class CliInstallService
         var installPath = Path.Combine(installDirectory, CliFileName);
         var launcherPath = Path.Combine(launcherDirectory, CliFileName);
         var bundledPath = _bundledPathProvider();
-        var installed = FileExistsWithExactName(installPath) && FileExistsWithExactName(launcherPath);
+        var installed =
+            FileExistsWithExactName(installPath) && FileExistsWithExactName(launcherPath);
         var inPath = IsDirectoryInPath(launcherDirectory);
 
         var status = installed
@@ -59,26 +62,32 @@ public sealed class CliInstallService
             installPath,
             launcherPath,
             inPath,
-            status);
+            status
+        );
     }
 
     public CliInstallState Install()
     {
         var state = GetState();
         if (state.BundledPath is null)
+        {
             return state;
+        }
 
-        var sourceDirectory = Path.GetDirectoryName(state.BundledPath)
+        var sourceDirectory =
+            Path.GetDirectoryName(state.BundledPath)
             ?? throw new InvalidOperationException("Missing CLI bundle directory.");
-        var installDirectory = Path.GetDirectoryName(state.InstallPath)
+        var installDirectory =
+            Path.GetDirectoryName(state.InstallPath)
             ?? throw new InvalidOperationException("Missing CLI install directory.");
-        var launcherDirectory = Path.GetDirectoryName(state.LauncherPath)
+        var launcherDirectory =
+            Path.GetDirectoryName(state.LauncherPath)
             ?? throw new InvalidOperationException("Missing CLI launcher directory.");
 
         Directory.CreateDirectory(installDirectory);
         Directory.CreateDirectory(launcherDirectory);
 
-        File.Copy(state.BundledPath, state.InstallPath, overwrite: true);
+        File.Copy(state.BundledPath, state.InstallPath, true);
         CopyCliPayload(sourceDirectory, installDirectory);
         MarkExecutable(state.InstallPath);
 
@@ -88,49 +97,65 @@ public sealed class CliInstallService
         return GetState();
     }
 
-    public static IReadOnlyList<string> BuildCliExamples(int port) =>
-    [
-        "export TYPEWHISPER_API_TOKEN=\"paste-token-here\"",
-        "typewhisper --help",
-        $"typewhisper status --port {port}",
-        $"typewhisper models --port {port}",
-        $"typewhisper transcribe recording.wav --port {port}",
-        $"typewhisper transcribe recording.wav --language de --json --port {port}"
-    ];
+    public static IReadOnlyList<string> BuildCliExamples(int port)
+    {
+        return
+        [
+            "export TYPEWHISPER_API_TOKEN=\"paste-token-here\"",
+            "typewhisper --help",
+            $"typewhisper status --port {port}",
+            $"typewhisper models --port {port}",
+            $"typewhisper transcribe recording.wav --port {port}",
+            $"typewhisper transcribe recording.wav --language de --json --port {port}"
+        ];
+    }
 
-    public static IReadOnlyList<string> BuildCurlExamples(int port) =>
-    [
-        "export TYPEWHISPER_API_TOKEN=\"paste-token-here\"",
-        $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" http://localhost:{port}/v1/status",
-        $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" http://localhost:{port}/v1/models",
-        $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/transcribe -F \"file=@recording.wav\"",
-        $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/dictation/start",
-        $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/dictation/stop"
-    ];
+    public static IReadOnlyList<string> BuildCurlExamples(int port)
+    {
+        return
+        [
+            "export TYPEWHISPER_API_TOKEN=\"paste-token-here\"",
+            $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" http://localhost:{port}/v1/status",
+            $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" http://localhost:{port}/v1/models",
+            $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/transcribe -F \"file=@recording.wav\"",
+            $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/dictation/start",
+            $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/dictation/stop"
+        ];
+    }
 
     private static void CopyCliPayload(string sourceDirectory, string installDirectory)
     {
         foreach (var file in Directory.EnumerateFiles(sourceDirectory, "typewhisper.*"))
         {
             var fileName = Path.GetFileName(file);
-            File.Copy(file, Path.Combine(installDirectory, fileName), overwrite: true);
+            File.Copy(file, Path.Combine(installDirectory, fileName), true);
         }
     }
 
-    private static string BuildLauncherScript(string installPath) =>
-        $"""
-        #!/usr/bin/env sh
-        exec "{installPath}" "$@"
-        """;
+    private static string BuildLauncherScript(string installPath)
+    {
+        return $"""
+                #!/usr/bin/env sh
+                exec "{installPath}" "$@"
+                """;
+    }
 
-    private static string DefaultInstallDirectory() =>
-        Path.Combine(TypeWhisperEnvironment.BasePath, "Cli");
+    private static string DefaultInstallDirectory()
+    {
+        return Path.Combine(TypeWhisperEnvironment.BasePath, "Cli");
+    }
 
-    private static string DefaultLauncherDirectory() =>
-        Path.Combine(
+    private static string DefaultLauncherDirectory()
+    {
+        // ~/.local/bin is the XDG-recommended per-user bin dir. Most distros
+        // add it to PATH via /etc/profile.d or ~/.profile; if it's not there
+        // yet the status text tells the user to add it.
+        return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".local",
-            "bin");
+            "bin"
+        );
+    }
 
     private static string? FindBundledCliPath()
     {
@@ -139,27 +164,61 @@ public sealed class CliInstallService
         {
             Path.Combine(baseDirectory, "Cli", CliFileName),
             Path.Combine(baseDirectory, "..", "TypeWhisper.Cli", CliFileName),
-            Path.Combine(baseDirectory, "..", "..", "..", "..", "TypeWhisper.Cli", "bin", "Debug", "net10.0", CliFileName),
-            Path.Combine(baseDirectory, "..", "..", "..", "..", "TypeWhisper.Cli", "bin", "Release", "net10.0", CliFileName)
+            Path.Combine(
+                baseDirectory,
+                "..",
+                "..",
+                "..",
+                "..",
+                "TypeWhisper.Cli",
+                "bin",
+                "Debug",
+                "net10.0",
+                CliFileName
+            ),
+            Path.Combine(
+                baseDirectory,
+                "..",
+                "..",
+                "..",
+                "..",
+                "TypeWhisper.Cli",
+                "bin",
+                "Release",
+                "net10.0",
+                CliFileName
+            )
         };
 
-        return candidates
-            .Select(Path.GetFullPath)
-            .FirstOrDefault(IsCliAppHost);
+        return candidates.Select(Path.GetFullPath).FirstOrDefault(IsCliAppHost);
     }
 
-    private static bool IsCliAppHost(string path) =>
-        FileExistsWithExactName(path);
+    private static bool IsCliAppHost(string path)
+    {
+        return FileExistsWithExactName(path);
+    }
 
     private static bool FileExistsWithExactName(string path)
     {
         var directory = Path.GetDirectoryName(path);
         var fileName = Path.GetFileName(path);
-        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(fileName) || !Directory.Exists(directory))
+        if (
+            string.IsNullOrWhiteSpace(directory)
+            || string.IsNullOrWhiteSpace(fileName)
+            || !Directory.Exists(directory)
+        )
+        {
             return false;
+        }
 
-        return Directory.EnumerateFiles(directory, fileName)
-            .Any(candidate => string.Equals(Path.GetFileName(candidate), fileName, StringComparison.Ordinal));
+        // Use EnumerateFiles + exact name comparison rather than File.Exists
+        // to guard against case-insensitive filesystems (FAT32, case-folded
+        // ext4 directories) that would treat "TypeWhisper" == "typewhisper".
+        return Directory
+            .EnumerateFiles(directory, fileName)
+            .Any(candidate =>
+                string.Equals(Path.GetFileName(candidate), fileName, StringComparison.Ordinal)
+            );
     }
 
     private static bool IsDirectoryInPath(string directory)
@@ -172,26 +231,42 @@ public sealed class CliInstallService
             .Any(path => string.Equals(path, full, StringComparison.Ordinal));
     }
 
-    private static IEnumerable<string> SplitPath(string value) =>
-        value.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    private static IEnumerable<string> SplitPath(string value)
+    {
+        return value.Split(
+            Path.PathSeparator,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+        );
+    }
 
-    private static string NormalizeDirectory(string directory) =>
-        Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    private static string NormalizeDirectory(string directory)
+    {
+        return Path.GetFullPath(directory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
 
     private static void MarkExecutable(string path)
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
             return;
+        }
 
         try
         {
             File.SetUnixFileMode(
                 path,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
-                UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+                UnixFileMode.UserRead
+                | UnixFileMode.UserWrite
+                | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead
+                | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead
+                | UnixFileMode.OtherExecute
+            );
         }
-        catch (Exception ex) when (ex is PlatformNotSupportedException or IOException or UnauthorizedAccessException)
+        catch (Exception ex)
+            when (ex is PlatformNotSupportedException or IOException or UnauthorizedAccessException)
         {
             Trace.WriteLine($"[CliInstallService] chmod failed for {path}: {ex.Message}");
         }

@@ -7,29 +7,28 @@ using TypeWhisper.PluginSDK;
 namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
-/// Central plugin registry and lifecycle manager. Discovers plugins, maintains
-/// enabled/disabled state, and provides typed capability indices for LLM providers,
-/// transcription engines, and post-processors.
+///     Central plugin registry and lifecycle manager. Discovers plugins, maintains
+///     enabled/disabled state, and provides typed capability indices for LLM providers,
+///     transcription engines, and post-processors.
 /// </summary>
 public sealed class PluginManager : IDisposable
 {
-    private readonly PluginLoader _loader;
-    private readonly PluginEventBus _eventBus;
+    private readonly HashSet<string> _activatedPlugins = [];
+    private readonly ConcurrentDictionary<string, Task<bool>> _activationTasks = new();
     private readonly IActiveWindowService _activeWindow;
-    private readonly IProfileService _profiles;
-    private readonly ISettingsService _settings;
-    private readonly string[] _searchDirectories;
 
     private readonly List<LoadedPlugin> _allPlugins = [];
     private readonly Dictionary<string, PluginHostServices> _hostServices = [];
-    private readonly HashSet<string> _activatedPlugins = [];
-    private readonly ConcurrentDictionary<string, Task<bool>> _activationTasks = new();
+    private readonly PluginLoader _loader;
     private readonly object _lock = new();
+    private readonly IProfileService _profiles;
+    private readonly string[] _searchDirectories;
+    private readonly ISettingsService _settings;
+    private List<IActionPlugin> _actionPlugins = [];
 
     private List<ILlmProviderPlugin> _llmProviders = [];
-    private List<ITranscriptionEnginePlugin> _transcriptionEngines = [];
     private List<IPostProcessorPlugin> _postProcessors = [];
-    private List<IActionPlugin> _actionPlugins = [];
+    private List<ITranscriptionEnginePlugin> _transcriptionEngines = [];
     private List<ITtsProviderPlugin> _ttsProviders = [];
 
     public PluginManager(
@@ -37,8 +36,16 @@ public sealed class PluginManager : IDisposable
         PluginEventBus eventBus,
         IActiveWindowService activeWindow,
         IProfileService profiles,
-        ISettingsService settings)
-        : this(loader, eventBus, activeWindow, profiles, settings, [TypeWhisperEnvironment.PluginsPath])
+        ISettingsService settings
+    )
+        : this(
+            loader,
+            eventBus,
+            activeWindow,
+            profiles,
+            settings,
+            [TypeWhisperEnvironment.PluginsPath]
+        )
     {
     }
 
@@ -48,10 +55,11 @@ public sealed class PluginManager : IDisposable
         IActiveWindowService activeWindow,
         IProfileService profiles,
         ISettingsService settings,
-        IEnumerable<string> searchDirectories)
+        IEnumerable<string> searchDirectories
+    )
     {
         _loader = loader;
-        _eventBus = eventBus;
+        EventBus = eventBus;
         _activeWindow = activeWindow;
         _profiles = profiles;
         _settings = settings;
@@ -60,48 +68,138 @@ public sealed class PluginManager : IDisposable
 
     public IReadOnlyList<LoadedPlugin> AllPlugins
     {
-        get { lock (_lock) return [.. _allPlugins]; }
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _allPlugins];
+            }
+        }
     }
 
     public IReadOnlyList<ILlmProviderPlugin> LlmProviders
     {
-        get { lock (_lock) return [.. _llmProviders]; }
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _llmProviders];
+            }
+        }
     }
 
     public IReadOnlyList<ITranscriptionEnginePlugin> TranscriptionEngines
     {
-        get { lock (_lock) return [.. _transcriptionEngines]; }
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _transcriptionEngines];
+            }
+        }
     }
 
     public IReadOnlyList<IPostProcessorPlugin> PostProcessors
     {
-        get { lock (_lock) return [.. _postProcessors]; }
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _postProcessors];
+            }
+        }
     }
 
     public IReadOnlyList<IActionPlugin> ActionPlugins
     {
-        get { lock (_lock) return [.. _actionPlugins]; }
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _actionPlugins];
+            }
+        }
     }
 
     public IReadOnlyList<ITtsProviderPlugin> TtsProviders
     {
-        get { lock (_lock) return [.. _ttsProviders]; }
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _ttsProviders];
+            }
+        }
     }
 
     public IReadOnlyList<PluginLoadFailure> LoadFailures => _loader.LastLoadFailures;
 
-    public IReadOnlyList<T> GetPlugins<T>() where T : class
+    public PluginEventBus EventBus { get; }
+
+    public void Dispose()
+    {
+        List<LoadedPlugin> plugins;
+        HashSet<string> activated;
+        lock (_lock)
+        {
+            plugins = [.. _allPlugins];
+            activated = [.. _activatedPlugins];
+        }
+
+        foreach (var plugin in plugins)
+        {
+            try
+            {
+                if (activated.Contains(plugin.Manifest.Id))
+                {
+                    plugin.Instance.DeactivateAsync().GetAwaiter().GetResult();
+                }
+
+                plugin.Instance.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[PluginManager] Error disposing plugin {plugin.Manifest.Id}: {ex.Message}"
+                );
+            }
+
+            try
+            {
+                plugin.LoadContext.Unload();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[PluginManager] Error unloading context for {plugin.Manifest.Id}: {ex.Message}"
+                );
+            }
+        }
+
+        lock (_lock)
+        {
+            _allPlugins.Clear();
+            _hostServices.Clear();
+            _activatedPlugins.Clear();
+            _llmProviders.Clear();
+            _transcriptionEngines.Clear();
+            _postProcessors.Clear();
+            _actionPlugins.Clear();
+            _ttsProviders.Clear();
+        }
+    }
+
+    public IReadOnlyList<T> GetPlugins<T>()
+        where T : class
     {
         lock (_lock)
+        {
             return _allPlugins
                 .Where(p => _activatedPlugins.Contains(p.Manifest.Id) && p.Instance is T)
                 .Select(p => (T)p.Instance!)
                 .ToList();
+        }
     }
-
-    public event EventHandler? PluginStateChanged;
-
-    public PluginEventBus EventBus => _eventBus;
 
     public async Task InitializeAsync()
     {
@@ -166,7 +264,10 @@ public sealed class PluginManager : IDisposable
             _activationTasks.TryRemove(new KeyValuePair<string, Task<bool>>(pluginId, activation));
         }
 
-        if (!success) return;
+        if (!success)
+        {
+            return;
+        }
 
         RebuildCapabilityIndices();
         PersistEnabledState(pluginId, true);
@@ -176,7 +277,9 @@ public sealed class PluginManager : IDisposable
     {
         var plugin = GetPlugin(pluginId);
         if (plugin is null)
+        {
             return;
+        }
 
         bool wasActivated;
         lock (_lock)
@@ -191,7 +294,9 @@ public sealed class PluginManager : IDisposable
         }
 
         if (!await DeactivatePluginAsync(plugin))
+        {
             return;
+        }
 
         RebuildCapabilityIndices();
         PersistEnabledState(pluginId, false);
@@ -213,80 +318,6 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
-    {
-        try
-        {
-            var hostServices = new PluginHostServices(
-                plugin.Manifest.Id, plugin.PluginDirectory,
-                _activeWindow, _eventBus, _profiles,
-                onCapabilitiesChanged: () =>
-                {
-                    RebuildCapabilityIndices();
-                    PluginStateChanged?.Invoke(this, EventArgs.Empty);
-                });
-
-            await plugin.Instance.ActivateAsync(hostServices);
-
-            lock (_lock)
-            {
-                _hostServices[plugin.Manifest.Id] = hostServices;
-                _activatedPlugins.Add(plugin.Manifest.Id);
-            }
-
-            Trace.WriteLine($"[PluginManager] Activated plugin: {plugin.Manifest.Id}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}");
-            return false;
-        }
-    }
-
-    private async Task<bool> DeactivatePluginAsync(LoadedPlugin plugin)
-    {
-        try
-        {
-            await plugin.Instance.DeactivateAsync();
-
-            lock (_lock)
-            {
-                _hostServices.Remove(plugin.Manifest.Id);
-                _activatedPlugins.Remove(plugin.Manifest.Id);
-            }
-
-            Trace.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}");
-            return false;
-        }
-    }
-
-    private void RebuildCapabilityIndices()
-    {
-        lock (_lock)
-        {
-            var activePlugins = _allPlugins
-                .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
-                .Select(p => p.Instance)
-                .ToList();
-
-            _llmProviders = activePlugins.OfType<ILlmProviderPlugin>().ToList();
-            _transcriptionEngines = activePlugins.OfType<ITranscriptionEnginePlugin>().ToList();
-            _postProcessors = activePlugins.OfType<IPostProcessorPlugin>()
-                .OrderBy(p => p.Priority)
-                .ToList();
-            _actionPlugins = activePlugins.OfType<IActionPlugin>().ToList();
-            _ttsProviders = activePlugins.OfType<ITtsProviderPlugin>().ToList();
-        }
-
-        PluginStateChanged?.Invoke(this, EventArgs.Empty);
-    }
-
     public async Task UnloadPluginAsync(string pluginId)
     {
         LoadedPlugin? plugin;
@@ -296,7 +327,9 @@ public sealed class PluginManager : IDisposable
         }
 
         if (plugin is null)
+        {
             return;
+        }
 
         bool wasActivated;
         lock (_lock)
@@ -305,7 +338,9 @@ public sealed class PluginManager : IDisposable
         }
 
         if (wasActivated)
+        {
             await DeactivatePluginAsync(plugin);
+        }
 
         // Always run Unload, even if Dispose throws — otherwise the
         // collectible ALC stays rooted and its native deps aren't freed.
@@ -324,7 +359,9 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[PluginManager] LoadContext.Unload failed for {pluginId}: {ex.Message}");
+            Trace.WriteLine(
+                $"[PluginManager] LoadContext.Unload failed for {pluginId}: {ex.Message}"
+            );
         }
 
         lock (_lock)
@@ -353,7 +390,9 @@ public sealed class PluginManager : IDisposable
         }
 
         if (hasExisting)
+        {
             await UnloadPluginAsync(plugin.Manifest.Id);
+        }
 
         lock (_lock)
         {
@@ -367,6 +406,104 @@ public sealed class PluginManager : IDisposable
         }
 
         RebuildCapabilityIndices();
+    }
+
+    public ITtsProviderPlugin? GetTtsProvider(string providerId)
+    {
+        lock (_lock)
+        {
+            return _ttsProviders.FirstOrDefault(provider =>
+                string.Equals(provider.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+    }
+
+    public event EventHandler? PluginStateChanged;
+
+    private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
+    {
+        try
+        {
+            var hostServices = new PluginHostServices(
+                plugin.Manifest.Id,
+                plugin.PluginDirectory,
+                _activeWindow,
+                EventBus,
+                _profiles,
+                () =>
+                {
+                    RebuildCapabilityIndices();
+                    PluginStateChanged?.Invoke(this, EventArgs.Empty);
+                }
+            );
+
+            await plugin.Instance.ActivateAsync(hostServices);
+
+            lock (_lock)
+            {
+                _hostServices[plugin.Manifest.Id] = hostServices;
+                _activatedPlugins.Add(plugin.Manifest.Id);
+            }
+
+            Trace.WriteLine($"[PluginManager] Activated plugin: {plugin.Manifest.Id}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
+            );
+            return false;
+        }
+    }
+
+    private async Task<bool> DeactivatePluginAsync(LoadedPlugin plugin)
+    {
+        try
+        {
+            await plugin.Instance.DeactivateAsync();
+
+            lock (_lock)
+            {
+                _hostServices.Remove(plugin.Manifest.Id);
+                _activatedPlugins.Remove(plugin.Manifest.Id);
+            }
+
+            Trace.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}"
+            );
+            return false;
+        }
+    }
+
+    private void RebuildCapabilityIndices()
+    {
+        lock (_lock)
+        {
+            var activePlugins = _allPlugins
+                .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
+                .Select(p => p.Instance)
+                .ToList();
+
+            _llmProviders = activePlugins.OfType<ILlmProviderPlugin>().ToList();
+            _transcriptionEngines = activePlugins.OfType<ITranscriptionEnginePlugin>().ToList();
+            _postProcessors = activePlugins
+                .OfType<IPostProcessorPlugin>()
+                .OrderBy(p => p.Priority)
+                .ToList();
+            _actionPlugins = activePlugins.OfType<IActionPlugin>().ToList();
+            _ttsProviders = activePlugins.OfType<ITtsProviderPlugin>().ToList();
+        }
+
+        // PluginStateChanged is raised outside _lock to avoid a deadlock if
+        // a handler (e.g. a ViewModel) calls back into PluginManager methods
+        // that also acquire _lock.
+        PluginStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void PersistEnabledState(string pluginId, bool enabled)
@@ -383,13 +520,16 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[PluginManager] Failed to persist enabled state for {pluginId}: {ex.Message}");
+            Trace.WriteLine(
+                $"[PluginManager] Failed to persist enabled state for {pluginId}: {ex.Message}"
+            );
         }
     }
 
     /// <summary>
-    /// Migrates legacy GroqApiKey/OpenAiApiKey from AppSettings to plugin secrets.
-    /// On a fresh Linux install these fields are typically empty so this is a no-op.
+    ///     One-shot migration for users upgrading from a build where Groq/OpenAI
+    ///     keys were stored at the top level of AppSettings. New installs leave
+    ///     those fields empty so this is effectively a no-op.
     /// </summary>
     private async Task MigrateApiKeysAsync()
     {
@@ -398,23 +538,41 @@ public sealed class PluginManager : IDisposable
         var migratedOpenAi = false;
 
         if (!string.IsNullOrEmpty(settings.GroqApiKey))
-            migratedGroq = await MigrateKeyToPluginAsync("com.typewhisper.groq", "api-key", settings.GroqApiKey);
+        {
+            migratedGroq = await MigrateKeyToPluginAsync(
+                "com.typewhisper.groq",
+                "api-key",
+                settings.GroqApiKey
+            );
+        }
 
         if (!string.IsNullOrEmpty(settings.OpenAiApiKey))
-            migratedOpenAi = await MigrateKeyToPluginAsync("com.typewhisper.openai", "api-key", settings.OpenAiApiKey);
+        {
+            migratedOpenAi = await MigrateKeyToPluginAsync(
+                "com.typewhisper.openai",
+                "api-key",
+                settings.OpenAiApiKey
+            );
+        }
 
         if (migratedGroq || migratedOpenAi)
         {
             var current = _settings.Current;
-            _settings.Save(current with
-            {
-                GroqApiKey = migratedGroq ? "" : current.GroqApiKey,
-                OpenAiApiKey = migratedOpenAi ? "" : current.OpenAiApiKey
-            });
+            _settings.Save(
+                current with
+                {
+                    GroqApiKey = migratedGroq ? "" : current.GroqApiKey,
+                    OpenAiApiKey = migratedOpenAi ? "" : current.OpenAiApiKey
+                }
+            );
         }
     }
 
-    private async Task<bool> MigrateKeyToPluginAsync(string pluginId, string secretKey, string encryptedValue)
+    private async Task<bool> MigrateKeyToPluginAsync(
+        string pluginId,
+        string secretKey,
+        string encryptedValue
+    )
     {
         PluginHostServices? hostServices;
         lock (_lock)
@@ -423,13 +581,17 @@ public sealed class PluginManager : IDisposable
         }
 
         if (hostServices is null)
+        {
             return false;
+        }
 
         try
         {
             var decrypted = ApiKeyProtection.Decrypt(encryptedValue);
             if (string.IsNullOrEmpty(decrypted))
+            {
                 return false;
+            }
 
             await hostServices.StoreSecretAsync(secretKey, decrypted);
             Trace.WriteLine($"[PluginManager] Migrated API key to plugin: {pluginId}");
@@ -437,66 +599,10 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[PluginManager] Failed to migrate API key for {pluginId}: {ex.Message}");
+            Trace.WriteLine(
+                $"[PluginManager] Failed to migrate API key for {pluginId}: {ex.Message}"
+            );
             return false;
-        }
-    }
-
-    public void Dispose()
-    {
-        List<LoadedPlugin> plugins;
-        HashSet<string> activated;
-        lock (_lock)
-        {
-            plugins = [.. _allPlugins];
-            activated = [.. _activatedPlugins];
-        }
-
-        foreach (var plugin in plugins)
-        {
-            try
-            {
-                if (activated.Contains(plugin.Manifest.Id))
-                {
-                    plugin.Instance.DeactivateAsync().GetAwaiter().GetResult();
-                }
-
-                plugin.Instance.Dispose();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[PluginManager] Error disposing plugin {plugin.Manifest.Id}: {ex.Message}");
-            }
-
-            try
-            {
-                plugin.LoadContext.Unload();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[PluginManager] Error unloading context for {plugin.Manifest.Id}: {ex.Message}");
-            }
-        }
-
-        lock (_lock)
-        {
-            _allPlugins.Clear();
-            _hostServices.Clear();
-            _activatedPlugins.Clear();
-            _llmProviders.Clear();
-            _transcriptionEngines.Clear();
-            _postProcessors.Clear();
-            _actionPlugins.Clear();
-            _ttsProviders.Clear();
-        }
-    }
-
-    public ITtsProviderPlugin? GetTtsProvider(string providerId)
-    {
-        lock (_lock)
-        {
-            return _ttsProviders.FirstOrDefault(provider =>
-                string.Equals(provider.ProviderId, providerId, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

@@ -10,7 +10,8 @@ public sealed class TransformSelectionServiceTests
     {
         var result = TransformSelectionService.BuildTransformPrompt(
             "This sentence is too long.",
-            "make it concise");
+            "make it concise"
+        );
 
         Assert.Contains("Return only the transformed text.", result);
         Assert.Contains("This sentence is too long.", result);

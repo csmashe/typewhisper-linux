@@ -5,7 +5,6 @@ namespace TypeWhisper.Core.Interfaces;
 public interface IDictionaryService
 {
     IReadOnlyList<DictionaryEntry> Entries { get; }
-    event Action? EntriesChanged;
 
     void AddEntry(DictionaryEntry entry);
     void AddEntries(IEnumerable<DictionaryEntry> entries);
@@ -15,25 +14,39 @@ public interface IDictionaryService
 
     string ApplyCorrections(string text);
     string? GetTermsForPrompt();
-    IReadOnlyList<string> GetEnabledTerms() => Entries
-        .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Term)
-        .Select(e => e.Original)
-        .ToList();
 
-    void SetTerms(IEnumerable<string> terms, bool replaceExisting) =>
-        throw new NotSupportedException();
+    IReadOnlyList<string> GetEnabledTerms()
+    {
+        return Entries
+            .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Term)
+            .Select(e => e.Original)
+            .ToList();
+    }
 
-    void RemoveAllTerms() =>
+    void SetTerms(IEnumerable<string> terms, bool replaceExisting)
+    {
         throw new NotSupportedException();
+    }
+
+    void RemoveAllTerms()
+    {
+        throw new NotSupportedException();
+    }
 
     void LearnCorrection(string original, string replacement);
 
     void ActivatePack(TermPack pack);
     void DeactivatePack(string packId);
 
-    string ExportToCsv() =>
+    string ExportToCsv()
+    {
         throw new NotSupportedException();
+    }
 
-    int ImportFromCsv(string csv) =>
+    int ImportFromCsv(string csv)
+    {
         throw new NotSupportedException();
+    }
+
+    event Action? EntriesChanged;
 }

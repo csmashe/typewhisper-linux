@@ -1,33 +1,35 @@
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
-using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.Linux.Services;
 
 public sealed record TtsProviderOption(string Id, string DisplayName);
+
 public sealed record TtsVoiceOption(string Id, string DisplayName, string? LocaleIdentifier = null);
 
 public sealed class SpeechFeedbackService : IDisposable
 {
     public const string DefaultVoiceOptionId = "__typewhisper_default_voice__";
+    private readonly object _lock = new();
+    private readonly PluginManager _pluginManager;
 
     private readonly ISettingsService _settings;
-    private readonly PluginManager _pluginManager;
     private readonly ITtsProviderPlugin _systemProvider;
-    private readonly object _lock = new();
+    private bool _disposed;
+    private bool _isPlaybackPending;
+    private ITtsPlaybackSession? _playbackSession;
+    private long _playbackVersion;
 
     private CancellationTokenSource? _speakCts;
-    private ITtsPlaybackSession? _playbackSession;
-    private bool _isPlaybackPending;
-    private bool _disposed;
-    private long _playbackVersion;
 
     public SpeechFeedbackService(
         ISettingsService settings,
         PluginManager pluginManager,
-        SystemCommandAvailabilityService commands)
+        SystemCommandAvailabilityService commands
+    )
         : this(settings, pluginManager, new LinuxSystemTtsProvider(settings, commands))
     {
     }
@@ -35,7 +37,8 @@ public sealed class SpeechFeedbackService : IDisposable
     internal SpeechFeedbackService(
         ISettingsService settings,
         PluginManager pluginManager,
-        ITtsProviderPlugin systemProvider)
+        ITtsProviderPlugin systemProvider
+    )
     {
         _settings = settings;
         _pluginManager = pluginManager;
@@ -51,34 +54,49 @@ public sealed class SpeechFeedbackService : IDisposable
         get
         {
             lock (_lock)
+            {
                 return _isPlaybackPending || _playbackSession?.IsActive == true;
+            }
         }
     }
 
-    public event EventHandler? ProvidersChanged;
-
     public IReadOnlyList<TtsProviderOption> AvailableProviders =>
         AllProviders()
-            .Select(provider => new TtsProviderOption(provider.ProviderId, provider.ProviderDisplayName))
+            .Select(provider => new TtsProviderOption(
+                provider.ProviderId,
+                provider.ProviderDisplayName
+            ))
             .ToList();
 
     public string EffectiveProviderId => ResolveSpeakProvider().ProviderId;
 
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _pluginManager.PluginStateChanged -= OnPluginStateChanged;
+        Stop();
+        _systemProvider.Dispose();
+    }
+
     public IReadOnlyList<TtsVoiceOption> GetVoiceOptions(string? providerId)
     {
         var provider = FindProvider(providerId) ?? _systemProvider;
-        var voices = new List<TtsVoiceOption>
-        {
-            new(DefaultVoiceOptionId, "System default voice")
-        };
+        var voices = new List<TtsVoiceOption> { new(DefaultVoiceOptionId, "System default voice") };
 
-        voices.AddRange(provider.AvailableVoices.Select(voice =>
-        {
-            var displayName = string.IsNullOrWhiteSpace(voice.LocaleIdentifier)
-                ? voice.DisplayName
-                : $"{voice.DisplayName} ({voice.LocaleIdentifier})";
-            return new TtsVoiceOption(voice.Id, displayName, voice.LocaleIdentifier);
-        }));
+        voices.AddRange(
+            provider.AvailableVoices.Select(voice =>
+            {
+                var displayName = string.IsNullOrWhiteSpace(voice.LocaleIdentifier)
+                    ? voice.DisplayName
+                    : $"{voice.DisplayName} ({voice.LocaleIdentifier})";
+                return new TtsVoiceOption(voice.Id, displayName, voice.LocaleIdentifier);
+            })
+        );
 
         return voices;
     }
@@ -104,15 +122,24 @@ public sealed class SpeechFeedbackService : IDisposable
         }
     }
 
-    public static bool IsDefaultVoiceOptionId(string? voiceId) =>
-        string.IsNullOrWhiteSpace(voiceId) ||
-        string.Equals(voiceId, DefaultVoiceOptionId, StringComparison.Ordinal);
+    public static bool IsDefaultVoiceOptionId(string? voiceId)
+    {
+        return string.IsNullOrWhiteSpace(voiceId)
+               || string.Equals(voiceId, DefaultVoiceOptionId, StringComparison.Ordinal);
+    }
 
-    public void Speak(string text, string? language = null) =>
-        SpeakCore(new TtsSpeakRequest(text, language, TtsPurpose.Status), requireEnabled: true);
+    public void Speak(string text, string? language = null)
+    {
+        SpeakCore(new TtsSpeakRequest(text, language), true);
+    }
 
-    public void SpeakAutomaticTranscription(string text, string? language = null) =>
-        SpeakCore(new TtsSpeakRequest(text, language, TtsPurpose.Transcription), requireEnabled: true);
+    public void SpeakAutomaticTranscription(string text, string? language = null)
+    {
+        SpeakCore(
+            new TtsSpeakRequest(text, language, TtsPurpose.Transcription),
+            true
+        );
+    }
 
     public void ReadBack(string text, string? language = null)
     {
@@ -122,15 +149,26 @@ public sealed class SpeechFeedbackService : IDisposable
             return;
         }
 
-        SpeakCore(new TtsSpeakRequest(text, language, TtsPurpose.ManualReadback), requireEnabled: false);
+        SpeakCore(
+            new TtsSpeakRequest(text, language, TtsPurpose.ManualReadback),
+            false
+        );
     }
 
-    public void AnnounceRecordingStarted() => Speak("Recording");
+    public void AnnounceRecordingStarted()
+    {
+        Speak("Recording");
+    }
 
-    public void AnnounceTranscriptionComplete(string text, string? language = null) =>
+    public void AnnounceTranscriptionComplete(string text, string? language = null)
+    {
         SpeakAutomaticTranscription(text, language);
+    }
 
-    public void AnnounceError(string reason) => Speak($"Error: {reason}");
+    public void AnnounceError(string reason)
+    {
+        Speak($"Error: {reason}");
+    }
 
     public void Stop()
     {
@@ -146,18 +184,36 @@ public sealed class SpeechFeedbackService : IDisposable
             _isPlaybackPending = false;
         }
 
-        try { cts?.Cancel(); }
+        try
+        {
+            cts?.Cancel();
+        }
         catch { }
-        finally { cts?.Dispose(); }
+        finally
+        {
+            cts?.Dispose();
+        }
 
-        try { session?.Stop(); }
+        try
+        {
+            session?.Stop();
+        }
         catch { }
     }
 
+    public event EventHandler? ProvidersChanged;
+
     private void SpeakCore(TtsSpeakRequest request, bool requireEnabled)
     {
-        if (_disposed || string.IsNullOrWhiteSpace(request.Text)) return;
-        if (requireEnabled && !_settings.Current.SpokenFeedbackEnabled) return;
+        if (_disposed || string.IsNullOrWhiteSpace(request.Text))
+        {
+            return;
+        }
+
+        if (requireEnabled && !_settings.Current.SpokenFeedbackEnabled)
+        {
+            return;
+        }
 
         Stop();
 
@@ -173,7 +229,11 @@ public sealed class SpeechFeedbackService : IDisposable
         _ = SpeakAsync(request, cts, version);
     }
 
-    private async Task SpeakAsync(TtsSpeakRequest request, CancellationTokenSource cts, long version)
+    private async Task SpeakAsync(
+        TtsSpeakRequest request,
+        CancellationTokenSource cts,
+        long version
+    )
     {
         ITtsPlaybackSession? session = null;
         try
@@ -187,6 +247,9 @@ public sealed class SpeechFeedbackService : IDisposable
                 return;
             }
 
+            // Check that no newer Speak / Stop call has superseded us while
+            // SpeakAsync was awaited. If the version has advanced, discard
+            // this session so the newer request's session owns the slot.
             var accepted = false;
             lock (_lock)
             {
@@ -213,7 +276,9 @@ public sealed class SpeechFeedbackService : IDisposable
             session.Completed += completedHandler;
 
             if (!session.IsActive)
+            {
                 OnPlaybackCompleted(session, cts, version);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -226,12 +291,19 @@ public sealed class SpeechFeedbackService : IDisposable
         }
     }
 
-    private void OnPlaybackCompleted(ITtsPlaybackSession session, CancellationTokenSource cts, long version)
+    private void OnPlaybackCompleted(
+        ITtsPlaybackSession session,
+        CancellationTokenSource cts,
+        long version
+    )
     {
         var disposeCts = false;
         lock (_lock)
         {
-            if (ReferenceEquals(_playbackSession, session) && version == Volatile.Read(ref _playbackVersion))
+            if (
+                ReferenceEquals(_playbackSession, session)
+                && version == Volatile.Read(ref _playbackVersion)
+            )
             {
                 _playbackSession = null;
                 _isPlaybackPending = false;
@@ -244,7 +316,9 @@ public sealed class SpeechFeedbackService : IDisposable
         }
 
         if (disposeCts)
+        {
             cts.Dispose();
+        }
     }
 
     private void ClearPending(CancellationTokenSource cts, long version)
@@ -261,17 +335,29 @@ public sealed class SpeechFeedbackService : IDisposable
         }
 
         if (disposeCts)
+        {
             cts.Dispose();
+        }
     }
 
-    private IReadOnlyList<ITtsProviderPlugin> AllProviders() =>
-        [_systemProvider, .. _pluginManager.TtsProviders];
+    private IReadOnlyList<ITtsProviderPlugin> AllProviders()
+    {
+        return [_systemProvider, .. _pluginManager.TtsProviders];
+    }
 
     private ITtsProviderPlugin? FindProvider(string? providerId)
     {
-        if (string.IsNullOrWhiteSpace(providerId) ||
-            string.Equals(providerId, _systemProvider.ProviderId, StringComparison.OrdinalIgnoreCase))
+        if (
+            string.IsNullOrWhiteSpace(providerId)
+            || string.Equals(
+                providerId,
+                _systemProvider.ProviderId,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
             return _systemProvider;
+        }
 
         return _pluginManager.GetTtsProvider(providerId);
     }
@@ -281,9 +367,11 @@ public sealed class SpeechFeedbackService : IDisposable
         var selectedProviderId = _settings.Current.SpokenFeedbackProviderId;
         var selectedProvider = FindProvider(selectedProviderId);
 
-        if (selectedProvider is not null &&
-            !ReferenceEquals(selectedProvider, _systemProvider) &&
-            selectedProvider.IsConfigured)
+        if (
+            selectedProvider is not null
+            && !ReferenceEquals(selectedProvider, _systemProvider)
+            && selectedProvider.IsConfigured
+        )
         {
             return selectedProvider;
         }
@@ -291,15 +379,8 @@ public sealed class SpeechFeedbackService : IDisposable
         return _systemProvider;
     }
 
-    private void OnPluginStateChanged(object? sender, EventArgs e) =>
-        ProvidersChanged?.Invoke(this, EventArgs.Empty);
-
-    public void Dispose()
+    private void OnPluginStateChanged(object? sender, EventArgs e)
     {
-        if (_disposed) return;
-        _disposed = true;
-        _pluginManager.PluginStateChanged -= OnPluginStateChanged;
-        Stop();
-        _systemProvider.Dispose();
+        ProvidersChanged?.Invoke(this, EventArgs.Empty);
     }
 }

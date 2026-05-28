@@ -11,8 +11,26 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
 
     public SnippetsSectionViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.Snippets.Tests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.Snippets.Tests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     [Fact]
@@ -72,65 +90,74 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
 
         Assert.True(sut.ShowPreview);
         Assert.StartsWith("Today is ", sut.PreviewText);
-        Assert.Equal(DateTime.Now.Date.ToString("yyyy-MM-dd"), sut.PreviewText["Today is ".Length..]);
+        Assert.Equal(
+            DateTime.Now.Date.ToString("yyyy-MM-dd"),
+            sut.PreviewText["Today is ".Length..]
+        );
     }
 
     [Fact]
     public void ConflictWarning_ShowsDictionaryTermMatch()
     {
         var dictionary = CreateDictionaryService();
-        dictionary.AddEntry(new DictionaryEntry
-        {
-            Id = "term-1",
-            EntryType = DictionaryEntryType.Term,
-            Original = "Kubernetes"
-        });
+        dictionary.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "term-1",
+                EntryType = DictionaryEntryType.Term,
+                Original = "Kubernetes"
+            }
+        );
         var sut = CreateViewModel(CreateSnippetService(), dictionary);
 
         sut.NewTrigger = "kubernetes";
 
         Assert.True(sut.HasConflictWarning);
-        Assert.Equal("This trigger matches an enabled dictionary term: Kubernetes.", sut.ConflictWarningText);
+        Assert.Equal(
+            "This trigger matches an enabled dictionary term: Kubernetes.",
+            sut.ConflictWarningText
+        );
     }
 
     [Fact]
     public void ConflictWarning_ShowsDictionaryCorrectionMatch()
     {
         var dictionary = CreateDictionaryService();
-        dictionary.AddEntry(new DictionaryEntry
-        {
-            Id = "correction-1",
-            EntryType = DictionaryEntryType.Correction,
-            Original = "wispr",
-            Replacement = "Wispr",
-        });
+        dictionary.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "correction-1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "wispr",
+                Replacement = "Wispr"
+            }
+        );
         var sut = CreateViewModel(CreateSnippetService(), dictionary);
 
         sut.NewTrigger = "wispr";
 
         Assert.True(sut.HasConflictWarning);
-        Assert.Equal("This trigger matches a dictionary correction: wispr -> Wispr.", sut.ConflictWarningText);
+        Assert.Equal(
+            "This trigger matches a dictionary correction: wispr -> Wispr.",
+            sut.ConflictWarningText
+        );
     }
 
-    private SnippetService CreateSnippetService() =>
-        new(Path.Combine(_tempDir, "snippets.json"));
-
-    private DictionaryService CreateDictionaryService() =>
-        new(Path.Combine(_tempDir, "dictionary.json"));
-
-    private SnippetsSectionViewModel CreateViewModel(SnippetService snippets, DictionaryService? dictionary = null) =>
-        new(snippets, dictionary ?? CreateDictionaryService());
-
-    public void Dispose()
+    private SnippetService CreateSnippetService()
     {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
+        return new SnippetService(Path.Combine(_tempDir, "snippets.json"));
+    }
+
+    private DictionaryService CreateDictionaryService()
+    {
+        return new DictionaryService(Path.Combine(_tempDir, "dictionary.json"));
+    }
+
+    private SnippetsSectionViewModel CreateViewModel(
+        SnippetService snippets,
+        DictionaryService? dictionary = null
+    )
+    {
+        return new SnippetsSectionViewModel(snippets, dictionary ?? CreateDictionaryService());
     }
 }

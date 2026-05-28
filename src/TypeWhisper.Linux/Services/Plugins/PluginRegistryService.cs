@@ -8,22 +8,27 @@ using TypeWhisper.Core.Interfaces;
 namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
-/// Fetches the plugin registry from GitHub, manages installation, uninstallation,
-/// and update checking for Linux-compatible marketplace plugins.
+///     Fetches the plugin registry from GitHub, manages installation, uninstallation,
+///     and update checking for Linux-compatible marketplace plugins.
 /// </summary>
 public sealed class PluginRegistryService
 {
+    // The registry JSON is hosted under the Windows repo path but is shared
+    // with the Linux client. SupportedPluginIds below filters it down to the
+    // Linux-compatible subset.
     private const string RegistryUrl = "https://typewhisper.github.io/typewhisper-win/plugins.json";
-    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
+    private static readonly TimeSpan s_cacheDuration = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan s_updateCheckInterval = TimeSpan.FromHours(24);
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
     // Keep Linux on the set already proven by the old bundled-plugin path.
-    private static readonly HashSet<string> SupportedPluginIds = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> s_supportedPluginIds = new(
+        StringComparer.OrdinalIgnoreCase
+    )
     {
         "com.typewhisper.sherpa-onnx",
         "com.typewhisper.whisper-cpp",
@@ -50,10 +55,11 @@ public sealed class PluginRegistryService
         "com.typewhisper.openai-compatible"
     };
 
-    private readonly PluginManager _pluginManager;
-    private readonly PluginLoader _pluginLoader;
-    private readonly ISettingsService _settings;
     private readonly HttpClient _httpClient;
+    private readonly PluginLoader _pluginLoader;
+
+    private readonly PluginManager _pluginManager;
+    private readonly ISettingsService _settings;
 
     private List<RegistryPlugin>? _cachedRegistry;
     private DateTime _cacheTimestamp;
@@ -63,7 +69,8 @@ public sealed class PluginRegistryService
         PluginManager pluginManager,
         PluginLoader pluginLoader,
         ISettingsService settings,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null
+    )
     {
         _pluginManager = pluginManager;
         _pluginLoader = pluginLoader;
@@ -71,28 +78,31 @@ public sealed class PluginRegistryService
         _httpClient = httpClient ?? new HttpClient();
     }
 
-    /// <summary>
-    /// Fetches the plugin registry from the remote URL. Results are cached for 5 minutes.
-    /// Filters out incompatible host versions and plugins not supported on Linux.
-    /// </summary>
-    public async Task<IReadOnlyList<RegistryPlugin>> FetchRegistryAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<RegistryPlugin>> FetchRegistryAsync(
+        CancellationToken ct = default
+    )
     {
-        if (_cachedRegistry is not null && DateTime.UtcNow - _cacheTimestamp < CacheDuration)
+        if (_cachedRegistry is not null && DateTime.UtcNow - _cacheTimestamp < s_cacheDuration)
+        {
             return _cachedRegistry;
+        }
 
         try
         {
             var json = await _httpClient.GetStringAsync(RegistryUrl, ct);
-            var allPlugins = JsonSerializer.Deserialize<List<RegistryPlugin>>(json, JsonOptions) ?? [];
+            var allPlugins =
+                JsonSerializer.Deserialize<List<RegistryPlugin>>(json, s_jsonOptions) ?? [];
 
             var hostVersion = GetHostVersion();
             _cachedRegistry = allPlugins
-                .Where(p => SupportedPluginIds.Contains(p.Id))
+                .Where(p => s_supportedPluginIds.Contains(p.Id))
                 .Where(p => IsCompatible(p.MinHostVersion, hostVersion))
                 .ToList();
             _cacheTimestamp = DateTime.UtcNow;
 
-            Trace.WriteLine($"[PluginRegistry] Fetched {_cachedRegistry.Count} compatible Linux plugin(s) from registry");
+            Trace.WriteLine(
+                $"[PluginRegistry] Fetched {_cachedRegistry.Count} compatible Linux plugin(s) from registry"
+            );
             return _cachedRegistry;
         }
         catch (Exception ex)
@@ -102,18 +112,19 @@ public sealed class PluginRegistryService
         }
     }
 
-    /// <summary>
-    /// Determines the install state of a registry plugin by comparing it with locally loaded plugins.
-    /// </summary>
     public PluginInstallState GetInstallState(RegistryPlugin registryPlugin)
     {
         var local = _pluginManager.GetPlugin(registryPlugin.Id);
         if (local is null)
+        {
             return PluginInstallState.NotInstalled;
+        }
 
-        if (Version.TryParse(registryPlugin.Version, out var remoteVer) &&
-            Version.TryParse(local.Manifest.Version, out var localVer) &&
-            remoteVer > localVer)
+        if (
+            Version.TryParse(registryPlugin.Version, out var remoteVer)
+            && Version.TryParse(local.Manifest.Version, out var localVer)
+            && remoteVer > localVer
+        )
         {
             return PluginInstallState.UpdateAvailable;
         }
@@ -121,21 +132,23 @@ public sealed class PluginRegistryService
         return PluginInstallState.Installed;
     }
 
-    /// <summary>
-    /// Downloads and installs a plugin from the registry.
-    /// </summary>
     public async Task InstallPluginAsync(
         RegistryPlugin registryPlugin,
         IProgress<double>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default
+    )
     {
         var pluginDir = Path.Combine(TypeWhisperEnvironment.PluginsPath, registryPlugin.Id);
 
         if (_pluginManager.GetPlugin(registryPlugin.Id) is not null)
+        {
             await _pluginManager.UnloadPluginAsync(registryPlugin.Id);
+        }
 
         if (Directory.Exists(pluginDir))
-            Directory.Delete(pluginDir, recursive: true);
+        {
+            Directory.Delete(pluginDir, true);
+        }
 
         Directory.CreateDirectory(pluginDir);
 
@@ -145,7 +158,10 @@ public sealed class PluginRegistryService
             try
             {
                 using var response = await _httpClient.GetAsync(
-                    registryPlugin.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+                    registryPlugin.DownloadUrl,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    ct
+                );
                 response.EnsureSuccessStatusCode();
 
                 var totalBytes = response.Content.Headers.ContentLength ?? registryPlugin.Size;
@@ -165,24 +181,34 @@ public sealed class PluginRegistryService
             catch
             {
                 if (File.Exists(tempZip))
+                {
                     File.Delete(tempZip);
+                }
+
                 throw;
             }
 
-            ZipFile.ExtractToDirectory(tempZip, pluginDir, overwriteFiles: true);
+            ZipFile.ExtractToDirectory(tempZip, pluginDir, true);
             File.Delete(tempZip);
 
-            await _pluginManager.LoadPluginFromDirectoryAsync(pluginDir, activate: true);
+            await _pluginManager.LoadPluginFromDirectoryAsync(pluginDir, true);
 
-            Trace.WriteLine($"[PluginRegistry] Installed plugin: {registryPlugin.Id} v{registryPlugin.Version}");
+            Trace.WriteLine(
+                $"[PluginRegistry] Installed plugin: {registryPlugin.Id} v{registryPlugin.Version}"
+            );
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[PluginRegistry] Failed to install {registryPlugin.Id}: {ex.Message}");
+            Trace.WriteLine(
+                $"[PluginRegistry] Failed to install {registryPlugin.Id}: {ex.Message}"
+            );
 
             if (Directory.Exists(pluginDir))
             {
-                try { Directory.Delete(pluginDir, recursive: true); }
+                try
+                {
+                    Directory.Delete(pluginDir, true);
+                }
                 catch { }
             }
 
@@ -190,9 +216,6 @@ public sealed class PluginRegistryService
         }
     }
 
-    /// <summary>
-    /// Uninstalls a plugin by unloading it and deleting its directory.
-    /// </summary>
     public async Task UninstallPluginAsync(string pluginId)
     {
         await _pluginManager.UnloadPluginAsync(pluginId);
@@ -202,23 +225,28 @@ public sealed class PluginRegistryService
         {
             try
             {
-                Directory.Delete(pluginDir, recursive: true);
+                Directory.Delete(pluginDir, true);
                 Trace.WriteLine($"[PluginRegistry] Uninstalled plugin: {pluginId}");
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[PluginRegistry] Failed to delete directory for {pluginId}: {ex.Message}");
+                Trace.WriteLine(
+                    $"[PluginRegistry] Failed to delete directory for {pluginId}: {ex.Message}"
+                );
             }
         }
     }
 
     /// <summary>
-    /// Checks for available plugin updates. Respects a 24-hour interval.
+    ///     Throttled to one network probe per 24h — this runs at startup so a
+    ///     repeated launch loop won't hammer the registry endpoint.
     /// </summary>
     public async Task CheckForUpdatesAsync(CancellationToken ct = default)
     {
-        if (DateTime.UtcNow - _lastUpdateCheck < UpdateCheckInterval)
+        if (DateTime.UtcNow - _lastUpdateCheck < s_updateCheckInterval)
+        {
             return;
+        }
 
         _lastUpdateCheck = DateTime.UtcNow;
 
@@ -228,19 +256,29 @@ public sealed class PluginRegistryService
             .ToList();
 
         if (updatesAvailable.Count > 0)
-            Trace.WriteLine($"[PluginRegistry] {updatesAvailable.Count} plugin update(s) available");
+        {
+            Trace.WriteLine(
+                $"[PluginRegistry] {updatesAvailable.Count} plugin update(s) available"
+            );
+        }
     }
 
     /// <summary>
-    /// On first run, auto-installs all compatible registry plugins.
-    /// Sets the PluginFirstRunCompleted flag to prevent re-running.
+    ///     First-launch bootstrap: pulls every Linux-compatible plugin from the
+    ///     registry so the app is usable out of the box. Guarded by the
+    ///     PluginFirstRunCompleted flag so subsequent launches respect any
+    ///     uninstalls the user has performed.
     /// </summary>
     public async Task FirstRunAutoInstallAsync(CancellationToken ct = default)
     {
         if (_settings.Current.PluginFirstRunCompleted)
+        {
             return;
+        }
 
-        Trace.WriteLine("[PluginRegistry] First run detected, auto-installing Linux-compatible registry plugins...");
+        Trace.WriteLine(
+            "[PluginRegistry] First run detected, auto-installing Linux-compatible registry plugins..."
+        );
 
         try
         {
@@ -255,7 +293,9 @@ public sealed class PluginRegistryService
                     }
                     catch (Exception ex)
                     {
-                        Trace.WriteLine($"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}");
+                        Trace.WriteLine(
+                            $"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}"
+                        );
                     }
                 }
             }
@@ -277,7 +317,9 @@ public sealed class PluginRegistryService
     private static bool IsCompatible(string? minHostVersion, Version hostVersion)
     {
         if (string.IsNullOrEmpty(minHostVersion))
+        {
             return true;
+        }
 
         return !Version.TryParse(minHostVersion, out var minVer) || hostVersion >= minVer;
     }

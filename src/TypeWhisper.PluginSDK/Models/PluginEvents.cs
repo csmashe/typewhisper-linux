@@ -1,7 +1,7 @@
 namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>
-/// Base class for all plugin events published via the event bus.
+///     Base class for all plugin events published via the event bus.
 /// </summary>
 public abstract record PluginEvent
 {

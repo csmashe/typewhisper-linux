@@ -1,8 +1,8 @@
-using System.IO;
 using Moq;
 using TypeWhisper.Core.Interfaces;
-using TypeWhisper.PluginSDK;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -15,20 +15,28 @@ public class PluginHostServicesTests : IDisposable
 
     public PluginHostServicesTests()
     {
-        _profiles.Setup(p => p.Profiles).Returns(new List<TypeWhisper.Core.Models.Profile>());
+        _profiles.Setup(p => p.Profiles).Returns(new List<Profile>());
         _tempDir = Path.Combine(Path.GetTempPath(), $"tw-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
     }
 
-    private PluginHostServices CreateServices(Action? onCapabilitiesChanged = null) =>
-        new("test-plugin", _tempDir, _activeWindow.Object, _eventBus.Object,
-            _profiles.Object, onCapabilitiesChanged);
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_tempDir, true);
+        }
+        catch
+        {
+            /* best effort */
+        }
+    }
 
     [Fact]
     public void NotifyCapabilitiesChanged_InvokesCallback()
     {
         var callbackInvoked = false;
-        var services = CreateServices(onCapabilitiesChanged: () => callbackInvoked = true);
+        var services = CreateServices(() => callbackInvoked = true);
 
         services.NotifyCapabilitiesChanged();
 
@@ -47,7 +55,7 @@ public class PluginHostServicesTests : IDisposable
     public void NotifyCapabilitiesChanged_CallbackInvokedMultipleTimes()
     {
         var callCount = 0;
-        var services = CreateServices(onCapabilitiesChanged: () => callCount++);
+        var services = CreateServices(() => callCount++);
 
         services.NotifyCapabilitiesChanged();
         services.NotifyCapabilitiesChanged();
@@ -84,9 +92,15 @@ public class PluginHostServicesTests : IDisposable
         Assert.Empty(services.Localization.AvailableLanguages);
     }
 
-    public void Dispose()
+    private PluginHostServices CreateServices(Action? onCapabilitiesChanged = null)
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { /* best effort */ }
+        return new PluginHostServices(
+            "test-plugin",
+            _tempDir,
+            _activeWindow.Object,
+            _eventBus.Object,
+            _profiles.Object,
+            onCapabilitiesChanged
+        );
     }
 }

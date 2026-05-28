@@ -14,7 +14,8 @@ public sealed class WatchFolderExportBuilderTests
             Result("hello world"),
             "recording.wav",
             "Local / base",
-            new DateTime(2026, 4, 28, 12, 0, 0));
+            new DateTime(2026, 4, 28, 12, 0, 0)
+        );
 
         Assert.Equal("md", artifact.FileExtension);
         Assert.Contains("# Transcription: recording.wav", artifact.Content);
@@ -30,7 +31,8 @@ public sealed class WatchFolderExportBuilderTests
             Result("plain"),
             "recording.wav",
             "Mock",
-            DateTime.Now);
+            DateTime.Now
+        );
 
         Assert.Equal("txt", artifact.FileExtension);
         Assert.Equal("plain", artifact.Content);
@@ -44,8 +46,20 @@ public sealed class WatchFolderExportBuilderTests
             Segments = [new TranscriptionSegment("caption", 1.2, 3.4)]
         };
 
-        var srt = WatchFolderExportBuilder.Build(WatchFolderOutputFormat.Srt, result, "audio.wav", "Mock", DateTime.Now);
-        var vtt = WatchFolderExportBuilder.Build(WatchFolderOutputFormat.Vtt, result, "audio.wav", "Mock", DateTime.Now);
+        var srt = WatchFolderExportBuilder.Build(
+            WatchFolderOutputFormat.Srt,
+            result,
+            "audio.wav",
+            "Mock",
+            DateTime.Now
+        );
+        var vtt = WatchFolderExportBuilder.Build(
+            WatchFolderOutputFormat.Vtt,
+            result,
+            "audio.wav",
+            "Mock",
+            DateTime.Now
+        );
 
         Assert.Equal("srt", srt.FileExtension);
         Assert.Contains("00:00:01,200 --> 00:00:03,400", srt.Content);
@@ -58,9 +72,18 @@ public sealed class WatchFolderExportBuilderTests
     public void Build_rejects_subtitle_export_without_segments()
     {
         Assert.Throws<InvalidOperationException>(() =>
-            WatchFolderExportBuilder.Build(WatchFolderOutputFormat.Srt, Result("caption"), "audio.wav", "Mock", DateTime.Now));
+            WatchFolderExportBuilder.Build(
+                WatchFolderOutputFormat.Srt,
+                Result("caption"),
+                "audio.wav",
+                "Mock",
+                DateTime.Now
+            )
+        );
     }
 
-    private static WatchFolderTranscriptionResult Result(string text) =>
-        new(text, "en", 1.0, 0.5, [], "mock", "base");
+    private static WatchFolderTranscriptionResult Result(string text)
+    {
+        return new WatchFolderTranscriptionResult(text, "en", 1.0, 0.5, [], "mock", "base");
+    }
 }

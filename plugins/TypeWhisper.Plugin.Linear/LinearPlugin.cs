@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,7 +14,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     private readonly HttpClient _httpClient = new();
@@ -45,12 +46,26 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         var cachedTeamsJson = host.GetSetting<string>("cached-teams");
         if (!string.IsNullOrWhiteSpace(cachedTeamsJson))
         {
-            try { _cachedTeams = JsonSerializer.Deserialize<List<LinearTeam>>(cachedTeamsJson, s_jsonOptions) ?? []; }
-            catch { _cachedTeams = []; }
+            try
+            {
+                _cachedTeams =
+                    JsonSerializer.Deserialize<List<LinearTeam>>(cachedTeamsJson, s_jsonOptions)
+                    ?? [];
+            }
+            catch (JsonException ex)
+            {
+                host.Log(
+                    PluginLogLevel.Warning,
+                    $"Failed to deserialize cached teams; resetting cache: {ex.Message}"
+                );
+                _cachedTeams = [];
+            }
         }
 
         _httpClient.DefaultRequestHeaders.Accept.Clear();
-        _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        _httpClient.DefaultRequestHeaders.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json")
+        );
 
         host.Log(PluginLogLevel.Info, "Linear plugin activated");
     }
@@ -61,13 +76,23 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         return Task.CompletedTask;
     }
 
-    public async Task<ActionResult> ExecuteAsync(string input, ActionContext context, CancellationToken ct)
+    public async Task<ActionResult> ExecuteAsync(
+        string input,
+        ActionContext context,
+        CancellationToken ct
+    )
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new ActionResult(false, "Linear API key not configured. Please set it in plugin settings.");
+            return new ActionResult(
+                false,
+                "Linear API key not configured. Please set it in plugin settings."
+            );
 
         if (string.IsNullOrWhiteSpace(_defaultTeamId))
-            return new ActionResult(false, "Default team ID not configured. Please set it in plugin settings.");
+            return new ActionResult(
+                false,
+                "Default team ID not configured. Please set it in plugin settings."
+            );
 
         var title = ExtractTitle(input);
         var description = input;
@@ -77,9 +102,17 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             var issueUrl = await CreateIssueAsync(title, description, ct);
 
             if (issueUrl is not null)
-                return new ActionResult(true, $"Linear issue created: {title}", Url: issueUrl, DisplayDuration: 5.0);
+                return new ActionResult(
+                    true,
+                    $"Linear issue created: {title}",
+                    Url: issueUrl,
+                    DisplayDuration: 5.0
+                );
 
-            return new ActionResult(false, "Failed to create Linear issue. Check logs for details.");
+            return new ActionResult(
+                false,
+                "Failed to create Linear issue. Check logs for details."
+            );
         }
         catch (OperationCanceledException)
         {
@@ -137,7 +170,8 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             """;
 
         var response = await SendGraphQlAsync(query, ct);
-        if (response is null) return [];
+        if (response is null)
+            return [];
 
         try
         {
@@ -146,12 +180,14 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
             foreach (var node in data.EnumerateArray())
             {
-                teams.Add(new LinearTeam
-                {
-                    Id = node.GetProperty("id").GetString() ?? "",
-                    Name = node.GetProperty("name").GetString() ?? "",
-                    Key = node.GetProperty("key").GetString() ?? ""
-                });
+                teams.Add(
+                    new LinearTeam
+                    {
+                        Id = node.GetProperty("id").GetString() ?? "",
+                        Name = node.GetProperty("name").GetString() ?? "",
+                        Key = node.GetProperty("key").GetString() ?? "",
+                    }
+                );
             }
 
             _cachedTeams = teams;
@@ -173,13 +209,17 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         }
     }
 
-    private async Task<string?> CreateIssueAsync(string title, string description, CancellationToken ct)
+    private async Task<string?> CreateIssueAsync(
+        string title,
+        string description,
+        CancellationToken ct
+    )
     {
         var variables = new Dictionary<string, object?>
         {
             ["title"] = title,
             ["description"] = description,
-            ["teamId"] = _defaultTeamId
+            ["teamId"] = _defaultTeamId,
         };
 
         if (!string.IsNullOrWhiteSpace(_defaultProjectId))
@@ -204,7 +244,8 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             """;
 
         var response = await SendGraphQlAsync(mutation, ct, variables);
-        if (response is null) return null;
+        if (response is null)
+            return null;
 
         try
         {
@@ -213,7 +254,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
             if (!success)
             {
-                _host?.Log(PluginLogLevel.Warning, "Linear API returned success=false for issueCreate");
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    "Linear API returned success=false for issueCreate"
+                );
                 return null;
             }
 
@@ -226,7 +270,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         }
         catch (Exception ex)
         {
-            _host?.Log(PluginLogLevel.Warning, $"Failed to parse issue creation response: {ex.Message}");
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Failed to parse issue creation response: {ex.Message}"
+            );
             return null;
         }
     }
@@ -234,7 +281,8 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     private async Task<JsonElement?> SendGraphQlAsync(
         string query,
         CancellationToken ct,
-        Dictionary<string, object?>? variables = null)
+        Dictionary<string, object?>? variables = null
+    )
     {
         var payload = new Dictionary<string, object?> { ["query"] = query };
 
@@ -243,30 +291,161 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
         var json = JsonSerializer.Serialize(payload, s_jsonOptions);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.linear.app/graphql");
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "https://api.linear.app/graphql"
+        );
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller cancellation: propagate so ExecuteAsync's outer handler
+            // can surface "cancelled" instead of swallowing it as a transport
+            // failure.
+            throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            // HttpClient.Timeout (not caller cancellation) surfaces as
+            // TaskCanceledException — treat as transport failure.
+            var fingerprint = ShortFingerprint(ex.ToString());
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API request timed out (sha256:{fingerprint})"
+            );
+            return null;
+        }
+        catch (HttpRequestException ex)
+        {
+            var fingerprint = ShortFingerprint(ex.ToString());
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API transport error: {ex.Message} (sha256:{fingerprint})"
+            );
+            return null;
+        }
+
+        using var responseScope = response;
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
-            _host?.Log(PluginLogLevel.Error, $"Linear API error {(int)response.StatusCode}: {errorBody}");
+            // Linear error bodies can echo back the failed mutation, including
+            // issue titles/descriptions — log only status + a short fingerprint
+            // of the response so the body is correlatable across reports
+            // without leaking user content to the trace.
+            string errorBody;
+            try
+            {
+                errorBody = await response.Content.ReadAsStringAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
+            {
+                var fp = ShortFingerprint(ex.ToString());
+                _host?.Log(
+                    PluginLogLevel.Error,
+                    $"Linear API error {(int)response.StatusCode}; could not read body: {ex.Message} (sha256:{fp})"
+                );
+                return null;
+            }
+            var fingerprint = ShortFingerprint(errorBody);
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API error {(int)response.StatusCode} (body length={errorBody.Length}, sha256:{fingerprint})"
+            );
             return null;
         }
 
-        var responseJson = await response.Content.ReadAsStringAsync(ct);
-        var doc = JsonDocument.Parse(responseJson);
-
-        if (doc.RootElement.TryGetProperty("errors", out var errors))
+        string responseJson;
+        try
         {
-            var errorMsg = errors.EnumerateArray().FirstOrDefault().GetProperty("message").GetString();
-            _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+            responseJson = await response.Content.ReadAsStringAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
+        {
+            var fingerprint = ShortFingerprint(ex.ToString());
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API response read failed: {ex.Message} (sha256:{fingerprint})"
+            );
             return null;
         }
 
-        return doc.RootElement;
+        try
+        {
+            using var doc = JsonDocument.Parse(responseJson);
+
+            if (doc.RootElement.TryGetProperty("errors", out var errors))
+            {
+                // GraphQL error arrays should contain { "message": "..." } objects, but
+                // be defensive: a missing/empty array or unexpected shape must not throw
+                // and hide the original failure.
+                string? errorMsg = null;
+                var firstError = errors.ValueKind == JsonValueKind.Array
+                    ? errors.EnumerateArray().FirstOrDefault()
+                    : default;
+
+                if (firstError.ValueKind == JsonValueKind.Object
+                    && firstError.TryGetProperty("message", out var msgProp))
+                {
+                    errorMsg = msgProp.GetString();
+                }
+
+                if (errorMsg is null)
+                {
+                    // Unexpected error shape: the raw payload can echo back the
+                    // failed mutation (issue title/description). Log only the
+                    // length + a short fingerprint so support can correlate
+                    // reports without spilling user content into traces.
+                    var raw = errors.GetRawText();
+                    var fingerprint = ShortFingerprint(raw);
+                    _host?.Log(
+                        PluginLogLevel.Error,
+                        $"Linear GraphQL error: {{redacted:length={raw.Length}, sha256:{fingerprint}}}"
+                    );
+                }
+                else
+                {
+                    _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+                }
+
+                return null;
+            }
+
+            // Clone so the returned element survives the JsonDocument's pooled-buffer disposal.
+            return doc.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            // A 200 response with non-JSON body shouldn't crash settings validation;
+            // log the parse failure plus a short fingerprint (not the raw body —
+            // it may echo user content), then return null so callers recover.
+            var fingerprint = ShortFingerprint(responseJson);
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API returned non-JSON body ({ex.Message}). Body length={responseJson.Length}, sha256:{fingerprint}"
+            );
+            return null;
+        }
+    }
+
+    private static string ShortFingerprint(string value)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 
     private static string ExtractTitle(string input)
@@ -274,41 +453,63 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         if (string.IsNullOrWhiteSpace(input))
             return "Untitled Issue";
 
-        // Use the first line as the title
-        var firstLine = input.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
+        var firstLine = input
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault()
+            ?.Trim();
 
         if (string.IsNullOrWhiteSpace(firstLine))
             return "Untitled Issue";
 
-        // Truncate to 100 characters
         return firstLine.Length > 100 ? firstLine[..100] : firstLine;
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, null, "Generate a personal API key in Linear Settings > API > Personal API keys."),
-        new(
-            "default-team-id",
-            "Default team ID",
-            Description: _cachedTeams.Count > 0
-                ? $"Showing {_cachedTeams.Count} cached Linear team(s). Click Validate to refresh."
-                : "Required. Team UUID where issues will be created. Click Validate after saving the API key to fetch teams.",
-            Options: _cachedTeams.Count > 0
-                ? _cachedTeams.Select(t => new PluginSettingOption(t.Id, $"{t.Key} - {t.Name}")).ToList()
-                : null),
-        new("default-project-id", "Default project ID", false, null, "Optional. Issues will be added to this project when set.")
-    ];
+        [
+            new(
+                "api-key",
+                "API key",
+                true,
+                null,
+                "Generate a personal API key in Linear Settings > API > Personal API keys."
+            ),
+            new(
+                "default-team-id",
+                "Default team ID",
+                Description: _cachedTeams.Count > 0
+                    ? $"Showing {_cachedTeams.Count} cached Linear team(s). Click Validate to refresh."
+                    : "Required. Team UUID where issues will be created. Click Validate after saving the API key to fetch teams.",
+                Options: _cachedTeams.Count > 0
+                    ? _cachedTeams
+                        .Select(t => new PluginSettingOption(t.Id, $"{t.Key} - {t.Name}"))
+                        .ToList()
+                    : null
+            ),
+            new(
+                "default-project-id",
+                "Default project ID",
+                false,
+                null,
+                "Optional. Issues will be added to this project when set."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "default-team-id" => _defaultTeamId,
-            "default-project-id" => _defaultProjectId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "default-team-id" => _defaultTeamId,
+                "default-project-id" => _defaultProjectId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {
@@ -333,7 +534,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         if (teams.Count == 0)
             return new PluginSettingsValidationResult(false, "No teams found. Check your API key.");
 
-        return new PluginSettingsValidationResult(true, $"Found {teams.Count} team(s). Team options refreshed.");
+        return new PluginSettingsValidationResult(
+            true,
+            $"Found {teams.Count} team(s). Team options refreshed."
+        );
     }
 
     public void Dispose()

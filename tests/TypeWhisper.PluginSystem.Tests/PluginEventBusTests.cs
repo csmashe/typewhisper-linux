@@ -1,5 +1,5 @@
-using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -49,7 +49,6 @@ public class PluginEventBusTests
         var received = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("hello", received.Text);
 
-        // Give a moment for the wrong handler to potentially fire
         await Task.Delay(100);
         Assert.False(wrongTypeCalled);
     }
@@ -76,7 +75,8 @@ public class PluginEventBusTests
 
         await Task.WhenAll(
             tcs1.Task.WaitAsync(TimeSpan.FromSeconds(2)),
-            tcs2.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+            tcs2.Task.WaitAsync(TimeSpan.FromSeconds(2))
+        );
 
         Assert.True(tcs1.Task.IsCompletedSuccessfully);
         Assert.True(tcs2.Task.IsCompletedSuccessfully);
@@ -168,28 +168,33 @@ public class PluginEventBusTests
     public async Task ConcurrentPublishAndSubscribe_DoesNotThrow()
     {
         var received = 0;
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
-        // Start multiple subscribers concurrently
         var subscriptions = new List<IDisposable>();
-        var subscribeTasks = Enumerable.Range(0, 10).Select(_ => Task.Run(() =>
-        {
-            var sub = _bus.Subscribe<RecordingStartedEvent>(_ =>
-            {
-                Interlocked.Increment(ref received);
-                return Task.CompletedTask;
-            });
-            lock (subscriptions)
-            {
-                subscriptions.Add(sub);
-            }
-        }));
+        var subscribeTasks = Enumerable
+            .Range(0, 10)
+            .Select(_ =>
+                Task.Run(() =>
+                {
+                    var sub = _bus.Subscribe<RecordingStartedEvent>(_ =>
+                    {
+                        Interlocked.Increment(ref received);
+                        return Task.CompletedTask;
+                    });
+                    lock (subscriptions)
+                    {
+                        subscriptions.Add(sub);
+                    }
+                })
+            );
 
-        // Start multiple publishes concurrently
-        var publishTasks = Enumerable.Range(0, 10).Select(_ => Task.Run(() =>
-        {
-            _bus.Publish(new RecordingStartedEvent());
-        }));
+        var publishTasks = Enumerable
+            .Range(0, 10)
+            .Select(_ =>
+                Task.Run(() =>
+                {
+                    _bus.Publish(new RecordingStartedEvent());
+                })
+            );
 
         var ex = await Record.ExceptionAsync(async () =>
         {
@@ -198,7 +203,6 @@ public class PluginEventBusTests
 
         Assert.Null(ex);
 
-        // Cleanup
         foreach (var sub in subscriptions)
         {
             sub.Dispose();
@@ -216,13 +220,15 @@ public class PluginEventBusTests
             return Task.CompletedTask;
         });
 
-        _bus.Publish(new TranscriptionCompletedEvent
-        {
-            Text = "Hello world",
-            DetectedLanguage = "en",
-            DurationSeconds = 3.5,
-            ModelId = "whisper-large-v3"
-        });
+        _bus.Publish(
+            new TranscriptionCompletedEvent
+            {
+                Text = "Hello world",
+                DetectedLanguage = "en",
+                DurationSeconds = 3.5,
+                ModelId = "whisper-large-v3"
+            }
+        );
 
         var received = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("Hello world", received.Text);

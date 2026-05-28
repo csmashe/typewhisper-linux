@@ -2,6 +2,7 @@ using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using Xunit;
@@ -14,8 +15,26 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
 
     public ProfilesSectionViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.Linux.Tests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.Linux.Tests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     [Fact]
@@ -26,7 +45,15 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions);
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        );
 
         var option = Assert.Single(sut.ModelOptions);
         Assert.Null(option.Value);
@@ -41,7 +68,15 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions);
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        );
         sut.AddProfileCommand.Execute(null);
 
         sut.EditName = "Docs";
@@ -71,7 +106,10 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         Assert.Equal("translate", profile.SelectedTask);
         Assert.Equal("en", profile.TranslationTarget);
         Assert.True(profile.WhisperModeOverride);
-        Assert.Equal("plugin:com.typewhisper.sherpa-onnx:parakeet", profile.TranscriptionModelOverride);
+        Assert.Equal(
+            "plugin:com.typewhisper.sherpa-onnx:parakeet",
+            profile.TranscriptionModelOverride
+        );
         Assert.Equal(ProfileStylePreset.Developer, profile.StylePreset);
         Assert.Equal(CleanupLevel.Light, profile.CleanupLevelOverride);
         Assert.False(profile.DeveloperFormattingOverride);
@@ -81,15 +119,17 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     public void Constructor_TracksMatchedProfileAndCurrentProcess()
     {
         var service = CreateProfileService();
-        service.AddProfile(new Profile
-        {
-            Id = Guid.NewGuid().ToString(),
-            Name = "Firefox",
-            IsEnabled = true,
-            Priority = 10,
-            ProcessNames = ["firefox"],
-            UrlPatterns = []
-        });
+        service.AddProfile(
+            new Profile
+            {
+                Id = Guid.NewGuid().ToString(),
+                Name = "Firefox",
+                IsEnabled = true,
+                Priority = 10,
+                ProcessNames = ["firefox"],
+                UrlPatterns = []
+            }
+        );
 
         var activeWindow = CreateActiveWindowService();
         activeWindow.Setup(service => service.GetActiveWindowProcessName()).Returns("firefox");
@@ -97,7 +137,15 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions);
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        );
 
         Assert.Equal("firefox", sut.CurrentProcessName);
         Assert.True(sut.HasMatchedProfile);
@@ -114,7 +162,15 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
 
-        var sut = new ProfilesSectionViewModel(service, activeWindow.Object, pluginManager, promptActions);
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        );
         sut.AddProfileCommand.Execute(null);
 
         sut.AddCurrentProcessRuleCommand.Execute(null);
@@ -123,8 +179,10 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         Assert.Equal("1 app rule(s), 0 URL rule(s)", sut.SelectedProfileSummary);
     }
 
-    private ProfileService CreateProfileService() =>
-        new(Path.Combine(_tempDir, "profiles.json"));
+    private ProfileService CreateProfileService()
+    {
+        return new ProfileService(Path.Combine(_tempDir, "profiles.json"));
+    }
 
     private static Mock<IActiveWindowService> CreateActiveWindowService()
     {
@@ -149,19 +207,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             new PluginEventBus(),
             activeWindow.Object,
             profiles.Object,
-            settings.Object);
-    }
-
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
+            settings.Object
+        );
     }
 }

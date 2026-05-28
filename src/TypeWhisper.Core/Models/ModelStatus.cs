@@ -20,9 +20,18 @@ public sealed record ModelStatus
     public static ModelStatus Ready => new() { Type = ModelStatusType.Ready };
     public static ModelStatus LoadingModel => new() { Type = ModelStatusType.Loading };
 
-    public static ModelStatus DownloadingModel(double progress, double? bytesPerSecond = null) =>
-        new() { Type = ModelStatusType.Downloading, Progress = progress, BytesPerSecond = bytesPerSecond };
+    public static ModelStatus DownloadingModel(double progress, double? bytesPerSecond = null)
+    {
+        return new ModelStatus
+        {
+            Type = ModelStatusType.Downloading,
+            Progress = progress,
+            BytesPerSecond = bytesPerSecond
+        };
+    }
 
-    public static ModelStatus Failed(string message) =>
-        new() { Type = ModelStatusType.Error, ErrorMessage = message };
+    public static ModelStatus Failed(string message)
+    {
+        return new ModelStatus { Type = ModelStatusType.Error, ErrorMessage = message };
+    }
 }

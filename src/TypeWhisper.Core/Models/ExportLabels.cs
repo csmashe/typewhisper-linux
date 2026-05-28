@@ -1,8 +1,8 @@
 namespace TypeWhisper.Core.Models;
 
 /// <summary>
-/// Localized labels for history export methods.
-/// Callers pass localized strings; defaults are English.
+///     Localized labels for history export methods.
+///     Callers pass localized strings; defaults are English.
 /// </summary>
 public sealed record ExportLabels
 {

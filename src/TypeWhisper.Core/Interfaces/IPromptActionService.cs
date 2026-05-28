@@ -6,11 +6,11 @@ public interface IPromptActionService
 {
     IReadOnlyList<PromptAction> Actions { get; }
     IReadOnlyList<PromptAction> EnabledActions { get; }
-    event Action? ActionsChanged;
 
     void AddAction(PromptAction action);
     void UpdateAction(PromptAction action);
     void DeleteAction(string id);
     void Reorder(IReadOnlyList<string> orderedIds);
     void SeedPresets();
+    event Action? ActionsChanged;
 }

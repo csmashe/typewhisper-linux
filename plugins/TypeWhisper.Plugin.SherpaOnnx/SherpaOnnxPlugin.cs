@@ -10,26 +10,50 @@ namespace TypeWhisper.Plugin.SherpaOnnx;
 
 public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEnginePlugin
 {
-    private const string ParakeetRepo = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
-    private const string CanaryRepo = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8/resolve/main";
+    private const string ParakeetRepo =
+        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
+    private const string CanaryRepo =
+        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8/resolve/main";
 
-    private static readonly IReadOnlyList<string> CanarySupportedLanguages = ["en", "de", "fr", "es"];
+    private static readonly IReadOnlyList<string> CanarySupportedLanguages =
+    [
+        "en",
+        "de",
+        "fr",
+        "es",
+    ];
 
     private static readonly IReadOnlyList<ModelDefinition> Models =
     [
-        new("parakeet-tdt-0.6b", "Parakeet TDT 0.6B", "~670 MB", 670, 25, true, false,
-        [
-            new("encoder.int8.onnx", $"{ParakeetRepo}/encoder.int8.onnx", 652),
-            new("decoder.int8.onnx", $"{ParakeetRepo}/decoder.int8.onnx", 12),
-            new("joiner.int8.onnx", $"{ParakeetRepo}/joiner.int8.onnx", 6),
-            new("tokens.txt", $"{ParakeetRepo}/tokens.txt", 1)
-        ]),
-        new("canary-180m-flash", "Canary 180M Flash", "~198 MB", 198, 4, false, true,
-        [
-            new("encoder.int8.onnx", $"{CanaryRepo}/encoder.int8.onnx", 127),
-            new("decoder.int8.onnx", $"{CanaryRepo}/decoder.int8.onnx", 71),
-            new("tokens.txt", $"{CanaryRepo}/tokens.txt", 1)
-        ])
+        new(
+            "parakeet-tdt-0.6b",
+            "Parakeet TDT 0.6B",
+            "~670 MB",
+            670,
+            25,
+            true,
+            false,
+            [
+                new("encoder.int8.onnx", $"{ParakeetRepo}/encoder.int8.onnx", 652),
+                new("decoder.int8.onnx", $"{ParakeetRepo}/decoder.int8.onnx", 12),
+                new("joiner.int8.onnx", $"{ParakeetRepo}/joiner.int8.onnx", 6),
+                new("tokens.txt", $"{ParakeetRepo}/tokens.txt", 1),
+            ]
+        ),
+        new(
+            "canary-180m-flash",
+            "Canary 180M Flash",
+            "~198 MB",
+            198,
+            4,
+            false,
+            true,
+            [
+                new("encoder.int8.onnx", $"{CanaryRepo}/encoder.int8.onnx", 127),
+                new("decoder.int8.onnx", $"{CanaryRepo}/decoder.int8.onnx", 71),
+                new("tokens.txt", $"{CanaryRepo}/tokens.txt", 1),
+            ]
+        ),
     ];
 
     private readonly object _sync = new();
@@ -41,16 +65,13 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string? _selectedModelId;
     private string _computeBackend = "cpu";
 
-    // Canary-specific state
     private string _canarySrcLang = "en";
     private string _canaryTgtLang = "en";
 
-    // ITypeWhisperPlugin
     public string PluginId => "com.typewhisper.sherpa-onnx";
     public string PluginName => "Lokale Modelle (sherpa-onnx)";
     public string PluginVersion => "1.0.0";
 
-    // ITranscriptionEnginePlugin
     public string ProviderId => "sherpa-onnx";
     public string ProviderDisplayName => "Lokal (sherpa-onnx)";
     public bool IsConfigured => true;
@@ -58,14 +79,16 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public bool SupportsTranslation => _selectedModelId == "canary-180m-flash";
     public bool SupportsModelDownload => true;
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } = Models.Select(m =>
-        new PluginModelInfo(m.Id, m.DisplayName)
-        {
-            SizeDescription = m.SizeDescription,
-            EstimatedSizeMB = m.EstimatedSizeMB,
-            IsRecommended = m.IsRecommended,
-            LanguageCount = m.LanguageCount,
-        }).ToList();
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+        Models
+            .Select(m => new PluginModelInfo(m.Id, m.DisplayName)
+            {
+                SizeDescription = m.SizeDescription,
+                EstimatedSizeMB = m.EstimatedSizeMB,
+                IsRecommended = m.IsRecommended,
+                LanguageCount = m.LanguageCount,
+            })
+            .ToList();
 
     public IReadOnlyList<string> SupportedLanguages =>
         _selectedModelId == "canary-180m-flash" ? CanarySupportedLanguages : [];
@@ -89,15 +112,27 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _selectedModelId = modelId;
     }
 
-    public void ConfigureComputeBackend(string backend)
+    public Task ConfigureComputeBackendAsync(string backend)
     {
-        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
-        if (_computeBackend == normalized)
-            return;
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cuda"
+            : "cpu";
 
-        _computeBackend = normalized;
-        if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
-            UnloadRecognizer();
+        // Serialize backend switches with model load/unload: without the lock,
+        // a LoadModelAsync running on another thread could observe the old
+        // backend, pass its check, and then load against a recognizer that's
+        // been unloaded mid-flight.
+        lock (_sync)
+        {
+            if (_computeBackend == normalized)
+                return Task.CompletedTask;
+
+            _computeBackend = normalized;
+            if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
+                UnloadRecognizerUnsafe();
+        }
+
+        return Task.CompletedTask;
     }
 
     public bool IsModelDownloaded(string modelId)
@@ -127,7 +162,11 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         return Task.CompletedTask;
     }
 
-    public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    public async Task DownloadModelAsync(
+        string modelId,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
     {
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
@@ -139,37 +178,68 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         foreach (var file in model.Files)
         {
             var filePath = Path.Combine(dir, file.FileName);
-            if (File.Exists(filePath)) continue;
+            if (File.Exists(filePath))
+                continue;
 
             using var request = new HttpRequestMessage(HttpMethod.Get, file.DownloadUrl);
-            using var response = await _httpClient.SendAsync(request,
-                HttpCompletionOption.ResponseHeadersRead, ct);
+            using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                ct
+            );
             response.EnsureSuccessStatusCode();
 
             var buffer = new byte[81920];
             long fileBytesRead = 0;
             var lastReport = DateTime.UtcNow;
 
+            // Per-invocation temp name so a concurrent duplicate download can't
+            // unlink an in-flight writer's file via its own catch-block cleanup.
+            var tmpPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-            await using (var fileStream = new FileStream(filePath + ".tmp", FileMode.Create,
-                FileAccess.Write, FileShare.None, 81920, true))
+            try
             {
-                int read;
-                while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
+                await using (
+                    var fileStream = new FileStream(
+                        tmpPath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None,
+                        81920,
+                        true
+                    )
+                )
                 {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                    fileBytesRead += read;
-
-                    var now = DateTime.UtcNow;
-                    if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
+                    int read;
+                    while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
                     {
-                        progress?.Report((double)(cumulativeBytesRead + fileBytesRead) / totalBytes);
-                        lastReport = now;
+                        await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                        fileBytesRead += read;
+
+                        var now = DateTime.UtcNow;
+                        if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
+                        {
+                            progress?.Report(
+                                (double)(cumulativeBytesRead + fileBytesRead) / totalBytes
+                            );
+                            lastReport = now;
+                        }
                     }
                 }
+
+                File.Move(tmpPath, filePath, overwrite: true);
+            }
+            catch
+            {
+                // Cancellation or I/O failure: don't leave a partial .tmp file behind
+                // to consume disk and confuse the next download attempt.
+                if (File.Exists(tmpPath))
+                {
+                    try { File.Delete(tmpPath); } catch { /* best effort */ }
+                }
+                throw;
             }
 
-            File.Move(filePath + ".tmp", filePath, overwrite: true);
             cumulativeBytesRead += fileBytesRead;
         }
 
@@ -181,64 +251,84 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
 
-        if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException("CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA.");
-
         if (!model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName))))
             throw new FileNotFoundException($"Model files not found for: {modelId}");
 
-        return Task.Run(() =>
-        {
-            lock (_sync)
+        return Task.Run(
+            () =>
             {
-                UnloadRecognizerUnsafe();
+                lock (_sync)
+                {
+                    if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+                        throw new NotSupportedException(
+                            "CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA."
+                        );
 
-                _recognizer = model.SupportsTranslation
-                    ? CreateCanaryRecognizer(dir, "en", "en")
-                    : CreateParakeetRecognizer(dir);
+                    UnloadRecognizerUnsafe();
 
-                _loadedModelId = modelId;
-                _loadedModelDir = dir;
-                _selectedModelId = modelId;
-                _canarySrcLang = "en";
-                _canaryTgtLang = "en";
+                    _recognizer = model.SupportsTranslation
+                        ? CreateCanaryRecognizer(dir, "en", "en")
+                        : CreateParakeetRecognizer(dir);
 
-                Debug.WriteLine($"[SherpaOnnx] Model {modelId} loaded from {dir}");
-            }
-        }, ct);
+                    _loadedModelId = modelId;
+                    _loadedModelDir = dir;
+                    _selectedModelId = modelId;
+                    _canarySrcLang = "en";
+                    _canaryTgtLang = "en";
+
+                    Debug.WriteLine($"[SherpaOnnx] Model {modelId} loaded from {dir}");
+                }
+            },
+            ct
+        );
     }
 
     public Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
-        return Task.Run(() =>
-        {
-            var audioSamples = DecodeWav(wavAudio);
-            var audioDuration = audioSamples.Length / 16000.0;
-
-            lock (_sync)
+        return Task.Run(
+            () =>
             {
-                if (_recognizer is null || _loadedModelId is null)
-                    throw new InvalidOperationException("Kein Modell geladen. LoadModelAsync zuerst aufrufen.");
+                var audioSamples = DecodeWav(wavAudio);
+                var audioDuration = audioSamples.Length / 16000.0;
 
-                var model = GetModelDefinition(_loadedModelId);
+                lock (_sync)
+                {
+                    if (_recognizer is null || _loadedModelId is null)
+                        throw new InvalidOperationException(
+                            "Kein Modell geladen. LoadModelAsync zuerst aufrufen."
+                        );
 
-                if (model.SupportsTranslation)
-                    EnsureCanaryLanguage(language, translate);
+                    var model = GetModelDefinition(_loadedModelId);
 
-                using var stream = _recognizer.CreateStream();
-                stream.AcceptWaveform(16000, audioSamples);
-                _recognizer.Decode(stream);
+                    if (model.SupportsTranslation)
+                        EnsureCanaryLanguage(language, translate);
 
-                var rawText = stream.Result.Text.Trim();
+                    using var stream = _recognizer.CreateStream();
+                    stream.AcceptWaveform(16000, audioSamples);
+                    _recognizer.Decode(stream);
 
-                var (text, detectedLanguage) = model.SupportsTranslation
-                    ? ParseCanaryResult(rawText)
-                    : (rawText, (string?)null);
+                    var rawText = stream.Result.Text.Trim();
 
-                return new PluginTranscriptionResult(text, detectedLanguage, audioDuration, NoSpeechProbability: null);
-            }
-        }, ct);
+                    var (text, detectedLanguage) = model.SupportsTranslation
+                        ? ParseCanaryResult(rawText)
+                        : (rawText, (string?)null);
+
+                    return new PluginTranscriptionResult(
+                        text,
+                        detectedLanguage,
+                        audioDuration,
+                        NoSpeechProbability: null
+                    );
+                }
+            },
+            ct
+        );
     }
 
     public void Dispose()
@@ -246,8 +336,6 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         UnloadRecognizer();
         _httpClient.Dispose();
     }
-
-    // --- Private helpers ---
 
     private string GetModelDirectory(string modelId) =>
         Path.Combine(_host?.PluginDataDirectory ?? ".", "Models", modelId);
@@ -286,7 +374,11 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         return new OfflineRecognizer(config);
     }
 
-    private static OfflineRecognizer CreateCanaryRecognizer(string modelDir, string srcLang, string tgtLang)
+    private static OfflineRecognizer CreateCanaryRecognizer(
+        string modelDir,
+        string srcLang,
+        string tgtLang
+    )
     {
         var config = new OfflineRecognizerConfig();
         config.ModelConfig.Canary.Encoder = Path.Combine(modelDir, "encoder.int8.onnx");
@@ -304,13 +396,17 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     private void EnsureCanaryLanguage(string? language, bool translate)
     {
-        if (_loadedModelDir is null) return;
+        if (_loadedModelDir is null)
+            return;
 
         var srcLang = NormalizeCanaryLanguage(language);
         var tgtLang = translate ? "en" : srcLang;
 
-        if (srcLang == _canarySrcLang && tgtLang == _canaryTgtLang) return;
+        if (srcLang == _canarySrcLang && tgtLang == _canaryTgtLang)
+            return;
 
+        // Canary bakes src/tgt language into the recognizer config, so a
+        // language or translation change requires recreating the recognizer.
         _recognizer?.Dispose();
         _recognizer = CreateCanaryRecognizer(_loadedModelDir, srcLang, tgtLang);
         _canarySrcLang = srcLang;
@@ -358,23 +454,31 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     private static float[] DecodeWav(byte[] wavData)
     {
-        // WAV header: 44 bytes minimum, samples start after data chunk header
         if (wavData.Length < 44)
             throw new ArgumentException("Invalid WAV data: too short");
 
-        // Find data chunk
-        var pos = 12; // Skip RIFF header
+        var pos = 12; // skip the leading RIFF/WAVE header
         while (pos + 8 < wavData.Length)
         {
             var chunkId = System.Text.Encoding.ASCII.GetString(wavData, pos, 4);
             var chunkSize = BitConverter.ToInt32(wavData, pos + 4);
 
+            // chunkSize comes from untrusted WAV bytes — reject anything
+            // negative or larger than the remaining buffer before we use it
+            // for allocation or indexing.
+            if (chunkSize < 0 || chunkSize > wavData.Length - (pos + 8))
+                throw new ArgumentException("Invalid WAV data: chunk size out of range");
+
             if (chunkId == "data")
             {
                 var dataStart = pos + 8;
-                var sampleCount = chunkSize / 2; // 16-bit samples
+                // Clamp to actual buffer length so a header that lies about
+                // chunk size (truncated download, malformed file) can't lead
+                // to an over-read.
+                var usableBytes = Math.Min(chunkSize, wavData.Length - dataStart);
+                var sampleCount = usableBytes / 2; // 16-bit samples
                 var samples = new float[sampleCount];
-                for (var i = 0; i < sampleCount && dataStart + i * 2 + 1 < wavData.Length; i++)
+                for (var i = 0; i < sampleCount; i++)
                 {
                     var sample = BitConverter.ToInt16(wavData, dataStart + i * 2);
                     samples[i] = sample / 32768f;
@@ -383,32 +487,44 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             }
 
             pos += 8 + chunkSize;
-            if (chunkSize % 2 != 0) pos++; // Padding byte
+            // RIFF chunks are 2-byte aligned; odd-sized chunks have a pad byte.
+            if (chunkSize % 2 != 0 && pos < wavData.Length)
+                pos++;
         }
 
         throw new ArgumentException("Invalid WAV data: no data chunk found");
     }
 
     /// <summary>
-    /// Migrates model files from the old location (%LocalAppData%/TypeWhisper/Models/)
-    /// to the plugin's data directory on first activation.
+    ///     One-shot migration from the pre-plugin layout
+    ///     (<c>%LocalAppData%/TypeWhisper/Models/</c>) into the per-plugin data
+    ///     directory. Best-effort: failures are logged and a stale source
+    ///     directory is left alone rather than blocking activation.
     /// </summary>
     private void MigrateModelFiles()
     {
-        if (_host is null) return;
+        if (_host is null)
+            return;
 
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var localAppData = Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData
+        );
         var oldModelsDir = Path.Combine(localAppData, "TypeWhisper", "Models");
 
-        if (!Directory.Exists(oldModelsDir)) return;
+        if (!Directory.Exists(oldModelsDir))
+            return;
 
         foreach (var model in Models)
         {
             var oldDir = Path.Combine(oldModelsDir, model.Id);
-            if (!Directory.Exists(oldDir)) continue;
+            if (!Directory.Exists(oldDir))
+                continue;
 
             var newDir = GetModelDirectory(model.Id);
-            if (Directory.Exists(newDir) && model.Files.All(f => File.Exists(Path.Combine(newDir, f.FileName))))
+            if (
+                Directory.Exists(newDir)
+                && model.Files.All(f => File.Exists(Path.Combine(newDir, f.FileName)))
+            )
                 continue; // Already migrated
 
             Directory.CreateDirectory(newDir);
@@ -427,7 +543,9 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                     }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine($"[SherpaOnnx] Failed to migrate {file.FileName}: {ex.Message}");
+                        Debug.WriteLine(
+                            $"[SherpaOnnx] Failed to migrate {file.FileName}: {ex.Message}"
+                        );
                     }
                 }
             }
@@ -438,7 +556,9 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 if (Directory.Exists(oldDir) && !Directory.EnumerateFileSystemEntries(oldDir).Any())
                     Directory.Delete(oldDir);
             }
-            catch { /* ignore */ }
+            catch
+            { /* ignore */
+            }
         }
     }
 
@@ -450,7 +570,12 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         int LanguageCount,
         bool IsRecommended,
         bool SupportsTranslation,
-        IReadOnlyList<ModelFileDefinition> Files);
+        IReadOnlyList<ModelFileDefinition> Files
+    );
 
-    private sealed record ModelFileDefinition(string FileName, string DownloadUrl, int EstimatedSizeMB);
+    private sealed record ModelFileDefinition(
+        string FileName,
+        string DownloadUrl,
+        int EstimatedSizeMB
+    );
 }

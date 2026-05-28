@@ -1,0 +1,83 @@
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+
+namespace TypeWhisper.Linux.Services.ActiveWindow;
+
+/// <summary>
+///     KDE Plasma / KWin active-window provider. Gated on
+///     <c>XDG_CURRENT_DESKTOP</c> containing "KDE" or "Plasma". Prefers
+///     <c>kdotool</c> (drop-in xdotool clone for KWin) for window identity;
+///     returns null when kdotool is unavailable. We deliberately do not embed
+///     a KWin scripting fallback — the script-engine path requires a writable
+///     <c>~/.local/share/kwin/scripts/</c> entry and a DBus round-trip per
+///     query, which is heavy enough that the failure-tracker remediation
+///     ("install kdotool") is the saner story.
+/// </summary>
+public sealed class KWinActiveWindowProvider : IActiveWindowProvider
+{
+    public string Name => "kwin";
+
+    public bool IsApplicable()
+    {
+        var raw = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var lower = raw.ToLowerInvariant();
+        if (!lower.Contains("kde") && !lower.Contains("plasma"))
+        {
+            return false;
+        }
+
+        return DesktopDetector.BinaryExists("kdotool");
+    }
+
+    public async Task<ActiveWindowSnapshot?> TryGetActiveWindowAsync(CancellationToken ct)
+    {
+        try
+        {
+            var (idExit, idOutput) = await ProviderProcessRunner
+                .RunAsync("kdotool", "getactivewindow", ct)
+                .ConfigureAwait(false);
+            var windowId = idExit == 0 ? idOutput?.Trim() : null;
+            if (string.IsNullOrWhiteSpace(windowId))
+            {
+                return null;
+            }
+
+            var (classExit, classOutput) = await ProviderProcessRunner
+                .RunAsync("kdotool", new[] { "getwindowclassname", windowId }, ct)
+                .ConfigureAwait(false);
+            var klass = classExit == 0 ? classOutput?.Trim() : null;
+
+            var (nameExit, nameOutput) = await ProviderProcessRunner
+                .RunAsync("kdotool", new[] { "getwindowname", windowId }, ct)
+                .ConfigureAwait(false);
+            var title = nameExit == 0 ? nameOutput?.Trim() : null;
+
+            var processName = !string.IsNullOrWhiteSpace(klass)
+                ? ProcessNameNormalizer.Normalize(klass).ToLowerInvariant()
+                : null;
+
+            return new ActiveWindowSnapshot(
+                string.IsNullOrWhiteSpace(processName) ? null : processName,
+                string.IsNullOrWhiteSpace(title) ? null : title,
+                windowId,
+                string.IsNullOrWhiteSpace(klass) ? null : klass,
+                Name,
+                true
+            );
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}

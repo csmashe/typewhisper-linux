@@ -3,8 +3,8 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Plugin that provides custom actions that can be triggered on transcribed text.
-/// Actions appear in the prompt palette and can be invoked by the user.
+///     Plugin that provides custom actions that can be triggered on transcribed text.
+///     Actions appear in the prompt palette and can be invoked by the user.
 /// </summary>
 public interface IActionPlugin : ITypeWhisperPlugin
 {

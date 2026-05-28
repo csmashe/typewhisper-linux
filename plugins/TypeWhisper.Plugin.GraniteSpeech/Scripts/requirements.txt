@@ -1,5 +1,0 @@
-torch
-torchaudio
-transformers
-soundfile
-huggingface_hub>=0.20.0

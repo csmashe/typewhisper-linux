@@ -1,19 +1,24 @@
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Represents an active real-time streaming transcription session (e.g. WebSocket connection).
-/// Created by <see cref="ITranscriptionEnginePlugin.StartStreamingAsync"/> and fed audio by the host.
+///     Represents an active real-time streaming transcription session (e.g. WebSocket connection).
+///     Created by <see cref="ITranscriptionEnginePlugin.StartStreamingAsync" /> and fed audio by the host.
+///     The host always calls <c>DisposeAsync</c>, even on cancellation or error paths — plugins must
+///     tolerate disposal before <see cref="FinalizeAsync" /> completes.
 /// </summary>
 public interface IStreamingSession : IAsyncDisposable
 {
     /// <summary>Sends a chunk of PCM16 mono 16 kHz audio to the streaming endpoint.</summary>
     Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct);
 
-    /// <summary>Fired when partial or final transcript text arrives.</summary>
-    event Action<StreamingTranscriptEvent> TranscriptReceived;
-
     /// <summary>Signals end of audio input and flushes any remaining transcript.</summary>
     Task FinalizeAsync(CancellationToken ct);
+
+    /// <summary>
+    ///     Fired when partial or final transcript text arrives. May be raised from a
+    ///     background/IO thread; handlers must marshal to the UI themselves.
+    /// </summary>
+    event Action<StreamingTranscriptEvent> TranscriptReceived;
 }
 
 /// <summary>A transcript update from a streaming session.</summary>

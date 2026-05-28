@@ -21,8 +21,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         new("enhanced", "Speechmatics Enhanced"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.speechmatics";
     public string PluginName => "Speechmatics";
     public string PluginVersion => "1.0.0";
@@ -40,8 +38,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "speechmatics";
     public string ProviderDisplayName => "Speechmatics";
@@ -62,23 +58,35 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
 
-        var lang = string.IsNullOrEmpty(language) || language == "auto" ? "en" : language;
+        // Speechmatics v2 requires an explicit language code; "auto" is not supported.
+        // Surface this clearly rather than silently transcribing as English, which
+        // produces garbage output for non-English audio. Normalize first so " Auto " /
+        // "AUTO" / etc. from less-careful callers hit the same guard.
+        var normalized = language?.Trim().ToLowerInvariant();
+        if (normalized == "auto")
+            throw new NotSupportedException(
+                "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
+            );
 
-        // Step 1: Submit batch transcription job
-        var config = JsonSerializer.Serialize(new
-        {
-            type = "transcription",
-            transcription_config = new
+        var lang = string.IsNullOrEmpty(normalized) ? "en" : normalized;
+
+        var config = JsonSerializer.Serialize(
+            new
             {
-                language = lang,
-                operating_point = "enhanced",
+                type = "transcription",
+                transcription_config = new { language = lang, operating_point = "enhanced" },
             }
-        });
+        );
 
         using var submitContent = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(wavAudio);
@@ -90,22 +98,36 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         submitRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
         submitRequest.Content = submitContent;
 
-        var submitResponse = await _httpClient.SendAsync(submitRequest, ct);
+        using var submitResponse = await _httpClient.SendAsync(submitRequest, ct);
         var submitJson = await submitResponse.Content.ReadAsStringAsync(ct);
 
         if (!submitResponse.IsSuccessStatusCode)
-            throw new HttpRequestException($"Speechmatics API error {(int)submitResponse.StatusCode}: {submitJson}");
+        {
+            // Log only the stable HTTP status; the response body can echo
+            // upload metadata (and on retries, partial transcripts) which
+            // we don't want persisted in the plugin log.
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Speechmatics submit error {(int)submitResponse.StatusCode} ({submitResponse.ReasonPhrase})"
+            );
+            throw new HttpRequestException(
+                $"Speechmatics API error {(int)submitResponse.StatusCode}: {submitResponse.ReasonPhrase}"
+            );
+        }
 
         using var submitDoc = JsonDocument.Parse(submitJson);
-        var jobId = submitDoc.RootElement.GetProperty("id").GetString()
+        var jobId =
+            submitDoc.RootElement.GetProperty("id").GetString()
             ?? throw new InvalidOperationException("No job ID in Speechmatics response");
 
-        // Step 2: Poll for completion
         var transcript = await PollForTranscriptAsync(jobId, ct);
         return transcript;
     }
 
-    private async Task<PluginTranscriptionResult> PollForTranscriptAsync(string jobId, CancellationToken ct)
+    private async Task<PluginTranscriptionResult> PollForTranscriptAsync(
+        string jobId,
+        CancellationToken ct
+    )
     {
         const int maxAttempts = 120;
         const int delayMs = 2000;
@@ -115,14 +137,25 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             ct.ThrowIfCancellationRequested();
             await Task.Delay(delayMs, ct);
 
-            using var statusRequest = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/jobs/{jobId}");
+            using var statusRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"{BaseUrl}/jobs/{jobId}"
+            );
             statusRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-            var statusResponse = await _httpClient.SendAsync(statusRequest, ct);
+            using var statusResponse = await _httpClient.SendAsync(statusRequest, ct);
             var statusJson = await statusResponse.Content.ReadAsStringAsync(ct);
 
             if (!statusResponse.IsSuccessStatusCode)
-                throw new HttpRequestException($"Speechmatics status error {(int)statusResponse.StatusCode}: {statusJson}");
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"Speechmatics status error {(int)statusResponse.StatusCode} ({statusResponse.ReasonPhrase}) for job {jobId}"
+                );
+                throw new HttpRequestException(
+                    $"Speechmatics status error {(int)statusResponse.StatusCode} for job {jobId}: {statusResponse.ReasonPhrase}"
+                );
+            }
 
             using var statusDoc = JsonDocument.Parse(statusJson);
             var job = statusDoc.RootElement.GetProperty("job");
@@ -130,16 +163,28 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
             if (status == "done")
             {
-                // Fetch transcript
-                using var transcriptRequest = new HttpRequestMessage(HttpMethod.Get,
-                    $"{BaseUrl}/jobs/{jobId}/transcript?format=json-v2");
-                transcriptRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+                using var transcriptRequest = new HttpRequestMessage(
+                    HttpMethod.Get,
+                    $"{BaseUrl}/jobs/{jobId}/transcript?format=json-v2"
+                );
+                transcriptRequest.Headers.Authorization = new AuthenticationHeaderValue(
+                    "Bearer",
+                    _apiKey
+                );
 
-                var transcriptResponse = await _httpClient.SendAsync(transcriptRequest, ct);
+                using var transcriptResponse = await _httpClient.SendAsync(transcriptRequest, ct);
                 var transcriptJson = await transcriptResponse.Content.ReadAsStringAsync(ct);
 
                 if (!transcriptResponse.IsSuccessStatusCode)
-                    throw new HttpRequestException($"Speechmatics transcript error {(int)transcriptResponse.StatusCode}: {transcriptJson}");
+                {
+                    _host?.Log(
+                        PluginLogLevel.Warning,
+                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} ({transcriptResponse.ReasonPhrase}) for job {jobId}"
+                    );
+                    throw new HttpRequestException(
+                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} for job {jobId}: {transcriptResponse.ReasonPhrase}"
+                    );
+                }
 
                 return ParseTranscript(transcriptJson, job);
             }
@@ -148,7 +193,9 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 throw new InvalidOperationException($"Speechmatics job {jobId} {status}");
         }
 
-        throw new TimeoutException($"Speechmatics job {jobId} did not complete within {maxAttempts * delayMs / 1000}s");
+        throw new TimeoutException(
+            $"Speechmatics job {jobId} did not complete within {maxAttempts * delayMs / 1000}s"
+        );
     }
 
     private static PluginTranscriptionResult ParseTranscript(string json, JsonElement job)
@@ -157,13 +204,18 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         var root = doc.RootElement;
 
         var sb = new StringBuilder();
-        if (root.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+        if (
+            root.TryGetProperty("results", out var results)
+            && results.ValueKind == JsonValueKind.Array
+        )
         {
             foreach (var result in results.EnumerateArray())
             {
-                if (result.TryGetProperty("alternatives", out var alts)
+                if (
+                    result.TryGetProperty("alternatives", out var alts)
                     && alts.ValueKind == JsonValueKind.Array
-                    && alts.GetArrayLength() > 0)
+                    && alts.GetArrayLength() > 0
+                )
                 {
                     var content = alts[0].GetProperty("content").GetString();
                     if (!string.IsNullOrEmpty(content))
@@ -177,13 +229,20 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             duration = durEl.GetDouble();
 
         string? detectedLanguage = null;
-        if (root.TryGetProperty("metadata", out var metadata)
-            && metadata.TryGetProperty("language", out var langEl))
+        if (
+            root.TryGetProperty("metadata", out var metadata)
+            && metadata.TryGetProperty("language", out var langEl)
+        )
         {
             detectedLanguage = langEl.GetString();
         }
 
-        return new PluginTranscriptionResult(sb.ToString().Trim(), detectedLanguage, duration, NoSpeechProbability: null);
+        return new PluginTranscriptionResult(
+            sb.ToString().Trim(),
+            detectedLanguage,
+            duration,
+            NoSpeechProbability: null
+        );
     }
 
     public void Dispose()
@@ -206,24 +265,31 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, null, "Required for Speechmatics transcription."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Speechmatics model.",
-            Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new("api-key", "API key", true, null, "Required for Speechmatics transcription."),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Speechmatics model.",
+                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {

@@ -8,14 +8,13 @@ namespace TypeWhisper.Plugin.Gemini;
 
 public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider
 {
+    // Google's OpenAI-compatibility layer; endpoints are appended as /v1/...
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai";
     private const string DefaultModel = "gemini-2.5-flash";
 
     private readonly HttpClient _httpClient = new();
     private IPluginHostServices? _host;
     private string? _apiKey;
-
-    // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.gemini";
     public string PluginName => "Google Gemini";
@@ -24,7 +23,11 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Trim on load: legacy values saved before SetApiKeyAsync trimmed would
+        // otherwise reach the Bearer header with trailing whitespace and 401
+        // every request while IsAvailable still reports true.
+        var loaded = await host.LoadSecretAsync("api-key");
+        _apiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsAvailable})");
     }
 
@@ -33,8 +36,6 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ILlmProviderPlugin
 
     public string ProviderName => "Google Gemini";
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
@@ -49,29 +50,40 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         new PluginModelInfo("gemma-4-4b-it", "Gemma 4 4B"),
     ];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsAvailable)
             throw new InvalidOperationException("API key not configured");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        var trimmed = apiKey?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", apiKey);
+                await _host.StoreSecretAsync("api-key", trimmed);
 
             _host.NotifyCapabilitiesChanged();
         }
@@ -97,22 +109,25 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         _httpClient.Dispose();
     }
 
-    // IPluginSettingsProvider
-
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "AIza...",
-            Description: "Required for Gemini LLM requests.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "AIza...",
+                Description: "Required for Gemini LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;

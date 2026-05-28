@@ -15,7 +15,10 @@ static class Program
     // Transcribe can run far longer than the default timeout when --await-download
     // triggers a model fetch on the server side, so use an unbounded HttpClient
     // and bound each request via CancellationTokenSource instead.
-    private static readonly HttpClient TranscribeHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private static readonly HttpClient TranscribeHttp = new()
+    {
+        Timeout = Timeout.InfiniteTimeSpan,
+    };
 
     static async Task<int> Main(string[] args)
     {
@@ -49,7 +52,7 @@ static class Program
             "status" => await StatusAsync(baseUrl, options.Json),
             "models" => await ModelsAsync(baseUrl, options.Json),
             "transcribe" => await TranscribeAsync(baseUrl, options),
-            _ => Error($"Unknown command: {options.Command}")
+            _ => Error($"Unknown command: {options.Command}"),
         };
     }
 
@@ -60,18 +63,26 @@ static class Program
             var response = await Http.GetAsync($"{baseUrl}/v1/status");
             var body = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
-                return Error($"Status request failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}");
+                return Error(
+                    $"Status request failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}"
+                );
 
-            if (json) { Console.WriteLine(PrettyJson(body)); return 0; }
+            if (json)
+            {
+                Console.WriteLine(PrettyJson(body));
+                return 0;
+            }
 
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
             var status = Prop(root, "status") == "ready" ? "Ready" : "No model loaded";
             var engine = Prop(root, "engine");
             var model = Prop(root, "model");
-            Console.WriteLine(string.IsNullOrEmpty(model)
-                ? $"{status} - {engine}"
-                : $"{status} - {engine} ({model})");
+            Console.WriteLine(
+                string.IsNullOrEmpty(model)
+                    ? $"{status} - {engine}"
+                    : $"{status} - {engine} ({model})"
+            );
             return 0;
         }
         catch (HttpRequestException)
@@ -87,9 +98,15 @@ static class Program
             var response = await Http.GetAsync($"{baseUrl}/v1/models");
             var body = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
-                return Error($"Models request failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}");
+                return Error(
+                    $"Models request failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}"
+                );
 
-            if (json) { Console.WriteLine(PrettyJson(body)); return 0; }
+            if (json)
+            {
+                Console.WriteLine(PrettyJson(body));
+                return 0;
+            }
 
             using var doc = JsonDocument.Parse(body);
             if (!doc.RootElement.TryGetProperty("models", out var models))
@@ -106,14 +123,18 @@ static class Program
             var engineWidth = Math.Max(6, rows.Max(m => Prop(m, "engine").Length));
             var nameWidth = Math.Max(4, rows.Max(m => Prop(m, "name").Length));
 
-            Console.WriteLine($"{Pad("ID", idWidth)}  {Pad("ENGINE", engineWidth)}  {Pad("NAME", nameWidth)}  STATUS");
+            Console.WriteLine(
+                $"{Pad("ID", idWidth)}  {Pad("ENGINE", engineWidth)}  {Pad("NAME", nameWidth)}  STATUS"
+            );
             Console.WriteLine(new string('-', idWidth + engineWidth + nameWidth + 10));
 
             foreach (var m in rows)
             {
-                var selected = m.TryGetProperty("selected", out var sel) && sel.GetBoolean() ? " *" : "";
+                var selected =
+                    m.TryGetProperty("selected", out var sel) && sel.GetBoolean() ? " *" : "";
                 Console.WriteLine(
-                    $"{Pad(Prop(m, "id"), idWidth)}  {Pad(Prop(m, "engine"), engineWidth)}  {Pad(Prop(m, "name"), nameWidth)}  {Prop(m, "status")}{selected}");
+                    $"{Pad(Prop(m, "id"), idWidth)}  {Pad(Prop(m, "engine"), engineWidth)}  {Pad(Prop(m, "name"), nameWidth)}  {Prop(m, "status")}{selected}"
+                );
             }
 
             return 0;
@@ -155,7 +176,9 @@ static class Program
             {
                 using var content = new MultipartFormDataContent();
                 var fileContent = new StreamContent(audioStream);
-                fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                fileContent.Headers.ContentType = new MediaTypeHeaderValue(
+                    "application/octet-stream"
+                );
                 content.Add(fileContent, "file", fileName);
 
                 AddString(content, "language", options.Language);
@@ -168,28 +191,44 @@ static class Program
                 AddString(content, "engine", options.Engine);
                 AddString(content, "model", options.Model);
 
-                var path = options.AwaitDownload ? "/v1/transcribe?await_download=1" : "/v1/transcribe";
-                var requestBudget = options.AwaitDownload ? TimeSpan.FromMinutes(15) : TimeSpan.FromMinutes(5);
+                var path = options.AwaitDownload
+                    ? "/v1/transcribe?await_download=1"
+                    : "/v1/transcribe";
+                var requestBudget = options.AwaitDownload
+                    ? TimeSpan.FromMinutes(15)
+                    : TimeSpan.FromMinutes(5);
                 using var requestCts = new CancellationTokenSource(requestBudget);
 
                 HttpResponseMessage response;
                 string body;
                 try
                 {
-                    response = await TranscribeHttp.PostAsync($"{baseUrl}{path}", content, requestCts.Token);
+                    response = await TranscribeHttp.PostAsync(
+                        $"{baseUrl}{path}",
+                        content,
+                        requestCts.Token
+                    );
                     body = await response.Content.ReadAsStringAsync(requestCts.Token);
                 }
                 catch (OperationCanceledException)
                 {
-                    return Error(options.AwaitDownload
-                        ? "Transcription timed out while waiting for model download."
-                        : "Transcription timed out.");
+                    return Error(
+                        options.AwaitDownload
+                            ? "Transcription timed out while waiting for model download."
+                            : "Transcription timed out."
+                    );
                 }
 
                 if (!response.IsSuccessStatusCode)
-                    return Error($"Transcription failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}");
+                    return Error(
+                        $"Transcription failed ({(int)response.StatusCode}): {ExtractErrorMessage(body)}"
+                    );
 
-                if (options.Json) { Console.WriteLine(PrettyJson(body)); return 0; }
+                if (options.Json)
+                {
+                    Console.WriteLine(PrettyJson(body));
+                    return 0;
+                }
 
                 using var doc = JsonDocument.Parse(body);
                 Console.WriteLine(Prop(doc.RootElement, "text"));
@@ -204,7 +243,8 @@ static class Program
 
     static void PrintUsage()
     {
-        Console.WriteLine("""
+        Console.WriteLine(
+            """
             TypeWhisper CLI - Speech-to-Text from the command line
 
             Usage: typewhisper <command> [options]
@@ -239,7 +279,8 @@ static class Program
               typewhisper transcribe recording.wav --language-hint de --language-hint en
               typewhisper transcribe recording.wav --engine groq --model whisper-large-v3-turbo
               typewhisper transcribe - < audio.wav
-            """);
+            """
+        );
     }
 
     static void ApplyAuthorization(string? token)
@@ -260,7 +301,8 @@ static class Program
 
     static string GetVersion()
     {
-        var info = Assembly.GetEntryAssembly()
+        var info = Assembly
+            .GetEntryAssembly()
             ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion;
 
@@ -270,10 +312,7 @@ static class Program
             return plus > 0 ? info[..plus] : info;
         }
 
-        return Assembly.GetEntryAssembly()
-            ?.GetName()
-            .Version?
-            .ToString() ?? "dev";
+        return Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "dev";
     }
 
     static string Prop(JsonElement el, string name)
@@ -287,7 +326,7 @@ static class Program
             JsonValueKind.Number => value.ToString(),
             JsonValueKind.True => "true",
             JsonValueKind.False => "false",
-            _ => ""
+            _ => "",
         };
     }
 
@@ -296,7 +335,10 @@ static class Program
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(
+                doc.RootElement,
+                new JsonSerializerOptions { WriteIndented = true }
+            );
         }
         catch
         {
@@ -312,8 +354,10 @@ static class Program
             var root = doc.RootElement;
             if (root.TryGetProperty("error", out var error))
             {
-                if (error.ValueKind == JsonValueKind.Object
-                    && error.TryGetProperty("message", out var message))
+                if (
+                    error.ValueKind == JsonValueKind.Object
+                    && error.TryGetProperty("message", out var message)
+                )
                     return message.GetString() ?? body;
 
                 if (error.ValueKind == JsonValueKind.String)
@@ -327,7 +371,11 @@ static class Program
 
     static string Pad(string value, int width) => value.PadRight(width);
 
-    static int Error(string message) { Console.Error.WriteLine($"Error: {message}"); return 1; }
+    static int Error(string message)
+    {
+        Console.Error.WriteLine($"Error: {message}");
+        return 1;
+    }
 
     private sealed record CliOptions
     {
@@ -384,11 +432,16 @@ static class Program
                         awaitDownload = true;
                         break;
                     case "--port":
-                        if (!TryReadValue(args, ref i, out var portValue)
+                        if (
+                            !TryReadValue(args, ref i, out var portValue)
                             || !int.TryParse(portValue, out port)
                             || port < 1
-                            || port > 65535)
-                            return options with { Error = "--port requires a number between 1 and 65535." };
+                            || port > 65535
+                        )
+                            return options with
+                            {
+                                Error = "--port requires a number between 1 and 65535.",
+                            };
                         break;
                     case "--token":
                         if (!TryReadValue(args, ref i, out token))
@@ -454,7 +507,7 @@ static class Program
                 Prompt = prompt,
                 Engine = engine,
                 Model = model,
-                AwaitDownload = awaitDownload
+                AwaitDownload = awaitDownload,
             };
         }
 

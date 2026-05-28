@@ -6,8 +6,8 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public class SettingsServiceTests : IDisposable
 {
-    private readonly string _tempDir;
     private readonly string _filePath;
+    private readonly string _tempDir;
 
     public SettingsServiceTests()
     {
@@ -18,7 +18,11 @@ public class SettingsServiceTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); } catch { }
+        try
+        {
+            Directory.Delete(_tempDir, true);
+        }
+        catch { }
     }
 
     [Fact]
@@ -56,8 +60,14 @@ public class SettingsServiceTests : IDisposable
         Assert.True(sut2.Current.VocabularyBoostingEnabled);
         Assert.True(sut2.Current.AutoAddDictionaryCorrections);
         Assert.Equal(CleanupLevel.Light, sut2.Current.CleanupLevel);
-        Assert.Equal(TextInsertionStrategy.DirectTyping, sut2.Current.AppInsertionStrategies["kitty"]);
-        Assert.Equal(TextInsertionStrategy.ClipboardPaste, sut2.Current.AppInsertionStrategies["firefox"]);
+        Assert.Equal(
+            TextInsertionStrategy.DirectTyping,
+            sut2.Current.AppInsertionStrategies["kitty"]
+        );
+        Assert.Equal(
+            TextInsertionStrategy.ClipboardPaste,
+            sut2.Current.AppInsertionStrategies["firefox"]
+        );
     }
 
     [Fact]
@@ -89,16 +99,16 @@ public class SettingsServiceTests : IDisposable
     [Fact]
     public void Load_CorruptPrimary_FallsBackToBackup()
     {
-        // Write valid backup
         var backup = AppSettings.Default with { Language = "de", HasCompletedOnboarding = true };
-        var json = JsonSerializer.Serialize(backup, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        var json = JsonSerializer.Serialize(
+            backup,
+            new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            }
+        );
         File.WriteAllText(_filePath + ".bak", json);
-
-        // Write corrupt primary
         File.WriteAllText(_filePath, "{{not valid json!!");
 
         var sut = new SettingsService(_filePath);
@@ -122,11 +132,14 @@ public class SettingsServiceTests : IDisposable
     public void Load_CorruptPrimary_RestoresPrimaryFromBackup()
     {
         var backup = AppSettings.Default with { Language = "de" };
-        var json = JsonSerializer.Serialize(backup, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        var json = JsonSerializer.Serialize(
+            backup,
+            new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            }
+        );
         File.WriteAllText(_filePath + ".bak", json);
         File.WriteAllText(_filePath, "{{corrupt}}");
 
@@ -154,12 +167,15 @@ public class SettingsServiceTests : IDisposable
     [Fact]
     public void Load_LegacyHistoryRetentionDays_MigratesToMinutes()
     {
-        File.WriteAllText(_filePath, """
-        {
-          "language": "en",
-          "historyRetentionDays": 7
-        }
-        """);
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "language": "en",
+              "historyRetentionDays": 7
+            }
+            """
+        );
 
         var sut = new SettingsService(_filePath);
 
@@ -170,12 +186,15 @@ public class SettingsServiceTests : IDisposable
     [Fact]
     public void Load_LegacyForeverRetention_MigratesToExplicitMode()
     {
-        File.WriteAllText(_filePath, """
-        {
-          "language": "en",
-          "historyRetentionDays": 9999
-        }
-        """);
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "language": "en",
+              "historyRetentionDays": 9999
+            }
+            """
+        );
 
         var sut = new SettingsService(_filePath);
 
@@ -186,11 +205,13 @@ public class SettingsServiceTests : IDisposable
     public void SaveAndLoad_RoundTripsMinuteBasedRetention()
     {
         var sut = new SettingsService(_filePath);
-        sut.Save(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.Duration,
-            HistoryRetentionMinutes = 60
-        });
+        sut.Save(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.Duration,
+                HistoryRetentionMinutes = 60
+            }
+        );
 
         var loaded = new SettingsService(_filePath);
 
@@ -202,10 +223,12 @@ public class SettingsServiceTests : IDisposable
     public void SaveAndLoad_RoundTripsUntilAppClosesMode()
     {
         var sut = new SettingsService(_filePath);
-        sut.Save(AppSettings.Default with
-        {
-            HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
-        });
+        sut.Save(
+            AppSettings.Default with
+            {
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+            }
+        );
 
         var loaded = new SettingsService(_filePath);
 

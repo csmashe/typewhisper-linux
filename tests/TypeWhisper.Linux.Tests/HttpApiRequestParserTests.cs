@@ -12,7 +12,8 @@ public class HttpApiRequestParserTests
     public void ParseTranscribe_ReadsMultipartFileAndFields()
     {
         var boundary = "Boundary123";
-        var body = Multipart(boundary,
+        var body = Multipart(
+            boundary,
             ("language_hint", null, null, "de"u8.ToArray()),
             ("language_hint", null, null, "en"u8.ToArray()),
             ("task", null, null, "translate"u8.ToArray()),
@@ -21,14 +22,19 @@ public class HttpApiRequestParserTests
             ("prompt", null, null, "Project names"u8.ToArray()),
             ("engine", null, null, "groq"u8.ToArray()),
             ("model", null, null, "whisper-large-v3"u8.ToArray()),
-            ("file", "audio.wav", "audio/wav", [1, 2, 3, 4]));
+            ("file", "audio.wav", "audio/wav", [1, 2, 3, 4])
+        );
 
         var request = new HttpApiRequest(
             "POST",
             "/v1/transcribe",
             new NameValueCollection { ["await_download"] = "1" },
-            new Dictionary<string, string> { ["content-type"] = $"multipart/form-data; boundary={boundary}" },
-            body);
+            new Dictionary<string, string>
+            {
+                ["content-type"] = $"multipart/form-data; boundary={boundary}"
+            },
+            body
+        );
 
         var parsed = HttpApiRequestParser.ParseTranscribe(request);
 
@@ -63,7 +69,8 @@ public class HttpApiRequestParserTests
                 ["x-engine"] = "openai",
                 ["x-model"] = "gpt-4o-transcribe"
             },
-            [9, 8, 7]);
+            [9, 8, 7]
+        );
 
         var parsed = HttpApiRequestParser.ParseTranscribe(request);
 
@@ -81,19 +88,27 @@ public class HttpApiRequestParserTests
     public void ParseTranscribe_RejectsLanguageAndHintsTogether()
     {
         var boundary = "Boundary123";
-        var body = Multipart(boundary,
+        var body = Multipart(
+            boundary,
             ("language", null, null, "de"u8.ToArray()),
             ("language_hint", null, null, "en"u8.ToArray()),
-            ("file", "audio.wav", "audio/wav", [1]));
+            ("file", "audio.wav", "audio/wav", [1])
+        );
 
         var request = new HttpApiRequest(
             "POST",
             "/v1/transcribe",
             new NameValueCollection(),
-            new Dictionary<string, string> { ["content-type"] = $"multipart/form-data; boundary={boundary}" },
-            body);
+            new Dictionary<string, string>
+            {
+                ["content-type"] = $"multipart/form-data; boundary={boundary}"
+            },
+            body
+        );
 
-        var ex = Assert.Throws<HttpApiRequestException>(() => HttpApiRequestParser.ParseTranscribe(request));
+        var ex = Assert.Throws<HttpApiRequestException>(() =>
+            HttpApiRequestParser.ParseTranscribe(request)
+        );
         Assert.Equal(400, ex.StatusCode);
         Assert.Contains("language", ex.Message);
     }
@@ -107,17 +122,24 @@ public class HttpApiRequestParserTests
             "POST",
             "/v1/transcribe",
             new NameValueCollection(),
-            new Dictionary<string, string> { ["content-type"] = $"multipart/form-data; boundary={boundary}" },
-            body);
+            new Dictionary<string, string>
+            {
+                ["content-type"] = $"multipart/form-data; boundary={boundary}"
+            },
+            body
+        );
 
-        var ex = Assert.Throws<HttpApiRequestException>(() => HttpApiRequestParser.ParseTranscribe(request));
+        var ex = Assert.Throws<HttpApiRequestException>(() =>
+            HttpApiRequestParser.ParseTranscribe(request)
+        );
         Assert.Equal(400, ex.StatusCode);
         Assert.Contains("file", ex.Message);
     }
 
     private static byte[] Multipart(
         string boundary,
-        params (string Name, string? FileName, string? ContentType, byte[] Data)[] parts)
+        params (string Name, string? FileName, string? ContentType, byte[] Data)[] parts
+    )
     {
         using var body = new MemoryStream();
         foreach (var part in parts)
@@ -125,10 +147,16 @@ public class HttpApiRequestParserTests
             Write(body, $"--{boundary}\r\n");
             var disposition = $"Content-Disposition: form-data; name=\"{part.Name}\"";
             if (part.FileName is not null)
+            {
                 disposition += $"; filename=\"{part.FileName}\"";
+            }
+
             Write(body, disposition + "\r\n");
             if (part.ContentType is not null)
+            {
                 Write(body, $"Content-Type: {part.ContentType}\r\n");
+            }
+
             Write(body, "\r\n");
             body.Write(part.Data);
             Write(body, "\r\n");

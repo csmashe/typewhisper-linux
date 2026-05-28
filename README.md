@@ -15,13 +15,14 @@ TypeWhisper lets you dictate into other applications, transcribe audio files, re
 The Linux branch currently includes:
 
 - Global dictation with toggle, push-to-talk, and hybrid activation modes
-- A Linux desktop UI with dashboard, dictation, shortcuts, file transcription, recorder, history, dictionary, snippets, profiles, prompts, extensions, general, appearance, advanced, and about sections
+- A Linux desktop UI with dashboard, dictation, shortcuts, text insertion, file transcription, recorder, history, dictionary, snippets, profiles, prompts, plugins, general, appearance, advanced, and about sections
 - Plugin-backed transcription engines and prompt/LLM providers
 - Drag-and-drop file transcription with batch queues, watch folders, and `ffmpeg`-based import when available
 - Session recording to WAV with optional transcript sidecar text files
 - Searchable history, recent transcriptions, dictionary corrections and term packs, snippets, and profiles
-- Overlay positioning and left/right content widgets
+- Configurable dictation overlay with selectable Indicator, Waveform, and Text widgets, including a live audio-level waveform visualization
 - Tray integration and XDG autostart support
+- Settings backup and restore
 - Local HTTP API and installable CLI for desktop automation
 - A user-level installer script that creates a desktop launcher and app icon
 
@@ -31,6 +32,8 @@ This branch contains Linux-specific work that is not part of the original branch
 
 - CUDA GPU support for the bundled whisper.cpp transcription engine on compatible NVIDIA systems
 - Linux desktop integration through Avalonia, XDG autostart, Linux tray behavior, and a user-level desktop launcher
+- Wayland global hotkey detection via an evdev backend that reads `/dev/input/event*` directly, so the configured shortcut fires regardless of which window has focus; falls back to the XDG portal and then focused-only SharpHook when the evdev path is unavailable. Enabled by default, requires the current user to be in the `input` group, and can be turned off from Settings → Shortcuts to keep focused-only behavior
+- A Shortcuts settings panel with per-desktop shortcut writers (GNOME, KDE, Hyprland, Sway) and a one-click auto-setup flow, so the configured TypeWhisper hotkey is registered with the active desktop environment without hand-editing config files
 - Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `canberra-gtk-play`, or CUDA runtime libraries
 - Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
 - Linux session audio handling for dictation, file transcription, and recorder workflows
@@ -38,18 +41,14 @@ This branch contains Linux-specific work that is not part of the original branch
 - Profile style presets — `Raw`, `Clean`, `Concise`, `Formal Email`, `Casual Message`, `Developer`, `Terminal Safe`, and `Meeting Notes` — that bundle cleanup level and formatting choices per profile, with optional cleanup and developer-formatting overrides
 - Developer-safe formatting that converts spoken punctuation and casing commands (for example "dash dash", "open paren", "snake case") into code-friendly output
 - Voice command suffixes parsed at the end of a dictation: `press enter`, `new paragraph`, `new line`, and `cancel`
-- Transform-selection hotkey that voice-edits the text currently selected in another application
 - Spoken IDE file references such as "at file dot ts" mapped to file tags for editor/IDE workflows
 - Per-app text-insertion strategies (`Auto`, `Clipboard Paste`, `Direct Typing`, `Copy Only`) keyed by process name, with auto-paste retry and clipboard preservation
-- Smart `Auto` insertion in browsers: types directly into web inputs, but falls back to clipboard paste when the active tab looks like a webmail composer
-- Active-window detection covers Chromium, Firefox, and Firefox-derived browsers including Zen Browser, with title-based inference when process metadata is unavailable
+- Smart `Auto` insertion that picks per-target: types directly into supported browsers (falling back to clipboard paste when the title looks like a webmail composer), types directly into terminals and the Codex CLI (where synthesized Ctrl+V isn't interpreted as paste), and on Wayland sessions where the focused app can't be identified, prefers direct typing for ASCII text and clipboard paste for non-ASCII text
+- Extended active-window browser coverage to include the Zen Browser and LibreWolf on top of the Chromium/Firefox families the upstream Windows build already supports, with title-based inference when process metadata is unavailable
 - Correction suggestions generated from user edits in history, with optional auto-learning into the dictionary and confidence scoring
 - Dictionary entries gain starring, priority, source tracking (`Manual`, `Import`, `CorrectionSuggestion`, `AutoLearned`), and times-applied/times-corrected stats
 - Snippets gain an `Exact Phrase` trigger mode alongside `Anywhere`, plus per-profile scoping by profile id
-- Dashboard insights panel summarizing average words and duration per dictation, insertion reliability, and top apps
-- Spoken-feedback provider and voice selection on top of the existing toggle
-- Aggressive short-clip transcription option for short, quiet utterances that would otherwise be discarded as silence
-- Short-speech policy with peak-level and duration thresholds so accidental taps and silent clips are dropped before they reach the engine
+- Dashboard insertion-reliability metric and per-dictation averages (average words and duration) on top of the upstream dashboard's words-per-minute, top-apps, and time-saved tiles
 
 ## Features
 
@@ -70,9 +69,12 @@ This branch contains Linux-specific work that is not part of the original branch
 - Activation modes: `Toggle` (press to start, press to stop), `Push to talk` (hold to record), and `Hybrid` (starts on press; a short tap keeps recording, holding past ~600 ms stops on release)
 - Optional prompt palette hotkey
 - Recent transcriptions palette and copy-last-transcription hotkey
+- Transform-selection hotkey that voice-edits the text currently selected in another application
 - Cancel-in-flight via the `Escape` key during recording, transcription, or post-processing — only active while a dictation is running so it does not shadow modal dialogs or editors
 - Auto-paste after transcription
 - Whisper mode, silence auto-stop, sound feedback, audio ducking, and media pause settings in the Linux UI
+- Aggressive short-clip transcription option for short, quiet utterances that would otherwise be discarded as silence
+- Short-speech policy with peak-level and duration thresholds so accidental taps and silent clips are dropped before they reach the engine
 - Live microphone preview and recording overlay
 
 Some Linux dictation features depend on external desktop tools:
@@ -80,9 +82,9 @@ Some Linux dictation features depend on external desktop tools:
 - Sound feedback uses `canberra-gtk-play`
 - Audio ducking uses `pactl`
 - Media pause uses `playerctl`
-- Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session — `wtype` is preferred on Wayland with a fallback to `xdotool` (X11 and XWayland apps). **Wayland support is a work in progress and is not currently working.**
+- Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session. On wlroots compositors (Hyprland, Sway) `wtype` is tried first; on GNOME and KDE Wayland — which omit the wtype virtual-keyboard protocol — `ydotool` is tried first instead, with `wtype` and `xdotool` as later fallbacks. X11 sessions use `xdotool`.
 
-When one of those tools is missing, the Linux UI disables that control and shows the reason, including session-aware install hints (for example, suggesting `wtype` on a Wayland session).
+When one of those tools is missing, the Linux UI disables that control and shows the reason, including session-aware install hints (for example, suggesting `wtype` on a wlroots Wayland session, or `ydotool` on GNOME / KDE Wayland). The **Text insertion** settings panel surfaces the current backend chain and offers a one-click setup flow for the `ydotool` daemon and `input`-group membership when needed.
 
 ### Personalization
 
@@ -105,11 +107,108 @@ The Advanced page exposes:
 
 ### Desktop Integration
 
-- Tray icon support where the current desktop environment exposes a compatible system tray
+- Tray icon support where the current desktop environment exposes a compatible system tray; the "close to tray" setting is gated on whether a real system tray is actually registered (detected via a D-Bus probe at startup) so the app can't hide itself with no way back to the UI
 - XDG autostart integration through `~/.config/autostart/typewhisper.desktop`
-- Single-instance lock using `XDG_RUNTIME_DIR`
+- Single-instance enforcement via a Unix control socket under `XDG_RUNTIME_DIR` (falling back to a `0700` directory under `/tmp` when `XDG_RUNTIME_DIR` is unavailable); a second launch hands its CLI command off to the already-running instance over a JSON control protocol instead of starting a new window
 - Set `TYPEWHISPER_DISABLE_IME=1` to disable Avalonia X11 IME integration when debugging input-method issues
 - Desktop install script that publishes the app, installs it under the user profile, and creates a launcher icon
+
+#### GNOME Wayland tray icons
+
+GNOME Shell does not show AppIndicator/KStatusNotifier tray icons by default.
+On Fedora GNOME Wayland, install and enable the AppIndicator extension if you
+want TypeWhisper's tray menu/icon in the top bar:
+
+```bash
+sudo dnf install -y gnome-shell-extension-appindicator
+gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
+```
+
+If `gnome-extensions enable` reports that the extension does not exist right
+after installation, log out and back in so GNOME Shell reloads system
+extensions, then run the enable command again. Restart TypeWhisper after the
+extension is loaded.
+
+The tray icon is separate from the launcher/dock icon. When running from
+source with `dotnet run`, GNOME may not match the process to a registered
+desktop entry, so the dock or app switcher can show a generic icon. The
+desktop installer registers the `.desktop` file and icon theme entry for that
+case.
+
+#### GNOME Wayland active-window detection
+
+Profile matching by process name (e.g. matching on `firefox`, `code`,
+`soffice.bin`) requires TypeWhisper to know which window has focus.
+TypeWhisper picks a compositor-native provider per session — `xdotool` on
+X11/XWayland, `hyprctl` on Hyprland, `swaymsg` on Sway, `kdotool` on KDE
+Plasma — and falls back to a Linux process-name lookup via `/proc/PID/comm`
+so user profiles built against X11 keep working unchanged on Wayland.
+
+On GNOME Wayland there is no built-in way for an unprivileged app to ask
+"what's the active window" — the built-in `org.gnome.Shell.Introspect`
+D-Bus API returns `AccessDenied` for everyone except trusted clients. The
+fix is the user-installed **Window Calls** GNOME Shell extension:
+
+1. Install from <https://extensions.gnome.org/extension/4974/window-calls/>
+   (the Profiles section in TypeWhisper has an **Install Window Calls
+   extension** button that opens this page when the extension is missing).
+2. Once enabled, restart TypeWhisper — no logout required. The extension's
+   D-Bus interface (`org.gnome.Shell.Extensions.Windows`) is detected at
+   the next snapshot tick.
+
+Without the extension, GNOME Wayland users can still use URL-only profile
+rules and any global (no-match) profile, but app-name matching will not
+fire.
+
+#### Wayland URL detection for browser-based profile rules
+
+URL-based profile rules (`mail.google.com`, `*.github.com`, etc.) need
+TypeWhisper to read the browser's address bar. On X11 the existing
+`xdotool` + `xclip` Ctrl+L/Ctrl+C trick covers this without any browser
+configuration. On Wayland synthetic-input shortcuts are blocked by the
+compositor, so TypeWhisper falls back to walking the browser's
+[AT-SPI](https://docs.gtk.org/atspi2/) accessibility tree — which only
+works if the browser is exposing it.
+
+The Profiles section in TypeWhisper has an **Enable browser URL
+detection** button that:
+
+- Writes `~/.config/environment.d/typewhisper-accessibility.conf` setting
+  `MOZ_ENABLE_ACCESSIBILITY=1` and `GTK_MODULES=gail:atk-bridge` for
+  Firefox-family browsers.
+- Patches user-local `.desktop` launchers for Firefox / Zen / LibreWolf
+  and Chromium / Chrome / Edge / Brave / Vivaldi / Opera so the
+  appropriate flag (`MOZ_ENABLE_ACCESSIBILITY=1` for Firefox-family,
+  `--force-renderer-accessibility` for Chromium-family) is set inline on
+  every menu launch — independent of whether `systemd --user` reloaded
+  the `environment.d` file across logouts.
+- Backs up any non-owned user `.desktop` files in
+  `~/.local/share/typewhisper/launcher-backups/` so the integration can
+  be cleanly removed without losing user customizations.
+
+**Firefox additionally needs the lazy-init gate flipped.** Modern Firefox
+(100+) refuses to register on AT-SPI until either an assistive
+technology connects or `accessibility.force_disabled` is explicitly set:
+
+1. Open `about:config` in Firefox, accept the warning.
+2. Search for `accessibility.force_disabled`.
+3. Edit the value from `0` to `-1` (force-enable always).
+4. Restart Firefox. Verify by visiting `about:support` — the
+   **Accessibility** section should now say `Activated: Yes`.
+
+After Firefox is on the AT-SPI bus, the TypeWhisper walker finds the
+address-bar element automatically and surfaces the URL to the profile
+matcher. The walker has a 1.2 s per-call budget and caches the matched
+URL for 10 s, so transient title bumps (Gmail badge updates,
+draft-saved overlays, etc.) do not force constant re-walking.
+
+When URL detection fails, the Profiles section banner explains what's
+missing, and the Error Log on the About page records a one-line
+diagnostic per unique state. Look for entries like
+`AT-SPI URL walk: process=firefox matched-app='Firefox' nodes-walked=N
+best-score=... result=...` — `matched-app=none` means the browser
+isn't exposing AT-SPI, `result=null` with a non-null `best-score` means
+the walker reached the address bar but didn't recognise it.
 
 ## Linux Requirements
 
@@ -122,7 +221,7 @@ The Advanced page exposes:
   - `canberra-gtk-play` for sound feedback
   - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
   - `xclip` (X11 clipboard) and `wl-copy`/`wl-paste` (Wayland clipboard) for clipboard-backed auto-paste
-  - `wtype` for Wayland keyboard input, with `xdotool` as a fallback on X11 and XWayland apps
+  - `wtype` (wlroots Wayland: Hyprland, Sway) and `ydotool` (GNOME / KDE Wayland, where wtype is unavailable) for Wayland keyboard input; `xdotool` as a fallback on X11 and XWayland apps. `ydotool` requires its daemon to be running and the current user to be in the `input` group
 - Optional CUDA backend:
   - NVIDIA GPU and driver
   - CUDA 12 runtime/toolkit libraries providing `libcudart.so.12` and `libcublas.so.12`
@@ -130,21 +229,49 @@ The Advanced page exposes:
 
 ## Tested On
 
-This Linux branch has only been tested on the maintainer's current setup so far:
+This Linux branch has been tested on the maintainer's current setups:
 
-- Pop!_OS 22.04 LTS
-- GNOME 42.9
-- X11 session
+- Pop!_OS 22.04 LTS / GNOME 42.9 / X11 session
+- Fedora 44 / GNOME 46+ / Wayland session (with the Window Calls
+  extension installed for active-window detection)
 
-Linux desktop behavior can vary by distribution, compositor, desktop environment, and especially Wayland implementation. **Wayland support is a work in progress and is not currently working** — code paths are included where possible, but they have not been verified end-to-end and should be considered non-functional for now.
+Other Wayland setups (Hyprland, Sway, KDE Plasma, and other GNOME
+versions) should work via their respective compositor-native window
+providers, but have not been tested at this time.
 
-If you run into a setup-specific issue, please create an issue or open a pull request with the distribution, desktop environment, display server, reproduction steps, and any relevant logs.
+Linux desktop behavior can vary by distribution, compositor, desktop
+environment, and especially Wayland implementation. Compositor-native
+window providers exist for Hyprland, Sway, KDE Plasma (via `kdotool`),
+and GNOME (via the Window Calls extension); URL detection on Wayland
+uses AT-SPI and requires browser-side accessibility to be enabled — see
+*Wayland URL detection for browser-based profile rules* above.
+
+If you run into a setup-specific issue, please create an issue or open a
+pull request with the distribution, desktop environment, display server,
+reproduction steps, and any relevant logs (the Error Log section on the
+About page has a per-window AT-SPI walk diagnostic for URL detection
+issues).
+
+## Download a Prebuilt Release
+
+Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four formats for `linux-x64`. Pick whichever fits your distribution and root preference:
+
+| Format | Filename | Where it installs | Notes |
+|--------|----------|-------------------|-------|
+| AppImage | `TypeWhisper-<version>-x86_64.AppImage` | Anywhere — run the file directly | Portable, no install step. `chmod +x` and double-click or run from a terminal. |
+| Debian / Ubuntu `.deb` | `typewhisper_<version>_amd64.deb` | `/opt/typewhisper` with `/usr/bin/typewhisper` wrapper | `sudo apt install ./typewhisper_<version>_amd64.deb`. Recommends `libpulse0`, `pulseaudio-utils`, `playerctl`, `xdotool`. |
+| Fedora / RHEL `.rpm` | `typewhisper-<version>-1.x86_64.rpm` | `/opt/typewhisper` with `/usr/bin/typewhisper` wrapper | `sudo dnf install ./typewhisper-<version>-1.x86_64.rpm`. Recommends `pulseaudio-libs`, `pulseaudio-utils`, `playerctl`, `xdotool`. |
+| Tarball | `typewhisper-linux-x64-<version>.tar.gz` | User-local: `~/.local/share/TypeWhisper` + `~/.local/bin/typewhisper` symlink | No root required. Extract, then `./install.sh` (or `./install.sh --uninstall` to remove). |
+
+All four formats bundle the self-contained .NET runtime and the Linux plugins — `.NET 10 SDK` is only needed if you're building from source. Optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `wl-copy`/`xclip`, `canberra-gtk-play`, `espeak-ng`) are still installed via your distro; see *Linux Requirements* above.
+
+The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayland global hotkeys (`input`-group membership for the evdev backend) still need their per-distro setup steps regardless of which package format you install.
 
 ## Build and Run
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/TypeWhisper/typewhisper-linux.git
+   git clone https://github.com/csmashe/typewhisper-linux.git
    cd typewhisper-linux
    ```
 
@@ -278,10 +405,27 @@ Example profile uses:
 - Use a different transcription model for one app
 - Run a specific prompt action for text captured in a matching context
 
+Profile-rule prerequisites on Wayland:
+
+- App-name rules need a compositor-native window provider — installed by
+  default on Hyprland (`hyprctl`) and Sway (`swaymsg`), available via
+  `kdotool` on KDE Plasma, and via the user-installed **Window Calls**
+  extension on GNOME. See *GNOME Wayland active-window detection* above.
+- URL-pattern rules need browser-side AT-SPI accessibility enabled. The
+  Profiles section has an **Enable browser URL detection** button that
+  patches the relevant launchers and writes the env file; Firefox users
+  additionally need the `about:config` flip described in *Wayland URL
+  detection* above.
+- The Profiles section shows live diagnostic banners when window detection
+  fails repeatedly, with a one-click remediation button for the missing
+  piece. The Error Log on the About page records per-state walk
+  diagnostics that pinpoint exactly which step failed.
+
 Known profile gaps:
 
-- Active-window and URL detection can vary by desktop environment, browser, and display server.
-- Some Wayland sessions may restrict app/window metadata more than X11.
+- Active-window detection on KDE Plasma requires `kdotool` to be
+  installed; without it, app-name matching is unavailable in that
+  session.
 
 ## Project Layout
 
@@ -314,14 +458,16 @@ TypeWhisper stores its Linux data under the user-local application data director
 
 The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin categories used by this branch include:
 
-- Transcription engines — bundled examples include `WhisperCpp`, `SherpaOnnx`, `GraniteSpeech`, `Qwen3Stt`, `Voxtral`, plus cloud engines `OpenAi`, `OpenAiCompatible`, `Groq`, `Deepgram`, `AssemblyAi`, `ElevenLabs`, `Speechmatics`, `Soniox`, `Gladia`, `CloudflareAsr`, and `GoogleCloudStt`
+- Transcription engines — bundled examples include `WhisperCpp` (with a configurable `noSpeechThreshold` for filtering silent segments to reduce hallucinated phrases), `SherpaOnnx`, `Qwen3Stt`, `Voxtral`, plus cloud engines `OpenAi`, `OpenAiCompatible`, `Groq`, `Deepgram`, `AssemblyAi`, `ElevenLabs`, `Speechmatics`, `Soniox`, `Gladia`, `CloudflareAsr`, and `GoogleCloudStt`
 - LLM providers — `Claude`, `OpenAi`, `OpenAiCompatible`, `OpenRouter`, `Gemini`, `GemmaLocal`, `Groq`, `Cerebras`, `Cohere`, and `Fireworks`
 - Action plugins — `Linear` and `Obsidian`
 - Post-processing plugins — `Script` (run a shell command against the transcription)
 - Memory storage plugins — `FileMemory` (local JSON) and `OpenAiVectorMemory` (embedding-backed recall)
-- Companion plugins — `LiveTranscript` window and `Webhook` notifications
+- Companion plugins — `Webhook` notifications
 
 The Linux build currently deploys bundled plugins from `plugins/` into the app output, then copies them into the user plugin directory on first run if they are missing.
+
+Plugins that own user-editable collections (Webhook, Script) expose per-plugin collection settings under `PluginData/<plugin-id>/` so their entries survive plugin reinstalls and the host can edit them through the settings UI without round-tripping a plugin process.
 
 Plugins are loaded from the user plugin directory:
 

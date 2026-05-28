@@ -29,34 +29,56 @@ public sealed class RecentTranscriptionStore
         string finalText,
         DateTime timestamp,
         string? appName,
-        string? appProcessName)
+        string? appProcessName
+    )
     {
         var trimmedText = finalText.Trim();
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(trimmedText))
+        {
             return;
+        }
 
         lock (_gate)
         {
-            _sessionEntries.RemoveAll(entry => string.Equals(entry.Id, id, StringComparison.OrdinalIgnoreCase));
-            _sessionEntries.Insert(0, new RecentTranscriptionEntry(
-                id,
-                trimmedText,
-                timestamp,
-                appName,
-                appProcessName,
-                RecentTranscriptionSource.Session));
+            _sessionEntries.RemoveAll(entry =>
+                string.Equals(entry.Id, id, StringComparison.OrdinalIgnoreCase)
+            );
+            _sessionEntries.Insert(
+                0,
+                new RecentTranscriptionEntry(
+                    id,
+                    trimmedText,
+                    timestamp,
+                    appName,
+                    appProcessName,
+                    RecentTranscriptionSource.Session
+                )
+            );
 
             if (_sessionEntries.Count > _maxSessionEntries)
-                _sessionEntries.RemoveRange(_maxSessionEntries, _sessionEntries.Count - _maxSessionEntries);
+            {
+                _sessionEntries.RemoveRange(
+                    _maxSessionEntries,
+                    _sessionEntries.Count - _maxSessionEntries
+                );
+            }
         }
     }
 
+    /// <summary>
+    ///     Returns the most-recent transcriptions, merging in-memory session entries with
+    ///     persisted history records. Session entries win on tie-breaks (same timestamp) so
+    ///     the most up-to-date version of a record is always shown. Duplicate IDs are dropped.
+    /// </summary>
     public IReadOnlyList<RecentTranscriptionEntry> MergedEntries(
         IReadOnlyList<TranscriptionRecord> historyRecords,
-        int limit = 12)
+        int limit = 12
+    )
     {
         if (limit <= 0)
+        {
             return [];
+        }
 
         List<RecentTranscriptionEntry> sessionSnapshot;
         lock (_gate)
@@ -72,7 +94,8 @@ public sealed class RecentTranscriptionStore
                 record.Timestamp,
                 record.AppName,
                 record.AppProcessName,
-                RecentTranscriptionSource.History));
+                RecentTranscriptionSource.History
+            ));
 
         var merged = sessionSnapshot
             .Concat(historyEntries)
@@ -80,15 +103,18 @@ public sealed class RecentTranscriptionStore
             .ThenBy(entry => entry.Source == RecentTranscriptionSource.Session ? 0 : 1)
             .ToList();
 
+        // seen.Add returns false for subsequent encounters of the same ID, effectively keeping
+        // only the first (highest-priority) occurrence in the sorted list.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        return merged
-            .Where(entry => seen.Add(entry.Id))
-            .Take(limit)
-            .ToList();
+        return merged.Where(entry => seen.Add(entry.Id)).Take(limit).ToList();
     }
 
-    public RecentTranscriptionEntry? LatestEntry(IReadOnlyList<TranscriptionRecord> historyRecords) =>
-        MergedEntries(historyRecords, limit: 1).FirstOrDefault();
+    public RecentTranscriptionEntry? LatestEntry(
+        IReadOnlyList<TranscriptionRecord> historyRecords
+    )
+    {
+        return MergedEntries(historyRecords, 1).FirstOrDefault();
+    }
 }
 
 public sealed record RecentTranscriptionEntry(
@@ -97,7 +123,8 @@ public sealed record RecentTranscriptionEntry(
     DateTime Timestamp,
     string? AppName,
     string? AppProcessName,
-    RecentTranscriptionSource Source);
+    RecentTranscriptionSource Source
+);
 
 public enum RecentTranscriptionSource
 {

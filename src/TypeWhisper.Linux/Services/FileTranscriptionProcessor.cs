@@ -1,7 +1,7 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
-using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -11,22 +11,26 @@ public interface IFileTranscriptionProcessor
         string filePath,
         Action<FileTranscriptionProcessProgress> onProgress,
         FileTranscriptionProcessOptions? options,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public sealed record FileTranscriptionProcessOptions(
     string? EngineId = null,
     string? ModelId = null,
     string? Language = null,
-    TranscriptionTask? Task = null);
+    TranscriptionTask? Task = null
+);
 
 public sealed record FileTranscriptionProcessProgress(
     FileTranscriptionQueueItemStatus Status,
-    string StatusText);
+    string StatusText
+);
 
 public sealed record FileTranscriptionProcessResult(
     TranscriptionResult RawResult,
-    string ProcessedText);
+    string ProcessedText
+);
 
 public sealed class FileTranscriptionProcessor(
     ModelManagerService modelManager,
@@ -34,48 +38,69 @@ public sealed class FileTranscriptionProcessor(
     AudioFileService audioFile,
     IDictionaryService dictionary,
     IVocabularyBoostingService vocabularyBoosting,
-    IPostProcessingPipeline pipeline) : IFileTranscriptionProcessor
+    IPostProcessingPipeline pipeline
+) : IFileTranscriptionProcessor
 {
     public async Task<FileTranscriptionProcessResult> ProcessAsync(
         string filePath,
         Action<FileTranscriptionProcessProgress> onProgress,
         FileTranscriptionProcessOptions? options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        onProgress(new FileTranscriptionProcessProgress(
-            FileTranscriptionQueueItemStatus.Loading,
-            "Loading audio..."));
+        onProgress(
+            new FileTranscriptionProcessProgress(
+                FileTranscriptionQueueItemStatus.Loading,
+                "Loading audio..."
+            )
+        );
 
         var modelId = ResolveModelId(options);
         if (string.IsNullOrWhiteSpace(modelId))
+        {
             throw new InvalidOperationException("No transcription model loaded.");
+        }
 
-        if (!await modelManager.EnsureModelLoadedAsync(modelId, cancellationToken))
-            throw new InvalidOperationException("No transcription model loaded.");
-
-        var plugin = modelManager.ActiveTranscriptionPlugin
-            ?? throw new InvalidOperationException("No transcription engine loaded.");
-
+        // Decode audio before acquiring the lease — ffmpeg shells out and must
+        // not monopolize the global model lock while no transcription runs.
         var wav = await audioFile.LoadAudioAsWavAsync(filePath, cancellationToken);
 
-        onProgress(new FileTranscriptionProcessProgress(
-            FileTranscriptionQueueItemStatus.Transcribing,
-            "Transcribing..."));
+        onProgress(
+            new FileTranscriptionProcessProgress(
+                FileTranscriptionQueueItemStatus.Transcribing,
+                "Transcribing..."
+            )
+        );
 
         var currentSettings = settings.Current;
         var configuredLanguage = options?.Language ?? currentSettings.Language;
         var language = configuredLanguage == "auto" ? null : configuredLanguage;
-        var task = options?.Task ?? (currentSettings.TranscriptionTask == "translate"
-            ? TranscriptionTask.Translate
-            : TranscriptionTask.Transcribe);
+        var task =
+            options?.Task
+            ?? (
+                currentSettings.TranscriptionTask == "translate"
+                    ? TranscriptionTask.Translate
+                    : TranscriptionTask.Transcribe
+            );
 
         var startedAt = DateTime.UtcNow;
-        var pluginResult = await plugin.TranscribeAsync(
-            wav,
-            language,
-            task == TranscriptionTask.Translate,
-            prompt: null,
-            cancellationToken);
+
+        // Narrow the lease scope to TranscribeAsync only. Holding it through
+        // the post-processing pipeline would block a concurrent dictation or
+        // watch-folder transcription from loading a different model.
+        PluginTranscriptionResult pluginResult;
+        await using (
+            var lease = await modelManager.AcquireTranscriptionAsync(modelId, cancellationToken)
+        )
+        {
+            pluginResult = await lease.Plugin.TranscribeAsync(
+                wav,
+                language,
+                task == TranscriptionTask.Translate,
+                null,
+                cancellationToken
+            );
+        }
 
         var result = new TranscriptionResult
         {
@@ -84,16 +109,26 @@ public sealed class FileTranscriptionProcessor(
             Duration = pluginResult.DurationSeconds,
             ProcessingTime = (DateTime.UtcNow - startedAt).TotalSeconds,
             NoSpeechProbability = pluginResult.NoSpeechProbability,
-            Segments = pluginResult.Segments
-                .Select(segment => new TranscriptionSegment(segment.Text, segment.Start, segment.End))
+            Segments = pluginResult
+                .Segments.Select(segment => new TranscriptionSegment(
+                    segment.Text,
+                    segment.Start,
+                    segment.End
+                ))
                 .ToArray()
         };
 
-        var pipelineResult = await pipeline.ProcessAsync(result.Text, new PipelineOptions
-        {
-            VocabularyBooster = currentSettings.VocabularyBoostingEnabled ? vocabularyBoosting.Apply : null,
-            DictionaryCorrector = dictionary.ApplyCorrections
-        }, cancellationToken);
+        var pipelineResult = await pipeline.ProcessAsync(
+            result.Text,
+            new PipelineOptions
+            {
+                VocabularyBooster = currentSettings.VocabularyBoostingEnabled
+                    ? vocabularyBoosting.Apply
+                    : null,
+                DictionaryCorrector = dictionary.ApplyCorrections
+            },
+            cancellationToken
+        );
 
         modelManager.ScheduleAutoUnload();
 
@@ -102,22 +137,47 @@ public sealed class FileTranscriptionProcessor(
 
     private string? ResolveModelId(FileTranscriptionProcessOptions? options)
     {
-        if (!string.IsNullOrWhiteSpace(options?.ModelId) && ModelManagerService.IsPluginModel(options.ModelId))
+        if (
+            !string.IsNullOrWhiteSpace(options?.ModelId)
+            && ModelManagerService.IsPluginModel(options.ModelId)
+        )
+        {
             return options.ModelId;
+        }
 
         if (!string.IsNullOrWhiteSpace(options?.EngineId))
         {
             var engine = modelManager.PluginManager.TranscriptionEngines.FirstOrDefault(candidate =>
-                string.Equals(candidate.ProviderId, options.EngineId, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(candidate.PluginId, options.EngineId, StringComparison.OrdinalIgnoreCase));
+                string.Equals(
+                    candidate.ProviderId,
+                    options.EngineId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+                || string.Equals(
+                    candidate.PluginId,
+                    options.EngineId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            );
             if (engine is null)
-                throw new InvalidOperationException($"Unknown transcription engine: {options.EngineId}");
+            {
+                throw new InvalidOperationException(
+                    $"Unknown transcription engine: {options.EngineId}"
+                );
+            }
 
             var model = string.IsNullOrWhiteSpace(options.ModelId)
                 ? engine.SelectedModelId ?? engine.TranscriptionModels.FirstOrDefault()?.Id
                 : options.ModelId;
-            if (string.IsNullOrWhiteSpace(model) || engine.TranscriptionModels.All(candidate => candidate.Id != model))
-                throw new InvalidOperationException($"Unknown model for engine {options.EngineId}: {options.ModelId}");
+            if (
+                string.IsNullOrWhiteSpace(model)
+                || engine.TranscriptionModels.All(candidate => candidate.Id != model)
+            )
+            {
+                throw new InvalidOperationException(
+                    $"Unknown model for engine {options.EngineId}: {options.ModelId}"
+                );
+            }
 
             return ModelManagerService.GetPluginModelId(engine.PluginId, model);
         }
@@ -125,9 +185,14 @@ public sealed class FileTranscriptionProcessor(
         if (!string.IsNullOrWhiteSpace(options?.ModelId))
         {
             var engine = modelManager.PluginManager.TranscriptionEngines.FirstOrDefault(candidate =>
-                candidate.TranscriptionModels.Any(model => model.Id == options.ModelId));
+                candidate.TranscriptionModels.Any(model => model.Id == options.ModelId)
+            );
             if (engine is null)
-                throw new InvalidOperationException($"Unknown transcription model: {options.ModelId}");
+            {
+                throw new InvalidOperationException(
+                    $"Unknown transcription model: {options.ModelId}"
+                );
+            }
 
             return ModelManagerService.GetPluginModelId(engine.PluginId, options.ModelId);
         }

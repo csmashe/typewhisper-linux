@@ -8,15 +8,15 @@ public class OpenAiTranscriptionHelperTests
     public void ParseTranscriptionResponse_VerboseJson_ExtractsNoSpeechProb()
     {
         var json = """
-        {
-            "text": "So.",
-            "language": "en",
-            "duration": 2.5,
-            "segments": [
-                { "text": "So.", "start": 0.0, "end": 0.7, "no_speech_prob": 0.95 }
-            ]
-        }
-        """;
+                   {
+                       "text": "So.",
+                       "language": "en",
+                       "duration": 2.5,
+                       "segments": [
+                           { "text": "So.", "start": 0.0, "end": 0.7, "no_speech_prob": 0.95 }
+                       ]
+                   }
+                   """;
 
         var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse(json);
 
@@ -34,16 +34,16 @@ public class OpenAiTranscriptionHelperTests
     {
         // Uses min so that mixed speech/silence audio is NOT filtered out
         var json = """
-        {
-            "text": "Hello world. So.",
-            "language": "en",
-            "duration": 5.0,
-            "segments": [
-                { "text": "Hello world.", "no_speech_prob": 0.1 },
-                { "text": "So.", "no_speech_prob": 0.92 }
-            ]
-        }
-        """;
+                   {
+                       "text": "Hello world. So.",
+                       "language": "en",
+                       "duration": 5.0,
+                       "segments": [
+                           { "text": "Hello world.", "no_speech_prob": 0.1 },
+                           { "text": "So.", "no_speech_prob": 0.92 }
+                       ]
+                   }
+                   """;
 
         var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse(json);
 
@@ -55,16 +55,16 @@ public class OpenAiTranscriptionHelperTests
     public void ParseTranscriptionResponse_AllSegmentsSilence_ReturnsHighProb()
     {
         var json = """
-        {
-            "text": "So. Vorsicht!",
-            "language": "en",
-            "duration": 3.0,
-            "segments": [
-                { "text": "So.", "no_speech_prob": 0.95 },
-                { "text": "Vorsicht!", "no_speech_prob": 0.88 }
-            ]
-        }
-        """;
+                   {
+                       "text": "So. Vorsicht!",
+                       "language": "en",
+                       "duration": 3.0,
+                       "segments": [
+                           { "text": "So.", "no_speech_prob": 0.95 },
+                           { "text": "Vorsicht!", "no_speech_prob": 0.88 }
+                       ]
+                   }
+                   """;
 
         var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse(json);
 
@@ -76,12 +76,12 @@ public class OpenAiTranscriptionHelperTests
     public void ParseTranscriptionResponse_JsonFormat_NoSegments_ReturnsNull()
     {
         var json = """
-        {
-            "text": "Hello world",
-            "language": "en",
-            "duration": 2.0
-        }
-        """;
+                   {
+                       "text": "Hello world",
+                       "language": "en",
+                       "duration": 2.0
+                   }
+                   """;
 
         var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse(json);
 
@@ -93,13 +93,13 @@ public class OpenAiTranscriptionHelperTests
     public void ParseTranscriptionResponse_EmptySegments_ReturnsNull()
     {
         var json = """
-        {
-            "text": "",
-            "language": "en",
-            "duration": 1.0,
-            "segments": []
-        }
-        """;
+                   {
+                       "text": "",
+                       "language": "en",
+                       "duration": 1.0,
+                       "segments": []
+                   }
+                   """;
 
         var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse(json);
 
@@ -110,15 +110,15 @@ public class OpenAiTranscriptionHelperTests
     public void ParseTranscriptionResponse_LowNoSpeechProb_IndicatesSpeech()
     {
         var json = """
-        {
-            "text": "This is a normal sentence.",
-            "language": "en",
-            "duration": 3.0,
-            "segments": [
-                { "text": "This is a normal sentence.", "no_speech_prob": 0.02 }
-            ]
-        }
-        """;
+                   {
+                       "text": "This is a normal sentence.",
+                       "language": "en",
+                       "duration": 3.0,
+                       "segments": [
+                           { "text": "This is a normal sentence.", "no_speech_prob": 0.02 }
+                       ]
+                   }
+                   """;
 
         var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse(json);
 

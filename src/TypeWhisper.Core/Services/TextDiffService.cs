@@ -5,12 +5,16 @@ namespace TypeWhisper.Core.Services;
 public static class TextDiffService
 {
     public static bool HasChanges(string rawText, string finalText)
-        => !string.Equals(rawText, finalText, StringComparison.Ordinal);
+    {
+        return !string.Equals(rawText, finalText, StringComparison.Ordinal);
+    }
 
     public static List<CorrectionSuggestion> ExtractCorrections(string original, string edited)
     {
         if (!HasChanges(original, edited))
+        {
             return [];
+        }
 
         var origWords = original.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var editWords = edited.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -19,17 +23,24 @@ public static class TextDiffService
         var lcsLen = LcsLength(origWords, editWords);
         var maxLen = Math.Max(origWords.Length, editWords.Length);
         if (maxLen > 0 && (double)lcsLen / maxLen < 0.5)
+        {
             return [];
+        }
 
         // Build edit script from LCS
         var lcs = LcsTable(origWords, editWords);
         var removals = new List<(int Position, string Word)>();
         var insertions = new List<(int Position, string Word)>();
 
-        int i = origWords.Length, j = editWords.Length;
+        int i = origWords.Length,
+            j = editWords.Length;
         while (i > 0 || j > 0)
         {
-            if (i > 0 && j > 0 && string.Equals(origWords[i - 1], editWords[j - 1], StringComparison.Ordinal))
+            if (
+                i > 0
+                && j > 0
+                && string.Equals(origWords[i - 1], editWords[j - 1], StringComparison.Ordinal)
+            )
             {
                 i--;
                 j--;
@@ -52,11 +63,15 @@ public static class TextDiffService
 
         foreach (var (rPos, rWord) in removals)
         {
-            int bestIdx = -1;
-            int bestDist = int.MaxValue;
+            var bestIdx = -1;
+            var bestDist = int.MaxValue;
             for (var k = 0; k < insertions.Count; k++)
             {
-                if (usedInsertions.Contains(k)) continue;
+                if (usedInsertions.Contains(k))
+                {
+                    continue;
+                }
+
                 var dist = Math.Abs(insertions[k].Position - rPos);
                 if (dist <= 3 && dist < bestDist)
                 {
@@ -72,13 +87,23 @@ public static class TextDiffService
 
                 // Skip punctuation-only changes
                 if (IsPunctuationOnly(rWord) && IsPunctuationOnly(iWord))
+                {
                     continue;
+                }
 
-                // Skip if only case/punctuation differ at boundaries
-                var rClean = rWord.Trim('.', ',', '!', '?', ':', ';');
-                var iClean = iWord.Trim('.', ',', '!', '?', ':', ';');
-                if (string.Equals(rClean, iClean, StringComparison.OrdinalIgnoreCase) && rClean == iClean)
+                // Skip if the words differ only in trailing punctuation.
+                // The second condition (rClean == iClean) checks for exact equality after trimming —
+                // when combined with OrdinalIgnoreCase equality it means the words were identical
+                // before trimming but differed only in punctuation; case-only diffs fall through.
+                var rClean = rWord.TrimEnd('.', ',', '!', '?', ':', ';');
+                var iClean = iWord.TrimEnd('.', ',', '!', '?', ':', ';');
+                if (
+                    string.Equals(rClean, iClean, StringComparison.OrdinalIgnoreCase)
+                    && rClean == iClean
+                )
+                {
                     continue;
+                }
 
                 suggestions.Add(new CorrectionSuggestion(rWord, iWord));
             }
@@ -87,8 +112,10 @@ public static class TextDiffService
         return suggestions;
     }
 
-    private static bool IsPunctuationOnly(string word) =>
-        word.All(c => char.IsPunctuation(c) || char.IsSymbol(c));
+    private static bool IsPunctuationOnly(string word)
+    {
+        return word.All(c => char.IsPunctuation(c) || char.IsSymbol(c));
+    }
 
     private static int LcsLength(string[] a, string[] b)
     {
@@ -103,11 +130,13 @@ public static class TextDiffService
         var dp = new int[m + 1, n + 1];
 
         for (var i = 1; i <= m; i++)
-        for (var j = 1; j <= n; j++)
         {
-            dp[i, j] = string.Equals(a[i - 1], b[j - 1], StringComparison.Ordinal)
-                ? dp[i - 1, j - 1] + 1
-                : Math.Max(dp[i - 1, j], dp[i, j - 1]);
+            for (var j = 1; j <= n; j++)
+            {
+                dp[i, j] = string.Equals(a[i - 1], b[j - 1], StringComparison.Ordinal)
+                    ? dp[i - 1, j - 1] + 1
+                    : Math.Max(dp[i - 1, j], dp[i, j - 1]);
+            }
         }
 
         return dp;

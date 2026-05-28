@@ -21,16 +21,106 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     private static readonly IReadOnlyList<string> Languages =
     [
-        "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo",
-        "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es",
-        "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw",
-        "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja",
-        "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo",
-        "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
-        "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt",
-        "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq",
-        "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl",
-        "tr", "tt", "uk", "ur", "uz", "vi", "vo", "yi", "yo", "yue",
+        "af",
+        "am",
+        "ar",
+        "as",
+        "az",
+        "ba",
+        "be",
+        "bg",
+        "bn",
+        "bo",
+        "br",
+        "bs",
+        "ca",
+        "cs",
+        "cy",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "et",
+        "eu",
+        "fa",
+        "fi",
+        "fo",
+        "fr",
+        "gl",
+        "gu",
+        "ha",
+        "haw",
+        "he",
+        "hi",
+        "hr",
+        "ht",
+        "hu",
+        "hy",
+        "id",
+        "is",
+        "it",
+        "ja",
+        "jw",
+        "ka",
+        "kk",
+        "km",
+        "kn",
+        "ko",
+        "la",
+        "lb",
+        "ln",
+        "lo",
+        "lt",
+        "lv",
+        "mg",
+        "mi",
+        "mk",
+        "ml",
+        "mn",
+        "mr",
+        "ms",
+        "mt",
+        "my",
+        "ne",
+        "nl",
+        "nn",
+        "no",
+        "oc",
+        "pa",
+        "pl",
+        "ps",
+        "pt",
+        "ro",
+        "ru",
+        "sa",
+        "sd",
+        "si",
+        "sk",
+        "sl",
+        "sn",
+        "so",
+        "sq",
+        "sr",
+        "su",
+        "sv",
+        "sw",
+        "ta",
+        "te",
+        "tg",
+        "th",
+        "tk",
+        "tl",
+        "tr",
+        "tt",
+        "uk",
+        "ur",
+        "uz",
+        "vi",
+        "vo",
+        "yi",
+        "yo",
+        "yue",
         "zh",
     ];
 
@@ -40,9 +130,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     private string? _selectedModelId;
 
     public ElevenLabsPlugin()
-        : this(CreateHttpClient())
-    {
-    }
+        : this(CreateHttpClient()) { }
 
     internal ElevenLabsPlugin(HttpClient httpClient)
     {
@@ -72,7 +160,9 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        ModelEntries.Select(m => new PluginModelInfo(m.Id, m.DisplayName) { IsRecommended = true }).ToList();
+        ModelEntries
+            .Select(m => new PluginModelInfo(m.Id, m.DisplayName) { IsRecommended = true })
+            .ToList();
 
     public string? SelectedModelId => _selectedModelId;
 
@@ -88,10 +178,17 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
+            throw new InvalidOperationException(
+                "Plugin not configured. API key and model required."
+            );
 
         var entry = ResolveModelEntry(_selectedModelId);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/speech-to-text");
@@ -115,7 +212,9 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         var json = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"ElevenLabs API error {(int)response.StatusCode}: {json}");
+            throw new HttpRequestException(
+                $"ElevenLabs API error {(int)response.StatusCode}: {json}"
+            );
 
         return ParseRestResponse(json, NormalizeLanguage(language));
     }
@@ -123,14 +222,17 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
+            throw new InvalidOperationException(
+                "Plugin not configured. API key and model required."
+            );
 
         var entry = ResolveModelEntry(_selectedModelId);
         return await ElevenLabsStreamingSession.ConnectAsync(
             _apiKey!,
             entry.RealtimeModelId,
             NormalizeLanguage(language),
-            ct);
+            ct
+        );
     }
 
     internal string? ApiKey => _apiKey;
@@ -171,7 +273,10 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         }
     }
 
-    internal static PluginTranscriptionResult ParseRestResponse(string json, string? fallbackLanguage)
+    internal static PluginTranscriptionResult ParseRestResponse(
+        string json,
+        string? fallbackLanguage
+    )
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -185,12 +290,21 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
         var duration = 0.0;
         var segments = new List<PluginTranscriptionSegment>();
-        if (root.TryGetProperty("words", out var wordsEl) && wordsEl.ValueKind == JsonValueKind.Array)
+        if (
+            root.TryGetProperty("words", out var wordsEl)
+            && wordsEl.ValueKind == JsonValueKind.Array
+        )
         {
             foreach (var wordEl in wordsEl.EnumerateArray())
             {
-                if (wordEl.TryGetProperty("type", out var typeEl)
-                    && !string.Equals(typeEl.GetString(), "word", StringComparison.OrdinalIgnoreCase))
+                if (
+                    wordEl.TryGetProperty("type", out var typeEl)
+                    && !string.Equals(
+                        typeEl.GetString(),
+                        "word",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
                 {
                     continue;
                 }
@@ -199,9 +313,11 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
                     ? wordTextEl.GetString() ?? ""
                     : "";
 
-                if (string.IsNullOrWhiteSpace(wordText)
+                if (
+                    string.IsNullOrWhiteSpace(wordText)
                     || !TryGetDouble(wordEl, "start", out var start)
-                    || !TryGetDouble(wordEl, "end", out var end))
+                    || !TryGetDouble(wordEl, "end", out var end)
+                )
                 {
                     continue;
                 }
@@ -211,9 +327,14 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
             }
         }
 
-        return new PluginTranscriptionResult(text, detectedLanguage, duration, NoSpeechProbability: null)
+        return new PluginTranscriptionResult(
+            text,
+            detectedLanguage,
+            duration,
+            NoSpeechProbability: null
+        )
         {
-            Segments = segments
+            Segments = segments,
         };
     }
 
@@ -224,14 +345,21 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var terms = new List<string>();
-        foreach (var part in prompt.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        foreach (
+            var part in prompt.Split(
+                ',',
+                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries
+            )
+        )
         {
             var term = part.Trim();
-            if (term.Length == 0
+            if (
+                term.Length == 0
                 || term.Length >= 50
                 || term.IndexOfAny(InvalidKeytermCharacters) >= 0
                 || term.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 5
-                || !seen.Add(term))
+                || !seen.Add(term)
+            )
             {
                 continue;
             }
@@ -245,24 +373,39 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, "xi-...", "Required for ElevenLabs Scribe transcription."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Scribe v2 is used for file transcription; live dictation uses Scribe v2 Realtime.",
-            Options: ModelEntries.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new(
+                "api-key",
+                "API key",
+                true,
+                "xi-...",
+                "Required for ElevenLabs Scribe transcription."
+            ),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Scribe v2 is used for file transcription; live dictation uses Scribe v2 Realtime.",
+                Options: ModelEntries
+                    .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
+                    .ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {
@@ -293,7 +436,8 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     }
 
     private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+        string.IsNullOrWhiteSpace(language)
+        || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
             : language;
 
@@ -306,9 +450,11 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     private static bool TryGetDouble(JsonElement element, string propertyName, out double value)
     {
-        if (element.TryGetProperty(propertyName, out var property)
+        if (
+            element.TryGetProperty(propertyName, out var property)
             && property.ValueKind == JsonValueKind.Number
-            && property.TryGetDouble(out value))
+            && property.TryGetDouble(out value)
+        )
         {
             return true;
         }
@@ -323,5 +469,6 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         string Id,
         string DisplayName,
         string RestModelId,
-        string RealtimeModelId);
+        string RealtimeModelId
+    );
 }

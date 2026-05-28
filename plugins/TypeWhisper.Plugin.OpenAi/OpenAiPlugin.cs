@@ -6,7 +6,10 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAi;
 
-public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin, IPluginSettingsProvider
+public sealed partial class OpenAiPlugin
+    : ITranscriptionEnginePlugin,
+        ILlmProviderPlugin,
+        IPluginSettingsProvider
 {
     private const string BaseUrl = "https://api.openai.com";
     private const string TranslationModel = "gpt-4o-mini";
@@ -21,11 +24,21 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
     [
         new("whisper-1", "Whisper 1", "whisper-1", "verbose_json", SupportsTranslation: true),
-        new("gpt-4o-transcribe", "GPT-4o Transcribe", "gpt-4o-transcribe", "json", SupportsTranslation: false),
-        new("gpt-4o-mini-transcribe", "GPT-4o Mini Transcribe", "gpt-4o-mini-transcribe", "json", SupportsTranslation: false),
+        new(
+            "gpt-4o-transcribe",
+            "GPT-4o Transcribe",
+            "gpt-4o-transcribe",
+            "json",
+            SupportsTranslation: false
+        ),
+        new(
+            "gpt-4o-mini-transcribe",
+            "GPT-4o Mini Transcribe",
+            "gpt-4o-mini-transcribe",
+            "json",
+            SupportsTranslation: false
+        ),
     ];
-
-    // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.openai";
     public string PluginName => "OpenAI";
@@ -34,7 +47,12 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Normalize on load: legacy stored keys may carry trailing whitespace
+        // from before SetSettingValueAsync started trimming, which keeps
+        // IsConfigured true while breaking the Authorization header.
+        var stored = await host.LoadSecretAsync("api-key");
+        var trimmed = stored?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -43,8 +61,6 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "openai";
     public string ProviderDisplayName => "OpenAI";
@@ -68,7 +84,8 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
 
     public void SelectModel(string modelId)
     {
-        var entry = TranscriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
+        var entry =
+            TranscriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
             ?? throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
         _selectedApiModelName = entry.ApiModelName;
@@ -76,47 +93,75 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured || _selectedApiModelName is null)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
+            throw new InvalidOperationException(
+                "Plugin not configured. API key and model required."
+            );
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient, BaseUrl, _apiKey!, _selectedApiModelName,
-            wavAudio, language, translate, _selectedResponseFormat, ct, prompt);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            _selectedApiModelName,
+            wavAudio,
+            language,
+            translate,
+            _selectedResponseFormat,
+            ct,
+            prompt
+        );
     }
-
-    // ILlmProviderPlugin
 
     public string ProviderName => "OpenAI";
     public bool IsAvailable => IsConfigured;
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-        [new PluginModelInfo(TranslationModel, "GPT-4o Mini")];
+    [new PluginModelInfo(TranslationModel, "GPT-4o Mini")];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("API key not configured");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        // Trim defensively at the internal entry too: SetSettingValueAsync
+        // already trims, but a future direct caller could re-introduce
+        // trailing whitespace that breaks the Authorization header.
+        var trimmed = apiKey?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", apiKey);
+                await _host.StoreSecretAsync("api-key", trimmed);
 
             _host.NotifyCapabilitiesChanged();
         }
@@ -142,27 +187,33 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
         _httpClient.Dispose();
     }
 
-    // IPluginSettingsProvider
-
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "sk-...",
-            Description: "Required for OpenAI transcription and LLM requests.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "sk-...",
+                Description: "Required for OpenAI transcription and LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;
 
-        await SetApiKeyAsync(value ?? string.Empty);
+        // Normalize whitespace once — pasted keys often pick up trailing
+        // newlines or spaces that break the Authorization header.
+        var normalized = value?.Trim() ?? string.Empty;
+        await SetApiKeyAsync(normalized);
     }
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
@@ -177,6 +228,10 @@ public sealed partial class OpenAiPlugin : ITranscriptionEnginePlugin, ILlmProvi
     }
 
     private sealed record TranscriptionModelEntry(
-        string Id, string DisplayName, string ApiModelName,
-        string ResponseFormat, bool SupportsTranslation);
+        string Id,
+        string DisplayName,
+        string ApiModelName,
+        string ResponseFormat,
+        bool SupportsTranslation
+    );
 }

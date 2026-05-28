@@ -4,7 +4,6 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Windows.Controls;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -32,6 +31,85 @@ public sealed record DeliveryLogEntry
     public bool Success { get; init; }
 }
 
+/// <summary>
+/// Host-independent persistence for webhook configurations. Reads and writes
+/// <c>webhooks.json</c> in the supplied data directory.
+/// </summary>
+internal sealed class WebhookStore
+{
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    private readonly string _configPath;
+
+    public WebhookStore(string dataDir)
+    {
+        _configPath = Path.Combine(dataDir, "webhooks.json");
+    }
+
+    /// <summary>
+    /// Loads stored configs; returns an empty list only when the file does not
+    /// exist. Read or JSON-parse failures propagate so the caller can log them
+    /// rather than mistaking a corrupt file for "no webhooks" and overwriting it.
+    /// </summary>
+    public List<WebhookConfig> Load()
+    {
+        if (!File.Exists(_configPath))
+            return [];
+
+        var json = File.ReadAllText(_configPath);
+        return JsonSerializer.Deserialize<List<WebhookConfig>>(json, s_jsonOptions) ?? [];
+    }
+
+    /// <summary>
+    /// Persists the supplied configs, creating the data directory if needed.
+    /// Writes through a sibling temp file and renames it over the target so a
+    /// crash or kill mid-write can't truncate webhooks.json.
+    /// </summary>
+    public void Save(IEnumerable<WebhookConfig> configs)
+    {
+        var dir = Path.GetDirectoryName(_configPath)!;
+        Directory.CreateDirectory(dir);
+
+        var json = JsonSerializer.Serialize(configs.ToList(), s_jsonOptions);
+        var tempPath = _configPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
+        try
+        {
+            File.WriteAllText(tempPath, json);
+
+            if (File.Exists(_configPath))
+            {
+                File.Replace(tempPath, _configPath, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(tempPath, _configPath);
+            }
+
+            tempPath = null!;
+        }
+        finally
+        {
+            if (tempPath is not null && File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // best effort cleanup
+                }
+            }
+        }
+    }
+}
+
 public sealed class WebhookService
 {
     private const int MaxLogEntries = 20;
@@ -39,67 +117,169 @@ public sealed class WebhookService
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     private readonly HttpClient _httpClient = new();
     private readonly IPluginHostServices _host;
-    private readonly string _configPath;
+    private readonly WebhookStore _store;
+    // Guards every mutation and enumeration of Webhooks so the
+    // ObservableCollection isn't torn between the UI / settings-save thread
+    // and the EventBus delivery thread. SendWebhooksAsync only holds this
+    // lock briefly to take a snapshot, so a slow disk write inside Save()
+    // can't stall webhook deliveries.
+    private readonly object _webhooksLock = new();
+    // Serializes the mutate-then-persist sequence so two overlapping saves
+    // can't reorder writes — without this, thread A could snapshot first,
+    // thread B could snapshot (including A's mutation) and write first, then
+    // thread A would write its older snapshot last and clobber B's state on
+    // disk while memory still reflects B's mutation.
+    private readonly object _saveLock = new();
+    private bool _loadSucceeded;
 
     public ObservableCollection<WebhookConfig> Webhooks { get; } = [];
     public ObservableCollection<DeliveryLogEntry> DeliveryLog { get; } = [];
 
-    public WebhookService(IPluginHostServices host)
+    public WebhookService(IPluginHostServices host, string dataDirectory)
     {
         _host = host;
-        _configPath = Path.Combine(host.PluginDataDirectory, "webhooks.json");
+        _store = new WebhookStore(dataDirectory);
         Load();
     }
 
     public void AddWebhook(WebhookConfig config)
     {
-        Webhooks.Add(config);
-        Save();
+        // _saveLock spans mutation + snapshot + Save so concurrent mutations
+        // can't reorder their writes on disk. SendWebhooksAsync only takes
+        // _webhooksLock briefly for its snapshot, so it isn't blocked by the
+        // disk write held under _saveLock.
+        lock (_saveLock)
+        {
+            List<WebhookConfig> snapshot;
+            lock (_webhooksLock)
+            {
+                Webhooks.Add(config);
+                snapshot = Webhooks.ToList();
+            }
+            Save(snapshot);
+        }
     }
 
     public void RemoveWebhook(Guid id)
     {
-        var webhook = Webhooks.FirstOrDefault(w => w.Id == id);
-        if (webhook is not null)
+        lock (_saveLock)
         {
-            Webhooks.Remove(webhook);
-            Save();
+            List<WebhookConfig>? snapshot = null;
+            lock (_webhooksLock)
+            {
+                var webhook = Webhooks.FirstOrDefault(w => w.Id == id);
+                if (webhook is not null)
+                {
+                    Webhooks.Remove(webhook);
+                    snapshot = Webhooks.ToList();
+                }
+            }
+
+            if (snapshot is not null)
+                Save(snapshot);
         }
     }
 
     public void UpdateWebhook(WebhookConfig updated)
     {
-        for (var i = 0; i < Webhooks.Count; i++)
+        lock (_saveLock)
         {
-            if (Webhooks[i].Id == updated.Id)
+            List<WebhookConfig>? snapshot = null;
+            lock (_webhooksLock)
             {
-                Webhooks[i] = updated;
-                Save();
-                return;
+                for (var i = 0; i < Webhooks.Count; i++)
+                {
+                    if (Webhooks[i].Id == updated.Id)
+                    {
+                        Webhooks[i] = updated;
+                        snapshot = Webhooks.ToList();
+                        break;
+                    }
+                }
+            }
+
+            if (snapshot is not null)
+                Save(snapshot);
+        }
+    }
+
+    /// <summary>Replaces every stored webhook with the supplied set and persists.</summary>
+    public void ReplaceAll(IEnumerable<WebhookConfig> configs)
+    {
+        // _saveLock keeps the mutate-snapshot-Save sequence ordered against
+        // other mutations so overlapping ReplaceAll/AddWebhook calls can't
+        // land an older snapshot on disk after a newer one. Save() rethrows
+        // on persistence failure; we snapshot the previous set first so we
+        // can roll the ObservableCollection back to disk-truth if the write
+        // fails.
+        lock (_saveLock)
+        {
+            List<WebhookConfig> previous;
+            List<WebhookConfig> snapshot;
+            lock (_webhooksLock)
+            {
+                previous = Webhooks.ToList();
+                Webhooks.Clear();
+                foreach (var config in configs)
+                    Webhooks.Add(config);
+                snapshot = Webhooks.ToList();
+            }
+
+            try
+            {
+                Save(snapshot);
+            }
+            catch
+            {
+                lock (_webhooksLock)
+                {
+                    Webhooks.Clear();
+                    foreach (var config in previous)
+                        Webhooks.Add(config);
+                }
+                throw;
             }
         }
     }
 
+    /// <summary>Returns a thread-safe snapshot of the current webhook set.</summary>
+    public IReadOnlyList<WebhookConfig> SnapshotWebhooks()
+    {
+        lock (_webhooksLock)
+            return Webhooks.ToList();
+    }
+
     public async Task SendWebhooksAsync(TranscriptionCompletedEvent evt)
     {
-        foreach (var webhook in Webhooks.ToList())
-        {
-            if (!webhook.IsEnabled) continue;
+        List<WebhookConfig> snapshot;
+        lock (_webhooksLock)
+            snapshot = Webhooks.ToList();
 
-            if (webhook.ProfileFilter.Count > 0
-                && (evt.ProfileName is null || !webhook.ProfileFilter.Contains(evt.ProfileName)))
+        foreach (var webhook in snapshot)
+        {
+            if (!webhook.IsEnabled)
+                continue;
+
+            if (
+                webhook.ProfileFilter.Count > 0
+                && (evt.ProfileName is null || !webhook.ProfileFilter.Contains(evt.ProfileName))
+            )
                 continue;
 
             await SendSingleAsync(webhook, evt, retryOnFailure: true);
         }
     }
 
-    private async Task SendSingleAsync(WebhookConfig webhook, TranscriptionCompletedEvent evt, bool retryOnFailure)
+    private async Task SendSingleAsync(
+        WebhookConfig webhook,
+        TranscriptionCompletedEvent evt,
+        bool retryOnFailure
+    )
     {
         try
         {
@@ -110,7 +290,7 @@ public sealed class WebhookService
                 durationSeconds = evt.DurationSeconds,
                 modelId = evt.ModelId,
                 profileName = evt.ProfileName,
-                timestamp = evt.Timestamp
+                timestamp = evt.Timestamp,
             };
 
             var json = JsonSerializer.Serialize(payload, s_jsonOptions);
@@ -124,29 +304,33 @@ public sealed class WebhookService
             foreach (var header in webhook.Headers)
                 request.Headers.TryAddWithoutValidation(header.Key, header.Value);
 
-            var response = await _httpClient.SendAsync(request);
+            using var response = await _httpClient.SendAsync(request);
             var statusCode = (int)response.StatusCode;
 
             if (response.IsSuccessStatusCode)
             {
-                AddLogEntry(new DeliveryLogEntry
-                {
-                    WebhookName = webhook.Name,
-                    Url = webhook.Url,
-                    StatusCode = statusCode,
-                    Success = true
-                });
+                AddLogEntry(
+                    new DeliveryLogEntry
+                    {
+                        WebhookName = webhook.Name,
+                        Url = webhook.Url,
+                        StatusCode = statusCode,
+                        Success = true,
+                    }
+                );
             }
             else
             {
-                AddLogEntry(new DeliveryLogEntry
-                {
-                    WebhookName = webhook.Name,
-                    Url = webhook.Url,
-                    StatusCode = statusCode,
-                    Error = $"HTTP {statusCode}",
-                    Success = false
-                });
+                AddLogEntry(
+                    new DeliveryLogEntry
+                    {
+                        WebhookName = webhook.Name,
+                        Url = webhook.Url,
+                        StatusCode = statusCode,
+                        Error = $"HTTP {statusCode}",
+                        Success = false,
+                    }
+                );
 
                 if (retryOnFailure)
                 {
@@ -157,13 +341,15 @@ public sealed class WebhookService
         }
         catch (Exception ex)
         {
-            AddLogEntry(new DeliveryLogEntry
-            {
-                WebhookName = webhook.Name,
-                Url = webhook.Url,
-                Error = ex.Message,
-                Success = false
-            });
+            AddLogEntry(
+                new DeliveryLogEntry
+                {
+                    WebhookName = webhook.Name,
+                    Url = webhook.Url,
+                    Error = ex.Message,
+                    Success = false,
+                }
+            );
 
             if (retryOnFailure)
             {
@@ -182,44 +368,69 @@ public sealed class WebhookService
 
     private void Load()
     {
-        if (!File.Exists(_configPath)) return;
-
+        List<WebhookConfig> loaded;
         try
         {
-            var json = File.ReadAllText(_configPath);
-            var configs = JsonSerializer.Deserialize<List<WebhookConfig>>(json, s_jsonOptions);
-            if (configs is null) return;
-
-            foreach (var config in configs)
-                Webhooks.Add(config);
-        }
-        catch
-        {
-            _host.Log(PluginLogLevel.Warning, "Failed to load webhook configuration");
-        }
-    }
-
-    private void Save()
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
-            var json = JsonSerializer.Serialize(Webhooks.ToList(), s_jsonOptions);
-            File.WriteAllText(_configPath, json);
+            loaded = _store.Load();
         }
         catch (Exception ex)
         {
-            _host.Log(PluginLogLevel.Warning, $"Failed to save webhook configuration: {ex.Message}");
+            // Surface as Warning + keep Webhooks empty, but leave
+            // _loadSucceeded=false so Save() refuses to overwrite a file
+            // that may still hold valid webhooks behind a parse error.
+            _host.Log(
+                PluginLogLevel.Warning,
+                $"Failed to load webhook configuration: {ex.Message}"
+            );
+            return;
+        }
+
+        foreach (var config in loaded)
+            Webhooks.Add(config);
+        _loadSucceeded = true;
+    }
+
+    private void Save(IReadOnlyList<WebhookConfig> snapshot)
+    {
+        if (!_loadSucceeded)
+        {
+            // Mirrors ScriptService: refuse to write when the existing
+            // file failed to load, so a corrupt or locked webhooks.json
+            // can't be silently replaced with an empty in-memory state.
+            _host.Log(
+                PluginLogLevel.Warning,
+                "Refusing to save webhook configuration because the existing file could not be loaded."
+            );
+            throw new InvalidOperationException(
+                "Cannot save webhook configuration because the existing file could not be loaded."
+            );
+        }
+
+        try
+        {
+            _store.Save(snapshot);
+        }
+        catch (Exception ex)
+        {
+            _host.Log(
+                PluginLogLevel.Warning,
+                $"Failed to save webhook configuration: {ex.Message}"
+            );
+            throw;
         }
     }
 
     public void Dispose() => _httpClient.Dispose();
 }
 
-public sealed class WebhookPlugin : ITypeWhisperPlugin, TypeWhisper.PluginSDK.Wpf.IWpfPluginSettingsProvider
+public sealed class WebhookPlugin
+    : ITypeWhisperPlugin,
+        IPluginCollectionSettingsProvider,
+        IPluginDataLocationAware
 {
     private IDisposable? _subscription;
     private IPluginHostServices? _host;
+    private string? _dataDirectory;
 
     public string PluginId => "com.typewhisper.webhook";
     public string PluginName => "Webhook";
@@ -230,8 +441,17 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, TypeWhisper.PluginSDK.Wp
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        Service = new WebhookService(host);
-        _subscription = host.EventBus.Subscribe<TranscriptionCompletedEvent>(OnTranscriptionCompleted);
+        // Single canonical data dir: prefer the one set via SetDataDirectory
+        // (called by the loader before ActivateAsync); fall back to the host's
+        // value for hosts that don't drive IPluginDataLocationAware. Threading
+        // the same string through WebhookService and ResolveDataDir() keeps
+        // the live service and any on-disk fallback path reading/writing the
+        // same webhooks.json.
+        _dataDirectory ??= host.PluginDataDirectory;
+        Service = new WebhookService(host, _dataDirectory);
+        _subscription = host.EventBus.Subscribe<TranscriptionCompletedEvent>(
+            OnTranscriptionCompleted
+        );
         return Task.CompletedTask;
     }
 
@@ -239,19 +459,279 @@ public sealed class WebhookPlugin : ITypeWhisperPlugin, TypeWhisper.PluginSDK.Wp
     {
         _subscription?.Dispose();
         _subscription = null;
+        // Dispose the service so its HttpClient is released; otherwise a
+        // reactivation would observe stale state and leak the previous client.
+        Service?.Dispose();
+        Service = null;
         return Task.CompletedTask;
     }
 
-    public UserControl? CreateSettingsView() => new WebhookSettingsView(this);
-
     public IPluginHostServices? Host => _host;
 
-    private Task OnTranscriptionCompleted(TranscriptionCompletedEvent evt)
-        => Service?.SendWebhooksAsync(evt) ?? Task.CompletedTask;
+    private Task OnTranscriptionCompleted(TranscriptionCompletedEvent evt) =>
+        Service?.SendWebhooksAsync(evt) ?? Task.CompletedTask;
 
     public void Dispose()
     {
         _subscription?.Dispose();
         Service?.Dispose();
+    }
+
+    public void SetDataDirectory(string pluginDataDirectory) =>
+        _dataDirectory = pluginDataDirectory;
+
+    private string ResolveDataDir() =>
+        _dataDirectory
+        ?? throw new InvalidOperationException("Webhook plugin data directory has not been set.");
+
+    public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
+        [
+            new PluginCollectionDefinition(
+                Key: "webhooks",
+                Label: "Webhooks",
+                Description: "HTTP endpoints notified when a transcription completes.",
+                ItemFields:
+                [
+                    new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
+                    new PluginSettingDefinition(
+                        "url",
+                        "URL",
+                        Placeholder: "https://example.com/hook",
+                        Kind: PluginSettingKind.Text
+                    ),
+                    new PluginSettingDefinition(
+                        "method",
+                        "Method",
+                        Options:
+                        [
+                            new PluginSettingOption("POST", "POST"),
+                            new PluginSettingOption("PUT", "PUT"),
+                        ],
+                        Kind: PluginSettingKind.Dropdown
+                    ),
+                    new PluginSettingDefinition(
+                        "headers",
+                        "Headers",
+                        Description: "One Name: Value per line.",
+                        Kind: PluginSettingKind.Multiline
+                    ),
+                    new PluginSettingDefinition(
+                        "profiles",
+                        "Profile filter",
+                        Description: "One profile name per line; blank = all profiles.",
+                        Kind: PluginSettingKind.Multiline
+                    ),
+                    new PluginSettingDefinition(
+                        "enabled",
+                        "Enabled",
+                        Kind: PluginSettingKind.Boolean
+                    ),
+                    new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
+                ],
+                ItemLabelFieldKey: "name",
+                AddButtonLabel: "Add webhook"
+            ),
+        ];
+
+    public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
+        string collectionKey,
+        CancellationToken ct = default
+    )
+    {
+        if (collectionKey != "webhooks")
+            return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
+
+        // When the plugin hasn't been activated yet we fall back to loading
+        // straight from disk. The store's Load propagates I/O / JSON errors —
+        // catch them here so settings retrieval doesn't break on a corrupt file.
+        IEnumerable<WebhookConfig> source;
+        if (Service is not null)
+        {
+            source = Service.SnapshotWebhooks();
+        }
+        else
+        {
+            try
+            {
+                source = new WebhookStore(ResolveDataDir()).Load();
+            }
+            catch (Exception ex)
+            {
+                _host?.Log(PluginLogLevel.Warning, $"Failed to load webhooks: {ex.Message}");
+                source = [];
+            }
+        }
+
+        IReadOnlyList<PluginCollectionItem> items = source
+            .Select(c => new PluginCollectionItem(
+                new Dictionary<string, string?>
+                {
+                    ["name"] = c.Name,
+                    ["url"] = c.Url,
+                    ["method"] = c.HttpMethod,
+                    ["headers"] = SerializeHeaders(c.Headers),
+                    ["profiles"] = SerializeProfiles(c.ProfileFilter),
+                    ["enabled"] = c.IsEnabled ? "true" : "false",
+                    ["__id"] = c.Id.ToString("D"),
+                }
+            ))
+            .ToList();
+
+        return Task.FromResult(items);
+    }
+
+    public Task<PluginSettingsValidationResult> SetItemsAsync(
+        string collectionKey,
+        IReadOnlyList<PluginCollectionItem> items,
+        CancellationToken ct = default
+    )
+    {
+        if (collectionKey != "webhooks")
+            return Task.FromResult(
+                new PluginSettingsValidationResult(false, "Unknown collection.")
+            );
+
+        var configs = new List<WebhookConfig>(items.Count);
+
+        foreach (var item in items)
+        {
+            var name = (Get(item, "name") ?? "").Trim();
+            var label = name.Length == 0 ? "(unnamed)" : name;
+
+            if (name.Length == 0)
+                return Fail(label, "name is required.");
+
+            var url = (Get(item, "url") ?? "").Trim();
+            if (
+                !Uri.TryCreate(url, UriKind.Absolute, out var parsedUrl)
+                || (parsedUrl.Scheme != Uri.UriSchemeHttp && parsedUrl.Scheme != Uri.UriSchemeHttps)
+                || string.IsNullOrEmpty(parsedUrl.Host)
+            )
+                return Fail(label, "URL must be a valid absolute http:// or https:// URL.");
+
+            var rawMethod = (Get(item, "method") ?? "").Trim();
+            if (
+                !rawMethod.Equals("POST", StringComparison.OrdinalIgnoreCase)
+                && !rawMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase)
+            )
+                return Fail(label, "method must be POST or PUT.");
+            var method = rawMethod.ToUpperInvariant();
+
+            var headersText = Get(item, "headers") ?? "";
+            if (!TryParseHeaders(headersText, out var headers, out var headerError))
+                return Fail(label, headerError);
+
+            var enabled = !TryGetBool(item, "enabled", out var parsed) || parsed;
+
+            var id = Guid.TryParse(Get(item, "__id"), out var parsedId) ? parsedId : Guid.NewGuid();
+
+            configs.Add(
+                new WebhookConfig
+                {
+                    Id = id,
+                    Name = name,
+                    Url = url,
+                    HttpMethod = method,
+                    Headers = headers,
+                    ProfileFilter = ParseProfiles(Get(item, "profiles") ?? ""),
+                    IsEnabled = enabled,
+                }
+            );
+        }
+
+        try
+        {
+            if (Service is not null)
+                Service.ReplaceAll(configs);
+            else
+                new WebhookStore(ResolveDataDir()).Save(configs);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(
+                new PluginSettingsValidationResult(
+                    false,
+                    $"Failed to save settings: {ex.Message}"
+                )
+            );
+        }
+
+        return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
+
+        static Task<PluginSettingsValidationResult> Fail(string label, string reason) =>
+            Task.FromResult(
+                new PluginSettingsValidationResult(false, $"Webhook '{label}': {reason}")
+            );
+    }
+
+    private static string? Get(PluginCollectionItem item, string key) =>
+        item.Values.TryGetValue(key, out var value) ? value : null;
+
+    private static bool TryGetBool(PluginCollectionItem item, string key, out bool value)
+    {
+        var raw = Get(item, key);
+        if (raw is not null && bool.TryParse(raw, out value))
+            return true;
+        value = false;
+        return false;
+    }
+
+    /// <summary>Serializes headers to one <c>Name: Value</c> line each.</summary>
+    internal static string SerializeHeaders(IReadOnlyDictionary<string, string> headers) =>
+        string.Join("\n", headers.Select(h => $"{h.Key}: {h.Value}"));
+
+    /// <summary>
+    /// Parses multiline header text. Each non-blank line is split on the first
+    /// <c>:</c> only. Returns false with an error message when a line is malformed.
+    /// </summary>
+    internal static bool TryParseHeaders(
+        string? text,
+        out Dictionary<string, string> headers,
+        out string error
+    )
+    {
+        headers = [];
+        error = "";
+
+        if (string.IsNullOrWhiteSpace(text))
+            return true;
+
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+                continue;
+
+            var colon = line.IndexOf(':');
+            if (colon < 0)
+            {
+                error = $"header line '{line}' is missing a ':' separator.";
+                return false;
+            }
+
+            var key = line[..colon].Trim();
+            if (key.Length == 0)
+            {
+                error = $"header line '{line}' has an empty name.";
+                return false;
+            }
+
+            headers[key] = line[(colon + 1)..].Trim();
+        }
+
+        return true;
+    }
+
+    /// <summary>Serializes the profile filter to one profile name per line.</summary>
+    internal static string SerializeProfiles(IEnumerable<string> profiles) =>
+        string.Join("\n", profiles);
+
+    /// <summary>Parses multiline profile text; trims each entry and skips blank lines.</summary>
+    internal static List<string> ParseProfiles(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return [];
+
+        return text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
     }
 }

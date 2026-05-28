@@ -24,7 +24,7 @@ public sealed class RecentTranscriptionStoreTests
             }
         };
 
-        var entries = store.MergedEntries(history, limit: 10);
+        var entries = store.MergedEntries(history, 10);
 
         Assert.Single(entries);
         Assert.Equal("session text", entries[0].FinalText);
@@ -37,10 +37,16 @@ public sealed class RecentTranscriptionStoreTests
         var store = new RecentTranscriptionStore();
         for (var i = 0; i < 5; i++)
         {
-            store.RecordTranscription(i.ToString(), $"text {i}", DateTime.UtcNow.AddSeconds(i), null, null);
+            store.RecordTranscription(
+                i.ToString(),
+                $"text {i}",
+                DateTime.UtcNow.AddSeconds(i),
+                null,
+                null
+            );
         }
 
-        var entries = store.MergedEntries([], limit: 3);
+        var entries = store.MergedEntries([], 3);
 
         Assert.Equal(3, entries.Count);
         Assert.Equal("text 4", entries[0].FinalText);
@@ -51,8 +57,22 @@ public sealed class RecentTranscriptionStoreTests
     {
         var entries = new[]
         {
-            new RecentTranscriptionEntry("1", "alpha note", DateTime.UtcNow, "Editor", "code", RecentTranscriptionSource.Session),
-            new RecentTranscriptionEntry("2", "beta note", DateTime.UtcNow, "Browser", "firefox", RecentTranscriptionSource.Session)
+            new RecentTranscriptionEntry(
+                "1",
+                "alpha note",
+                DateTime.UtcNow,
+                "Editor",
+                "code",
+                RecentTranscriptionSource.Session
+            ),
+            new RecentTranscriptionEntry(
+                "2",
+                "beta note",
+                DateTime.UtcNow,
+                "Browser",
+                "firefox",
+                RecentTranscriptionSource.Session
+            )
         };
         var sut = new RecentTranscriptionsPaletteViewModel(entries, _ => { });
 

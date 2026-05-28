@@ -1,10 +1,15 @@
-using System.IO;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.Linux.Services.Hotkey;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Hotkey.Evdev;
+using TypeWhisper.Linux.Services.Hotkey.Portal;
+using TypeWhisper.Linux.Services.Insertion;
+using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -13,32 +18,41 @@ using TypeWhisper.Linux.Views;
 namespace TypeWhisper.Linux;
 
 /// <summary>
-/// DI wiring for the Linux host. Keeps registrations Linux-native and omits
-/// Windows-only services such as Win32 hotkeys, WPF UI, Velopack, SMTC media
-/// pause, Core Audio ducking, supporter Discord, and license server flows.
+///     DI wiring for the Linux host. Keeps registrations Linux-native and omits
+///     Windows-only services such as Win32 hotkeys, WPF UI, Velopack, SMTC media
+///     pause, Core Audio ducking, supporter Discord, and license server flows.
 /// </summary>
 internal static class ServiceRegistrations
 {
-    public static void Register(HostBuilderContext context, IServiceCollection services)
+    public static void Register(IServiceCollection services)
     {
         var dataPath = TypeWhisperEnvironment.DataPath;
 
         // Core — settings & JSON-file-backed data services (all portable)
         services.AddSingleton<ISettingsService>(
-            new SettingsService(TypeWhisperEnvironment.SettingsFilePath));
+            new SettingsService(TypeWhisperEnvironment.SettingsFilePath)
+        );
         services.AddSingleton<IErrorLogService>(new ErrorLogService(dataPath));
         services.AddSingleton<IHistoryService>(
-            new HistoryService(Path.Combine(dataPath, "history.json"), TypeWhisperEnvironment.AudioPath));
+            new HistoryService(
+                Path.Combine(dataPath, "history.json"),
+                TypeWhisperEnvironment.AudioPath
+            )
+        );
         services.AddSingleton<RecentTranscriptionStore>();
         services.AddSingleton<IDictionaryService>(
-            new DictionaryService(Path.Combine(dataPath, "dictionary.json")));
+            new DictionaryService(Path.Combine(dataPath, "dictionary.json"))
+        );
         services.AddSingleton<IVocabularyBoostingService, VocabularyBoostingService>();
         services.AddSingleton<ISnippetService>(
-            new SnippetService(Path.Combine(dataPath, "snippets.json")));
+            new SnippetService(Path.Combine(dataPath, "snippets.json"))
+        );
         services.AddSingleton<IProfileService>(
-            new ProfileService(Path.Combine(dataPath, "profiles.json")));
+            new ProfileService(Path.Combine(dataPath, "profiles.json"))
+        );
         services.AddSingleton<IPromptActionService>(
-            new PromptActionService(Path.Combine(dataPath, "prompt-actions.json")));
+            new PromptActionService(Path.Combine(dataPath, "prompt-actions.json"))
+        );
         services.AddSingleton<CleanupService>();
         services.AddSingleton<CorrectionSuggestionService>();
         services.AddSingleton<IHistoryInsightsService, HistoryInsightsService>();
@@ -54,11 +68,24 @@ internal static class ServiceRegistrations
         services.AddSingleton<ModelManagerService>();
 
         // Linux-native platform services
+        services.AddSingleton<IDetectionFailureTracker, DetectionFailureTracker>();
+        services.AddSingleton<IActiveWindowProvider, HyprlandActiveWindowProvider>();
+        services.AddSingleton<IActiveWindowProvider, SwayActiveWindowProvider>();
+        services.AddSingleton<IActiveWindowProvider, KWinActiveWindowProvider>();
+        // Window Calls extension wins on GNOME when installed — modern
+        // GNOME blocks the built-in Introspect API for unprivileged apps.
+        services.AddSingleton<IActiveWindowProvider, GnomeWindowCallsProvider>();
+        services.AddSingleton<IActiveWindowProvider, GnomeShellActiveWindowProvider>();
+        services.AddSingleton<IActiveWindowProvider, XdotoolActiveWindowProvider>();
+        services.AddSingleton<AtSpiUrlExtractor>();
         services.AddSingleton<ActiveWindowService>();
-        services.AddSingleton<IActiveWindowService>(sp => sp.GetRequiredService<ActiveWindowService>());
+        services.AddSingleton<IActiveWindowService>(sp =>
+            sp.GetRequiredService<ActiveWindowService>()
+        );
         services.AddSingleton<IAudioDuckingService, AudioDuckingService>();
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<SystemCommandAvailabilityService>();
+        services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton<AudioRecordingService>();
         services.AddSingleton<AudioFileService>();
         services.AddSingleton<IFileTranscriptionProcessor, FileTranscriptionProcessor>();
@@ -66,8 +93,25 @@ internal static class ServiceRegistrations
         services.AddSingleton<SessionAudioFileService>();
         services.AddSingleton<SoundFeedbackService>();
         services.AddSingleton<SpeechFeedbackService>();
+        services.AddSingleton<SharpHookGlobalShortcutBackend>();
+        services.AddSingleton<EvdevGlobalShortcutBackend>();
+        services.AddSingleton<XdgPortalGlobalShortcutsBackend>();
+        services.AddSingleton<BackendSelector>();
         services.AddSingleton<HotkeyService>();
+
+        // Per-desktop "Set up automatically" writers. Order in the list
+        // is the order the Settings panel evaluates IsCurrentDesktop()
+        // — first hit wins, but on a sane system at most one will be
+        // applicable anyway.
+        services.AddSingleton<IDeShortcutWriter, GnomeShortcutWriter>();
+        services.AddSingleton<IDeShortcutWriter, KdeShortcutWriter>();
+        services.AddSingleton<IDeShortcutWriter, HyprlandShortcutWriter>();
+        services.AddSingleton<IDeShortcutWriter, SwayShortcutWriter>();
+
         services.AddSingleton<TextInsertionService>();
+        services.AddSingleton<YdotoolSetupHelper>();
+        services.AddSingleton<BrowserAccessibilitySetupHelper>();
+        services.AddSingleton<GnomeWindowCallsSetupHelper>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
@@ -83,6 +127,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<HttpApiService>();
         services.AddSingleton<CliInstallService>();
         services.AddSingleton<WatchFolderService>();
+        services.AddSingleton<ControlSocketServer>();
 
         // ViewModels — section VMs are singletons so state stays consistent
         // across the sidebar nav and the onboarding wizard.
@@ -92,6 +137,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<AppearanceSectionViewModel>();
         services.AddSingleton<AdvancedSectionViewModel>();
         services.AddSingleton<ShortcutsSectionViewModel>();
+        services.AddSingleton<TextInsertionSectionViewModel>();
         services.AddSingleton<FileTranscriptionSectionViewModel>();
         services.AddSingleton<RecorderSectionViewModel>();
         services.AddSingleton<PluginsSectionViewModel>();
@@ -105,7 +151,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<AboutSectionViewModel>();
         services.AddTransient<WelcomeWizardViewModel>();
 
-        // Windows
+        // Avalonia windows
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();
         services.AddTransient<PromptPaletteWindow>();

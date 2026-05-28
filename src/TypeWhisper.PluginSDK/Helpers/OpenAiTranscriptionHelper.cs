@@ -1,4 +1,3 @@
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK.Models;
@@ -6,13 +5,13 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.PluginSDK.Helpers;
 
 /// <summary>
-/// Static helper for Whisper-compatible audio transcription API calls.
-/// Extracted from CloudProviderBase for reuse by transcription engine plugins.
+///     Static helper for Whisper-compatible audio transcription API calls.
+///     Shared by transcription engine plugins targeting OpenAI's API shape.
 /// </summary>
 public static class OpenAiTranscriptionHelper
 {
     /// <summary>
-    /// Sends a transcription request to a Whisper-compatible API endpoint.
+    ///     Sends a transcription request to a Whisper-compatible API endpoint.
     /// </summary>
     /// <param name="httpClient">HTTP client to use for the request.</param>
     /// <param name="baseUrl">API base URL (e.g. "https://api.openai.com").</param>
@@ -25,9 +24,17 @@ public static class OpenAiTranscriptionHelper
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Transcription result with text, detected language, and duration.</returns>
     public static async Task<PluginTranscriptionResult> TranscribeAsync(
-        HttpClient httpClient, string baseUrl, string apiKey,
-        string model, byte[] wavAudio, string? language, bool translate,
-        string responseFormat, CancellationToken ct, string? prompt = null)
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string responseFormat,
+        CancellationToken ct,
+        string? prompt = null
+    )
     {
         var endpoint = translate
             ? $"{baseUrl}/v1/audio/translations"
@@ -40,11 +47,17 @@ public static class OpenAiTranscriptionHelper
         content.Add(new StringContent(model), "model");
         content.Add(new StringContent(responseFormat), "response_format");
 
+        // "auto" is a TypeWhisper-internal sentinel meaning "let the API detect the language".
+        // Omitting the language field entirely is the correct way to request auto-detection.
         if (!string.IsNullOrEmpty(language) && language != "auto")
+        {
             content.Add(new StringContent(language), "language");
+        }
 
         if (!string.IsNullOrWhiteSpace(prompt))
+        {
             content.Add(new StringContent(prompt), "prompt");
+        }
 
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -56,7 +69,7 @@ public static class OpenAiTranscriptionHelper
     }
 
     /// <summary>
-    /// Parses a Whisper-compatible JSON transcription response.
+    ///     Parses a Whisper-compatible JSON transcription response.
     /// </summary>
     internal static PluginTranscriptionResult ParseTranscriptionResponse(string json)
     {
@@ -71,20 +84,18 @@ public static class OpenAiTranscriptionHelper
         // Extract min no_speech_prob from segments (verbose_json format).
         // Using min so that the filter only triggers when ALL segments are silence.
         float? minNoSpeechProb = null;
-        if (root.TryGetProperty("segments", out var segmentsEl)
-            && segmentsEl.ValueKind == JsonValueKind.Array)
+        if (
+            root.TryGetProperty("segments", out var segmentsEl)
+            && segmentsEl.ValueKind == JsonValueKind.Array
+        )
         {
             foreach (var seg in segmentsEl.EnumerateArray())
             {
                 var segmentText = seg.TryGetProperty("text", out var segTextEl)
                     ? segTextEl.GetString() ?? ""
                     : "";
-                var start = seg.TryGetProperty("start", out var startEl)
-                    ? startEl.GetDouble()
-                    : 0;
-                var end = seg.TryGetProperty("end", out var endEl)
-                    ? endEl.GetDouble()
-                    : 0;
+                var start = seg.TryGetProperty("start", out var startEl) ? startEl.GetDouble() : 0;
+                var end = seg.TryGetProperty("end", out var endEl) ? endEl.GetDouble() : 0;
                 segments.Add(new PluginTranscriptionSegment(segmentText, start, end));
 
                 if (seg.TryGetProperty("no_speech_prob", out var nspEl))

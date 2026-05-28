@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Text;
 using TypeWhisper.PluginSDK;
@@ -8,24 +9,169 @@ using Whisper.net.LibraryLoader;
 
 namespace TypeWhisper.Plugin.WhisperCpp;
 
-public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEnginePlugin
+public sealed class WhisperCppPlugin
+    : ITypeWhisperPlugin,
+        ITranscriptionEnginePlugin,
+        IPluginSettingsProvider
 {
+    private const string NoSpeechThresholdKey = "noSpeechThreshold";
+    private const float DefaultNoSpeechThreshold = 0.6f;
     private static readonly IReadOnlyList<ModelDefinition> Models =
     [
-        new("tiny", "Tiny", GgmlType.Tiny, QuantizationType.NoQuantization, "ggml-tiny.bin", "~75 MB", 75, 99, false),
-        new("tiny.en", "Tiny (English)", GgmlType.TinyEn, QuantizationType.NoQuantization, "ggml-tiny.en.bin", "~75 MB", 75, 1, false),
-        new("tiny-q5_0", "Tiny (Q5_0)", GgmlType.Tiny, QuantizationType.Q5_0, "ggml-tiny-q5_0.bin", "~31 MB", 31, 99, false),
-        new("base", "Base", GgmlType.Base, QuantizationType.NoQuantization, "ggml-base.bin", "~142 MB", 142, 99, true),
-        new("base.en", "Base (English)", GgmlType.BaseEn, QuantizationType.NoQuantization, "ggml-base.en.bin", "~142 MB", 142, 1, false),
-        new("base-q5_0", "Base (Q5_0)", GgmlType.Base, QuantizationType.Q5_0, "ggml-base-q5_0.bin", "~57 MB", 57, 99, true),
-        new("small", "Small", GgmlType.Small, QuantizationType.NoQuantization, "ggml-small.bin", "~466 MB", 466, 99, false),
-        new("small.en", "Small (English)", GgmlType.SmallEn, QuantizationType.NoQuantization, "ggml-small.en.bin", "~466 MB", 466, 1, false),
-        new("small-q5_0", "Small (Q5_0)", GgmlType.Small, QuantizationType.Q5_0, "ggml-small-q5_0.bin", "~182 MB", 182, 99, false),
-        new("medium", "Medium", GgmlType.Medium, QuantizationType.NoQuantization, "ggml-medium.bin", "~1.5 GB", 1530, 99, false),
-        new("medium.en", "Medium (English)", GgmlType.MediumEn, QuantizationType.NoQuantization, "ggml-medium.en.bin", "~1.5 GB", 1530, 1, false),
-        new("medium-q5_0", "Medium (Q5_0)", GgmlType.Medium, QuantizationType.Q5_0, "ggml-medium-q5_0.bin", "~601 MB", 601, 99, false),
-        new("large-v3-turbo", "Large V3 Turbo", GgmlType.LargeV3Turbo, QuantizationType.NoQuantization, "ggml-large-v3-turbo.bin", "~1.6 GB", 1620, 99, false),
-        new("large-v3-turbo-q5_0", "Large V3 Turbo (Q5_0)", GgmlType.LargeV3Turbo, QuantizationType.Q5_0, "ggml-large-v3-turbo-q5_0.bin", "~684 MB", 684, 99, false),
+        new(
+            "tiny",
+            "Tiny",
+            GgmlType.Tiny,
+            QuantizationType.NoQuantization,
+            "ggml-tiny.bin",
+            "~75 MB",
+            75,
+            99,
+            false
+        ),
+        new(
+            "tiny.en",
+            "Tiny (English)",
+            GgmlType.TinyEn,
+            QuantizationType.NoQuantization,
+            "ggml-tiny.en.bin",
+            "~75 MB",
+            75,
+            1,
+            false
+        ),
+        new(
+            "tiny-q5_0",
+            "Tiny (Q5_0)",
+            GgmlType.Tiny,
+            QuantizationType.Q5_0,
+            "ggml-tiny-q5_0.bin",
+            "~31 MB",
+            31,
+            99,
+            false
+        ),
+        new(
+            "base",
+            "Base",
+            GgmlType.Base,
+            QuantizationType.NoQuantization,
+            "ggml-base.bin",
+            "~142 MB",
+            142,
+            99,
+            true
+        ),
+        new(
+            "base.en",
+            "Base (English)",
+            GgmlType.BaseEn,
+            QuantizationType.NoQuantization,
+            "ggml-base.en.bin",
+            "~142 MB",
+            142,
+            1,
+            false
+        ),
+        new(
+            "base-q5_0",
+            "Base (Q5_0)",
+            GgmlType.Base,
+            QuantizationType.Q5_0,
+            "ggml-base-q5_0.bin",
+            "~57 MB",
+            57,
+            99,
+            true
+        ),
+        new(
+            "small",
+            "Small",
+            GgmlType.Small,
+            QuantizationType.NoQuantization,
+            "ggml-small.bin",
+            "~466 MB",
+            466,
+            99,
+            false
+        ),
+        new(
+            "small.en",
+            "Small (English)",
+            GgmlType.SmallEn,
+            QuantizationType.NoQuantization,
+            "ggml-small.en.bin",
+            "~466 MB",
+            466,
+            1,
+            false
+        ),
+        new(
+            "small-q5_0",
+            "Small (Q5_0)",
+            GgmlType.Small,
+            QuantizationType.Q5_0,
+            "ggml-small-q5_0.bin",
+            "~182 MB",
+            182,
+            99,
+            false
+        ),
+        new(
+            "medium",
+            "Medium",
+            GgmlType.Medium,
+            QuantizationType.NoQuantization,
+            "ggml-medium.bin",
+            "~1.5 GB",
+            1530,
+            99,
+            false
+        ),
+        new(
+            "medium.en",
+            "Medium (English)",
+            GgmlType.MediumEn,
+            QuantizationType.NoQuantization,
+            "ggml-medium.en.bin",
+            "~1.5 GB",
+            1530,
+            1,
+            false
+        ),
+        new(
+            "medium-q5_0",
+            "Medium (Q5_0)",
+            GgmlType.Medium,
+            QuantizationType.Q5_0,
+            "ggml-medium-q5_0.bin",
+            "~601 MB",
+            601,
+            99,
+            false
+        ),
+        new(
+            "large-v3-turbo",
+            "Large V3 Turbo",
+            GgmlType.LargeV3Turbo,
+            QuantizationType.NoQuantization,
+            "ggml-large-v3-turbo.bin",
+            "~1.6 GB",
+            1620,
+            99,
+            false
+        ),
+        new(
+            "large-v3-turbo-q5_0",
+            "Large V3 Turbo (Q5_0)",
+            GgmlType.LargeV3Turbo,
+            QuantizationType.Q5_0,
+            "ggml-large-v3-turbo-q5_0.bin",
+            "~684 MB",
+            684,
+            99,
+            false
+        ),
     ];
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -35,6 +181,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
     private bool _runtimeLibraryOrderInitialized;
+    private float _noSpeechThreshold = DefaultNoSpeechThreshold;
 
     public string PluginId => "com.typewhisper.whisper-cpp";
     public string PluginName => "whisper.cpp (Local)";
@@ -48,21 +195,44 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public bool SupportsModelDownload => true;
     public IReadOnlyList<string> SupportedLanguages => [];
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } = Models.Select(model =>
-        new PluginModelInfo(model.Id, model.DisplayName)
-        {
-            SizeDescription = model.SizeDescription,
-            EstimatedSizeMB = model.EstimatedSizeMB,
-            IsRecommended = model.IsRecommended,
-            LanguageCount = model.LanguageCount,
-        }).ToList();
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+        Models
+            .Select(model => new PluginModelInfo(model.Id, model.DisplayName)
+            {
+                SizeDescription = model.SizeDescription,
+                EstimatedSizeMB = model.EstimatedSizeMB,
+                IsRecommended = model.IsRecommended,
+                LanguageCount = model.LanguageCount,
+            })
+            .ToList();
 
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
         _selectedModelId = host.GetSetting<string>("selectedModel");
+        _noSpeechThreshold = ReadNoSpeechThreshold(host);
         host.Log(PluginLogLevel.Info, "Activated");
         return Task.CompletedTask;
+    }
+
+    private static float ReadNoSpeechThreshold(IPluginHostServices host)
+    {
+        var raw = host.GetSetting<string>(NoSpeechThresholdKey);
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultNoSpeechThreshold;
+
+        if (
+            float.TryParse(
+                raw,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsed
+            )
+            && parsed is >= 0f and <= 1f
+        )
+            return parsed;
+
+        return DefaultNoSpeechThreshold;
     }
 
     public async Task DeactivateAsync()
@@ -78,23 +248,55 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _host?.SetSetting("selectedModel", modelId);
     }
 
-    public void ConfigureComputeBackend(string backend)
+    public async Task ConfigureComputeBackendAsync(string backend)
     {
-        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
-        if (_computeBackend == normalized)
-            return;
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cuda"
+            : "cpu";
 
-        _computeBackend = normalized;
-        if (_factory is not null)
+        // Hold the same gate used by load/transcribe paths so the backend
+        // swap and the factory disposal don't race a concurrent operation.
+        // Use WaitAsync to avoid sync-over-async deadlocks if a caller on a
+        // captured SynchronizationContext is awaiting transcription/load.
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            DisposeFactoryUnsafe();
-            _loadedModelId = null;
+            if (_computeBackend == normalized)
+                return;
+
+            // RuntimeLibraryOrder is consulted once when the native library first
+            // loads (see EnsureRuntimeLibraryOrderInitialized). Once that has run,
+            // further backend swaps would desync the managed factory's UseGpu flag
+            // from the actual loaded native runtime, so refuse the change.
+            if (_runtimeLibraryOrderInitialized)
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"Cannot switch compute backend to '{normalized}' after the native runtime has loaded ({_computeBackend}). Restart the app to change backends."
+                );
+                return;
+            }
+
+            _computeBackend = normalized;
+            if (_factory is not null)
+            {
+                DisposeFactoryUnsafe();
+                _loadedModelId = null;
+            }
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 
     public bool IsModelDownloaded(string modelId) => File.Exists(GetModelPath(modelId));
 
-    public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    public async Task DownloadModelAsync(
+        string modelId,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
     {
         await _gate.WaitAsync(ct);
         try
@@ -110,18 +312,33 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 return;
             }
 
-            var tempPath = Path.Combine(modelDirectory, $"{Path.GetFileName(modelPath)}.{Guid.NewGuid():N}.tmp");
+            var tempPath = Path.Combine(
+                modelDirectory,
+                $"{Path.GetFileName(modelPath)}.{Guid.NewGuid():N}.tmp"
+            );
 
             try
             {
-                await using var modelStream = await WhisperGgmlDownloader.Default
-                    .GetGgmlModelAsync(model.Type, model.Quantization, ct);
+                await using var modelStream = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(
+                    model.Type,
+                    model.Quantization,
+                    ct
+                );
 
                 var buffer = new byte[81920];
                 long bytesCopied = 0;
                 var totalBytes = modelStream.CanSeek ? modelStream.Length : 0;
 
-                await using (var fileStream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+                await using (
+                    var fileStream = new FileStream(
+                        tempPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        81920,
+                        true
+                    )
+                )
                 {
                     while (true)
                     {
@@ -139,10 +356,10 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                     await fileStream.FlushAsync(ct);
                 }
 
-                if (File.Exists(modelPath))
-                    File.Delete(modelPath);
-
-                File.Move(tempPath, modelPath);
+                // Atomic on the same filesystem: a crash between delete and move
+                // would otherwise leave no model in place. Move(overwrite: true)
+                // is implemented via rename(2) on Linux, which is atomic.
+                File.Move(tempPath, modelPath, overwrite: true);
                 progress?.Report(1.0);
             }
             catch
@@ -172,7 +389,10 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             _loadedModelId = modelId;
             _selectedModelId = modelId;
             _host?.SetSetting("selectedModel", modelId);
-            _host?.Log(PluginLogLevel.Info, $"Loaded model {modelId} using {_computeBackend.ToUpperInvariant()}");
+            _host?.Log(
+                PluginLogLevel.Info,
+                $"Loaded model {modelId} using {_computeBackend.ToUpperInvariant()}"
+            );
         }
         finally
         {
@@ -185,7 +405,8 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         string? language,
         bool translate,
         string? prompt,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         await _gate.WaitAsync(ct);
         try
@@ -193,8 +414,12 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (_factory is null || _loadedModelId is null)
                 throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
 
-            var builder = _factory.CreateBuilder()
-                .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language);
+            var threshold = _noSpeechThreshold;
+
+            var builder = _factory
+                .CreateBuilder()
+                .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language)
+                .WithNoSpeechThreshold(threshold);
 
             if (!string.IsNullOrWhiteSpace(prompt))
                 builder.WithPrompt(prompt);
@@ -202,7 +427,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (translate)
                 builder.WithTranslate();
 
-            using var processor = builder.Build();
+            await using var processor = builder.Build();
             await using var audioStream = new MemoryStream(wavAudio, writable: false);
 
             var text = new StringBuilder();
@@ -212,6 +437,21 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
             await foreach (var segment in processor.ProcessAsync(audioStream, ct))
             {
+                if (
+                    string.IsNullOrWhiteSpace(detectedLanguage)
+                    && !string.IsNullOrWhiteSpace(segment.Language)
+                )
+                    detectedLanguage = segment.Language;
+
+                durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
+                noSpeechProbability = segment.NoSpeechProbability;
+
+                // whisper.cpp returns every segment, including ones it has
+                // flagged as silence. Skip those so training-bias phrases like
+                // "Thank you." don't leak into the output during silent gaps.
+                if (segment.NoSpeechProbability > threshold)
+                    continue;
+
                 var segmentText = segment.Text.Trim();
                 if (segmentText.Length > 0)
                 {
@@ -220,19 +460,14 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
                     text.Append(segmentText);
                 }
-
-                if (string.IsNullOrWhiteSpace(detectedLanguage) && !string.IsNullOrWhiteSpace(segment.Language))
-                    detectedLanguage = segment.Language;
-
-                durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
-                noSpeechProbability = segment.NoSpeechProbability;
             }
 
             return new PluginTranscriptionResult(
                 text.ToString().Trim(),
                 detectedLanguage,
                 durationSeconds,
-                noSpeechProbability);
+                noSpeechProbability
+            );
         }
         finally
         {
@@ -287,7 +522,102 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _gate.Dispose();
     }
 
-    private ModelDefinition GetModel(string modelId) => Models.FirstOrDefault(model => model.Id == modelId)
+    public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+        [
+            new(
+                Key: NoSpeechThresholdKey,
+                Label: "No-speech threshold",
+                Placeholder: DefaultNoSpeechThreshold.ToString(CultureInfo.InvariantCulture),
+                Description: "0.0 to 1.0. Segments whose no-speech probability exceeds this value "
+                    + "are dropped so silent gaps don't get transcribed as hallucinated phrases "
+                    + "(commonly \"Thank you.\"). Lower = more aggressive filtering. "
+                    + "Default 0.6 matches whisper.cpp's own default. Leave blank to use the default.",
+                Kind: PluginSettingKind.Text
+            ),
+        ];
+
+    public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default)
+    {
+        if (key != NoSpeechThresholdKey)
+            return Task.FromResult<string?>(null);
+
+        var raw = _host?.GetSetting<string>(NoSpeechThresholdKey);
+        return Task.FromResult<string?>(string.IsNullOrWhiteSpace(raw) ? null : raw);
+    }
+
+    public Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
+    {
+        if (key != NoSpeechThresholdKey)
+            return Task.CompletedTask;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            _host?.SetSetting(NoSpeechThresholdKey, string.Empty);
+            _noSpeechThreshold = DefaultNoSpeechThreshold;
+            return Task.CompletedTask;
+        }
+
+        if (
+            !float.TryParse(
+                value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsed
+            )
+            || parsed is < 0f or > 1f
+        )
+        {
+            // Persist the attempted value so ValidateAsync can read it back and
+            // surface the rejection reason to the UI. Leave _noSpeechThreshold
+            // at its last valid value so transcription keeps working.
+            _host?.SetSetting(NoSpeechThresholdKey, value);
+            return Task.CompletedTask;
+        }
+
+        _host?.SetSetting(
+            NoSpeechThresholdKey,
+            parsed.ToString(CultureInfo.InvariantCulture)
+        );
+        _noSpeechThreshold = parsed;
+        return Task.CompletedTask;
+    }
+
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    {
+        var raw = _host?.GetSetting<string>(NoSpeechThresholdKey);
+        if (string.IsNullOrWhiteSpace(raw))
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(
+                    true,
+                    $"Using default threshold {DefaultNoSpeechThreshold.ToString(CultureInfo.InvariantCulture)}."
+                )
+            );
+
+        if (
+            float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            && parsed is >= 0f and <= 1f
+        )
+            return Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(
+                    true,
+                    $"Threshold set to {parsed.ToString(CultureInfo.InvariantCulture)}."
+                )
+            );
+
+        return Task.FromResult<PluginSettingsValidationResult?>(
+            new PluginSettingsValidationResult(
+                false,
+                "No-speech threshold must be a number between 0.0 and 1.0."
+            )
+        );
+    }
+
+    private ModelDefinition GetModel(string modelId) =>
+        Models.FirstOrDefault(model => model.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private string GetModelPath(string modelId)
@@ -303,10 +633,11 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _factory = null;
     }
 
-    private WhisperFactoryOptions CreateFactoryOptions() => new()
-    {
-        UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
-    };
+    private WhisperFactoryOptions CreateFactoryOptions() =>
+        new()
+        {
+            UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase),
+        };
 
     // RuntimeOptions.RuntimeLibraryOrder is consulted once when the native library first loads.
     // Later changes are ignored for the process lifetime, so set it once before the first factory.
@@ -315,7 +646,11 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         if (_runtimeLibraryOrderInitialized)
             return;
 
-        RuntimeOptions.RuntimeLibraryOrder = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+        RuntimeOptions.RuntimeLibraryOrder = string.Equals(
+            _computeBackend,
+            "cuda",
+            StringComparison.OrdinalIgnoreCase
+        )
             ? [RuntimeLibrary.Cuda]
             : [RuntimeLibrary.Cpu];
         _runtimeLibraryOrderInitialized = true;
@@ -328,9 +663,7 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (File.Exists(path))
                 File.Delete(path);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private sealed record ModelDefinition(
@@ -342,5 +675,6 @@ public sealed class WhisperCppPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         string SizeDescription,
         long EstimatedSizeMB,
         int LanguageCount,
-        bool IsRecommended);
+        bool IsRecommended
+    );
 }

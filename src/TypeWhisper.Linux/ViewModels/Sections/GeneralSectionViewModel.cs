@@ -1,6 +1,6 @@
-using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -9,19 +9,66 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class GeneralSectionViewModel : ObservableObject
 {
-    private readonly ISettingsService _settings;
     private readonly HttpApiService _api;
     private readonly CliInstallService _cliInstall;
-    [ObservableProperty] private string? _uiLanguage;
-    [ObservableProperty] private bool _startWithSystem;
-    [ObservableProperty] private bool _apiServerEnabled;
-    [ObservableProperty] private int _apiServerPort;
-    [ObservableProperty] private string _apiBearerToken = "";
-    [ObservableProperty] private string _apiStatusText = "";
-    [ObservableProperty] private string _cliStatusText = "";
-    [ObservableProperty] private string _cliBundledPathText = "";
-    [ObservableProperty] private bool _cliBundledAvailable;
-    [ObservableProperty] private bool _cliInstalled;
+    private readonly LinuxPreferencesService _linuxPrefs;
+    private readonly ISettingsService _settings;
+    private readonly TrayIconService _tray;
+
+    [ObservableProperty]
+    private string _apiBearerToken = "";
+
+    [ObservableProperty]
+    private bool _apiServerEnabled;
+
+    [ObservableProperty]
+    private int _apiServerPort;
+
+    [ObservableProperty]
+    private string _apiStatusText = "";
+
+    [ObservableProperty]
+    private bool _cliBundledAvailable;
+
+    [ObservableProperty]
+    private string _cliBundledPathText = "";
+
+    [ObservableProperty]
+    private bool _cliInstalled;
+
+    [ObservableProperty]
+    private string _cliStatusText = "";
+
+    [ObservableProperty]
+    private bool _closeToTray;
+
+    [ObservableProperty]
+    private bool _startWithSystem;
+
+    [ObservableProperty]
+    private string? _uiLanguage;
+
+    public GeneralSectionViewModel(
+        ISettingsService settings,
+        HttpApiService api,
+        CliInstallService cliInstall,
+        LinuxPreferencesService linuxPrefs,
+        TrayIconService tray
+    )
+    {
+        _settings = settings;
+        _api = api;
+        _cliInstall = cliInstall;
+        _linuxPrefs = linuxPrefs;
+        _tray = tray;
+        Refresh(settings.Current);
+        StartWithSystem = StartupService.IsEnabled;
+        CloseToTray = _linuxPrefs.Current.CloseToTray;
+        _settings.SettingsChanged += Refresh;
+        _api.StateChanged += () => ApiStatusText = _api.StatusText;
+        ApiStatusText = _api.StatusText;
+        RefreshCliState();
+    }
 
     public ObservableCollection<CommandExample> CurlExamples { get; } = [];
     public ObservableCollection<CommandExample> CliExamples { get; } = [];
@@ -44,37 +91,38 @@ public partial class GeneralSectionViewModel : ObservableObject
     ];
 
     public bool IsUiLanguageSupported => false;
-    public string UiLanguageSupportMessage => "Interface language is not implemented in the Linux build yet.";
+
+    public string UiLanguageSupportMessage =>
+        "Interface language is not implemented in the Linux build yet.";
 
     public UiLanguageOption? SelectedUiLanguageOption
     {
-        get => UiLanguageChoices.FirstOrDefault(option =>
-            string.Equals(option.Value, UiLanguage, StringComparison.Ordinal));
+        get =>
+            UiLanguageChoices.FirstOrDefault(option =>
+                string.Equals(option.Value, UiLanguage, StringComparison.Ordinal)
+            );
         set
         {
             var selected = value?.Value;
             if (string.Equals(selected, UiLanguage, StringComparison.Ordinal))
+            {
                 return;
+            }
 
             UiLanguage = selected;
             OnPropertyChanged();
         }
     }
 
-    public GeneralSectionViewModel(ISettingsService settings, HttpApiService api, CliInstallService cliInstall)
-    {
-        _settings = settings;
-        _api = api;
-        _cliInstall = cliInstall;
-        Refresh(settings.Current);
-        StartWithSystem = StartupService.IsEnabled;
-        _settings.SettingsChanged += Refresh;
-        _api.StateChanged += () => ApiStatusText = _api.StatusText;
-        ApiStatusText = _api.StatusText;
-        RefreshCliState();
-    }
+    // Read live (not cached): the tray probe is one-shot at startup and this
+    // VM can be constructed before or after it. Without a tray the close-to-
+    // tray toggle must be disabled — otherwise the window hides with no way
+    // to bring it back (backlog #18).
+    public bool IsTrayAvailable => _tray.IsTrayAvailable;
 
-    private void Refresh(Core.Models.AppSettings s)
+    public bool IsTrayUnavailable => !_tray.IsTrayAvailable;
+
+    private void Refresh(AppSettings s)
     {
         UiLanguage = s.UiLanguage;
         ApiServerEnabled = s.ApiServerEnabled;
@@ -85,7 +133,10 @@ public partial class GeneralSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void RefreshCliState() => ApplyCliState(_cliInstall.GetState());
+    private void RefreshCliState()
+    {
+        ApplyCliState(_cliInstall.GetState());
+    }
 
     [RelayCommand]
     private void InstallCli()
@@ -94,7 +145,8 @@ public partial class GeneralSectionViewModel : ObservableObject
         {
             ApplyCliState(_cliInstall.Install());
         }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        catch (Exception ex)
+            when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             CliStatusText = ex.Message;
         }
@@ -114,11 +166,15 @@ public partial class GeneralSectionViewModel : ObservableObject
     {
         CurlExamples.Clear();
         foreach (var command in CliInstallService.BuildCurlExamples(port))
+        {
             CurlExamples.Add(new CommandExample(command));
+        }
 
         CliExamples.Clear();
         foreach (var command in CliInstallService.BuildCliExamples(port))
+        {
             CliExamples.Add(new CommandExample(command));
+        }
     }
 
     partial void OnUiLanguageChanged(string? value)
@@ -130,18 +186,26 @@ public partial class GeneralSectionViewModel : ObservableObject
     partial void OnStartWithSystemChanged(bool value)
     {
         if (value == StartupService.IsEnabled)
+        {
             return;
+        }
 
         if (value)
+        {
             StartupService.Enable();
+        }
         else
+        {
             StartupService.Disable();
+        }
     }
 
     partial void OnApiServerEnabledChanged(bool value)
     {
         if (_settings.Current.ApiServerEnabled == value)
+        {
             return;
+        }
 
         _settings.Save(_settings.Current with { ApiServerEnabled = value });
     }
@@ -149,9 +213,21 @@ public partial class GeneralSectionViewModel : ObservableObject
     partial void OnApiServerPortChanged(int value)
     {
         if (value <= 0 || value > 65535 || _settings.Current.ApiServerPort == value)
+        {
             return;
+        }
 
         _settings.Save(_settings.Current with { ApiServerPort = value });
+    }
+
+    partial void OnCloseToTrayChanged(bool value)
+    {
+        if (_linuxPrefs.Current.CloseToTray == value)
+        {
+            return;
+        }
+
+        _linuxPrefs.Save(_linuxPrefs.Current with { CloseToTray = value });
     }
 }
 

@@ -1,7 +1,10 @@
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Base interface for all TypeWhisper plugins.
+///     Base interface for all TypeWhisper plugins. The host owns the plugin's lifetime:
+///     <c>ActivateAsync</c> is invoked once after construction, <c>DeactivateAsync</c>
+///     before <c>Dispose</c>. Plugins must not block these methods — long-running work
+///     belongs on a background task — or the host UI will hang during startup/shutdown.
 /// </summary>
 public interface ITypeWhisperPlugin : IDisposable
 {

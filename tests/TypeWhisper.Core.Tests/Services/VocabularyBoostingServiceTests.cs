@@ -15,7 +15,8 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
                 Original = "TypeWhisper"
-            });
+            }
+        );
 
         var result = sut.Apply("TypeWhisper is ready");
 
@@ -31,7 +32,8 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
                 Original = "Parakeet"
-            });
+            }
+        );
 
         var result = sut.Apply("parrakeet is loaded");
 
@@ -47,7 +49,8 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
                 Original = "TypeWhisper"
-            });
+            }
+        );
 
         var result = sut.Apply("type whisper for windows");
 
@@ -63,7 +66,8 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
                 Original = "Parakeet"
-            });
+            }
+        );
 
         var result = sut.Apply("papaya is loaded");
 
@@ -85,7 +89,8 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-2",
                 EntryType = DictionaryEntryType.Term,
                 Original = "Parakeat"
-            });
+            }
+        );
 
         var result = sut.Apply("parakeit is loaded");
 
@@ -107,7 +112,8 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-2",
                 EntryType = DictionaryEntryType.Term,
                 Original = "Studio"
-            });
+            }
+        );
 
         var result = sut.Apply("visual studeo project");
 
@@ -129,7 +135,8 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
                 Original = "TypeWhisper"
-            });
+            }
+        );
 
         var result = sut.Apply("type whisper");
 
@@ -146,7 +153,8 @@ public class VocabularyBoostingServiceTests
                 EntryType = DictionaryEntryType.Term,
                 Original = "TypeWhisper",
                 IsEnabled = false
-            });
+            }
+        );
 
         var result = sut.Apply("type whisper");
 
@@ -163,7 +171,8 @@ public class VocabularyBoostingServiceTests
                 EntryType = DictionaryEntryType.Correction,
                 Original = "type whisper",
                 Replacement = "TypeWhisper"
-            });
+            }
+        );
 
         var result = sut.Apply("type whisper");
 
@@ -179,7 +188,8 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
                 Original = "Type-Whisper"
-            });
+            }
+        );
 
         var result = sut.Apply("type whisper");
 
@@ -196,15 +206,18 @@ public class VocabularyBoostingServiceTests
                 EntryType = DictionaryEntryType.Term,
                 Original = "Type visped.",
                 Replacement = "TypeWhisper"
-            });
+            }
+        );
 
         var result = sut.Apply("type whisper");
 
         Assert.Equal("TypeWhisper", result);
     }
 
-    private static VocabularyBoostingService CreateSut(params DictionaryEntry[] entries) =>
-        new(new FakeDictionaryService(entries));
+    private static VocabularyBoostingService CreateSut(params DictionaryEntry[] entries)
+    {
+        return new VocabularyBoostingService(new FakeDictionaryService(entries));
+    }
 
     private sealed class FakeDictionaryService : IDictionaryService
     {
@@ -216,16 +229,55 @@ public class VocabularyBoostingServiceTests
         public IReadOnlyList<DictionaryEntry> Entries { get; private set; }
         public event Action? EntriesChanged;
 
-        public void AddEntry(DictionaryEntry entry) => throw new NotSupportedException();
-        public void AddEntries(IEnumerable<DictionaryEntry> entries) => throw new NotSupportedException();
-        public void UpdateEntry(DictionaryEntry entry) => throw new NotSupportedException();
-        public void DeleteEntry(string id) => throw new NotSupportedException();
-        public void DeleteEntries(IEnumerable<string> ids) => throw new NotSupportedException();
-        public string ApplyCorrections(string text) => text;
-        public string? GetTermsForPrompt() => null;
-        public void LearnCorrection(string original, string replacement) => throw new NotSupportedException();
-        public void ActivatePack(TermPack pack) => throw new NotSupportedException();
-        public void DeactivatePack(string packId) => throw new NotSupportedException();
+        public void AddEntry(DictionaryEntry entry)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void AddEntries(IEnumerable<DictionaryEntry> entries)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void UpdateEntry(DictionaryEntry entry)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void DeleteEntry(string id)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void DeleteEntries(IEnumerable<string> ids)
+        {
+            throw new NotSupportedException();
+        }
+
+        public string ApplyCorrections(string text)
+        {
+            return text;
+        }
+
+        public string? GetTermsForPrompt()
+        {
+            return null;
+        }
+
+        public void LearnCorrection(string original, string replacement)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void ActivatePack(TermPack pack)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void DeactivatePack(string packId)
+        {
+            throw new NotSupportedException();
+        }
 
         public void SetEntries(params DictionaryEntry[] entries)
         {

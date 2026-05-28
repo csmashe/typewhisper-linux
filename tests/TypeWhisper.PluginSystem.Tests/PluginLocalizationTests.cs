@@ -1,12 +1,12 @@
-using System.IO;
+using System.Text.Json;
 using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public class PluginLocalizationTests : IDisposable
 {
-    private readonly string _pluginDir;
     private readonly string _locDir;
+    private readonly string _pluginDir;
 
     public PluginLocalizationTests()
     {
@@ -15,10 +15,16 @@ public class PluginLocalizationTests : IDisposable
         Directory.CreateDirectory(_locDir);
     }
 
-    private void WriteLocale(string lang, Dictionary<string, string> strings)
+    public void Dispose()
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(strings);
-        File.WriteAllText(Path.Combine(_locDir, $"{lang}.json"), json);
+        try
+        {
+            Directory.Delete(_pluginDir, true);
+        }
+        catch
+        {
+            /* best effort */
+        }
     }
 
     [Fact]
@@ -35,14 +41,14 @@ public class PluginLocalizationTests : IDisposable
         }
         finally
         {
-            Directory.Delete(emptyDir, recursive: true);
+            Directory.Delete(emptyDir, true);
         }
     }
 
     [Fact]
     public void GetString_ReturnsLocalizedValue()
     {
-        WriteLocale("de", new() { ["greeting"] = "Hallo", ["farewell"] = "Tschuess" });
+        WriteLocale("de", new Dictionary<string, string> { ["greeting"] = "Hallo", ["farewell"] = "Tschuess" });
 
         var loc = new PluginLocalization(_pluginDir, "de");
 
@@ -53,8 +59,8 @@ public class PluginLocalizationTests : IDisposable
     [Fact]
     public void GetString_FallsBackToEnglish()
     {
-        WriteLocale("en", new() { ["greeting"] = "Hello", ["only_en"] = "English only" });
-        WriteLocale("de", new() { ["greeting"] = "Hallo" });
+        WriteLocale("en", new Dictionary<string, string> { ["greeting"] = "Hello", ["only_en"] = "English only" });
+        WriteLocale("de", new Dictionary<string, string> { ["greeting"] = "Hallo" });
 
         var loc = new PluginLocalization(_pluginDir, "de");
 
@@ -65,7 +71,7 @@ public class PluginLocalizationTests : IDisposable
     [Fact]
     public void GetString_ReturnsKeyWhenNotInAnyLanguage()
     {
-        WriteLocale("en", new() { ["greeting"] = "Hello" });
+        WriteLocale("en", new Dictionary<string, string> { ["greeting"] = "Hello" });
 
         var loc = new PluginLocalization(_pluginDir, "de");
 
@@ -75,7 +81,7 @@ public class PluginLocalizationTests : IDisposable
     [Fact]
     public void GetString_WithFormatArgs()
     {
-        WriteLocale("en", new() { ["welcome"] = "Welcome, {0}! You have {1} items." });
+        WriteLocale("en", new Dictionary<string, string> { ["welcome"] = "Welcome, {0}! You have {1} items." });
 
         var loc = new PluginLocalization(_pluginDir, "en");
 
@@ -85,20 +91,19 @@ public class PluginLocalizationTests : IDisposable
     [Fact]
     public void GetString_WithFormatArgs_InvalidFormat_ReturnsTemplate()
     {
-        WriteLocale("en", new() { ["broken"] = "No placeholders here" });
+        WriteLocale("en", new Dictionary<string, string> { ["broken"] = "No placeholders here" });
 
         var loc = new PluginLocalization(_pluginDir, "en");
 
-        // Calling with args on a string without placeholders should not throw
         Assert.Equal("No placeholders here", loc.GetString("broken", "extra"));
     }
 
     [Fact]
     public void AvailableLanguages_ListsAllLoadedFiles()
     {
-        WriteLocale("en", new() { ["a"] = "A" });
-        WriteLocale("de", new() { ["a"] = "A" });
-        WriteLocale("fr", new() { ["a"] = "A" });
+        WriteLocale("en", new Dictionary<string, string> { ["a"] = "A" });
+        WriteLocale("de", new Dictionary<string, string> { ["a"] = "A" });
+        WriteLocale("fr", new Dictionary<string, string> { ["a"] = "A" });
 
         var loc = new PluginLocalization(_pluginDir, "en");
 
@@ -118,7 +123,7 @@ public class PluginLocalizationTests : IDisposable
     [Fact]
     public void GetString_EnglishFallback_NotUsedWhenCurrentIsEnglish()
     {
-        WriteLocale("en", new() { ["greeting"] = "Hello" });
+        WriteLocale("en", new Dictionary<string, string> { ["greeting"] = "Hello" });
 
         var loc = new PluginLocalization(_pluginDir, "en");
 
@@ -130,7 +135,7 @@ public class PluginLocalizationTests : IDisposable
     public void GetString_MalformedJson_SkipsFile()
     {
         File.WriteAllText(Path.Combine(_locDir, "bad.json"), "{ not valid json }}}");
-        WriteLocale("en", new() { ["ok"] = "OK" });
+        WriteLocale("en", new Dictionary<string, string> { ["ok"] = "OK" });
 
         var loc = new PluginLocalization(_pluginDir, "en");
 
@@ -139,9 +144,9 @@ public class PluginLocalizationTests : IDisposable
         Assert.Equal("OK", loc.GetString("ok"));
     }
 
-    public void Dispose()
+    private void WriteLocale(string lang, Dictionary<string, string> strings)
     {
-        try { Directory.Delete(_pluginDir, recursive: true); }
-        catch { /* best effort */ }
+        var json = JsonSerializer.Serialize(strings);
+        File.WriteAllText(Path.Combine(_locDir, $"{lang}.json"), json);
     }
 }

@@ -16,8 +16,6 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     private string? _apiKey;
     private string? _selectedModelId;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.voxtral";
     public string PluginName => "Voxtral";
     public string PluginVersion => "1.0.0";
@@ -36,14 +34,12 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
         return Task.CompletedTask;
     }
 
-    // ITranscriptionEnginePlugin
-
     public string ProviderId => "voxtral";
     public string ProviderDisplayName => "Voxtral";
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        [new PluginModelInfo(ModelId, "Voxtral (Mistral Whisper)")];
+    [new PluginModelInfo(ModelId, "Voxtral (Mistral Whisper)")];
 
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => true;
@@ -57,14 +53,28 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
-        byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. Mistral API key required.");
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient, BaseUrl, _apiKey!, ModelId,
-            wavAudio, language, translate, "verbose_json", ct, prompt);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            ModelId,
+            wavAudio,
+            language,
+            translate,
+            "verbose_json",
+            ct,
+            prompt
+        );
     }
 
     internal string? ApiKey => _apiKey;
@@ -99,24 +109,39 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new("api-key", "API key", true, null, "Required for Voxtral transcription via Mistral."),
-        new(
-            "selectedModel",
-            "Transcription model",
-            Description: "Choose the Voxtral model.",
-            Options: TranscriptionModels.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList())
-    ];
+        [
+            new(
+                "api-key",
+                "API key",
+                true,
+                null,
+                "Required for Voxtral transcription via Mistral."
+            ),
+            new(
+                "selectedModel",
+                "Transcription model",
+                Description: "Choose the Voxtral model.",
+                Options: TranscriptionModels
+                    .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
+                    .ToList()
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key switch
-        {
-            "api-key" => _apiKey,
-            "selectedModel" => _selectedModelId,
-            _ => null,
-        });
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                "selectedModel" => _selectedModelId,
+                _ => null,
+            }
+        );
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         switch (key)
         {

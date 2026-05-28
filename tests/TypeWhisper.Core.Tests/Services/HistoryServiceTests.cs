@@ -5,10 +5,10 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public class HistoryServiceTests : IDisposable
 {
-    private readonly string _tempDir;
-    private readonly string _filePath;
     private readonly string _audioDirectory;
+    private readonly string _filePath;
     private readonly HistoryService _sut;
+    private readonly string _tempDir;
 
     public HistoryServiceTests()
     {
@@ -18,6 +18,15 @@ public class HistoryServiceTests : IDisposable
         _audioDirectory = Path.Combine(_tempDir, "audio");
         Directory.CreateDirectory(_audioDirectory);
         _sut = new HistoryService(_filePath, _audioDirectory);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_tempDir, true);
+        }
+        catch { }
     }
 
     [Fact]
@@ -91,10 +100,10 @@ public class HistoryServiceTests : IDisposable
         };
         _sut.AddRecord(record);
 
-        _sut.SetPendingCorrectionSuggestions(record.Id,
-        [
-            new CorrectionSuggestion("Kubernets", "Kubernetes") { Confidence = 0.9 }
-        ]);
+        _sut.SetPendingCorrectionSuggestions(
+            record.Id,
+            [new CorrectionSuggestion("Kubernets", "Kubernetes") { Confidence = 0.9 }]
+        );
 
         var freshService = new HistoryService(_filePath);
         var loaded = freshService.Records.First(r => r.Id == record.Id);
@@ -233,13 +242,13 @@ public class HistoryServiceTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_audioDirectory, audioFile)));
     }
 
-    public void Dispose()
+    private static TranscriptionRecord CreateRecord(
+        string id,
+        DateTime createdAt,
+        string? audioFileName = null
+    )
     {
-        try { Directory.Delete(_tempDir, recursive: true); } catch { }
-    }
-
-    private static TranscriptionRecord CreateRecord(string id, DateTime createdAt, string? audioFileName = null) =>
-        new()
+        return new TranscriptionRecord
         {
             Id = id,
             Timestamp = createdAt,
@@ -248,4 +257,5 @@ public class HistoryServiceTests : IDisposable
             FinalText = "test",
             AudioFileName = audioFileName
         };
+    }
 }

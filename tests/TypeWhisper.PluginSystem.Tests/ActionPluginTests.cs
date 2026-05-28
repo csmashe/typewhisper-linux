@@ -10,11 +10,12 @@ public class ActionPluginTests
     public void ActionContext_PropertiesAreAccessible()
     {
         var context = new ActionContext(
-            AppName: "Visual Studio Code",
-            ProcessName: "Code",
-            Url: "https://example.com",
-            Language: "de",
-            OriginalText: "Hallo Welt");
+            "Visual Studio Code",
+            "Code",
+            "https://example.com",
+            "de",
+            "Hallo Welt"
+        );
 
         Assert.Equal("Visual Studio Code", context.AppName);
         Assert.Equal("Code", context.ProcessName);
@@ -38,7 +39,7 @@ public class ActionPluginTests
     [Fact]
     public void ActionResult_SuccessCreation()
     {
-        var result = new ActionResult(Success: true, Message: "Done");
+        var result = new ActionResult(true, "Done");
 
         Assert.True(result.Success);
         Assert.Equal("Done", result.Message);
@@ -50,10 +51,7 @@ public class ActionPluginTests
     [Fact]
     public void ActionResult_FailureWithCustomDuration()
     {
-        var result = new ActionResult(
-            Success: false,
-            Message: "Failed",
-            DisplayDuration: 5.0);
+        var result = new ActionResult(false, "Failed", DisplayDuration: 5.0);
 
         Assert.False(result.Success);
         Assert.Equal("Failed", result.Message);
@@ -63,7 +61,7 @@ public class ActionPluginTests
     [Fact]
     public void ActionResult_DefaultDisplayDurationIsThreeSeconds()
     {
-        var result = new ActionResult(Success: true);
+        var result = new ActionResult(true);
         Assert.Equal(3.0, result.DisplayDuration);
     }
 
@@ -74,11 +72,15 @@ public class ActionPluginTests
         mockAction.Setup(a => a.ActionId).Returns("test-action");
         mockAction.Setup(a => a.ActionName).Returns("Test Action");
         mockAction.Setup(a => a.ActionIcon).Returns("star");
-        mockAction.Setup(a => a.ExecuteAsync(
-            It.IsAny<string>(),
-            It.IsAny<ActionContext>(),
-            It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ActionResult(Success: true, Message: "Executed"));
+        mockAction
+            .Setup(a =>
+                a.ExecuteAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<ActionContext>(),
+                    It.IsAny<CancellationToken>()
+                )
+            )
+            .ReturnsAsync(new ActionResult(true, "Executed"));
 
         var context = new ActionContext("App", "proc", null, "en", "hello");
         var result = await mockAction.Object.ExecuteAsync("hello", context, CancellationToken.None);

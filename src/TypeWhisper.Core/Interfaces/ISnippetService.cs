@@ -6,14 +6,20 @@ public interface ISnippetService
 {
     IReadOnlyList<Snippet> Snippets { get; }
     IReadOnlyList<string> AllTags { get; }
-    event Action? SnippetsChanged;
 
     void AddSnippet(Snippet snippet);
     void UpdateSnippet(Snippet snippet);
     void DeleteSnippet(string id);
-    string ApplySnippets(string text, Func<string>? clipboardProvider = null, string? profileId = null);
+
+    string ApplySnippets(
+        string text,
+        Func<string>? clipboardProvider = null,
+        string? profileId = null
+    );
+
     string PreviewReplacement(string replacement, Func<string>? clipboardProvider = null);
 
     string ExportToJson();
     int ImportFromJson(string json);
+    event Action? SnippetsChanged;
 }

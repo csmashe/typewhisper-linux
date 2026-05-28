@@ -13,13 +13,14 @@ TestResults/
 *.swp
 *~
 .DS_Store
-releases/
-!docs/releases/
-!docs/releases/*.md
+/releases/
+/dist/
 docs/local/
+docs/plans/
 publish/
 .agents/
 .claude/
+.serena/
 .venv
 granite-speech-onnx/
 granite-speech-onnx-int8/

@@ -139,6 +139,49 @@
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="18,18,18,18"
                                 MaxWidth="940">
+                        <Border Background="#FFC371"
+                                CornerRadius="6"
+                                Padding="12,10"
+                                Margin="0,0,0,12"
+                                IsVisible="{Binding WaylandDetectionWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <Grid RowDefinitions="Auto,Auto"
+                                  RowSpacing="8">
+                                <TextBlock Grid.Row="0"
+                                           Text="{Binding WaylandDetectionWarning}"
+                                           Foreground="#222"
+                                           FontSize="12"
+                                           TextWrapping="Wrap" />
+                                <Button Grid.Row="1"
+                                        Content="Install Window Calls extension"
+                                        HorizontalAlignment="Left"
+                                        IsVisible="{Binding CanInstallWindowCallsExtension}"
+                                        Command="{Binding InstallWindowCallsExtensionCommand}" />
+                            </Grid>
+                        </Border>
+
+                        <Border Classes="section-panel"
+                                Padding="14,12"
+                                Margin="0,0,0,12"
+                                IsVisible="{Binding BrowserAccessibilityStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <Grid RowDefinitions="Auto,Auto"
+                                  RowSpacing="8">
+                                <TextBlock Grid.Row="0"
+                                           Text="{Binding BrowserAccessibilityStatusMessage}"
+                                           FontSize="12"
+                                           TextWrapping="Wrap" />
+                                <StackPanel Grid.Row="1"
+                                            Orientation="Horizontal"
+                                            Spacing="8">
+                                    <Button Content="Enable browser URL detection"
+                                            IsVisible="{Binding CanEnableBrowserAccessibility}"
+                                            Command="{Binding EnableBrowserAccessibilityCommand}" />
+                                    <Button Content="Revert browser URL detection"
+                                            IsVisible="{Binding CanRevertBrowserAccessibility}"
+                                            Command="{Binding RevertBrowserAccessibilityCommand}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
                         <Border Classes="section-panel"
                                 Padding="18,16"
                                 Margin="0,0,0,18">
@@ -173,45 +216,62 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                                <TextBox Text="{Binding ProcessNameInput}"
-                                         PlaceholderText="Add process name and press Enter"
-                                         KeyDown="OnProcessNameKeyDown"
-                                         Margin="0,0,0,8" />
-                                <TextBlock Text="Enter process names and press Enter, or use Live Context for the current app."
-                                           Classes="page-subtitle"
-                                           Margin="0,0,0,14" />
+                                <Grid ColumnDefinitions="*,Auto"
+                                      ColumnSpacing="8"
+                                      Margin="0,0,0,8">
+                                    <TextBox Grid.Column="0"
+                                             Text="{Binding ProcessNameInput}"
+                                             PlaceholderText="Add process name and press Enter"
+                                             KeyDown="OnProcessNameKeyDown" />
+                                    <Button Grid.Column="1"
+                                            Content="Capture current"
+                                            Command="{Binding CaptureCurrentProcessNameCommand}" />
+                                </Grid>
+                                <TextBlock
+                                    Text="Enter process names and press Enter, or use Live Context for the current app."
+                                    Classes="page-subtitle"
+                                    Margin="0,0,0,14" />
 
-                                <TextBlock Text="URL Patterns"
-                                           Classes="field-label" />
-                                <ItemsControl ItemsSource="{Binding UrlPatternChips}"
-                                              Margin="0,0,0,6">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Classes="chip">
-                                                <StackPanel Orientation="Horizontal"
-                                                            Spacing="6">
-                                                    <TextBlock Text="{Binding}"
-                                                               FontSize="11" />
-                                                    <Button Content="×"
-                                                            Classes="chip-remove"
-                                                            Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveUrlPatternChipCommand}"
-                                                            CommandParameter="{Binding}" />
-                                                </StackPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <TextBox Text="{Binding UrlPatternInput}"
-                                         PlaceholderText="Add URL pattern and press Enter"
-                                         KeyDown="OnUrlPatternKeyDown"
-                                         Margin="0,0,0,8" />
-                                <TextBlock Text="Enter URL patterns and press Enter (e.g. slack.com, *.github.com)"
-                                           Classes="page-subtitle" />
+                                <StackPanel IsVisible="{Binding IsUrlPatternsSectionVisible}">
+                                    <TextBlock Text="URL Patterns"
+                                               Classes="field-label" />
+                                    <ItemsControl ItemsSource="{Binding UrlPatternChips}"
+                                                  Margin="0,0,0,6">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Classes="chip">
+                                                    <StackPanel Orientation="Horizontal"
+                                                                Spacing="6">
+                                                        <TextBlock Text="{Binding}"
+                                                                   FontSize="11" />
+                                                        <Button Content="×"
+                                                                Classes="chip-remove"
+                                                                Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveUrlPatternChipCommand}"
+                                                                CommandParameter="{Binding}" />
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Grid ColumnDefinitions="*,Auto"
+                                          ColumnSpacing="8"
+                                          Margin="0,0,0,8">
+                                        <TextBox Grid.Column="0"
+                                                 Text="{Binding UrlPatternInput}"
+                                                 PlaceholderText="Add URL pattern and press Enter"
+                                                 KeyDown="OnUrlPatternKeyDown" />
+                                        <Button Grid.Column="1"
+                                                Content="Capture current"
+                                                Command="{Binding CaptureCurrentUrlPatternCommand}" />
+                                    </Grid>
+                                    <TextBlock Text="Enter URL patterns and press Enter (e.g. slack.com, *.github.com)"
+                                               Classes="page-subtitle" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 
@@ -242,9 +302,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Task"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Choose when this profile should transcribe normally or translate instead."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Choose when this profile should transcribe normally or translate instead."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding TaskChoices}"
@@ -260,9 +321,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Translation"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Overrides the global translation setting for this profile."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Overrides the global translation setting for this profile."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding TranslationTargetOptions}"
@@ -330,9 +392,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Whisper Mode (AGC)"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Override the global whisper mode behavior for this profile."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Override the global whisper mode behavior for this profile."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding WhisperModeOptions}"
@@ -353,9 +416,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Style Preset"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Controls cleanup and developer-safe formatting for this profile."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Controls cleanup and developer-safe formatting for this profile."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding StylePresetOptions}"
@@ -377,9 +441,10 @@
                                         <StackPanel>
                                             <TextBlock Text="Cleanup Override"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Use this only when the style preset needs a different cleanup level."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Use this only when the style preset needs a different cleanup level."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding CleanupOverrideOptions}"
@@ -400,10 +465,14 @@
                                         <StackPanel>
                                             <TextBlock Text="Developer Formatting Override"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Force symbol and casing formatting on or off for this profile."
-                                                       Classes="page-subtitle"
-                                                       Margin="0,6,0,0" />
+                                            <TextBlock
+                                                Text="Force symbol and casing formatting on or off for this profile."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
                                         </StackPanel>
+                                        <!-- Reuses WhisperModeOptions (NullableBooleanOption list)
+                                             because the three choices — inherit / on / off — are
+                                             identical in structure to the Whisper Mode override. -->
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding WhisperModeOptions}"
                                                   SelectedItem="{Binding SelectedDeveloperFormattingOverrideOption}">

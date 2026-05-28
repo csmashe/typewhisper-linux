@@ -21,7 +21,4 @@ public sealed record HistoryInsights
     public IReadOnlyList<AppUsageInsight> TopApps { get; init; } = [];
 }
 
-public sealed record AppUsageInsight(
-    string AppProcessName,
-    int RecordCount,
-    int WordCount);
+public sealed record AppUsageInsight(string AppProcessName, int RecordCount, int WordCount);

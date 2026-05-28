@@ -1,7 +1,7 @@
 namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>
-/// Context information passed to post-processing plugins.
+///     Context information passed to post-processing plugins.
 /// </summary>
 public sealed record PostProcessingContext
 {

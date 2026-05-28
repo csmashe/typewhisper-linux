@@ -19,12 +19,19 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
     public event Action<StreamingTranscriptEvent>? TranscriptReceived;
 
     public static async Task<AssemblyAiStreamingSession> ConnectAsync(
-        string apiKey, string? language, CancellationToken ct)
+        string apiKey,
+        string? language,
+        CancellationToken ct
+    )
     {
         var session = new AssemblyAiStreamingSession();
 
         var url = "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&format_turns=true";
-        if (!string.IsNullOrEmpty(language) && language != "en")
+        // The default streaming model is English-only; opt into the multilingual
+        // variant only when a non-English language is requested. Match by prefix
+        // so locale variants like "en-US" stay on the English model.
+        if (!string.IsNullOrEmpty(language)
+            && !language.StartsWith("en", StringComparison.OrdinalIgnoreCase))
             url += "&speech_model=universal-streaming-multilingual";
 
         session._ws.Options.SetRequestHeader("Authorization", apiKey);
@@ -35,11 +42,13 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
 
     public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
     {
-        if (_ws.State != WebSocketState.Open) return;
+        if (_ws.State != WebSocketState.Open)
+            return;
 
         _audioBuffer.Write(pcm16Audio.Span);
 
-        if (_audioBuffer.Length < MinChunkBytes) return;
+        if (_audioBuffer.Length < MinChunkBytes)
+            return;
 
         var chunk = _audioBuffer.ToArray();
         _audioBuffer.SetLength(0);
@@ -49,7 +58,8 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
 
     public async Task FinalizeAsync(CancellationToken ct)
     {
-        if (_ws.State != WebSocketState.Open) return;
+        if (_ws.State != WebSocketState.Open)
+            return;
         var msg = Encoding.UTF8.GetBytes("""{"terminate_session":true}""");
         await _ws.SendAsync(msg, WebSocketMessageType.Text, true, ct);
     }
@@ -57,7 +67,7 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         var buffer = new byte[8192];
-        var messageBuffer = new MemoryStream();
+        using var messageBuffer = new MemoryStream();
 
         try
         {
@@ -68,13 +78,19 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
                 do
                 {
                     result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close) return;
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        return;
                     messageBuffer.Write(buffer, 0, result.Count);
                 } while (!result.EndOfMessage);
 
-                if (result.MessageType != WebSocketMessageType.Text) continue;
+                if (result.MessageType != WebSocketMessageType.Text)
+                    continue;
 
-                var json = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
+                var json = Encoding.UTF8.GetString(
+                    messageBuffer.GetBuffer(),
+                    0,
+                    (int)messageBuffer.Length
+                );
                 ParseAndEmit(json);
             }
         }
@@ -96,13 +112,16 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
                 ? textEl.GetString() ?? ""
                 : "";
 
-            if (string.IsNullOrWhiteSpace(transcript)) return;
+            if (string.IsNullOrWhiteSpace(transcript))
+                return;
 
             var isFinal = root.TryGetProperty("end_of_turn", out var eotEl) && eotEl.GetBoolean();
 
             TranscriptReceived?.Invoke(new StreamingTranscriptEvent(transcript, isFinal));
         }
-        catch { /* malformed message, skip */ }
+        catch
+        { /* malformed message, skip */
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -111,14 +130,37 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
 
         if (_ws.State == WebSocketState.Open)
         {
-            try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
-            catch { /* best effort */ }
+            // Cap the graceful close handshake; a wedged remote could otherwise
+            // hang DisposeAsync indefinitely. On timeout or any failure, abort
+            // the socket so cleanup can proceed.
+            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                await _ws.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    null,
+                    closeCts.Token
+                );
+            }
+            catch (Exception ex)
+                when (ex is OperationCanceledException or WebSocketException)
+            {
+                try { _ws.Abort(); } catch { /* best effort */ }
+            }
+            catch
+            { /* best effort */
+            }
         }
 
         if (_receiveTask is not null)
         {
-            try { await _receiveTask; }
-            catch { /* expected */ }
+            try
+            {
+                await _receiveTask;
+            }
+            catch
+            { /* expected */
+            }
         }
 
         _receiveCts.Dispose();

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -11,7 +12,18 @@ public sealed class DictionaryService : IDictionaryService
     private readonly string _filePath;
     private readonly object _gate = new();
     private List<DictionaryEntry> _cache = [];
+
     private bool _cacheLoaded;
+
+    // Set when the cache file exists but couldn't be read (IO / permission error).
+    // SaveToDisk refuses to write while this is set so we don't replace the
+    // user's on-disk dictionary with an empty list we got from a failed load.
+    private bool _cacheLoadFailed;
+
+    public DictionaryService(string filePath)
+    {
+        _filePath = filePath;
+    }
 
     public IReadOnlyList<DictionaryEntry> Entries
     {
@@ -27,19 +39,16 @@ public sealed class DictionaryService : IDictionaryService
 
     public event Action? EntriesChanged;
 
-    public DictionaryService(string filePath)
-    {
-        _filePath = filePath;
-    }
-
     public void AddEntry(DictionaryEntry entry)
     {
         EnsureCacheLoaded();
         lock (_gate)
         {
-            _cache.Add(entry);
-            SaveToDisk();
+            var newCache = new List<DictionaryEntry>(_cache) { entry };
+            SaveToDisk(newCache);
+            _cache = newCache;
         }
+
         EntriesChanged?.Invoke();
     }
 
@@ -48,9 +57,12 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
         lock (_gate)
         {
-            _cache.AddRange(entries);
-            SaveToDisk();
+            var newCache = new List<DictionaryEntry>(_cache);
+            newCache.AddRange(entries);
+            SaveToDisk(newCache);
+            _cache = newCache;
         }
+
         EntriesChanged?.Invoke();
     }
 
@@ -59,10 +71,17 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
         lock (_gate)
         {
-            var idx = _cache.FindIndex(e => e.Id == entry.Id);
-            if (idx >= 0) _cache[idx] = entry;
-            SaveToDisk();
+            var newCache = new List<DictionaryEntry>(_cache);
+            var idx = newCache.FindIndex(e => e.Id == entry.Id);
+            if (idx >= 0)
+            {
+                newCache[idx] = entry;
+            }
+
+            SaveToDisk(newCache);
+            _cache = newCache;
         }
+
         EntriesChanged?.Invoke();
     }
 
@@ -71,9 +90,12 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
         lock (_gate)
         {
-            _cache.RemoveAll(e => e.Id == id);
-            SaveToDisk();
+            var newCache = new List<DictionaryEntry>(_cache);
+            newCache.RemoveAll(e => e.Id == id);
+            SaveToDisk(newCache);
+            _cache = newCache;
         }
+
         EntriesChanged?.Invoke();
     }
 
@@ -83,9 +105,12 @@ public sealed class DictionaryService : IDictionaryService
         var idSet = ids.ToHashSet();
         lock (_gate)
         {
-            _cache.RemoveAll(e => idSet.Contains(e.Id));
-            SaveToDisk();
+            var newCache = new List<DictionaryEntry>(_cache);
+            newCache.RemoveAll(e => idSet.Contains(e.Id));
+            SaveToDisk(newCache);
+            _cache = newCache;
         }
+
         EntriesChanged?.Invoke();
     }
 
@@ -96,12 +121,22 @@ public sealed class DictionaryService : IDictionaryService
         lock (_gate)
         {
             corrections = _cache
-                .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Correction && e.Replacement is not null)
+                .Where(e =>
+                    e.IsEnabled
+                    && e.EntryType == DictionaryEntryType.Correction
+                    && !string.IsNullOrEmpty(e.Original)
+                    && e.Replacement is not null
+                )
                 .OrderByDescending(e => e.Priority)
                 .ThenByDescending(e => e.IsStarred)
                 .ThenByDescending(e => e.Original.Length)
                 .ToList();
         }
+
+        // Accumulate usage increments and persist once at the end. A per-match
+        // SaveToDisk would mean N file writes for a transcript with N
+        // corrections, which adds noticeable I/O to every dictation.
+        var usedCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (var entry in corrections)
         {
@@ -113,13 +148,51 @@ public sealed class DictionaryService : IDictionaryService
             {
                 var pattern = Regex.Escape(entry.Original);
                 var options = entry.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
-                var replaced = Regex.Replace(text, @"\b" + pattern + @"\b", entry.Replacement!, options);
-                if (string.Equals(replaced, text, StringComparison.Ordinal))
+                // \b only anchors between a word char and a non-word char, so a
+                // bare \b on each side silently fails for originals like "C#" or
+                // ".NET" whose ends are non-word. Anchor each side based on what
+                // the original actually starts/ends with: \b on word ends, and a
+                // string/non-word lookaround on symbol ends.
+                var prefix = char.IsLetterOrDigit(entry.Original[0]) || entry.Original[0] == '_'
+                    ? @"\b"
+                    : @"(?<=\W|^)";
+                var lastChar = entry.Original[^1];
+                var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
+                    ? @"\b"
+                    : @"(?=\W|$)";
+                // Use the MatchEvaluator overload so dollar sequences in
+                // user-supplied replacements (e.g. "$1", "$&") are inserted
+                // verbatim rather than interpreted as regex substitution tokens.
+                // Count each match so UsageCount/TimesApplied reflect the
+                // actual number of replacements — not just whether any
+                // replacement happened for the entry.
+                var replacement = entry.Replacement!;
+                var matchCount = 0;
+                var replaced = Regex.Replace(
+                    text,
+                    prefix + pattern + suffix,
+                    _ =>
+                    {
+                        matchCount++;
+                        return replacement;
+                    },
+                    options
+                );
+                if (matchCount == 0 || string.Equals(replaced, text, StringComparison.Ordinal))
+                {
                     continue;
+                }
 
                 text = replaced;
-                IncrementUsageCount(entry.Id);
+                usedCounts[entry.Id] = usedCounts.TryGetValue(entry.Id, out var prior)
+                    ? prior + matchCount
+                    : matchCount;
             }
+        }
+
+        if (usedCounts.Count > 0)
+        {
+            IncrementUsageCounts(usedCounts);
         }
 
         return text;
@@ -130,7 +203,11 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
         var terms = GetEnabledTerms();
 
-        if (terms.Count == 0) return null;
+        if (terms.Count == 0)
+        {
+            return null;
+        }
+
         return string.Join(", ", terms);
     }
 
@@ -139,9 +216,11 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
         lock (_gate)
         {
-            return NormalizeTerms(_cache
-                .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Term)
-                .Select(e => e.Original));
+            return NormalizeTerms(
+                _cache
+                    .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Term)
+                    .Select(e => e.Original)
+            );
         }
     }
 
@@ -151,37 +230,47 @@ public sealed class DictionaryService : IDictionaryService
 
         lock (_gate)
         {
+            var newCache = new List<DictionaryEntry>(_cache);
             var normalized = NormalizeTerms(terms);
             var desiredByKey = normalized.ToDictionary(TermKey, term => term);
-            var existingTerms = _cache.Where(e => e.EntryType == DictionaryEntryType.Term).ToList();
+            var existingTerms = newCache.Where(e => e.EntryType == DictionaryEntryType.Term).ToList();
 
             foreach (var entry in existingTerms)
             {
                 var key = TermKey(entry.Original);
                 if (desiredByKey.ContainsKey(key))
                 {
-                    var idx = _cache.FindIndex(e => e.Id == entry.Id);
+                    var idx = newCache.FindIndex(e => e.Id == entry.Id);
                     if (idx >= 0)
-                        _cache[idx] = entry with { IsEnabled = true };
+                    {
+                        newCache[idx] = entry with { IsEnabled = true };
+                    }
                 }
                 else if (replaceExisting)
                 {
-                    _cache.Remove(entry);
+                    newCache.Remove(entry);
                 }
             }
 
-            var existingKeys = existingTerms.Select(e => TermKey(e.Original)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var existingKeys = existingTerms
+                .Select(e => TermKey(e.Original))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var term in normalized.Where(term => !existingKeys.Contains(TermKey(term))))
             {
-                _cache.Add(new DictionaryEntry
-                {
-                    Id = Guid.NewGuid().ToString(),
-                    EntryType = DictionaryEntryType.Term,
-                    Original = term
-                });
+                newCache.Add(
+                    new DictionaryEntry
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        EntryType = DictionaryEntryType.Term,
+                        Original = term
+                    }
+                );
             }
-            SaveToDisk();
+
+            SaveToDisk(newCache);
+            _cache = newCache;
         }
+
         EntriesChanged?.Invoke();
     }
 
@@ -190,9 +279,11 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
         lock (_gate)
         {
-            _cache.RemoveAll(e => e.EntryType == DictionaryEntryType.Term);
-            SaveToDisk();
+            var newCache = _cache.Where(e => e.EntryType != DictionaryEntryType.Term).ToList();
+            SaveToDisk(newCache);
+            _cache = newCache;
         }
+
         EntriesChanged?.Invoke();
     }
 
@@ -202,37 +293,44 @@ public sealed class DictionaryService : IDictionaryService
 
         lock (_gate)
         {
-            var existing = _cache.FirstOrDefault(e =>
-                e.EntryType == DictionaryEntryType.Correction &&
-                e.Original.Equals(original, StringComparison.OrdinalIgnoreCase));
+            var newCache = new List<DictionaryEntry>(_cache);
+            var existing = newCache.FirstOrDefault(e =>
+                e.EntryType == DictionaryEntryType.Correction
+                && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
+            );
 
             if (existing is not null)
             {
-                var idx = _cache.FindIndex(e => e.Id == existing.Id);
+                var idx = newCache.FindIndex(e => e.Id == existing.Id);
                 if (idx >= 0)
-                    _cache[idx] = existing with
+                {
+                    newCache[idx] = existing with
                     {
                         Replacement = replacement,
                         UsageCount = existing.UsageCount + 1,
                         TimesCorrected = existing.TimesCorrected + 1,
                         LastCorrectedAt = DateTime.UtcNow
                     };
+                }
             }
             else
             {
-                _cache.Add(new DictionaryEntry
-                {
-                    Id = Guid.NewGuid().ToString(),
-                    EntryType = DictionaryEntryType.Correction,
-                    Original = original,
-                    Replacement = replacement,
-                    TimesCorrected = 1,
-                    LastCorrectedAt = DateTime.UtcNow,
-                    Source = DictionaryEntrySource.CorrectionSuggestion
-                });
+                newCache.Add(
+                    new DictionaryEntry
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        EntryType = DictionaryEntryType.Correction,
+                        Original = original,
+                        Replacement = replacement,
+                        TimesCorrected = 1,
+                        LastCorrectedAt = DateTime.UtcNow,
+                        Source = DictionaryEntrySource.CorrectionSuggestion
+                    }
+                );
             }
 
-            SaveToDisk();
+            SaveToDisk(newCache);
+            _cache = newCache;
         }
 
         EntriesChanged?.Invoke();
@@ -243,7 +341,9 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
 
         var sb = new StringBuilder();
-        sb.AppendLine("EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source");
+        sb.AppendLine(
+            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source"
+        );
 
         List<DictionaryEntry> entries;
         lock (_gate)
@@ -281,38 +381,65 @@ public sealed class DictionaryService : IDictionaryService
     {
         EnsureCacheLoaded();
         if (string.IsNullOrWhiteSpace(csv))
+        {
             return 0;
+        }
 
         var rows = ParseCsv(csv);
         if (rows.Count == 0)
+        {
             return 0;
+        }
 
         var imported = 0;
 
         lock (_gate)
         {
+            var newCache = new List<DictionaryEntry>(_cache);
             var startIndex = LooksLikeHeader(rows[0]) ? 1 : 0;
-            var existingKeys = _cache.Select(DictionaryEntryKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var existingKeys = newCache
+                .Select(DictionaryEntryKey)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             for (var i = startIndex; i < rows.Count; i++)
             {
                 var row = rows[i];
                 if (row.Count < 2)
+                {
                     continue;
+                }
 
-                if (!Enum.TryParse<DictionaryEntryType>(row[0], ignoreCase: true, out var entryType))
+                if (
+                    !Enum.TryParse<DictionaryEntryType>(row[0], true, out var entryType)
+                )
+                {
                     continue;
+                }
 
                 var original = row[1].Trim();
                 if (string.IsNullOrWhiteSpace(original))
+                {
                     continue;
+                }
 
-                var replacement = row.Count > 2 && !string.IsNullOrWhiteSpace(row[2])
-                    ? row[2].Trim()
-                    : null;
+                var replacement =
+                    row.Count > 2 && !string.IsNullOrWhiteSpace(row[2]) ? row[2].Trim() : null;
 
-                if (entryType == DictionaryEntryType.Correction && string.IsNullOrWhiteSpace(replacement))
+                if (
+                    entryType == DictionaryEntryType.Correction
+                    && string.IsNullOrWhiteSpace(replacement)
+                )
+                {
                     continue;
+                }
+
+                // Term rows must not carry a Replacement: it's meaningless for
+                // terms and a hand-edited CSV with a stray value would break
+                // DictionaryEntryKey-based de-duplication on re-import.
+                if (entryType != DictionaryEntryType.Correction)
+                {
+                    replacement = null;
+                }
 
                 var entry = new DictionaryEntry
                 {
@@ -328,18 +455,25 @@ public sealed class DictionaryService : IDictionaryService
                 };
 
                 if (!existingKeys.Add(DictionaryEntryKey(entry)))
+                {
                     continue;
+                }
 
-                _cache.Add(entry);
+                newCache.Add(entry);
                 imported++;
             }
 
             if (imported > 0)
-                SaveToDisk();
+            {
+                SaveToDisk(newCache);
+                _cache = newCache;
+            }
         }
 
         if (imported > 0)
+        {
             EntriesChanged?.Invoke();
+        }
 
         return imported;
     }
@@ -351,13 +485,15 @@ public sealed class DictionaryService : IDictionaryService
         var changed = false;
         lock (_gate)
         {
+            // Pack term entries use a deterministic ID "pack:<packId>:<term>" so we can
+            // detect duplicates without a full text scan and cleanly remove them in DeactivatePack.
             var existingPackIds = _cache
                 .Where(e => e.EntryType == DictionaryEntryType.Term)
                 .Select(e => e.Id)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var newEntries = pack.Terms
-                .Where(t => !existingPackIds.Contains($"pack:{pack.Id}:{t}"))
+            var newEntries = pack
+                .Terms.Where(t => !existingPackIds.Contains($"pack:{pack.Id}:{t}"))
                 .Select(t => new DictionaryEntry
                 {
                     Id = $"pack:{pack.Id}:{t}",
@@ -368,14 +504,18 @@ public sealed class DictionaryService : IDictionaryService
 
             if (newEntries.Count > 0)
             {
-                _cache.AddRange(newEntries);
-                SaveToDisk();
+                var newCache = new List<DictionaryEntry>(_cache);
+                newCache.AddRange(newEntries);
+                SaveToDisk(newCache);
+                _cache = newCache;
                 changed = true;
             }
         }
 
         if (changed)
+        {
             EntriesChanged?.Invoke();
+        }
     }
 
     public void DeactivatePack(string packId)
@@ -386,48 +526,101 @@ public sealed class DictionaryService : IDictionaryService
         lock (_gate)
         {
             var prefix = $"pack:{packId}:";
-            var removed = _cache.RemoveAll(e => e.Id.StartsWith(prefix, StringComparison.Ordinal));
+            var newCache = _cache
+                .Where(e => !e.Id.StartsWith(prefix, StringComparison.Ordinal))
+                .ToList();
 
-            if (removed > 0)
+            if (newCache.Count != _cache.Count)
             {
-                SaveToDisk();
+                SaveToDisk(newCache);
+                _cache = newCache;
                 changed = true;
             }
         }
 
         if (changed)
+        {
             EntriesChanged?.Invoke();
+        }
     }
 
-    private void IncrementUsageCount(string id)
+    private void IncrementUsageCounts(IReadOnlyDictionary<string, int> deltas)
     {
         lock (_gate)
         {
-            var idx = _cache.FindIndex(e => e.Id == id);
-            if (idx >= 0)
+            var newCache = new List<DictionaryEntry>(_cache);
+            var now = DateTime.UtcNow;
+            var changed = false;
+
+            foreach (var (id, delta) in deltas)
             {
-                _cache[idx] = _cache[idx] with
+                if (delta <= 0)
                 {
-                    UsageCount = _cache[idx].UsageCount + 1,
-                    TimesApplied = _cache[idx].TimesApplied + 1,
-                    LastUsedAt = DateTime.UtcNow
+                    continue;
+                }
+
+                var idx = newCache.FindIndex(e => e.Id == id);
+                if (idx < 0)
+                {
+                    continue;
+                }
+
+                newCache[idx] = newCache[idx] with
+                {
+                    UsageCount = newCache[idx].UsageCount + delta,
+                    TimesApplied = newCache[idx].TimesApplied + delta,
+                    LastUsedAt = now
                 };
-                SaveToDisk();
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            try
+            {
+                SaveToDisk(newCache);
+                _cache = newCache;
+            }
+            catch (Exception ex)
+            {
+                // Usage tracking is best-effort. ApplyCorrections has already
+                // produced corrected text by the time this runs; if SaveToDisk
+                // throws (load-failed guard, disk full, permission), the
+                // post-processing pipeline would otherwise treat the whole
+                // correction step as failed and return the pre-correction text.
+                // Drop the increments so memory stays consistent with disk and
+                // swallow the exception.
+                Trace.WriteLine(
+                    $"[DictionaryService] Could not persist usage counts for {deltas.Count} entries: {ex.Message}"
+                );
             }
         }
     }
 
     private void EnsureCacheLoaded()
     {
-        if (_cacheLoaded) return;
+        // Volatile reads/writes pair the unsynchronized fast-path check with the
+        // in-lock state mutation: without them, a reader could see
+        // _cacheLoaded == true while _cache hasn't been published yet on weaker
+        // memory architectures (ARM/AArch64).
+        if (Volatile.Read(ref _cacheLoaded))
+        {
+            return;
+        }
 
         lock (_gate)
         {
-            if (_cacheLoaded) return;
+            if (Volatile.Read(ref _cacheLoaded))
+            {
+                return;
+            }
 
             if (!File.Exists(_filePath))
             {
-                _cacheLoaded = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
 
@@ -438,14 +631,20 @@ public sealed class DictionaryService : IDictionaryService
             }
             catch (IOException ex)
             {
-                System.Diagnostics.Trace.WriteLine($"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}");
-                _cacheLoaded = true;
+                Trace.WriteLine(
+                    $"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}"
+                );
+                _cacheLoadFailed = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
             catch (UnauthorizedAccessException ex)
             {
-                System.Diagnostics.Trace.WriteLine($"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}");
-                _cacheLoaded = true;
+                Trace.WriteLine(
+                    $"[DictionaryService] Could not read cache file '{_filePath}': {ex.Message}"
+                );
+                _cacheLoadFailed = true;
+                Volatile.Write(ref _cacheLoaded, true);
                 return;
             }
 
@@ -459,22 +658,64 @@ public sealed class DictionaryService : IDictionaryService
                 _cache = [];
             }
 
-            _cacheLoaded = true;
+            Volatile.Write(ref _cacheLoaded, true);
         }
     }
 
-    private void SaveToDisk()
+    private void SaveToDisk(IReadOnlyList<DictionaryEntry> entries)
     {
+        // If the on-disk file existed but we couldn't read it, don't overwrite
+        // it with whatever's currently in _cache — we'd silently destroy the
+        // user's dictionary.
+        if (_cacheLoadFailed)
+        {
+            Trace.WriteLine(
+                $"[DictionaryService] Skipping save to '{_filePath}': previous load failed and overwriting would discard existing data."
+            );
+            throw new IOException(
+                $"Refusing to overwrite '{_filePath}' because the previous load failed."
+            );
+        }
+
+        var dir = Path.GetDirectoryName(_filePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        var json = JsonSerializer.Serialize(
+            entries,
+            new JsonSerializerOptions { WriteIndented = true }
+        );
+
+        // Write to a sibling temp file and atomically replace, so a crash
+        // mid-write can't leave the user's dictionary truncated.
+        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            var dir = Path.GetDirectoryName(_filePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            var json = JsonSerializer.Serialize(_cache, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_filePath, json);
+            File.WriteAllText(tempPath, json);
+            if (File.Exists(_filePath))
+            {
+                File.Replace(tempPath, _filePath, null);
+            }
+            else
+            {
+                File.Move(tempPath, _filePath);
+            }
         }
-        catch { }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch
+                {
+                    /* best effort */
+                }
+            }
+
+            throw;
+        }
     }
 
     private static void PreserveBrokenFile(string path)
@@ -482,15 +723,21 @@ public sealed class DictionaryService : IDictionaryService
         try
         {
             if (!File.Exists(path))
+            {
                 return;
+            }
 
             var brokenPath = $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}";
             File.Move(path, brokenPath);
-            System.Diagnostics.Trace.WriteLine($"[DictionaryService] Preserved unreadable file as {brokenPath}");
+            Trace.WriteLine(
+                $"[DictionaryService] Preserved unreadable file as {brokenPath}"
+            );
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Trace.WriteLine($"[DictionaryService] Could not preserve unreadable file: {ex.Message}");
+            Trace.WriteLine(
+                $"[DictionaryService] Could not preserve unreadable file: {ex.Message}"
+            );
         }
     }
 
@@ -503,40 +750,65 @@ public sealed class DictionaryService : IDictionaryService
         {
             var term = rawTerm.Trim();
             if (term.Length == 0)
+            {
                 continue;
+            }
 
             if (seen.Add(TermKey(term)))
+            {
                 normalized.Add(term);
+            }
         }
 
         return normalized;
     }
 
-    private static string TermKey(string term) => term.Trim().ToUpperInvariant();
+    private static string TermKey(string term)
+    {
+        return term.Trim().ToUpperInvariant();
+    }
 
-    private static string DictionaryEntryKey(DictionaryEntry entry) =>
-        $"{entry.EntryType}|{entry.Original.Trim()}|{entry.Replacement?.Trim()}";
+    private static string DictionaryEntryKey(DictionaryEntry entry)
+    {
+        return $"{entry.EntryType}|{entry.Original.Trim()}|{entry.Replacement?.Trim()}";
+    }
 
-    private static bool LooksLikeHeader(IReadOnlyList<string> row) =>
-        row.Count > 0 && string.Equals(row[0], "EntryType", StringComparison.OrdinalIgnoreCase);
+    private static bool LooksLikeHeader(IReadOnlyList<string> row)
+    {
+        return row.Count > 0 && string.Equals(row[0], "EntryType", StringComparison.OrdinalIgnoreCase);
+    }
 
-    private static bool ReadBool(IReadOnlyList<string> row, int index) =>
-        row.Count > index && bool.TryParse(row[index], out var value) && value;
+    private static bool ReadBool(IReadOnlyList<string> row, int index)
+    {
+        return row.Count > index && bool.TryParse(row[index], out var value) && value;
+    }
 
-    private static int ReadInt(IReadOnlyList<string> row, int index) =>
-        row.Count > index && int.TryParse(row[index], out var value)
+    private static int ReadInt(IReadOnlyList<string> row, int index)
+    {
+        return row.Count > index && int.TryParse(row[index], out var value)
             ? Math.Clamp(value, 0, 999)
             : 0;
+    }
 
-    private static DictionaryEntrySource ReadSource(IReadOnlyList<string> row, int index) =>
-        row.Count > index && Enum.TryParse<DictionaryEntrySource>(row[index], ignoreCase: true, out var source)
+    private static DictionaryEntrySource ReadSource(IReadOnlyList<string> row, int index)
+    {
+        return row.Count > index
+               && Enum.TryParse<DictionaryEntrySource>(row[index], true, out var source)
             ? source
             : DictionaryEntrySource.Import;
+    }
 
     private static string CsvEscape(string value)
     {
-        if (!value.Contains(',') && !value.Contains('"') && !value.Contains('\n') && !value.Contains('\r'))
+        if (
+            !value.Contains(',')
+            && !value.Contains('"')
+            && !value.Contains('\n')
+            && !value.Contains('\r')
+        )
+        {
             return value;
+        }
 
         return "\"" + value.Replace("\"", "\"\"") + "\"";
     }
@@ -585,7 +857,10 @@ public sealed class DictionaryService : IDictionaryService
                     row.Add(field.ToString());
                     field.Clear();
                     if (row.Any(value => value.Length > 0))
+                    {
                         rows.Add(row);
+                    }
+
                     row = [];
                     break;
                 default:
@@ -596,7 +871,9 @@ public sealed class DictionaryService : IDictionaryService
 
         row.Add(field.ToString());
         if (row.Any(value => value.Length > 0))
+        {
             rows.Add(row);
+        }
 
         return rows;
     }

@@ -1,3 +1,4 @@
+using System.Reflection;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -13,8 +14,26 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
     public PromptsSectionViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.Linux.PromptVmTests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.Linux.PromptVmTests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     [Fact]
@@ -41,15 +60,25 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     public void SelectedEditProvider_UpdatesProviderOverride()
     {
         var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
-        var provider = new FakeLlmProviderPlugin("com.typewhisper.openai", "OpenAI", "gpt-4.1-mini");
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
         using var pluginManager = TestPluginManagerFactory.Create(
-            llmProviders: [provider],
-            loadedPlugins: [TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)]);
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+            ]
+        );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
         var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
-        var option = Assert.Single(sut.AvailableProviders, candidate =>
-            candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini");
+        var option = Assert.Single(
+            sut.AvailableProviders,
+            candidate => candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
+        );
 
         sut.SelectedEditProvider = option;
 
@@ -61,15 +90,26 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     public void SelectedEditProvider_IgnoresTransientSelectionChangesDuringProviderRefresh()
     {
         var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
-        var provider = new FakeLlmProviderPlugin("com.typewhisper.openai", "OpenAI", "gpt-4.1-mini");
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
         using var pluginManager = TestPluginManagerFactory.Create(
-            llmProviders: [provider],
-            loadedPlugins: [TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)]);
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+            ]
+        );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
         var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
         {
             EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini"
         };
+        // Simulate the guard flag that the view-model sets while it rebuilds
+        // the provider list — a null selection during that window must not
+        // clear a previously configured override.
         SetPrivateField(sut, "_isRefreshingProviders", true);
 
         sut.SelectedEditProvider = null;
@@ -77,22 +117,16 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         Assert.Equal("plugin:com.typewhisper.openai:gpt-4.1-mini", sut.EditProviderOverride);
     }
 
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
-    }
-
     private static void SetPrivateField(object target, string fieldName, object value)
     {
-        var field = target.GetType().GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+        var field =
+            target
+                .GetType()
+                .GetField(
+                    fieldName,
+                    BindingFlags.Instance
+                    | BindingFlags.NonPublic
+                )
             ?? throw new MissingFieldException(target.GetType().FullName, fieldName);
         field.SetValue(target, value);
     }
@@ -113,13 +147,26 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         public bool IsAvailable => true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
 
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
-        public Task DeactivateAsync() => Task.CompletedTask;
-        public Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct) =>
-            Task.FromResult(userText);
-
-        public void Dispose()
+        public Task ActivateAsync(IPluginHostServices host)
         {
+            return Task.CompletedTask;
         }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<string> ProcessAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult(userText);
+        }
+
+        public void Dispose() { }
     }
 }

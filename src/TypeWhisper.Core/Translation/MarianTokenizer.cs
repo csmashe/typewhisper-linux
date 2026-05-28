@@ -3,22 +3,23 @@ using System.Text.Json;
 namespace TypeWhisper.Core.Translation;
 
 /// <summary>
-/// Unigram (SentencePiece) tokenizer for Marian/Opus-MT models.
-/// Parses tokenizer.json from HuggingFace transformers format.
+///     Unigram (SentencePiece) tokenizer for Marian/Opus-MT models.
+///     Parses tokenizer.json from HuggingFace transformers format.
 /// </summary>
 public sealed class MarianTokenizer
 {
-    private readonly Dictionary<string, (int Id, float Score)> _vocab;
+    private const string MetaspacePrefix = "▁";
+    private readonly int _eosTokenId;
     private readonly Dictionary<int, string> _idToToken;
     private readonly int _unkTokenId;
-    private readonly int _eosTokenId;
-    private const string MetaspacePrefix = "▁";
+    private readonly Dictionary<string, (int Id, float Score)> _vocab;
 
     private MarianTokenizer(
         Dictionary<string, (int Id, float Score)> vocab,
         Dictionary<int, string> idToToken,
         int unkTokenId,
-        int eosTokenId)
+        int eosTokenId
+    )
     {
         _vocab = vocab;
         _idToToken = idToToken;
@@ -51,7 +52,9 @@ public sealed class MarianTokenizer
         // Find unk token id
         var unkId = 0;
         if (model.TryGetProperty("unk_id", out var unkProp))
+        {
             unkId = unkProp.GetInt32();
+        }
 
         // Override with added_tokens if present (some tokenizer.json files define token→id mapping there)
         if (root.TryGetProperty("added_tokens", out var addedTokens))
@@ -72,13 +75,15 @@ public sealed class MarianTokenizer
     }
 
     /// <summary>
-    /// Encode text to token IDs using Viterbi segmentation.
-    /// Appends EOS token.
+    ///     Encode text to token IDs using Viterbi segmentation.
+    ///     Appends EOS token.
     /// </summary>
     public int[] Encode(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
+        {
             return [_eosTokenId];
+        }
 
         var tokens = new List<int>();
 
@@ -96,16 +101,22 @@ public sealed class MarianTokenizer
     }
 
     /// <summary>
-    /// Decode token IDs back to text. Replaces metaspace with space and trims.
+    ///     Decode token IDs back to text. Replaces metaspace with space and trims.
     /// </summary>
     public string Decode(ReadOnlySpan<int> ids)
     {
         var parts = new List<string>();
         foreach (var id in ids)
         {
-            if (id == _eosTokenId) break;
+            if (id == _eosTokenId)
+            {
+                break;
+            }
+
             if (_idToToken.TryGetValue(id, out var token))
+            {
                 parts.Add(token);
+            }
         }
 
         var text = string.Join("", parts);
@@ -114,7 +125,7 @@ public sealed class MarianTokenizer
     }
 
     /// <summary>
-    /// Viterbi algorithm for optimal Unigram segmentation.
+    ///     Viterbi algorithm for optimal Unigram segmentation.
     /// </summary>
     private List<int> ViterbiSegment(string word)
     {
@@ -129,11 +140,17 @@ public sealed class MarianTokenizer
         for (var end = 1; end <= n; end++)
         {
             // Try all substrings ending at 'end'
-            var maxStart = Math.Max(0, end - 64); // practical limit on token length
+            var maxStart =
+                Math.Max(0,
+                    end - 64); // real SentencePiece tokens are rarely longer than ~20 chars; 64 is a safe upper bound
             for (var start = maxStart; start < end; start++)
             {
                 var substr = word[start..end];
-                if (!_vocab.TryGetValue(substr, out var entry)) continue;
+                if (!_vocab.TryGetValue(substr, out var entry))
+                {
+                    continue;
+                }
+
                 var candidate = bestScore[start] + entry.Score;
                 if (candidate > bestScore[end])
                 {
@@ -142,10 +159,11 @@ public sealed class MarianTokenizer
                 }
             }
 
-            // If no token found ending at this position, fall back to single character as UNK
+            // No vocab entry covers this position — fall back to the single character as UNK
+            // with a large negative score so the Viterbi path avoids it unless there is no alternative
             if (bestScore[end] == float.NegativeInfinity)
             {
-                bestScore[end] = bestScore[end - 1] + -100f; // large penalty
+                bestScore[end] = bestScore[end - 1] + -100f;
                 bestLen[end] = 1;
             }
         }
@@ -158,9 +176,14 @@ public sealed class MarianTokenizer
             var len = bestLen[pos];
             var substr = word[(pos - len)..pos];
             if (_vocab.TryGetValue(substr, out var entry))
+            {
                 result.Add(entry.Id);
+            }
             else
+            {
                 result.Add(_unkTokenId);
+            }
+
             pos -= len;
         }
 

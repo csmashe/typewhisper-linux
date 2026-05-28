@@ -14,8 +14,6 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     private IPluginHostServices? _host;
     private string? _apiKey;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.cerebras";
     public string PluginName => "Cerebras";
     public string PluginVersion => "1.0.0";
@@ -33,26 +31,32 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         return Task.CompletedTask;
     }
 
-    // ILlmProviderPlugin
-
     public string ProviderName => "Cerebras";
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-    [
-        new PluginModelInfo("llama-4-scout-17b-16e-instruct", "Llama 4 Scout 17B"),
-    ];
+    [new PluginModelInfo("llama-4-scout-17b-16e-instruct", "Llama 4 Scout 17B")];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsAvailable)
             throw new InvalidOperationException("API key not configured");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -91,22 +95,25 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         _httpClient.Dispose();
     }
 
-    // IPluginSettingsProvider
-
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "api-key",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "csk-...",
-            Description: "Required for Cerebras LLM requests.")
-    ];
+        [
+            new(
+                Key: "api-key",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "csk-...",
+                Description: "Required for Cerebras LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "api-key" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "api-key")
             return;

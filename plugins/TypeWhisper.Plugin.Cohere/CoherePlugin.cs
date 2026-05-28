@@ -13,8 +13,6 @@ public sealed partial class CoherePlugin : ILlmProviderPlugin, IDisposable, IPlu
     private IPluginHostServices? _host;
     private string? _apiKey;
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.cohere";
     public string PluginName => "Cohere";
     public string PluginVersion => "1.0.0";
@@ -32,23 +30,31 @@ public sealed partial class CoherePlugin : ILlmProviderPlugin, IDisposable, IPlu
         return Task.CompletedTask;
     }
 
-    // ILlmProviderPlugin
-
     public string ProviderName => "Cohere";
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-    [
-        new PluginModelInfo("command-a-03-2025", "Command A") { IsRecommended = true },
-    ];
+    [new PluginModelInfo("command-a-03-2025", "Command A") { IsRecommended = true }];
 
-    public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+    public async Task<string> ProcessAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
     {
         if (!IsAvailable)
             throw new InvalidOperationException("API key not configured");
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient, BaseUrl, _apiKey!, model, systemPrompt, userText, ct);
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
     }
 
     internal async Task SetApiKeyAsync(string apiKey)
@@ -81,19 +87,24 @@ public sealed partial class CoherePlugin : ILlmProviderPlugin, IDisposable, IPlu
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-    [
-        new(
-            Key: "apiKey",
-            Label: "API key",
-            IsSecret: true,
-            Placeholder: "co-...",
-            Description: "Required for Cohere LLM requests.")
-    ];
+        [
+            new(
+                Key: "apiKey",
+                Label: "API key",
+                IsSecret: true,
+                Placeholder: "co-...",
+                Description: "Required for Cohere LLM requests."
+            ),
+        ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(key == "apiKey" ? _apiKey : null);
 
-    public async Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+    public async Task SetSettingValueAsync(
+        string key,
+        string? value,
+        CancellationToken ct = default
+    )
     {
         if (key != "apiKey")
             return;

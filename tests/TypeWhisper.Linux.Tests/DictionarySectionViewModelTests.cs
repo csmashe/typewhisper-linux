@@ -11,8 +11,26 @@ public sealed class DictionarySectionViewModelTests : IDisposable
 
     public DictionarySectionViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "TypeWhisper.Dictionary.Tests_" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(
+            Path.GetTempPath(),
+            "TypeWhisper.Dictionary.Tests_" + Guid.NewGuid().ToString("N")
+        );
         Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
     }
 
     [Fact]
@@ -63,8 +81,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
     public void Refresh_SortsStarredAndHighPriorityFirst()
     {
         var dictionary = CreateDictionaryService();
-        dictionary.AddEntries(
-        [
+        dictionary.AddEntries([
             new DictionaryEntry
             {
                 Id = "low",
@@ -89,25 +106,19 @@ public sealed class DictionarySectionViewModelTests : IDisposable
 
         var sut = CreateViewModel(dictionary);
 
-        Assert.Equal(["gamma", "beta", "alpha"], sut.FilteredEntries.Select(entry => entry.Original));
+        Assert.Equal(
+            ["gamma", "beta", "alpha"],
+            sut.FilteredEntries.Select(entry => entry.Original)
+        );
     }
 
-    private DictionaryService CreateDictionaryService() =>
-        new(Path.Combine(_tempDir, "dictionary.json"));
-
-    private DictionarySectionViewModel CreateViewModel(DictionaryService dictionary) =>
-        new(dictionary, new SettingsService(Path.Combine(_tempDir, "settings.json")));
-
-    public void Dispose()
+    private DictionaryService CreateDictionaryService()
     {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for temp test directories.
-        }
+        return new DictionaryService(Path.Combine(_tempDir, "dictionary.json"));
+    }
+
+    private DictionarySectionViewModel CreateViewModel(DictionaryService dictionary)
+    {
+        return new DictionarySectionViewModel(dictionary, new SettingsService(Path.Combine(_tempDir, "settings.json")));
     }
 }
