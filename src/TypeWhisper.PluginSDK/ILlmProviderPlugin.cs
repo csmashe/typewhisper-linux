@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSDK;
@@ -23,4 +24,20 @@ public interface ILlmProviderPlugin : ITypeWhisperPlugin
         string model,
         CancellationToken ct
     );
+
+    /// <summary>
+    ///     Streams the chat-completion response token-by-token. The default
+    ///     implementation wraps <see cref="ProcessAsync" /> and yields the entire
+    ///     result as a single chunk, so providers that do not override it remain
+    ///     correct (one bulk yield, byte-identical to the batch path).
+    /// </summary>
+    async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        yield return await ProcessAsync(systemPrompt, userText, model, ct);
+    }
 }

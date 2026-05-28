@@ -62,6 +62,7 @@ public sealed class OpenAiPlugin
     private bool _forgetChatGptLogin;
     private string _temperatureMode = TemperatureModeProviderDefault;
     private double _temperatureValue = 0.3;
+    private bool _streamResponses = true;
 
     private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
     [
@@ -157,6 +158,7 @@ public sealed class OpenAiPlugin
         _oauthExpiresAt = LoadExpiresAt(host);
         _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
         _temperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
+        _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         SelectModelCore(
             host.GetSetting<string>(SelectedModelSettingName) ?? TranscriptionModelEntries[0].Id,
@@ -329,6 +331,50 @@ public sealed class OpenAiPlugin
             reasoningEffort: SupportsReasoningEffort(modelId) ? _reasoningEffort : null,
             temperature: ResolvedTemperature(modelId)
         );
+    }
+
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        var modelId = string.IsNullOrWhiteSpace(model)
+            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            : model;
+
+        // Self-gated per the C7 per-provider toggle. Also bulk-yield the
+        // ChatGPT-OAuth and Responses-API sub-paths: only /v1/chat/completions has
+        // a streaming reader so far (the shared helper). The other two stay
+        // byte-identical to ProcessAsync — see the C7 Phase 3 doc's scope note.
+        if (!_streamResponses
+            || _authMode == OpenAiAuthMode.ChatGpt
+            || UsesResponsesApi(modelId))
+        {
+            yield return await ProcessAsync(systemPrompt, userText, modelId, ct);
+            yield break;
+        }
+
+        if (!IsConfigured)
+            throw new InvalidOperationException("API key not configured");
+
+        var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            modelId,
+            systemPrompt,
+            userText,
+            ct,
+            maxOutputTokens: 2048,
+            maxOutputTokenParameter: OutputTokenParameter(modelId),
+            reasoningEffort: SupportsReasoningEffort(modelId) ? _reasoningEffort : null,
+            temperature: ResolvedTemperature(modelId)
+        );
+
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
     }
 
     // ITtsProviderPlugin
@@ -970,6 +1016,15 @@ public sealed class OpenAiPlugin
                 Kind: PluginSettingKind.Text
             ),
             new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: "Stream responses",
+                Description: "Render prompt-action and cleanup output token-by-token "
+                    + "as the model generates it, instead of waiting for the full reply. "
+                    + "Applies to the chat-completions models; reasoning models fall back "
+                    + "to a single render.",
+                Kind: PluginSettingKind.Boolean
+            ),
+            new(
                 Key: SelectedVoiceSettingName,
                 Label: "Text-to-speech voice",
                 Description: "Choose the OpenAI text-to-speech voice.",
@@ -1008,6 +1063,7 @@ public sealed class OpenAiPlugin
                 SelectedVoiceSettingName => _selectedVoiceId,
                 TtsInstructionsSettingName => _ttsInstructions,
                 ForgetChatGptLoginSettingName => _forgetChatGptLogin ? "true" : "false",
+                LlmStreamingSettings.StreamResponsesSettingKey => _streamResponses ? "true" : "false",
                 _ => null,
             }
         );
@@ -1063,7 +1119,16 @@ public sealed class OpenAiPlugin
             case ForgetChatGptLoginSettingName:
                 _forgetChatGptLogin = ParseBool(value);
                 break;
+            case LlmStreamingSettings.StreamResponsesSettingKey:
+                SetStreamResponses(ParseBool(value));
+                break;
         }
+    }
+
+    internal void SetStreamResponses(bool enabled)
+    {
+        _streamResponses = enabled;
+        _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
     }
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>

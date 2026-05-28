@@ -44,6 +44,9 @@ public partial class DictationOverlayViewModel : ObservableObject
     private string? _partialText;
 
     [ObservableProperty]
+    private string? _llmResponseText;
+
+    [ObservableProperty]
     private double _recordingSeconds;
 
     private DateTime? _sessionStartedAtUtc;
@@ -248,6 +251,7 @@ public partial class DictationOverlayViewModel : ObservableObject
         FeedbackText = state.FeedbackText;
         StatusText = state.StatusText;
         PartialText = state.PartialText;
+        LlmResponseText = state.LlmResponseText;
         ActiveProfileName = state.ActiveProfileName;
         ActiveAppName = state.ActiveAppName;
         _sessionStartedAtUtc = state.SessionStartedAtUtc;

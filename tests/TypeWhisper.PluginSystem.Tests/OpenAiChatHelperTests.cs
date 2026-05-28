@@ -30,4 +30,33 @@ public sealed class OpenAiChatHelperTests
         Assert.NotNull(method);
         Assert.Equal(typeof(Task<string>), method!.ReturnType);
     }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_ExtractsContentDelta()
+    {
+        Assert.Equal(
+            "Hello",
+            OpenAiChatHelper.ParseChatCompletionStreamDelta(
+                """{"choices":[{"delta":{"content":"Hello"}}]}"""));
+    }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_RoleOnlyFrame_ReturnsNull()
+    {
+        Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamDelta(
+            """{"choices":[{"delta":{"role":"assistant"}}]}"""));
+    }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_FinishFrame_ReturnsNull()
+    {
+        Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamDelta(
+            """{"choices":[{"delta":{},"finish_reason":"stop"}]}"""));
+    }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_GarbageFrame_ReturnsNull()
+    {
+        Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamDelta("not json"));
+    }
 }

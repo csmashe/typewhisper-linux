@@ -96,6 +96,33 @@ public sealed record PartialTranscriptionUpdateEvent : PluginEvent
     public double ElapsedSeconds { get; init; }
 }
 
+/// <summary>
+///     Raised as an LLM response streams in, carrying the accumulated text. The
+///     overlay binds <see cref="AccumulatedText" /> directly, exactly as it binds
+///     <see cref="PartialTranscriptionUpdateEvent.PartialText" />.
+/// </summary>
+public sealed record LlmResponseTokenEvent : PluginEvent
+{
+    /// <summary>Full accumulated response text so far.</summary>
+    public required string AccumulatedText { get; init; }
+
+    /// <summary>The delta appended since the previous event (for bus subscribers).</summary>
+    public string DeltaText { get; init; } = "";
+
+    /// <summary>True on the terminal flush (stream completed or faulted).</summary>
+    public bool IsFinal { get; init; }
+
+    /// <summary>True when the terminal flush is due to a mid-stream fault.</summary>
+    public bool Faulted { get; init; }
+
+    /// <summary>
+    ///     Pipeline step that produced this text (the orchestrator passes the
+    ///     <c>PostProcessingStepNames.Llm / Translation / Cleanup</c> value). Kept
+    ///     as a bare string so the SDK does not depend on TypeWhisper.Core.
+    /// </summary>
+    public string? StepName { get; init; }
+}
+
 /// <summary>Raised when an action plugin completes execution.</summary>
 public sealed record ActionCompletedEvent : PluginEvent
 {

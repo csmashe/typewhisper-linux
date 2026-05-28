@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 
@@ -77,6 +78,103 @@ public static class OpenAiChatHelper
         double? temperature = 0.1
     )
     {
+        var requestBody = JsonSerializer.Serialize(
+            BuildRequestBody(model, systemPrompt, userText, maxOutputTokens,
+                maxOutputTokenParameter, reasoningEffort, temperature, stream: false));
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{baseUrl}/v1/chat/completions"
+        );
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+
+        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return ParseChatCompletionResponse(json);
+    }
+
+    /// <summary>
+    ///     Streaming sibling of <see cref="SendChatCompletionAsync(HttpClient, string, string, string, string, string, CancellationToken, int?, string, string?, double?)" />.
+    ///     Sends the same request body with <c>"stream": true</c> and yields each
+    ///     <c>choices[0].delta.content</c> token as it arrives over the SSE
+    ///     connection. Covers the whole OpenAI-compatible <c>/v1/chat/completions</c>
+    ///     cohort (OpenAI, Groq, Cerebras, Fireworks, Gemini, Cohere, OpenRouter,
+    ///     OpenAiCompatible).
+    /// </summary>
+    public static async IAsyncEnumerable<string> SendChatCompletionStreamingAsync(
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        string systemPrompt,
+        string userText,
+        [EnumeratorCancellation] CancellationToken ct,
+        int? maxOutputTokens = 2048,
+        string maxOutputTokenParameter = "max_tokens",
+        string? reasoningEffort = null,
+        double? temperature = 0.1
+    )
+    {
+        var requestBody = JsonSerializer.Serialize(
+            BuildRequestBody(model, systemPrompt, userText, maxOutputTokens,
+                maxOutputTokenParameter, reasoningEffort, temperature, stream: true));
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{baseUrl}/v1/chat/completions"
+        );
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+
+        // ResponseHeadersRead so we start reading the body as it streams instead of
+        // buffering the whole response (the batch path's SendWithErrorHandlingAsync
+        // buffers, so we send + check the status line ourselves here).
+        using var response = await httpClient.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var message = (int)response.StatusCode switch
+            {
+                401 => "Invalid API key",
+                429 => "Rate limit reached, please wait",
+                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}"
+            };
+            throw new InvalidOperationException(message);
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
+
+        while (await reader.ReadLineAsync(ct) is { } rawLine)
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+                continue;
+
+            var payload = line[6..];
+            if (payload == "[DONE]")
+                yield break;
+
+            if (ParseChatCompletionStreamDelta(payload) is { Length: > 0 } delta)
+                yield return delta;
+        }
+    }
+
+    private static Dictionary<string, object?> BuildRequestBody(
+        string model,
+        string systemPrompt,
+        string userText,
+        int? maxOutputTokens,
+        string maxOutputTokenParameter,
+        string? reasoningEffort,
+        double? temperature,
+        bool stream
+    )
+    {
         var body = new Dictionary<string, object?>
         {
             ["model"] = model,
@@ -93,19 +191,45 @@ public static class OpenAiChatHelper
             body[maxOutputTokenParameter] = maxOutputTokens.Value;
         if (!string.IsNullOrWhiteSpace(reasoningEffort))
             body["reasoning_effort"] = reasoningEffort;
+        if (stream)
+            body["stream"] = true;
 
-        var requestBody = JsonSerializer.Serialize(body);
+        return body;
+    }
 
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            $"{baseUrl}/v1/chat/completions"
-        );
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+    /// <summary>
+    ///     Extracts <c>choices[0].delta.content</c> from a single SSE
+    ///     <c>chat.completion.chunk</c> <c>data:</c> payload, or <c>null</c> for a
+    ///     contentless / unparseable frame (heartbeats, role-only first frames,
+    ///     finish frames). Reflection-free (A18) via <see cref="JsonDocument" />.
+    /// </summary>
+    internal static string? ParseChatCompletionStreamDelta(string dataPayload)
+    {
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(dataPayload);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
 
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseChatCompletionResponse(json);
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (root.TryGetProperty("choices", out var choices)
+                && choices.ValueKind == JsonValueKind.Array
+                && choices.GetArrayLength() > 0
+                && choices[0].TryGetProperty("delta", out var delta)
+                && delta.TryGetProperty("content", out var content)
+                && content.ValueKind == JsonValueKind.String)
+            {
+                return content.GetString();
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

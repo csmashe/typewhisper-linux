@@ -555,6 +555,7 @@ public class OpenAiPluginTests
                 "reasoningEffort",
                 "llmTemperatureMode",
                 "llmTemperatureValue",
+                "streamResponses",
                 "selectedVoice",
                 "ttsInstructions",
                 "forgetChatGptLogin",
@@ -1235,6 +1236,67 @@ public class OpenAiPluginTests
             .ToDictionary(
                 pair => Uri.UnescapeDataString(pair[0]),
                 pair => pair.Length > 1 ? Uri.UnescapeDataString(pair[1].Replace("+", " ")) : "");
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ChatCompletionsModel_StreamsDeltas()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        string? capturedBody = null;
+        var sse = string.Join("\n",
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}",
+            "",
+            "data: [DONE]",
+            "");
+        var handler = new CapturingHandler((request, body) =>
+        {
+            capturedRequest = request;
+            capturedBody = body;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            });
+        });
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "sk-test";
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("sys", "user", "gpt-4o", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Equal(new[] { "Hello", " world" }, chunks);
+        Assert.Equal("https://api.openai.com/v1/chat/completions", capturedRequest?.RequestUri?.ToString());
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk()
+    {
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(
+            """{"choices":[{"message":{"content":"bulk result"}}]}""")));
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "sk-test";
+        host.SetSetting("streamResponses", false);
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("sys", "user", "gpt-4o", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Single(chunks);
+        Assert.Equal("bulk result", chunks[0]);
     }
 
     private static HttpResponseMessage JsonResponse(string json) =>

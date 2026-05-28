@@ -474,6 +474,7 @@ public sealed class DictationOrchestrator : IDisposable
                         FeedbackIsError = false,
                         FeedbackText = null,
                         PartialText = null,
+                        LlmResponseText = null,
                         IsRecording = true,
                         StatusText = "Recording… press the hotkey again to stop.",
                         ActiveProfileName = null,
@@ -1794,7 +1795,40 @@ public sealed class DictationOrchestrator : IDisposable
             var message = $"Running prompt action '{promptAction.Name}'...";
             Trace.WriteLine($"[Dictation] {message}");
             ReportStatus(context, message);
-            return await _promptProcessing.ProcessAsync(promptAction, text, token);
+
+            var pump = new LlmStreamPump(accumulated =>
+            {
+                SetOverlayState(state => state with { LlmResponseText = accumulated });
+                _models.PluginManager.EventBus.Publish(
+                    new LlmResponseTokenEvent
+                    {
+                        AccumulatedText = accumulated,
+                        StepName = PostProcessingStepNames.Llm
+                    });
+            });
+
+            var streamed = await pump.RunAsync(
+                _promptProcessing.ProcessStreamingAsync(promptAction, text, token),
+                token);
+
+            // Streaming→batch lossless fallback: a buggy/empty streaming parser
+            // faults the pump, so retry once with the known-good batch path
+            // before the step is allowed to fail (RequireLlmSuccess). A clean
+            // stream skips this entirely.
+            var result = pump.Faulted
+                ? await _promptProcessing.ProcessAsync(promptAction, text, token)
+                : streamed;
+
+            _models.PluginManager.EventBus.Publish(
+                new LlmResponseTokenEvent
+                {
+                    AccumulatedText = result,
+                    IsFinal = true,
+                    Faulted = pump.Faulted,
+                    StepName = PostProcessingStepNames.Llm
+                });
+
+            return result;
         }
         catch (OperationCanceledException)
         {
@@ -2224,6 +2258,7 @@ public sealed class DictationOrchestrator : IDisposable
                 FeedbackIsError = isError,
                 FeedbackText = text,
                 PartialText = null,
+                LlmResponseText = null,
                 IsRecording = false,
                 ActiveProfileName = null,
                 ActiveAppName = null,
@@ -2313,6 +2348,7 @@ public sealed class DictationOrchestrator : IDisposable
                 FeedbackIsError = false,
                 FeedbackText = null,
                 PartialText = null,
+                LlmResponseText = null,
                 IsRecording = false,
                 StatusText = "Ready",
                 ActiveProfileName = null,

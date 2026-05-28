@@ -154,6 +154,60 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
     }
 
+    [Fact]
+    public async Task ProcessStreamingAsync_StreamsProviderResponse_AndFramesInputLikeBatch()
+    {
+        var provider = new FakeLlmProviderPlugin("com.test.default", "Default Provider", "model-a");
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.default:model-a" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var action = new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" };
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync(action, "hello", CancellationToken.None))
+            chunks.Add(chunk);
+
+        // The fake provider does not override ProcessStreamingAsync, so the SDK
+        // default wrap yields exactly one bulk chunk equal to the batch result.
+        Assert.Equal(
+            $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            string.Concat(chunks)
+        );
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenNoProviderAvailable()
+    {
+        using var pluginManager = CreatePluginManager([], []);
+        var settings = CreateSettings(new AppSettings());
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var action = new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", CancellationToken.None))
+            {
+            }
+        });
+    }
+
     // Framing behavior (FormatPromptActionInput) is covered by PromptProcessingInputFramingTests.
 
     private static Mock<ISettingsService> CreateSettings(AppSettings current)

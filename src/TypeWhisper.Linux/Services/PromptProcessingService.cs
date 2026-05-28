@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -59,6 +60,53 @@ public sealed class PromptProcessingService
             modelId,
             ct
         );
+    }
+
+    /// <summary>
+    ///     Streaming sibling of <see cref="ProcessAsync" />: resolves the same
+    ///     provider / model / memory-augmented system prompt and frames the input
+    ///     identically (A22), then streams the provider's response token-by-token.
+    ///     The caller (the orchestrator's <c>LlmStreamPump</c>) accumulates the
+    ///     full string and may fall back to <see cref="ProcessAsync" /> on a fault.
+    /// </summary>
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        PromptAction action,
+        string inputText,
+        [EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        var (provider, modelId) = ResolveProvider(action);
+        if (provider is null)
+        {
+            throw new InvalidOperationException("No enabled LLM provider is available.");
+        }
+
+        var systemPrompt = action.SystemPrompt;
+        if (_settings.Current.MemoryEnabled)
+        {
+            var context = await _memory.GetContextAsync(inputText, ct);
+            if (!string.IsNullOrWhiteSpace(context))
+            {
+                systemPrompt = $"""
+                                {systemPrompt}
+
+                                Relevant remembered context:
+                                {context}
+                                """;
+            }
+        }
+
+        var source = provider.ProcessStreamingAsync(
+            systemPrompt,
+            FormatPromptActionInput(inputText),
+            modelId,
+            ct
+        );
+
+        await foreach (var delta in source.WithCancellation(ct))
+        {
+            yield return delta;
+        }
     }
 
     public async Task<string> ProcessSystemPromptAsync(

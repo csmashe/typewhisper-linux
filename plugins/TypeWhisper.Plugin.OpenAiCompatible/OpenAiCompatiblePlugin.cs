@@ -12,13 +12,24 @@ public sealed partial class OpenAiCompatiblePlugin
         ILlmProviderPlugin,
         IPluginSettingsProvider
 {
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
     private string? _baseUrl;
     private string? _selectedModelId;
     private string? _selectedLlmModelId;
     private List<FetchedModel> _fetchedModels = [];
+    private bool _streamResponses = true;
+
+    public OpenAiCompatiblePlugin()
+        : this(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+    {
+    }
+
+    internal OpenAiCompatiblePlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
 
     public string PluginId => "com.typewhisper.openai-compatible";
     public string PluginName => "OpenAI Compatible";
@@ -31,6 +42,7 @@ public sealed partial class OpenAiCompatiblePlugin
         _baseUrl = host.GetSetting<string>("baseUrl");
         _selectedModelId = host.GetSetting<string>("selectedModel");
         _selectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
+        _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         var modelsJson = host.GetSetting<string>("fetchedModels");
         if (!string.IsNullOrEmpty(modelsJson))
@@ -151,6 +163,40 @@ public sealed partial class OpenAiCompatiblePlugin
         );
     }
 
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        if (!_streamResponses)
+        {
+            yield return await ProcessAsync(systemPrompt, userText, model, ct);
+            yield break;
+        }
+
+        if (string.IsNullOrEmpty(_baseUrl))
+            throw new InvalidOperationException("Server-URL nicht konfiguriert");
+
+        var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
+        if (string.IsNullOrEmpty(modelId))
+            throw new InvalidOperationException("Kein LLM-Modell ausgewählt");
+
+        var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            _httpClient,
+            _baseUrl!,
+            _apiKey ?? "",
+            modelId,
+            systemPrompt,
+            userText,
+            ct
+        );
+
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
+    }
+
     internal string? BaseUrl => _baseUrl;
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -190,6 +236,15 @@ public sealed partial class OpenAiCompatiblePlugin
         _selectedLlmModelId = modelId;
         _host?.SetSetting("selectedLlmModel", modelId);
     }
+
+    internal void SetStreamResponses(bool enabled)
+    {
+        _streamResponses = enabled;
+        _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
+    }
+
+    private static bool ParseBool(string? value) =>
+        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
     internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged = true)
     {
@@ -304,6 +359,14 @@ public sealed partial class OpenAiCompatiblePlugin
                     : "Click Validate after saving the server settings to fetch available models.",
                 Options: BuildModelOptions()
             ),
+            new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: "Stream responses",
+                Description: "Render prompt-action output token-by-token as the "
+                    + "server generates it (works with Ollama, LM Studio, vLLM, etc.), "
+                    + "instead of waiting for the full reply.",
+                Kind: PluginSettingKind.Boolean
+            ),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -314,6 +377,8 @@ public sealed partial class OpenAiCompatiblePlugin
                 "api-key" => _apiKey,
                 "selectedModel" => _selectedModelId,
                 "selectedLlmModel" => _selectedLlmModelId,
+                LlmStreamingSettings.StreamResponsesSettingKey
+                    => _streamResponses ? "true" : "false",
                 _ => null,
             }
         );
@@ -339,6 +404,9 @@ public sealed partial class OpenAiCompatiblePlugin
             case "selectedLlmModel":
                 if (!string.IsNullOrWhiteSpace(value))
                     SelectLlmModel(value);
+                break;
+            case LlmStreamingSettings.StreamResponsesSettingKey:
+                SetStreamResponses(ParseBool(value));
                 break;
         }
     }
