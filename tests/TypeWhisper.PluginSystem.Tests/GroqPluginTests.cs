@@ -272,6 +272,81 @@ public class GroqPluginTests
         Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
     }
 
+    [Fact]
+    public async Task ProcessStreamingAsync_StreamsDeltasInOrder_UsingSelectedModel()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        string? capturedBody = null;
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
+            "",
+            "data: [DONE]",
+            ""
+        );
+        var handler = new CapturingHandler((request, body) =>
+            {
+                capturedRequest = request;
+                capturedBody = body;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                };
+            }
+        );
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "groq-key";
+        host.SetSetting("selectedLlmModel", "openai/gpt-oss-120b");
+
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (
+            var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None)
+        )
+            chunks.Add(chunk);
+
+        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(
+            "https://api.groq.com/openai/v1/chat/completions",
+            capturedRequest?.RequestUri?.ToString()
+        );
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
+        Assert.Equal("openai/gpt-oss-120b", doc.RootElement.GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk()
+    {
+        var handler = new CapturingHandler(
+            (_, _) => JsonResponse("""{"choices":[{"message":{"content":"bulk"}}]}""")
+        );
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "groq-key";
+        host.SetSetting("selectedLlmModel", "openai/gpt-oss-120b");
+        host.SetSetting("streamResponses", false);
+
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (
+            var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None)
+        )
+            chunks.Add(chunk);
+
+        Assert.Single(chunks);
+        Assert.Equal("bulk", chunks[0]);
+    }
+
     private static HttpResponseMessage JsonResponse(string json)
     {
         return new HttpResponseMessage(HttpStatusCode.OK)

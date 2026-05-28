@@ -144,6 +144,126 @@ public class XaiPluginTests
     }
 
     [Fact]
+    public async Task ProcessStreamingAsync_StreamsResponsesApiDeltasInOrder()
+    {
+        string? capturedBody = null;
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.created\"}",
+            "",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}",
+            "",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"lo\"}",
+            "",
+            "data: {\"type\":\"response.completed\"}",
+            "",
+            "data: [DONE]",
+            "");
+        var handler = new CapturingHandler((request, body) =>
+        {
+            capturedBody = body;
+            Assert.Equal("https://api.x.ai/v1/responses", request.RequestUri?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+            };
+        });
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "xai-key";
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
+        Assert.Equal("grok-4.3", doc.RootElement.GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk()
+    {
+        var handler = new CapturingHandler((_, _) =>
+            JsonResponse("""{ "output_text": "bulk" }"""));
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "xai-key";
+        host.SetSetting("streamResponses", false);
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Single(chunks);
+        Assert.Equal("bulk", chunks[0]);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"response.output_text.delta","delta":"hi"}""", "hi")]
+    [InlineData("""{"type":"response.output_text.done","text":"ignored"}""", null)]
+    [InlineData("""{"type":"response.created"}""", null)]
+    [InlineData("not json", null)]
+    public void XaiResponsesClient_ParseStreamDelta_ExtractsOnlyDeltaFrames(string payload, string? expected)
+    {
+        Assert.Equal(expected, XaiResponsesClient.ParseStreamDelta(payload));
+    }
+
+    [Theory]
+    [InlineData("""{"type":"error","error":{"message":"boom"}}""", "boom")]
+    [InlineData("""{"type":"error","message":"top-level boom"}""", "top-level boom")]
+    [InlineData("""{"type":"response.failed","response":{"error":{"message":"failed badly"}}}""", "failed badly")]
+    [InlineData("""{"type":"response.output_text.delta","delta":"hi"}""", null)]
+    [InlineData("""{"type":"response.completed"}""", null)]
+    [InlineData("not json", null)]
+    public void XaiResponsesClient_ParseStreamError_DetectsFailureFrames(string payload, string? expected)
+    {
+        Assert.Equal(expected, XaiResponsesClient.ParseStreamError(payload));
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsOnResponseFailedFrameAfterPartialDeltas()
+    {
+        // A Responses stream returns 200 then can fail mid-flight via a typed
+        // frame. The reader must throw so LlmStreamPump faults and the caller
+        // falls back to batch, rather than committing the partial deltas as success.
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}",
+            "",
+            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"server overloaded\"}}}",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "xai-key";
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+                chunks.Add(chunk);
+        });
+
+        Assert.Equal(new[] { "Hel" }, chunks);
+        Assert.Contains("server overloaded", ex.Message);
+    }
+
+    [Fact]
     public void XaiResponsesClient_ParseResponse_ExtractsNestedOutputText()
     {
         var result = XaiResponsesClient.ParseResponse("""
@@ -554,6 +674,7 @@ public class XaiPluginTests
                 "api-key",
                 "selectedModel",
                 "selectedLlmModel",
+                "streamResponses",
                 "selectedVoice",
                 "customVoiceId",
                 "ttsLowLatency",

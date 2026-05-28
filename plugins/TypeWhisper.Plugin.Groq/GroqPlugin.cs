@@ -20,6 +20,7 @@ public sealed partial class GroqPlugin
     private string? _selectedApiModelName;
     private string? _selectedLlmModelId;
     private List<FetchedLlmModel> _fetchedLlmModels = [];
+    private bool _streamResponses = true;
 
     private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
     [
@@ -63,6 +64,7 @@ public sealed partial class GroqPlugin
         _fetchedLlmModels = NormalizeFetchedLlmModels(
             host.GetSetting<List<FetchedLlmModel>>("fetchedLlmModels") ?? []
         );
+        _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         var selectedTranscription =
             TranscriptionModelEntries.FirstOrDefault(m => m.Id == _selectedModelId)
@@ -165,6 +167,37 @@ public sealed partial class GroqPlugin
             userText,
             ct
         );
+    }
+
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        if (!_streamResponses)
+        {
+            yield return await ProcessAsync(systemPrompt, userText, model, ct);
+            yield break;
+        }
+
+        if (!IsConfigured)
+            throw new InvalidOperationException("API key not configured");
+
+        var modelId = ResolveLlmModelId(string.IsNullOrWhiteSpace(model) ? null : model);
+        var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            modelId,
+            systemPrompt,
+            userText,
+            ct
+        );
+
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
     }
 
     internal string? ApiKey => _apiKey;
@@ -355,6 +388,13 @@ public sealed partial class GroqPlugin
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
+            new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: "Stream responses",
+                Description: "Render prompt-action output token-by-token as it is "
+                    + "generated, instead of waiting for the full reply.",
+                Kind: PluginSettingKind.Boolean
+            ),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -364,6 +404,8 @@ public sealed partial class GroqPlugin
                 "api-key" => _apiKey,
                 "selectedModel" => _selectedModelId,
                 "selectedLlmModel" => _selectedLlmModelId,
+                LlmStreamingSettings.StreamResponsesSettingKey
+                    => _streamResponses ? "true" : "false",
                 _ => null,
             }
         );
@@ -387,8 +429,20 @@ public sealed partial class GroqPlugin
                 if (!string.IsNullOrWhiteSpace(value))
                     SelectLlmModel(value);
                 break;
+            case LlmStreamingSettings.StreamResponsesSettingKey:
+                SetStreamResponses(ParseBool(value));
+                break;
         }
     }
+
+    private void SetStreamResponses(bool enabled)
+    {
+        _streamResponses = enabled;
+        _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
+    }
+
+    private static bool ParseBool(string? value) =>
+        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
