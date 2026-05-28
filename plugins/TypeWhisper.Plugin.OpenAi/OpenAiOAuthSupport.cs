@@ -336,10 +336,9 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
         // The losing accept is left dangling; StopListeners() in the caller's
         // finally cancels it via ObjectDisposedException, which we observe by
         // ignoring the resulting unobserved-exception task.
-        foreach (var task in tasks)
+        foreach (var task in tasks.Where(task => task != winner))
         {
-            if (task != winner)
-                _ = task.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+            _ = task.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
         }
 
         return await winner;

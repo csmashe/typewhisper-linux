@@ -89,6 +89,12 @@ internal sealed class ControlSocketServer : IDisposable
             return;
         }
 
+        // Order matters: cancel first so the accept loop observes shutdown,
+        // then close the listener to unblock any in-flight AcceptAsync with
+        // ObjectDisposedException, then await the loop, then unlink the
+        // path. Reversing close/wait risks an indefinite wait on a blocked
+        // accept; reversing wait/unlink risks deleting the socket file
+        // while the loop is still touching it.
         try
         {
             _cts?.Cancel();
@@ -363,7 +369,6 @@ internal sealed class ControlSocketServer : IDisposable
             }
         }
 
-        // Cap reached without seeing a newline.
         return LineTooLongSentinel;
     }
 

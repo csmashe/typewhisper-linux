@@ -113,16 +113,19 @@ public partial class AppearanceSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(PreviewRightText));
     }
 
-    private static bool IsTextWidget(OverlayWidget? widget) =>
-        widget
+    private static bool IsTextWidget(OverlayWidget? widget)
+    {
+        return widget
             is OverlayWidget.Timer
-                or OverlayWidget.Clock
-                or OverlayWidget.Profile
-                or OverlayWidget.HotkeyMode
-                or OverlayWidget.AppName;
+            or OverlayWidget.Clock
+            or OverlayWidget.Profile
+            or OverlayWidget.HotkeyMode
+            or OverlayWidget.AppName;
+    }
 
-    private string SampleText(OverlayWidget? widget) =>
-        widget switch
+    private string SampleText(OverlayWidget? widget)
+    {
+        return widget switch
         {
             OverlayWidget.Timer => "0:05",
             OverlayWidget.Clock => "10:24",
@@ -137,6 +140,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
             OverlayWidget.AppName => "Sample app",
             _ => ""
         };
+    }
 
     partial void OnSelectedOverlayPositionChanged(OverlayPositionOption? value)
     {

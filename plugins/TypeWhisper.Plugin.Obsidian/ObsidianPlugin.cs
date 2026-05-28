@@ -161,7 +161,8 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
                 sanitized.Append(c);
         }
 
-        // Trim trailing dots and spaces (Windows restriction)
+        // Trailing dots/spaces are illegal on Windows; trim them so vaults
+        // synced via Dropbox/OneDrive to a Windows host don't break.
         var result = sanitized.ToString().TrimEnd('.', ' ');
         return string.IsNullOrWhiteSpace(result) ? "Transcription" : result;
     }
@@ -190,7 +191,9 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
     /// <summary>
-    /// Detects installed Obsidian vaults by reading the Obsidian config file.
+    ///     Parses Obsidian's own obsidian.json so the vault picker can offer
+    ///     real vaults instead of forcing a manual path. Best-effort: any
+    ///     parse/IO failure just yields an empty list.
     /// </summary>
     internal static List<ObsidianVaultInfo> DetectVaults()
     {

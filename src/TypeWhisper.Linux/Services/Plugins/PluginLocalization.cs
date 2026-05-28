@@ -6,8 +6,8 @@ using TypeWhisper.PluginSDK;
 namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
-///     Loads localized strings from JSON files in a plugin's Localization/ subdirectory.
-///     current language defaults to CultureInfo.CurrentUICulture or an explicit override.
+///     loads localized strings from a plugin's Localization/ subdirectory.
+///     current language defaults to CultureInfo.CurrentUICulture unless overridden.
 /// </summary>
 public sealed class PluginLocalization : IPluginLocalization
 {

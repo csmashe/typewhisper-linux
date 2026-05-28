@@ -475,10 +475,8 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler<string>? PromptActionHotkeyTriggered;
     public event EventHandler<string>? HookFailed;
 
-    /// <summary>
-    ///     Hook for derived/wrapping logic (e.g. unit-test instrumentation) to
-    ///     observe a backend switch. The base implementation is a no-op.
-    /// </summary>
+    // Placeholder for instrumentation on backend switch; left as a named
+    // call site so future hooks (telemetry, tests) have an obvious anchor.
     private static void OnPropertyChangedHook() { }
 
     private void UnsubscribeBackendHandlers(IGlobalShortcutBackend? backend)

@@ -5,8 +5,8 @@ using System.Text.Json;
 namespace TypeWhisper.PluginSDK.Helpers;
 
 /// <summary>
-///     Static helper for OpenAI-compatible chat completion API calls.
-///     Extracted from CloudProviderBase for reuse by LLM provider plugins.
+///     Static helper for OpenAI-compatible chat completion API calls. Shared by
+///     LLM provider plugins so each plugin doesn't reimplement request shaping.
 /// </summary>
 public static class OpenAiChatHelper
 {
@@ -39,6 +39,30 @@ public static class OpenAiChatHelper
     ///     reject the parameter outright.
     /// </param>
     /// <returns>The assistant's response content text.</returns>
+    public static Task<string> SendChatCompletionAsync(
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        string systemPrompt,
+        string userText,
+        CancellationToken ct
+    ) =>
+        SendChatCompletionAsync(
+            httpClient,
+            baseUrl,
+            apiKey,
+            model,
+            systemPrompt,
+            userText,
+            ct,
+            maxOutputTokens: 2048,
+            maxOutputTokenParameter: "max_tokens",
+            reasoningEffort: null,
+            temperature: 0.1
+        );
+
+    /// <inheritdoc cref="SendChatCompletionAsync(HttpClient, string, string, string, string, string, CancellationToken)" />
     public static async Task<string> SendChatCompletionAsync(
         HttpClient httpClient,
         string baseUrl,

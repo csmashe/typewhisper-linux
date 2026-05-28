@@ -298,7 +298,40 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller cancellation: propagate so ExecuteAsync's outer handler
+            // can surface "cancelled" instead of swallowing it as a transport
+            // failure.
+            throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            // HttpClient.Timeout (not caller cancellation) surfaces as
+            // TaskCanceledException — treat as transport failure.
+            var fingerprint = ShortFingerprint(ex.ToString());
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API request timed out (sha256:{fingerprint})"
+            );
+            return null;
+        }
+        catch (HttpRequestException ex)
+        {
+            var fingerprint = ShortFingerprint(ex.ToString());
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API transport error: {ex.Message} (sha256:{fingerprint})"
+            );
+            return null;
+        }
+
+        using var responseScope = response;
 
         if (!response.IsSuccessStatusCode)
         {
@@ -306,7 +339,24 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             // issue titles/descriptions — log only status + a short fingerprint
             // of the response so the body is correlatable across reports
             // without leaking user content to the trace.
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            string errorBody;
+            try
+            {
+                errorBody = await response.Content.ReadAsStringAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
+            {
+                var fp = ShortFingerprint(ex.ToString());
+                _host?.Log(
+                    PluginLogLevel.Error,
+                    $"Linear API error {(int)response.StatusCode}; could not read body: {ex.Message} (sha256:{fp})"
+                );
+                return null;
+            }
             var fingerprint = ShortFingerprint(errorBody);
             _host?.Log(
                 PluginLogLevel.Error,
@@ -315,7 +365,24 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             return null;
         }
 
-        var responseJson = await response.Content.ReadAsStringAsync(ct);
+        string responseJson;
+        try
+        {
+            responseJson = await response.Content.ReadAsStringAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
+        {
+            var fingerprint = ShortFingerprint(ex.ToString());
+            _host?.Log(
+                PluginLogLevel.Error,
+                $"Linear API response read failed: {ex.Message} (sha256:{fingerprint})"
+            );
+            return null;
+        }
 
         try
         {

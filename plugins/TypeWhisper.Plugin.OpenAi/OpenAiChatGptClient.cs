@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace TypeWhisper.Plugin.OpenAi;
@@ -84,7 +85,7 @@ internal sealed class OpenAiChatGptClient
 
     private static string? ParseEventStreamResponseText(string body)
     {
-        var deltaBuffer = "";
+        var deltaBuffer = new StringBuilder();
         var completedParts = new List<string>();
 
         foreach (var rawLine in body.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
@@ -118,7 +119,7 @@ internal sealed class OpenAiChatGptClient
                 {
                     case "response.output_text.delta":
                         if (GetString(root, "delta") is { } delta)
-                            deltaBuffer += delta;
+                            deltaBuffer.Append(delta);
                         break;
                     case "response.output_text.done":
                         if (GetString(root, "text") is { Length: > 0 } text)
@@ -135,8 +136,8 @@ internal sealed class OpenAiChatGptClient
             }
         }
 
-        if (!string.IsNullOrEmpty(deltaBuffer))
-            return deltaBuffer.Trim();
+        if (deltaBuffer.Length > 0)
+            return deltaBuffer.ToString().Trim();
 
         var completed = string.Join("\n", completedParts).Trim();
         return string.IsNullOrEmpty(completed) ? null : completed;
@@ -155,10 +156,10 @@ internal sealed class OpenAiChatGptClient
             if (root.TryGetProperty("choices", out var choices)
                 && choices.ValueKind == JsonValueKind.Array
                 && choices.GetArrayLength() > 0
-                && choices[0].TryGetProperty("message", out var message))
+                && choices[0].TryGetProperty("message", out var message)
+                && GetString(message, "content") is { Length: > 0 } messageContent)
             {
-                if (GetString(message, "content") is { Length: > 0 } content)
-                    return content.Trim();
+                return messageContent.Trim();
             }
 
             if (root.TryGetProperty("output", out var output)

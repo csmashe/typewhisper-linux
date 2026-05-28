@@ -10,6 +10,15 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
+/// <summary>
+///     Local HTTP API exposing dictation/transcription/history endpoints to
+///     CLI tools and browser scripts. Binds only to <c>http://localhost/</c>
+///     prefixes (loopback host + loopback origin checks) — there is no
+///     plaintext-over-LAN deployment story for the bearer auth scheme used
+///     here. CORS is echoed only for the listener's own loopback origin and
+///     port, so a remote page cannot induce a localhost-origin request to
+///     leak the API.
+/// </summary>
 public sealed class HttpApiService : IDisposable
 {
     private const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
@@ -444,7 +453,8 @@ public sealed class HttpApiService : IDisposable
                 transcribeRequest.ResponseFormat,
                 transcribeRequest.Prompt,
                 transcribeRequest.Engine,
-                transcribeRequest.Model
+                transcribeRequest.Model,
+                transcribeRequest.AwaitDownload
             );
             return await RunTranscriptionAsync(tempPath, opts, ct);
         }
@@ -512,7 +522,8 @@ public sealed class HttpApiService : IDisposable
             string.IsNullOrWhiteSpace(payload.ResponseFormat) ? "json" : payload.ResponseFormat,
             payload.Prompt,
             payload.Engine,
-            payload.Model
+            payload.Model,
+            payload.AwaitDownload
         );
         return await RunTranscriptionAsync(payload.Path, opts, ct);
     }
@@ -524,6 +535,30 @@ public sealed class HttpApiService : IDisposable
     )
     {
         var modelId = ResolveRequestedModelId(opts.Engine, opts.Model);
+
+        // Refuse to silently block on a model download/restore when the caller
+        // didn't opt in via await_download=1. EnsureModelLoadedCoreAsync would
+        // otherwise call DownloadAndLoadModelCoreAsync for any missing local
+        // model, hitting the CLI's 5-min budget before returning.
+        if (!opts.AwaitDownload)
+        {
+            var resolvedModelId = modelId ?? _settings.Current.SelectedModelId;
+            if (
+                !string.IsNullOrWhiteSpace(resolvedModelId)
+                && !_models.IsDownloaded(resolvedModelId)
+            )
+            {
+                return (
+                    503,
+                    Serialize(
+                        new
+                        {
+                            error = "Model is not downloaded. Pass await_download=1 to wait for the download."
+                        }
+                    )
+                );
+            }
+        }
 
         // Decode audio before acquiring the lease — ffmpeg shells out and
         // must not monopolize the global model lock while no transcription
@@ -649,7 +684,8 @@ public sealed class HttpApiService : IDisposable
         string ResponseFormat,
         string? Prompt,
         string? Engine,
-        string? Model
+        string? Model,
+        bool AwaitDownload
     );
 
     private (int, string) HandleHistorySearch(HttpListenerRequest request)

@@ -182,9 +182,9 @@ public static class SentinelBlock
             joined += sep;
         }
         else if (!originalEndsWithNewline && joinedEndsWithNewline)
+        {
             // Slice exactly one separator — TrimEnd would over-trim a
             // file that legitimately ends in multiple blank lines.
-        {
             joined = joined[..^sep.Length];
         }
 

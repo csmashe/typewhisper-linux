@@ -1405,12 +1405,16 @@ public sealed class DictationOrchestrator : IDisposable
                     && promptAction is null
                 )
                 {
+                    // Fail before building the pipeline so lower-priority
+                    // steps (Formatting/Cleanup/plugins with priority < LLM)
+                    // don't run on a transcript we already know we will reject.
                     var message =
                         $"Prompt action for profile '{context.Profile.Name}' is disabled or missing.";
                     Trace.WriteLine(
                         $"[Dictation] {message} actionId='{context.Profile.PromptActionId}'."
                     );
                     ReportStatus(context, message);
+                    throw new InvalidOperationException(message);
                 }
             }
 
@@ -1454,6 +1458,7 @@ public sealed class DictationOrchestrator : IDisposable
                     LlmHandler = promptAction is not null
                         ? (text, token) => RunPromptActionAsync(context, promptAction, text, token)
                         : null,
+                    RequireLlmSuccess = promptAction is not null,
                     TranslationHandler = !string.IsNullOrWhiteSpace(translationTarget)
                         ? (text, source, target, token) =>
                             _translation.TranslateAsync(text, source, target, token)
@@ -1701,7 +1706,8 @@ public sealed class DictationOrchestrator : IDisposable
             );
             ReportStatus(context, $"Transcription failed: {ex.Message}");
             _speechFeedback.AnnounceError(ex.Message);
-            ShowFeedback(context, "Transcription failed.", true);
+            var feedbackText = ex is InvalidOperationException ? ex.Message : "Transcription failed.";
+            ShowFeedback(context, feedbackText, true);
             PublishSessionTerminal(context.SessionId, "failed", ex.Message);
         }
         catch (Exception ex)

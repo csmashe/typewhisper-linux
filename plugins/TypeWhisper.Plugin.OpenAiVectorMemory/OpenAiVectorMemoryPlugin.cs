@@ -244,12 +244,16 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
 
         if (!response.IsSuccessStatusCode)
         {
+            // Embedding requests carry transcribed user content; on rate-limit
+            // or content errors the response body can echo input fragments
+            // back. Keep both the plugin log and the thrown exception to a
+            // stable status + reason so neither surface leaks user text.
             _host?.Log(
                 PluginLogLevel.Error,
-                $"Embedding API error {response.StatusCode}: {responseBody}"
+                $"Embedding API error {(int)response.StatusCode} ({response.ReasonPhrase})"
             );
             throw new HttpRequestException(
-                $"OpenAI Embedding API returned {(int)response.StatusCode}: {responseBody}"
+                $"OpenAI Embedding API returned {(int)response.StatusCode}: {response.ReasonPhrase}"
             );
         }
 

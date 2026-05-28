@@ -20,8 +20,9 @@ The Linux branch currently includes:
 - Drag-and-drop file transcription with batch queues, watch folders, and `ffmpeg`-based import when available
 - Session recording to WAV with optional transcript sidecar text files
 - Searchable history, recent transcriptions, dictionary corrections and term packs, snippets, and profiles
-- Overlay positioning and left/right content widgets
+- Configurable dictation overlay with selectable Indicator, Waveform, and Text widgets, including a live audio-level waveform visualization
 - Tray integration and XDG autostart support
+- Settings backup and restore
 - Local HTTP API and installable CLI for desktop automation
 - A user-level installer script that creates a desktop launcher and app icon
 
@@ -32,6 +33,7 @@ This branch contains Linux-specific work that is not part of the original branch
 - CUDA GPU support for the bundled whisper.cpp transcription engine on compatible NVIDIA systems
 - Linux desktop integration through Avalonia, XDG autostart, Linux tray behavior, and a user-level desktop launcher
 - Wayland global hotkey detection via an evdev backend that reads `/dev/input/event*` directly, so the configured shortcut fires regardless of which window has focus; falls back to the XDG portal and then focused-only SharpHook when the evdev path is unavailable. Enabled by default, requires the current user to be in the `input` group, and can be turned off from Settings → Shortcuts to keep focused-only behavior
+- A Shortcuts settings panel with per-desktop shortcut writers (GNOME, KDE, Hyprland, Sway) and a one-click auto-setup flow, so the configured TypeWhisper hotkey is registered with the active desktop environment without hand-editing config files
 - Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `canberra-gtk-play`, or CUDA runtime libraries
 - Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
 - Linux session audio handling for dictation, file transcription, and recorder workflows
@@ -39,18 +41,14 @@ This branch contains Linux-specific work that is not part of the original branch
 - Profile style presets — `Raw`, `Clean`, `Concise`, `Formal Email`, `Casual Message`, `Developer`, `Terminal Safe`, and `Meeting Notes` — that bundle cleanup level and formatting choices per profile, with optional cleanup and developer-formatting overrides
 - Developer-safe formatting that converts spoken punctuation and casing commands (for example "dash dash", "open paren", "snake case") into code-friendly output
 - Voice command suffixes parsed at the end of a dictation: `press enter`, `new paragraph`, `new line`, and `cancel`
-- Transform-selection hotkey that voice-edits the text currently selected in another application
 - Spoken IDE file references such as "at file dot ts" mapped to file tags for editor/IDE workflows
 - Per-app text-insertion strategies (`Auto`, `Clipboard Paste`, `Direct Typing`, `Copy Only`) keyed by process name, with auto-paste retry and clipboard preservation
 - Smart `Auto` insertion that picks per-target: types directly into supported browsers (falling back to clipboard paste when the title looks like a webmail composer), types directly into terminals and the Codex CLI (where synthesized Ctrl+V isn't interpreted as paste), and on Wayland sessions where the focused app can't be identified, prefers direct typing for ASCII text and clipboard paste for non-ASCII text
-- Active-window detection covers the Chromium family (Chromium, Chrome, Brave, Edge, Vivaldi, Opera) and the Firefox family (Firefox, Zen Browser, LibreWolf, Waterfox), with title-based inference when process metadata is unavailable
+- Extended active-window browser coverage to include the Zen Browser and LibreWolf on top of the Chromium/Firefox families the upstream Windows build already supports, with title-based inference when process metadata is unavailable
 - Correction suggestions generated from user edits in history, with optional auto-learning into the dictionary and confidence scoring
 - Dictionary entries gain starring, priority, source tracking (`Manual`, `Import`, `CorrectionSuggestion`, `AutoLearned`), and times-applied/times-corrected stats
 - Snippets gain an `Exact Phrase` trigger mode alongside `Anywhere`, plus per-profile scoping by profile id
-- Dashboard insights panel summarizing average words and duration per dictation, insertion reliability, and top apps
-- Spoken-feedback provider and voice selection on top of the existing toggle
-- Aggressive short-clip transcription option for short, quiet utterances that would otherwise be discarded as silence
-- Short-speech policy with peak-level and duration thresholds so accidental taps and silent clips are dropped before they reach the engine
+- Dashboard insertion-reliability metric and per-dictation averages (average words and duration) on top of the upstream dashboard's words-per-minute, top-apps, and time-saved tiles
 
 ## Features
 
@@ -71,9 +69,12 @@ This branch contains Linux-specific work that is not part of the original branch
 - Activation modes: `Toggle` (press to start, press to stop), `Push to talk` (hold to record), and `Hybrid` (starts on press; a short tap keeps recording, holding past ~600 ms stops on release)
 - Optional prompt palette hotkey
 - Recent transcriptions palette and copy-last-transcription hotkey
+- Transform-selection hotkey that voice-edits the text currently selected in another application
 - Cancel-in-flight via the `Escape` key during recording, transcription, or post-processing — only active while a dictation is running so it does not shadow modal dialogs or editors
 - Auto-paste after transcription
 - Whisper mode, silence auto-stop, sound feedback, audio ducking, and media pause settings in the Linux UI
+- Aggressive short-clip transcription option for short, quiet utterances that would otherwise be discarded as silence
+- Short-speech policy with peak-level and duration thresholds so accidental taps and silent clips are dropped before they reach the engine
 - Live microphone preview and recording overlay
 
 Some Linux dictation features depend on external desktop tools:
@@ -106,9 +107,9 @@ The Advanced page exposes:
 
 ### Desktop Integration
 
-- Tray icon support where the current desktop environment exposes a compatible system tray
+- Tray icon support where the current desktop environment exposes a compatible system tray; the "close to tray" setting is gated on whether a real system tray is actually registered (detected via a D-Bus probe at startup) so the app can't hide itself with no way back to the UI
 - XDG autostart integration through `~/.config/autostart/typewhisper.desktop`
-- Single-instance lock using `XDG_RUNTIME_DIR`
+- Single-instance enforcement via a Unix control socket under `XDG_RUNTIME_DIR` (falling back to a `0700` directory under `/tmp` when `XDG_RUNTIME_DIR` is unavailable); a second launch hands its CLI command off to the already-running instance over a JSON control protocol instead of starting a new window
 - Set `TYPEWHISPER_DISABLE_IME=1` to disable Avalonia X11 IME integration when debugging input-method issues
 - Desktop install script that publishes the app, installs it under the user profile, and creates a launcher icon
 
@@ -270,7 +271,7 @@ The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayl
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/TypeWhisper/typewhisper-linux.git
+   git clone https://github.com/csmashe/typewhisper-linux.git
    cd typewhisper-linux
    ```
 
@@ -457,7 +458,7 @@ TypeWhisper stores its Linux data under the user-local application data director
 
 The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin categories used by this branch include:
 
-- Transcription engines — bundled examples include `WhisperCpp`, `SherpaOnnx`, `Qwen3Stt`, `Voxtral`, plus cloud engines `OpenAi`, `OpenAiCompatible`, `Groq`, `Deepgram`, `AssemblyAi`, `ElevenLabs`, `Speechmatics`, `Soniox`, `Gladia`, `CloudflareAsr`, and `GoogleCloudStt`
+- Transcription engines — bundled examples include `WhisperCpp` (with a configurable `noSpeechThreshold` for filtering silent segments to reduce hallucinated phrases), `SherpaOnnx`, `Qwen3Stt`, `Voxtral`, plus cloud engines `OpenAi`, `OpenAiCompatible`, `Groq`, `Deepgram`, `AssemblyAi`, `ElevenLabs`, `Speechmatics`, `Soniox`, `Gladia`, `CloudflareAsr`, and `GoogleCloudStt`
 - LLM providers — `Claude`, `OpenAi`, `OpenAiCompatible`, `OpenRouter`, `Gemini`, `GemmaLocal`, `Groq`, `Cerebras`, `Cohere`, and `Fireworks`
 - Action plugins — `Linear` and `Obsidian`
 - Post-processing plugins — `Script` (run a shell command against the transcription)
@@ -465,6 +466,8 @@ The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin
 - Companion plugins — `Webhook` notifications
 
 The Linux build currently deploys bundled plugins from `plugins/` into the app output, then copies them into the user plugin directory on first run if they are missing.
+
+Plugins that own user-editable collections (Webhook, Script) expose per-plugin collection settings under `PluginData/<plugin-id>/` so their entries survive plugin reinstalls and the host can edit them through the settings UI without round-tripping a plugin process.
 
 Plugins are loaded from the user plugin directory:
 

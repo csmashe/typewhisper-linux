@@ -69,16 +69,13 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private TranscriptionAccelerationStatus _accelerationStatus =
         new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
-    // Canary-specific state
     private string _canarySrcLang = "en";
     private string _canaryTgtLang = "en";
 
-    // ITypeWhisperPlugin
     public string PluginId => "com.typewhisper.sherpa-onnx";
     public string PluginName => "Lokale Modelle (sherpa-onnx)";
     public string PluginVersion => "1.0.0";
 
-    // ITranscriptionEnginePlugin
     public string ProviderId => "sherpa-onnx";
     public string ProviderDisplayName => "Lokal (sherpa-onnx)";
     public bool IsConfigured => true;
@@ -497,27 +494,27 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     private static float[] DecodeWav(byte[] wavData)
     {
-        // WAV header: 44 bytes minimum, samples start after data chunk header
         if (wavData.Length < 44)
             throw new ArgumentException("Invalid WAV data: too short");
 
-        // Find data chunk
-        var pos = 12; // Skip RIFF header
+        var pos = 12; // skip the leading RIFF/WAVE header
         while (pos + 8 < wavData.Length)
         {
             var chunkId = System.Text.Encoding.ASCII.GetString(wavData, pos, 4);
             var chunkSize = BitConverter.ToInt32(wavData, pos + 4);
 
-            // chunkSize comes from untrusted WAV bytes — guard against negative
-            // values, overflow, and sizes that would run past the buffer before
-            // allocating or indexing based on it.
+            // chunkSize comes from untrusted WAV bytes — reject anything
+            // negative or larger than the remaining buffer before we use it
+            // for allocation or indexing.
             if (chunkSize < 0 || chunkSize > wavData.Length - (pos + 8))
                 throw new ArgumentException("Invalid WAV data: chunk size out of range");
 
             if (chunkId == "data")
             {
                 var dataStart = pos + 8;
-                // Clamp to what's actually present in case the header lied.
+                // Clamp to actual buffer length so a header that lies about
+                // chunk size (truncated download, malformed file) can't lead
+                // to an over-read.
                 var usableBytes = Math.Min(chunkSize, wavData.Length - dataStart);
                 var sampleCount = usableBytes / 2; // 16-bit samples
                 var samples = new float[sampleCount];
@@ -530,16 +527,19 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             }
 
             pos += 8 + chunkSize;
+            // RIFF chunks are 2-byte aligned; odd-sized chunks have a pad byte.
             if (chunkSize % 2 != 0 && pos < wavData.Length)
-                pos++; // Padding byte
+                pos++;
         }
 
         throw new ArgumentException("Invalid WAV data: no data chunk found");
     }
 
     /// <summary>
-    /// Migrates model files from the old location (%LocalAppData%/TypeWhisper/Models/)
-    /// to the plugin's data directory on first activation.
+    ///     One-shot migration from the pre-plugin layout
+    ///     (<c>%LocalAppData%/TypeWhisper/Models/</c>) into the per-plugin data
+    ///     directory. Best-effort: failures are logged and a stale source
+    ///     directory is left alone rather than blocking activation.
     /// </summary>
     private void MigrateModelFiles()
     {

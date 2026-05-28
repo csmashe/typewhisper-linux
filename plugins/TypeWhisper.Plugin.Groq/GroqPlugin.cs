@@ -49,8 +49,6 @@ public sealed partial class GroqPlugin
         _httpClient = httpClient;
     }
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.groq";
     public string PluginName => "Groq";
     public string PluginVersion => "1.0.2";
@@ -81,8 +79,6 @@ public sealed partial class GroqPlugin
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "groq";
     public string ProviderDisplayName => "Groq";
@@ -141,8 +137,6 @@ public sealed partial class GroqPlugin
         );
     }
 
-    // ILlmProviderPlugin
-
     public string ProviderName => "Groq";
     public bool IsAvailable => IsConfigured;
 
@@ -172,8 +166,6 @@ public sealed partial class GroqPlugin
             ct
         );
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -250,9 +242,18 @@ public sealed partial class GroqPlugin
                 .OrderBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller explicitly cancelled — propagate so ValidateAsync surfaces
+            // cancellation instead of a misleading "couldn't fetch models" result.
+            throw;
+        }
         catch (OperationCanceledException)
         {
-            throw;
+            // HttpClient timeout (its 30s budget fires an OCE on an internal
+            // token, not ct). Treat as transient: fall back to saved/default
+            // models so a slow network doesn't poison ValidateAsync.
+            return null;
         }
         catch
         {
@@ -326,8 +327,6 @@ public sealed partial class GroqPlugin
     {
         _httpClient.Dispose();
     }
-
-    // IPluginSettingsProvider
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [

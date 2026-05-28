@@ -123,6 +123,18 @@ public sealed class WebhookService
     private readonly HttpClient _httpClient = new();
     private readonly IPluginHostServices _host;
     private readonly WebhookStore _store;
+    // Guards every mutation and enumeration of Webhooks so the
+    // ObservableCollection isn't torn between the UI / settings-save thread
+    // and the EventBus delivery thread. SendWebhooksAsync only holds this
+    // lock briefly to take a snapshot, so a slow disk write inside Save()
+    // can't stall webhook deliveries.
+    private readonly object _webhooksLock = new();
+    // Serializes the mutate-then-persist sequence so two overlapping saves
+    // can't reorder writes — without this, thread A could snapshot first,
+    // thread B could snapshot (including A's mutation) and write first, then
+    // thread A would write its older snapshot last and clobber B's state on
+    // disk while memory still reflects B's mutation.
+    private readonly object _saveLock = new();
     private bool _loadSucceeded;
 
     public ObservableCollection<WebhookConfig> Webhooks { get; } = [];
@@ -137,60 +149,118 @@ public sealed class WebhookService
 
     public void AddWebhook(WebhookConfig config)
     {
-        Webhooks.Add(config);
-        Save();
+        // _saveLock spans mutation + snapshot + Save so concurrent mutations
+        // can't reorder their writes on disk. SendWebhooksAsync only takes
+        // _webhooksLock briefly for its snapshot, so it isn't blocked by the
+        // disk write held under _saveLock.
+        lock (_saveLock)
+        {
+            List<WebhookConfig> snapshot;
+            lock (_webhooksLock)
+            {
+                Webhooks.Add(config);
+                snapshot = Webhooks.ToList();
+            }
+            Save(snapshot);
+        }
     }
 
     public void RemoveWebhook(Guid id)
     {
-        var webhook = Webhooks.FirstOrDefault(w => w.Id == id);
-        if (webhook is not null)
+        lock (_saveLock)
         {
-            Webhooks.Remove(webhook);
-            Save();
+            List<WebhookConfig>? snapshot = null;
+            lock (_webhooksLock)
+            {
+                var webhook = Webhooks.FirstOrDefault(w => w.Id == id);
+                if (webhook is not null)
+                {
+                    Webhooks.Remove(webhook);
+                    snapshot = Webhooks.ToList();
+                }
+            }
+
+            if (snapshot is not null)
+                Save(snapshot);
         }
     }
 
     public void UpdateWebhook(WebhookConfig updated)
     {
-        for (var i = 0; i < Webhooks.Count; i++)
+        lock (_saveLock)
         {
-            if (Webhooks[i].Id == updated.Id)
+            List<WebhookConfig>? snapshot = null;
+            lock (_webhooksLock)
             {
-                Webhooks[i] = updated;
-                Save();
-                return;
+                for (var i = 0; i < Webhooks.Count; i++)
+                {
+                    if (Webhooks[i].Id == updated.Id)
+                    {
+                        Webhooks[i] = updated;
+                        snapshot = Webhooks.ToList();
+                        break;
+                    }
+                }
             }
+
+            if (snapshot is not null)
+                Save(snapshot);
         }
     }
 
     /// <summary>Replaces every stored webhook with the supplied set and persists.</summary>
     public void ReplaceAll(IEnumerable<WebhookConfig> configs)
     {
-        // Save() rethrows on persistence failure. Snapshot the existing
-        // collection first so we can restore it and leave Webhooks in sync
-        // with what's actually on disk if the write fails.
-        var snapshot = Webhooks.ToList();
-        Webhooks.Clear();
-        foreach (var config in configs)
-            Webhooks.Add(config);
+        // _saveLock keeps the mutate-snapshot-Save sequence ordered against
+        // other mutations so overlapping ReplaceAll/AddWebhook calls can't
+        // land an older snapshot on disk after a newer one. Save() rethrows
+        // on persistence failure; we snapshot the previous set first so we
+        // can roll the ObservableCollection back to disk-truth if the write
+        // fails.
+        lock (_saveLock)
+        {
+            List<WebhookConfig> previous;
+            List<WebhookConfig> snapshot;
+            lock (_webhooksLock)
+            {
+                previous = Webhooks.ToList();
+                Webhooks.Clear();
+                foreach (var config in configs)
+                    Webhooks.Add(config);
+                snapshot = Webhooks.ToList();
+            }
 
-        try
-        {
-            Save();
+            try
+            {
+                Save(snapshot);
+            }
+            catch
+            {
+                lock (_webhooksLock)
+                {
+                    Webhooks.Clear();
+                    foreach (var config in previous)
+                        Webhooks.Add(config);
+                }
+                throw;
+            }
         }
-        catch
-        {
-            Webhooks.Clear();
-            foreach (var config in snapshot)
-                Webhooks.Add(config);
-            throw;
-        }
+    }
+
+    /// <summary>Returns a thread-safe snapshot of the current webhook set.</summary>
+    public IReadOnlyList<WebhookConfig> SnapshotWebhooks()
+    {
+        lock (_webhooksLock)
+            return Webhooks.ToList();
     }
 
     public async Task SendWebhooksAsync(TranscriptionCompletedEvent evt)
     {
-        foreach (var webhook in Webhooks.ToList())
+        List<WebhookConfig> snapshot;
+        lock (_webhooksLock)
+            snapshot = Webhooks.ToList();
+
+        foreach (var webhook in snapshot)
         {
             if (!webhook.IsEnabled)
                 continue;
@@ -320,7 +390,7 @@ public sealed class WebhookService
         _loadSucceeded = true;
     }
 
-    private void Save()
+    private void Save(IReadOnlyList<WebhookConfig> snapshot)
     {
         if (!_loadSucceeded)
         {
@@ -338,7 +408,7 @@ public sealed class WebhookService
 
         try
         {
-            _store.Save(Webhooks);
+            _store.Save(snapshot);
         }
         catch (Exception ex)
         {
@@ -477,7 +547,7 @@ public sealed class WebhookPlugin
         IEnumerable<WebhookConfig> source;
         if (Service is not null)
         {
-            source = Service.Webhooks.AsEnumerable();
+            source = Service.SnapshotWebhooks();
         }
         else
         {

@@ -13,7 +13,6 @@ namespace TypeWhisper.Linux.Services;
 ///     this throttles cold start by ~60×. The same binary launched from a
 ///     terminal inherits the terminal's nice 0 / best-effort I/O and starts in
 ///     well under 2s.
-///
 ///     We shell out to <c>renice</c> and <c>ionice</c> against our own PID
 ///     instead of P/Invoking <c>setpriority</c>/<c>ioprio_set</c>. The C
 ///     wrappers have signed-int return-vs-error ambiguity (getpriority can
@@ -21,7 +20,6 @@ namespace TypeWhisper.Linux.Services;
 ///     arguments which P/Invoke marshals incorrectly with <c>int</c>.
 ///     The external tools are a few milliseconds each and not worth getting
 ///     wrong.
-///
 ///     Failures are non-fatal — the app keeps starting; we just log so we know.
 /// </remarks>
 internal static class ProcessPriority

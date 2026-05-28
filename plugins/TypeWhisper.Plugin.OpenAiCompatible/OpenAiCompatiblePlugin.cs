@@ -20,7 +20,6 @@ public sealed partial class OpenAiCompatiblePlugin
     private string? _selectedLlmModelId;
     private List<FetchedModel> _fetchedModels = [];
 
-    // ITypeWhisperPlugin
     public string PluginId => "com.typewhisper.openai-compatible";
     public string PluginName => "OpenAI Compatible";
     public string PluginVersion => "1.0.0";
@@ -55,7 +54,6 @@ public sealed partial class OpenAiCompatiblePlugin
         return Task.CompletedTask;
     }
 
-    // ITranscriptionEnginePlugin
     public string ProviderId => "openai-compatible";
     public string ProviderDisplayName => "Custom Server";
 
@@ -111,7 +109,6 @@ public sealed partial class OpenAiCompatiblePlugin
         );
     }
 
-    // ILlmProviderPlugin
     public string ProviderName => "OpenAI Compatible";
 
     public bool IsAvailable => IsConfigured && !string.IsNullOrEmpty(_selectedLlmModelId);
@@ -154,7 +151,6 @@ public sealed partial class OpenAiCompatiblePlugin
         );
     }
 
-    // Internal methods for settings view
     internal string? BaseUrl => _baseUrl;
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -164,6 +160,9 @@ public sealed partial class OpenAiCompatiblePlugin
 
     internal void SetBaseUrl(string url)
     {
+        // Helpers append "/v1/..." themselves; pasted URLs often already
+        // include "/v1", so strip a trailing "/v1" segment to avoid building
+        // "/v1/v1/models" and similar paths.
         var normalized = url.Trim().TrimEnd('/');
         if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
             normalized = normalized[..^3];

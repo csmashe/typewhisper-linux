@@ -27,7 +27,11 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Trim on load to mirror SetApiKeyAsync: legacy secrets saved before
+        // the save-side trim could otherwise leave the x-gladia-key header
+        // with trailing whitespace while IsConfigured still reports true.
+        var loaded = await host.LoadSecretAsync("api-key");
+        _apiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
         _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -146,13 +150,17 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        // Trim defensively at the internal entry too: SetSettingValueAsync
+        // already trims, but a future direct caller could re-introduce
+        // trailing whitespace that breaks the x-gladia-key header.
+        var trimmed = apiKey?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", apiKey);
+                await _host.StoreSecretAsync("api-key", trimmed);
 
             _host.NotifyCapabilitiesChanged();
         }
@@ -188,7 +196,9 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         switch (key)
         {
             case "api-key":
-                await SetApiKeyAsync(value ?? string.Empty);
+                // Normalize whitespace once — pasted keys often pick up
+                // trailing newlines or spaces that break the request header.
+                await SetApiKeyAsync(value?.Trim() ?? string.Empty);
                 break;
             case "selectedModel":
                 if (!string.IsNullOrWhiteSpace(value))

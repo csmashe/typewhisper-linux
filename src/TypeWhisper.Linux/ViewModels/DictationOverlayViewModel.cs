@@ -160,13 +160,17 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     public string RightText => ResolveText(_settings.Current.OverlayRightWidget);
 
-    private static double BarHeight(float level) =>
-        4 + PerceptualLevel(level) * 14;
+    private static double BarHeight(float level)
+    {
+        return 4 + PerceptualLevel(level) * 14;
+    }
 
     // sqrt curve pulls quiet/medium levels closer to the top of the range so
     // the meter reads as responsive without requiring shouting.
-    private static double PerceptualLevel(float level) =>
-        Math.Sqrt(Math.Clamp(level, 0f, 1f));
+    private static double PerceptualLevel(float level)
+    {
+        return Math.Sqrt(Math.Clamp(level, 0f, 1f));
+    }
 
     partial void OnIsOverlayVisibleChanged(bool value)
     {
@@ -219,6 +223,7 @@ public partial class DictationOverlayViewModel : ObservableObject
         {
             _waveformLevels[i] = _waveformLevels[i + 1];
         }
+
         _waveformLevels[WaveformSampleCount - 1] = value;
 
         OnPropertyChanged(nameof(IndicatorSize));
@@ -293,13 +298,15 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(RightText));
     }
 
-    private static bool IsTextWidget(OverlayWidget widget) =>
-        widget
+    private static bool IsTextWidget(OverlayWidget widget)
+    {
+        return widget
             is OverlayWidget.Timer
-                or OverlayWidget.Clock
-                or OverlayWidget.Profile
-                or OverlayWidget.HotkeyMode
-                or OverlayWidget.AppName;
+            or OverlayWidget.Clock
+            or OverlayWidget.Profile
+            or OverlayWidget.HotkeyMode
+            or OverlayWidget.AppName;
+    }
 
     private string ResolveText(OverlayWidget widget)
     {

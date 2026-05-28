@@ -165,7 +165,7 @@ static class Program
             return Error("Usage: typewhisper transcribe <file|->");
 
         Stream audioStream;
-        var fileName = "audio.wav";
+        string fileName;
 
         if (file == "-")
         {

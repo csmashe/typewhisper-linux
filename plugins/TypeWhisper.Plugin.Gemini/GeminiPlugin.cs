@@ -23,7 +23,11 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        // Trim on load: legacy values saved before SetApiKeyAsync trimmed would
+        // otherwise reach the Bearer header with trailing whitespace and 401
+        // every request while IsAvailable still reports true.
+        var loaded = await host.LoadSecretAsync("api-key");
+        _apiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsAvailable})");
     }
 
@@ -72,13 +76,14 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        var trimmed = apiKey?.Trim();
+        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", apiKey);
+                await _host.StoreSecretAsync("api-key", trimmed);
 
             _host.NotifyCapabilitiesChanged();
         }

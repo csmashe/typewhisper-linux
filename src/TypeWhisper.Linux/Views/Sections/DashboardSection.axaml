@@ -313,7 +313,7 @@
                                         <TextBlock Grid.Column="1"
                                                    Text="{Binding Summary}"
                                                    FontSize="11"
-                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   Foreground="#9AA5B3"
                                                    Margin="12,0,0,0" />
                                     </Grid>
                                 </DataTemplate>
