@@ -5,10 +5,9 @@ namespace TypeWhisper.Linux.Services;
 
 /// <summary>
 ///     Copies bundled plugins from the app's install directory into
-///     <c>~/.local/share/TypeWhisper/Plugins/</c>. Unlike the original
-///     first-run-only behavior, this now repairs stale or partially deployed
-///     bundled plugins on startup while leaving non-bundled/manual installs
-///     alone.
+///     <c>~/.local/share/TypeWhisper/Plugins/</c>, repairing stale or partially
+///     deployed bundled plugins on every startup while leaving non-bundled /
+///     manually installed plugins alone.
 /// </summary>
 public sealed class BundledPluginDeployer
 {

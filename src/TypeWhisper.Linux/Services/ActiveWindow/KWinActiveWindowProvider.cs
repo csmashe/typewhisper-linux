@@ -8,9 +8,11 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 ///     KDE Plasma / KWin active-window provider. Gated on
 ///     <c>XDG_CURRENT_DESKTOP</c> containing "KDE" or "Plasma". Prefers
 ///     <c>kdotool</c> (drop-in xdotool clone for KWin) for window identity;
-///     returns null when kdotool is unavailable rather than over-engineering a
-///     KWin-scripting fallback. Layer B can extend this with a qdbus-based
-///     fallback if real-world coverage demands it.
+///     returns null when kdotool is unavailable. We deliberately do not embed
+///     a KWin scripting fallback — the script-engine path requires a writable
+///     <c>~/.local/share/kwin/scripts/</c> entry and a DBus round-trip per
+///     query, which is heavy enough that the failure-tracker remediation
+///     ("install kdotool") is the saner story.
 /// </summary>
 public sealed class KWinActiveWindowProvider : IActiveWindowProvider
 {

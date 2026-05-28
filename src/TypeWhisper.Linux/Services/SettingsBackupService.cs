@@ -105,6 +105,10 @@ public sealed class SettingsBackupService
             }
         }
 
+        // Atomic-replace: write the whole archive to <dest>.tmp first and rename
+        // over the destination only after every entry has been zipped. If the
+        // process is killed mid-backup the user's previous good archive is
+        // untouched and the .tmp orphan gets cleaned up on the next run.
         File.Move(tempPath, destinationZipPath, true);
         return new SettingsBackupResult(fileCount, bytes);
     }
@@ -116,6 +120,9 @@ public sealed class SettingsBackupService
             throw new FileNotFoundException("Backup file was not found.", sourceZipPath);
         }
 
+        // Stage extraction into a temp dir first so a half-decoded archive
+        // can't leave _basePath in a mixed state. Only after every entry is
+        // validated and extracted do we copy files into place.
         var tempDir = Path.Combine(Path.GetTempPath(), $"typewhisper-restore-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
 

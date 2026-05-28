@@ -22,8 +22,6 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
         new("universal-2", "Universal-2"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.assemblyai";
     public string PluginName => "AssemblyAI";
     public string PluginVersion => "1.1.0";
@@ -41,8 +39,6 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "assemblyai";
     public string ProviderDisplayName => "AssemblyAI";
@@ -83,13 +79,8 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
                 "Plugin not configured. API key and model required."
             );
 
-        // Step 1: Upload audio
         var uploadUrl = await UploadAudioAsync(wavAudio, ct);
-
-        // Step 2: Submit transcription job
         var transcriptId = await SubmitTranscriptionAsync(uploadUrl, language, ct);
-
-        // Step 3: Poll until completed
         return await PollForResultAsync(transcriptId, ct);
     }
 
@@ -207,8 +198,6 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
 
         throw new TimeoutException("AssemblyAI transcription timed out after 5 minutes");
     }
-
-    // API key management (for settings view)
 
     internal string? ApiKey => _apiKey;
     internal IPluginLocalization? Loc => _host?.Localization;

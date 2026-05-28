@@ -527,8 +527,9 @@ public sealed class PluginManager : IDisposable
     }
 
     /// <summary>
-    ///     Migrates legacy GroqApiKey/OpenAiApiKey from AppSettings to plugin secrets.
-    ///     On a fresh Linux install these fields are typically empty so this is a no-op.
+    ///     One-shot migration for users upgrading from a build where Groq/OpenAI
+    ///     keys were stored at the top level of AppSettings. New installs leave
+    ///     those fields empty so this is effectively a no-op.
     /// </summary>
     private async Task MigrateApiKeysAsync()
     {

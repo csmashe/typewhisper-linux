@@ -114,13 +114,10 @@ public partial class GeneralSectionViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    ///     Whether a usable system tray was detected. The close-to-tray toggle is
-    ///     disabled without one — hiding the window with no tray to restore it
-    ///     would strand the user (backlog #18). Read live (not cached) so it is
-    ///     correct regardless of whether this VM is built before or after the
-    ///     tray's one-shot probe at startup.
-    /// </summary>
+    // Read live (not cached): the tray probe is one-shot at startup and this
+    // VM can be constructed before or after it. Without a tray the close-to-
+    // tray toggle must be disabled — otherwise the window hides with no way
+    // to bring it back (backlog #18).
     public bool IsTrayAvailable => _tray.IsTrayAvailable;
 
     public bool IsTrayUnavailable => !_tray.IsTrayAvailable;

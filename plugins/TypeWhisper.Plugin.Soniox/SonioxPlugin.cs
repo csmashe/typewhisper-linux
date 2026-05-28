@@ -20,8 +20,6 @@ public sealed partial class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSe
         new("default", "Soniox (Auto)"),
     ];
 
-    // ITypeWhisperPlugin
-
     public string PluginId => "com.typewhisper.soniox";
     public string PluginName => "Soniox";
     public string PluginVersion => "1.0.0";
@@ -39,8 +37,6 @@ public sealed partial class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSe
         _host = null;
         return Task.CompletedTask;
     }
-
-    // ITranscriptionEnginePlugin
 
     public string ProviderId => "soniox";
     public string ProviderDisplayName => "Soniox";

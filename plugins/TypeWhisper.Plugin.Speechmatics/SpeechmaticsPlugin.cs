@@ -80,7 +80,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
         var lang = string.IsNullOrEmpty(normalized) ? "en" : normalized;
 
-        // Step 1: Submit batch transcription job
         var config = JsonSerializer.Serialize(
             new
             {
@@ -104,12 +103,12 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
         if (!submitResponse.IsSuccessStatusCode)
         {
-            // Exception messages flow into user-visible logs; the raw body
-            // can echo upload metadata or partial transcripts on a retry,
-            // so route the payload to the plugin log instead.
+            // Log only the stable HTTP status; the response body can echo
+            // upload metadata (and on retries, partial transcripts) which
+            // we don't want persisted in the plugin log.
             _host?.Log(
                 PluginLogLevel.Warning,
-                $"Speechmatics submit error {(int)submitResponse.StatusCode}: {submitJson}"
+                $"Speechmatics submit error {(int)submitResponse.StatusCode} ({submitResponse.ReasonPhrase})"
             );
             throw new HttpRequestException(
                 $"Speechmatics API error {(int)submitResponse.StatusCode}: {submitResponse.ReasonPhrase}"
@@ -121,7 +120,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             submitDoc.RootElement.GetProperty("id").GetString()
             ?? throw new InvalidOperationException("No job ID in Speechmatics response");
 
-        // Step 2: Poll for completion
         var transcript = await PollForTranscriptAsync(jobId, ct);
         return transcript;
     }
@@ -152,7 +150,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             {
                 _host?.Log(
                     PluginLogLevel.Warning,
-                    $"Speechmatics status error {(int)statusResponse.StatusCode} for job {jobId}: {statusJson}"
+                    $"Speechmatics status error {(int)statusResponse.StatusCode} ({statusResponse.ReasonPhrase}) for job {jobId}"
                 );
                 throw new HttpRequestException(
                     $"Speechmatics status error {(int)statusResponse.StatusCode} for job {jobId}: {statusResponse.ReasonPhrase}"
@@ -165,7 +163,6 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
             if (status == "done")
             {
-                // Fetch transcript
                 using var transcriptRequest = new HttpRequestMessage(
                     HttpMethod.Get,
                     $"{BaseUrl}/jobs/{jobId}/transcript?format=json-v2"
@@ -182,7 +179,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 {
                     _host?.Log(
                         PluginLogLevel.Warning,
-                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} for job {jobId}: {transcriptJson}"
+                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} ({transcriptResponse.ReasonPhrase}) for job {jobId}"
                     );
                     throw new HttpRequestException(
                         $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} for job {jobId}: {transcriptResponse.ReasonPhrase}"

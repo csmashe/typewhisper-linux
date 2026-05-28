@@ -305,7 +305,7 @@ public sealed class TextInsertionService
         }
         catch
         {
-            // Best effort restore.
+            /* best effort restore */
         }
     }
 

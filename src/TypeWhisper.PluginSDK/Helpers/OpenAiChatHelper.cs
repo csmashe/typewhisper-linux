@@ -5,8 +5,8 @@ using System.Text.Json;
 namespace TypeWhisper.PluginSDK.Helpers;
 
 /// <summary>
-///     Static helper for OpenAI-compatible chat completion API calls.
-///     Extracted from CloudProviderBase for reuse by LLM provider plugins.
+///     Static helper for OpenAI-compatible chat completion API calls. Shared by
+///     LLM provider plugins so each plugin doesn't reimplement request shaping.
 /// </summary>
 public static class OpenAiChatHelper
 {

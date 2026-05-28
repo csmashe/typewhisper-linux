@@ -6,7 +6,7 @@ namespace TypeWhisper.PluginSDK.Helpers;
 
 /// <summary>
 ///     Static helper for Whisper-compatible audio transcription API calls.
-///     Extracted from CloudProviderBase for reuse by transcription engine plugins.
+///     Shared by transcription engine plugins targeting OpenAI's API shape.
 /// </summary>
 public static class OpenAiTranscriptionHelper
 {

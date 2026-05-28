@@ -18,14 +18,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
     private readonly IReadOnlyList<IDeShortcutWriter> _writers;
 
-    /// <summary>
-    ///     First writer whose <see cref="IDeShortcutWriter.IsCurrentDesktop" />
-    ///     returns true, or null when we're on an unsupported DE / when no
-    ///     writers were registered (e.g. unit tests). Cached lazily so the
-    ///     IsCurrentDesktop check doesn't re-run for every property the UI
-    ///     binds. The detection is cheap but the env-var-free path
-    ///     (BinaryExists) does touch the filesystem.
-    /// </summary>
+    // Cached lazily: IsCurrentDesktop hits the filesystem (BinaryExists) so
+    // we don't want to rerun it for every UI-bound property.
     private IDeShortcutWriter? _activeWriterCache;
 
     private bool _activeWriterCached;
@@ -57,12 +51,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _waylandEvdevHotkeysEnabled;
 
-    /// <summary>
-    ///     Test-friendly constructor — defaults the writer list to empty
-    ///     so unit tests that don't care about DE integration don't need
-    ///     to fabricate writers. Production wiring passes the registered
-    ///     <see cref="IDeShortcutWriter" /> collection from DI.
-    /// </summary>
+    // Test-friendly overload — production wiring passes the DI-registered
+    // writer collection through the three-arg constructor.
     public ShortcutsSectionViewModel(HotkeyService hotkey, ISettingsService settings)
         : this(hotkey, settings, Array.Empty<IDeShortcutWriter>())
     {
@@ -89,27 +79,19 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public IReadOnlyList<RecordingMode> Modes { get; } =
         [RecordingMode.Toggle, RecordingMode.PushToTalk, RecordingMode.Hybrid];
 
-    /// <summary>Stable id of the currently-active backend, e.g. <c>linux-evdev</c>.</summary>
     public string ActiveBackendId => _hotkey.ActiveBackendId ?? "(not initialized)";
 
-    /// <summary>Human-readable backend name shown in the status panel.</summary>
     public string ActiveBackendDisplayName =>
         _hotkey.ActiveBackendDisplayName ?? "(not initialized)";
 
-    /// <summary>Session type ("wayland", "x11", or "unknown").</summary>
     public string SessionType =>
         Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") ?? "unknown";
 
-    /// <summary>True if the active backend can deliver press/release pairs.</summary>
     public bool SupportsPressRelease => _hotkey.ActiveBackendSupportsPressRelease ?? false;
 
-    /// <summary>
-    ///     Human-readable capture scope shown in the status panel. Distinct
-    ///     from <see cref="SupportsPressRelease" /> because SharpHook on
-    ///     Wayland delivers press+release but only while TypeWhisper has focus
-    ///     — labeling that as "Global" would mislead users diagnosing a
-    ///     broken hotkey.
-    /// </summary>
+    // Distinct from SupportsPressRelease: SharpHook on Wayland delivers
+    // press+release but only while TypeWhisper has focus. Labelling that
+    // "Global" would mislead users diagnosing a broken hotkey.
     public string ScopeText
     {
         get
@@ -126,20 +108,11 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    ///     True when the active backend can only deliver presses but the user
-    ///     has selected a mode that requires release events (PTT / Hybrid).
-    ///     Drives the capability-mismatch warning in the UI.
-    /// </summary>
     public bool ShowCapabilityMismatch =>
         _hotkey.BackendRequiresToggleMode && Mode != RecordingMode.Toggle;
 
-    /// <summary>
-    ///     True when the user is on a Wayland session and not a member of the
-    ///     <c>input</c> group — i.e. the evdev backend can't activate until they
-    ///     run the suggested usermod command. Null result from the group check
-    ///     (e.g. /proc not available) hides the banner.
-    /// </summary>
+    // Hide the banner when the group check returns null (e.g. /proc
+    // unavailable) so we don't nag users we can't actually advise.
     public bool ShowInputGroupBanner
     {
         get
@@ -156,47 +129,23 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     public string InputGroupCommand => AddToInputGroupCommand;
 
-    /// <summary>
-    ///     Command users paste into a DE shortcut binding to toggle dictation
-    ///     from any focused window. The bare binary name relies on Phase 4's
-    ///     single-instance IPC: a second invocation toggles the existing
-    ///     instance instead of launching a new one.
-    /// </summary>
+    // Bare binary name relies on the Phase 4 single-instance IPC: a second
+    // invocation toggles the existing instance instead of launching a new one.
     public string CustomShortcutCommand => "typewhisper";
 
-    /// <summary>
-    ///     True when the detected desktop supports separate press/release binds
-    ///     (Hyprland's <c>bind</c>+<c>bindr</c>, Sway's <c>bindsym</c> +
-    ///     <c>--release</c>). When true the UI shows a two-line PTT snippet
-    ///     alongside the toggle command; when false only the toggle snippet is
-    ///     shown.
-    /// </summary>
     public bool ShowPushToTalkSnippet => DesktopName is "Hyprland" or "Sway";
 
-    /// <summary>
-    ///     First line of the desktop-specific push-to-talk binding snippet
-    ///     (key press → <c>record start</c>). Empty for desktops that don't
-    ///     support the press/release pair.
-    /// </summary>
     public string PushToTalkPressSnippet =>
         DesktopName switch
         {
-            // Hyprland: `bind` fires on press. CTRL+SHIFT+SPACE is the same
-            // default suggested elsewhere in the UI so users don't have to
-            // pick a key just to read the example.
             "Hyprland" => "bind  = CTRL SHIFT, SPACE, exec, typewhisper record start",
-            // Sway: `--no-repeat` prevents the press-bind from auto-repeating
-            // while the key is held, which would otherwise hammer record.start
-            // many times per second. The orchestrator is idempotent so this is
-            // safe, but the noise is unhelpful.
+            // `--no-repeat` keeps a held key from hammering record.start many
+            // times per second. The orchestrator is idempotent so it's safe,
+            // just noisy.
             "Sway" => "bindsym --no-repeat $mod+space exec typewhisper record start",
             _ => ""
         };
 
-    /// <summary>
-    ///     Second line of the push-to-talk binding snippet (key release →
-    ///     <c>record stop</c>). Empty for desktops without press/release.
-    /// </summary>
     public string PushToTalkReleaseSnippet =>
         DesktopName switch
         {
@@ -205,11 +154,6 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _ => ""
         };
 
-    /// <summary>
-    ///     Short label describing what the PTT snippet does, surfaced above the
-    ///     command lines so a user copying the snippet knows they're getting
-    ///     true hold-to-talk rather than the toggle shown elsewhere on the page.
-    /// </summary>
     public string PushToTalkSnippetHint =>
         DesktopName switch
         {
@@ -220,15 +164,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _ => ""
         };
 
-    /// <summary>
-    ///     Best-effort desktop name. Routed through
-    ///     <see cref="DesktopDetector" /> so the snippet-display string and
-    ///     the writer-selection logic agree on what "Hyprland" or "GNOME"
-    ///     means — previously the VM and the new writers each parsed the
-    ///     env var independently and could disagree on edge cases like
-    ///     "ubuntu:GNOME". The trailing "KDE Plasma" → "KDE" tweak keeps
-    ///     the legacy snippet-display keys intact.
-    /// </summary>
+    // Route through DesktopDetector so this VM and the writer-selection
+    // logic agree on edge cases like "ubuntu:GNOME". "KDE Plasma" → "KDE"
+    // keeps the legacy snippet-display keys intact.
     public string DesktopName
     {
         get
@@ -238,11 +176,6 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    ///     DE-tailored instructions for binding a global shortcut to the
-    ///     <c>typewhisper</c> command. Falls back to generic wording for
-    ///     unknown desktops.
-    /// </summary>
     public string DesktopInstructions =>
         DesktopName switch
         {
@@ -298,27 +231,13 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    ///     True when a writer matches the current DE and the
-    ///     "Set up automatically" button should be shown.
-    /// </summary>
     public bool CanSetupAutomatically => ActiveWriter is not null;
 
-    /// <summary>
-    ///     "Set up automatically (GNOME)" — DE name baked in so
-    ///     the button is unambiguous when shown next to the "Show me the
-    ///     commands" alternative.
-    /// </summary>
     public string SetupAutomaticallyLabel =>
         ActiveWriter is null
             ? "Set up automatically"
             : $"Set up automatically ({ActiveWriter.DisplayName})";
 
-    /// <summary>
-    ///     Preview of the lines the active writer would change,
-    ///     shown beside the auto-setup button so the user can audit what
-    ///     the click will do before they click it.
-    /// </summary>
     public string IntegrationPreview
     {
         get
@@ -333,13 +252,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    ///     Build the <see cref="DeShortcutSpec" /> we hand to the writer.
-    ///     Defaults the trigger from the user's currently-configured
-    ///     toggle hotkey so they don't have to re-enter it — and for PTT-
-    ///     capable DEs we emit the record start/stop/cancel triplet so the
-    ///     installed bind drives the Phase 5 CLI directly.
-    /// </summary>
+    // For PTT-capable DEs emit the record start/stop/cancel triplet so the
+    // installed bind drives the Phase 5 CLI directly. Trigger defaults from
+    // the user's configured toggle hotkey so they don't re-enter it here.
     private DeShortcutSpec BuildSpec(IDeShortcutWriter writer)
     {
         var trigger = string.IsNullOrWhiteSpace(_settings.Current.ToggleHotkey)
@@ -420,12 +335,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         return string.Join('+', parts);
     }
 
-    /// <summary>
-    ///     Raised when the user clicks the "Copy" button next to the custom
-    ///     shortcut command. The view subscribes and performs the actual
-    ///     clipboard write via the parent <see cref="Avalonia.Controls.TopLevel" />
-    ///     — VMs don't have direct access to the clipboard in Avalonia.
-    /// </summary>
+    // VMs don't have direct clipboard access in Avalonia — the view
+    // subscribes and writes via TopLevel.Clipboard.
     public event EventHandler<string>? CopyCustomShortcutRequested;
 
     private static bool IsWaylandSession()

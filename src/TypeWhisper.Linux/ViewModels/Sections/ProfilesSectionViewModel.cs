@@ -201,16 +201,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public ObservableCollection<string> ProcessNameChips { get; } = [];
     public ObservableCollection<string> UrlPatternChips { get; } = [];
 
-    /// <summary>
-    ///     True when the URL Patterns block in the profile editor should be
-    ///     rendered. URL-based profile rules need a working URL extraction
-    ///     path: on X11 that's always available (xdotool + xclip); on Wayland
-    ///     it needs browser accessibility configured. Hiding the section when
-    ///     it can't possibly work avoids leading the user into building rules
-    ///     that silently never match — but we keep the section visible when
-    ///     the profile already has saved URL patterns so existing data isn't
-    ///     orphaned from view.
-    /// </summary>
+    // URL rules need extraction support: always available on X11; on Wayland
+    // they need browser accessibility configured. Hide the section when it
+    // can't work so the user doesn't build silently-broken rules — but keep
+    // it visible if the profile already has saved patterns.
     public bool IsUrlPatternsSectionVisible =>
         !_browserSetup.IsApplicable()
         || _browserSetup.IsCurrentlyConfigured().IsFullyConfigured
