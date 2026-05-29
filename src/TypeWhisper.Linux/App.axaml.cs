@@ -259,6 +259,10 @@ public class App : Application
             BootTrace.Stage("synchronous init complete; starting BootstrapDeferredAsync");
             var bootstrapTask = BootstrapDeferredAsync(services);
 
+            // Detached from bootstrapTask so a slow update check can't delay
+            // first-run onboarding (which awaits bootstrap below).
+            _ = RunStartupUpdateCheckAsync(services);
+
             // First-run onboarding wizard. Wait for bootstrap so bundled
             // plugins are deployed and initialized before the model picker loads.
             if (!settings.Current.HasCompletedOnboarding)
@@ -534,6 +538,29 @@ public class App : Application
             {
                 Debug.WriteLine($"[App] Auto-load model failed: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>
+    ///     Fire-and-forget once-per-day GitHub release check. Kept off the
+    ///     bootstrap task on purpose: first-run onboarding awaits bootstrap, and
+    ///     update checking is unrelated to the model/plugin setup the wizard
+    ///     needs, so a slow or unreachable network must not delay the wizard by
+    ///     the HTTP timeout. Network failures are swallowed inside the service;
+    ///     a found update drives the main window's banner via
+    ///     UpdateCheckService.ResultChanged (already subscribed by the VMs).
+    /// </summary>
+    private static async Task RunStartupUpdateCheckAsync(IServiceProvider services)
+    {
+        try
+        {
+            var updateCheck = services.GetRequiredService<UpdateCheckService>();
+            await updateCheck.CheckOnStartupAsync();
+            BootTrace.Stage("UpdateCheckService.CheckOnStartupAsync");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Startup update check failed: {ex.Message}");
         }
     }
 

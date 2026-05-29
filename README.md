@@ -524,3 +524,5 @@ These items appeared in the earlier project README or settings surface, but they
 ## License
 
 GPLv3 — see [LICENSE](LICENSE) for details. Commercial licensing available — see [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md). Trademark policy — see [TRADEMARK.md](TRADEMARK.md).
+
+Copyright and attribution — see [NOTICE](NOTICE). TypeWhisper for Linux is © 2026 Excel on the Web and incorporates code from the upstream TypeWhisper project (© 2026 TypeWhisper).
