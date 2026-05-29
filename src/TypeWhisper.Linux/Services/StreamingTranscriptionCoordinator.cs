@@ -216,6 +216,14 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             catch { /* best effort */ }
         }
 
+        // If the sender faulted during the drain above, HandleFault has already
+        // taken ownership of tearing this session down (fire-and-forget
+        // CleanupSessionAsync, which calls FinalizeAsync + DisposeAsync). Bail out
+        // before our own session.FinalizeAsync so we don't finalize/dispose the
+        // same instance concurrently. The caller reads Faulted (not this return
+        // value) to trigger batch fallback, matching the entry guard above.
+        if (Faulted) return SnapshotFinalSegments();
+
         Exception? sessionFinalizeFault = null;
         if (session is not null)
         {

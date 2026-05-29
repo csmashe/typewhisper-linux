@@ -152,10 +152,14 @@ public static class OpenAiChatHelper
         while (await reader.ReadLineAsync(ct) is { } rawLine)
         {
             var line = rawLine.Trim();
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+            if (!line.StartsWith("data:", StringComparison.Ordinal))
                 continue;
 
-            var payload = line[6..];
+            // SSE makes the single space after "data:" optional; strip at most
+            // one so "data:{...}" / "data:[DONE]" frames aren't silently skipped.
+            var payload = line[5..];
+            if (payload.StartsWith(' '))
+                payload = payload[1..];
             if (payload == "[DONE]")
                 yield break;
 

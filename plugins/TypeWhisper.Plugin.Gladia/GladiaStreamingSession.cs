@@ -36,28 +36,37 @@ internal sealed class GladiaStreamingSession : IStreamingSession
     )
     {
         var session = new GladiaStreamingSession();
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, InitUrl);
-        request.Headers.Add("x-gladia-key", apiKey);
-        request.Content = new StringContent(
-            BuildInitRequest(language, 16000),
-            Encoding.UTF8,
-            "application/json"
-        );
-
-        using var response = await httpClient.SendAsync(request, ct);
-        var json = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(
-                $"Gladia live init failed {(int)response.StatusCode}: {json}"
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, InitUrl);
+            request.Headers.Add("x-gladia-key", apiKey);
+            request.Content = new StringContent(
+                BuildInitRequest(language, 16000),
+                Encoding.UTF8,
+                "application/json"
             );
 
-        var url = ParseSessionUrl(json)
-            ?? throw new InvalidOperationException("Gladia live init response missing 'url'.");
+            using var response = await httpClient.SendAsync(request, ct);
+            var json = await response.Content.ReadAsStringAsync(ct);
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException(
+                    $"Gladia live init failed {(int)response.StatusCode}: {json}"
+                );
 
-        await session._ws.ConnectAsync(new Uri(url), ct);
-        session._receiveTask = session.ReceiveLoopAsync(session._receiveCts.Token);
-        return session;
+            var url = ParseSessionUrl(json)
+                ?? throw new InvalidOperationException("Gladia live init response missing 'url'.");
+
+            await session._ws.ConnectAsync(new Uri(url), ct);
+            session._receiveTask = session.ReceiveLoopAsync(session._receiveCts.Token);
+            return session;
+        }
+        catch
+        {
+            // Init/connect failed after we allocated the session — dispose so the
+            // ClientWebSocket and CancellationTokenSource don't leak on the error path.
+            await session.DisposeAsync();
+            throw;
+        }
     }
 
     public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
