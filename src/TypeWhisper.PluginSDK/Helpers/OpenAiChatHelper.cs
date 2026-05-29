@@ -159,6 +159,13 @@ public static class OpenAiChatHelper
             if (payload == "[DONE]")
                 yield break;
 
+            // A chat-completions stream returns 200 then can fail mid-flight via a
+            // top-level `error` frame rather than an HTTP error. Throw so
+            // LlmStreamPump faults and the caller falls back to batch, instead of
+            // committing the partial deltas seen so far as a successful result.
+            if (ParseChatCompletionStreamError(payload) is { } error)
+                throw new InvalidOperationException(error);
+
             if (ParseChatCompletionStreamDelta(payload) is { Length: > 0 } delta)
                 yield return delta;
         }
@@ -230,6 +237,50 @@ public static class OpenAiChatHelper
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     Returns a provider error message when a single chat-completions SSE
+    ///     <c>data:</c> payload is a top-level <c>error</c> frame — OpenAI-compatible
+    ///     providers emit <c>{"error": {...}}</c> (or a string) mid-stream after a
+    ///     200 — otherwise <c>null</c>. A literal <c>"error": null</c> on a normal
+    ///     chunk is not treated as a failure. Reflection-free (A18) via
+    ///     <see cref="JsonDocument" />.
+    /// </summary>
+    internal static string? ParseChatCompletionStreamError(string dataPayload)
+    {
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(dataPayload);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("error", out var error)
+                || error.ValueKind == JsonValueKind.Null)
+            {
+                return null;
+            }
+
+            if (error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("message", out var message)
+                && message.ValueKind == JsonValueKind.String)
+            {
+                return message.GetString() ?? "Streaming error.";
+            }
+
+            if (error.ValueKind == JsonValueKind.String)
+                return error.GetString() ?? "Streaming error.";
+
+            return "Streaming error.";
+        }
     }
 
     /// <summary>

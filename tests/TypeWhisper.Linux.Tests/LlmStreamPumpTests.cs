@@ -17,6 +17,7 @@ public sealed class LlmStreamPumpTests
 
         Assert.Equal("Hello, world!", result);
         Assert.False(pump.Faulted);
+        Assert.True(pump.ReceivedAnyChunk);
         Assert.Equal("Hello, world!", emissions[^1]);
     }
 
@@ -102,6 +103,25 @@ public sealed class LlmStreamPumpTests
 
         Assert.Equal("", result);
         Assert.False(pump.Faulted);
+        Assert.False(pump.ReceivedAnyChunk);
+        Assert.Empty(emissions);
+    }
+
+    [Fact]
+    public async Task RunAsync_SingleEmptyChunk_ReceivedAnyChunkTrue_NoFallbackSignal()
+    {
+        // The toggle-off / default bulk-yield path yields exactly one chunk that
+        // may legitimately be "". That must read as "the source produced output"
+        // (ReceivedAnyChunk == true) so the caller does NOT re-run ProcessAsync,
+        // even though the accumulated text is empty.
+        var emissions = new List<string>();
+        var pump = new LlmStreamPump(emissions.Add, TimeSpan.FromSeconds(10));
+
+        var result = await pump.RunAsync(Source(""), CancellationToken.None);
+
+        Assert.Equal("", result);
+        Assert.False(pump.Faulted);
+        Assert.True(pump.ReceivedAnyChunk);
         Assert.Empty(emissions);
     }
 

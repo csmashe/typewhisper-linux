@@ -1811,11 +1811,16 @@ public sealed class DictationOrchestrator : IDisposable
                 _promptProcessing.ProcessStreamingAsync(promptAction, text, token),
                 token);
 
-            // Streaming→batch lossless fallback: a buggy/empty streaming parser
-            // faults the pump, so retry once with the known-good batch path
-            // before the step is allowed to fail (RequireLlmSuccess). A clean
-            // stream skips this entirely.
-            var result = pump.Faulted
+            // Streaming→batch lossless fallback: retry once with the known-good
+            // batch path before the step is allowed to fail (RequireLlmSuccess)
+            // when either the pump faulted (mid-stream error / parse failure) OR
+            // the stream yielded nothing at all (proxy EOF, empty 200, silent
+            // parser regression) — those leave Faulted false, so ReceivedAnyChunk
+            // is what stops an empty stream from erasing the prompt-action output.
+            // A legitimately empty result delivered as a single chunk (toggle-off /
+            // bulk-yield) sets ReceivedAnyChunk, so it is NOT retried — that lone
+            // chunk is already a completed ProcessAsync call.
+            var result = pump.Faulted || !pump.ReceivedAnyChunk
                 ? await _promptProcessing.ProcessAsync(promptAction, text, token)
                 : streamed;
 

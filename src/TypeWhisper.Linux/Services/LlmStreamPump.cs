@@ -39,6 +39,18 @@ internal sealed class LlmStreamPump
     public bool Faulted { get; private set; }
 
     /// <summary>
+    ///     True once the source enumerable yielded at least one item, even an empty
+    ///     string. This distinguishes a stream that produced <em>nothing</em> (proxy
+    ///     EOF, empty 200, silent parser regression — zero items) from one that
+    ///     delivered a legitimately empty result in a single chunk (the toggle-off /
+    ///     default bulk-yield path, where the lone chunk is already a completed
+    ///     <c>ProcessAsync</c> call). The caller falls back to batch only on the
+    ///     former: re-running <c>ProcessAsync</c> for the latter would duplicate the
+    ///     request and could replace a valid empty answer with a different one.
+    /// </summary>
+    public bool ReceivedAnyChunk { get; private set; }
+
+    /// <summary>
     ///     Consumes <paramref name="source" />, coalescing deltas to
     ///     <c>onAccumulated</c> at no more than the flush rate. Returns the full
     ///     accumulated string. On a mid-stream fault, sets <see cref="Faulted" />
@@ -54,6 +66,10 @@ internal sealed class LlmStreamPump
         {
             await foreach (var delta in source.WithCancellation(ct))
             {
+                // Mark receipt before the empty-skip: a lone "" chunk (bulk-yield /
+                // toggle-off path) still counts as "the source produced output",
+                // which is what separates a real empty stream from an empty result.
+                ReceivedAnyChunk = true;
                 if (string.IsNullOrEmpty(delta)) continue;
                 _sb.Append(delta);
 

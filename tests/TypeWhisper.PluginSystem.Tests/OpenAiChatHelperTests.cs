@@ -59,4 +59,22 @@ public sealed class OpenAiChatHelperTests
     {
         Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamDelta("not json"));
     }
+
+    [Theory]
+    [InlineData("""{"error":{"message":"server had an error","type":"server_error"}}""", "server had an error")]
+    [InlineData("""{"error":{"type":"server_error"}}""", "Streaming error.")]
+    [InlineData("""{"error":"flat string error"}""", "flat string error")]
+    public void ParseChatCompletionStreamError_DetectsErrorFrames(string payload, string expected)
+    {
+        Assert.Equal(expected, OpenAiChatHelper.ParseChatCompletionStreamError(payload));
+    }
+
+    [Theory]
+    [InlineData("""{"choices":[{"delta":{"content":"Hello"}}]}""")]
+    [InlineData("""{"choices":[{"delta":{"content":"Hi"}}],"error":null}""")] // literal error:null is not a failure
+    [InlineData("not json")]
+    public void ParseChatCompletionStreamError_NonErrorFrame_ReturnsNull(string payload)
+    {
+        Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamError(payload));
+    }
 }

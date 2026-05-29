@@ -74,6 +74,45 @@ public sealed class SharedHelperStreamingCohortTests
     public async Task Gemini_ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk() =>
         await AssertToggleOffYieldsBulk(h => new GeminiPlugin(h), "api-key");
 
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsOnErrorFrameAfterPartialDeltas()
+    {
+        // A chat-completions stream returns 200 then can fail mid-flight via a
+        // top-level `error` frame. The reader must throw so LlmStreamPump faults
+        // and the caller falls back to batch, rather than committing the partial
+        // deltas seen so far as a successful result. Exercised through Cerebras;
+        // the path is the shared OpenAiChatHelper, so it covers the whole cohort.
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
+            "",
+            "data: {\"error\":{\"message\":\"server had an error\",\"type\":\"server_error\"}}",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "test-key";
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new CerebrasPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "model", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(new[] { "Hel" }, chunks);
+        Assert.Equal("server had an error", ex.Message);
+    }
+
     private static void AssertStreamBody(string? body, string expectedModel)
     {
         using var doc = JsonDocument.Parse(body!);
