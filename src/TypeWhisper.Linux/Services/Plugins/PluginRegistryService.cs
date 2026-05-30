@@ -47,6 +47,7 @@ public sealed class PluginRegistryService
         "com.typewhisper.gladia",
         "com.typewhisper.speechmatics",
         "com.typewhisper.soniox",
+        "com.typewhisper.reson8",
         "com.typewhisper.google-cloud-stt",
         "com.typewhisper.voxtral",
         "com.typewhisper.qwen3-stt",
