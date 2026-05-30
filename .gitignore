@@ -15,6 +15,7 @@ TestResults/
 .DS_Store
 releases/
 /dist/
+# Ignore everything under docs/ except published release notes
 docs/*
 !docs/releases/
 publish/

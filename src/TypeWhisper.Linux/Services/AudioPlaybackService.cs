@@ -48,20 +48,30 @@ public sealed class AudioPlaybackService : IDisposable
             return;
         }
 
+        bool toggleOff;
+        PaStream? previous;
         lock (_gate)
         {
-            if (
+            toggleOff =
                 IsPlaying
-                && string.Equals(CurrentFile, audioFileName, StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                StopCore();
-                NotifyPlaybackChanged();
-                return;
-            }
+                && string.Equals(CurrentFile, audioFileName, StringComparison.OrdinalIgnoreCase);
+            previous = DetachStreamLocked();
+        }
 
-            StopCore();
+        // Tear down any existing stream WITHOUT holding _gate: Pa_StopStream
+        // blocks until the audio callback thread finishes, and that callback
+        // also takes _gate — stopping under the lock deadlocks the UI.
+        DisposeStream(previous);
 
+        if (toggleOff)
+        {
+            NotifyPlaybackChanged();
+            return;
+        }
+
+        PaStream? failed = null;
+        lock (_gate)
+        {
             try
             {
                 var (samples, sampleRate) = LoadWav(path);
@@ -71,53 +81,56 @@ public sealed class AudioPlaybackService : IDisposable
                 var deviceIndex = PortAudio.DefaultOutputDevice;
                 if (deviceIndex == PortAudio.NoDevice)
                 {
-                    StopCore();
-                    return;
+                    DetachStreamLocked();
                 }
-
-                var outputInfo = PortAudio.GetDeviceInfo(deviceIndex);
-                var outputParams = new StreamParameters
+                else
                 {
-                    device = deviceIndex,
-                    channelCount = Channels,
-                    sampleFormat = SampleFormat.Float32,
-                    suggestedLatency = outputInfo.defaultLowOutputLatency,
-                    hostApiSpecificStreamInfo = IntPtr.Zero
-                };
+                    var outputInfo = PortAudio.GetDeviceInfo(deviceIndex);
+                    var outputParams = new StreamParameters
+                    {
+                        device = deviceIndex,
+                        channelCount = Channels,
+                        sampleFormat = SampleFormat.Float32,
+                        suggestedLatency = outputInfo.defaultLowOutputLatency,
+                        hostApiSpecificStreamInfo = IntPtr.Zero
+                    };
 
-                _stream = new PaStream(
-                    null,
-                    outputParams,
-                    sampleRate,
-                    FramesPerBuffer,
-                    StreamFlags.ClipOff,
-                    PlaybackCallback,
-                    IntPtr.Zero
-                );
+                    _stream = new PaStream(
+                        null,
+                        outputParams,
+                        sampleRate,
+                        FramesPerBuffer,
+                        StreamFlags.ClipOff,
+                        PlaybackCallback,
+                        IntPtr.Zero
+                    );
 
-                _stream.Start();
-                CurrentFile = audioFileName;
-                IsPlaying = true;
-                _ = MonitorPlaybackCompletionAsync();
+                    _stream.Start();
+                    CurrentFile = audioFileName;
+                    IsPlaying = true;
+                    _ = MonitorPlaybackCompletionAsync();
+                }
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[AudioPlaybackService] Play failed: {ex.Message}");
-                StopCore();
-                return;
+                failed = DetachStreamLocked();
             }
         }
 
+        DisposeStream(failed);
         NotifyPlaybackChanged();
     }
 
     public void Stop()
     {
+        PaStream? stream;
         lock (_gate)
         {
-            StopCore();
+            stream = DetachStreamLocked();
         }
 
+        DisposeStream(stream);
         NotifyPlaybackChanged();
     }
 
@@ -161,40 +174,68 @@ public sealed class AudioPlaybackService : IDisposable
         {
             await Task.Delay(100).ConfigureAwait(false);
 
-            bool done;
+            PaStream? finished;
             lock (_gate)
             {
-                done = _stream is null || !_stream.IsActive || _stream.IsStopped;
-                if (!done)
+                if (_stream is null)
+                {
+                    // Already stopped from Play()/Stop().
+                    return;
+                }
+
+                if (_stream.IsActive && !_stream.IsStopped)
                 {
                     continue;
                 }
 
-                StopCore();
+                finished = DetachStreamLocked();
             }
 
+            DisposeStream(finished);
             NotifyPlaybackChanged();
             return;
         }
     }
 
-    private void StopCore()
+    // Clears playback state and hands back the active stream (if any) so the
+    // caller can dispose it OUTSIDE _gate. Must be called while holding _gate.
+    private PaStream? DetachStreamLocked()
     {
+        var stream = _stream;
+        _stream = null;
+        _samples = [];
+        _position = 0;
+        CurrentFile = null;
+        IsPlaying = false;
+        return stream;
+    }
+
+    // Stops and disposes a PortAudio stream. Pa_StopStream blocks on the audio
+    // callback thread, so this must never run while _gate is held.
+    private static void DisposeStream(PaStream? stream)
+    {
+        if (stream is null)
+        {
+            return;
+        }
+
         try
         {
-            _stream?.Stop();
+            stream.Stop();
         }
         catch
         {
             /* best effort */
         }
 
-        _stream?.Dispose();
-        _stream = null;
-        _samples = [];
-        _position = 0;
-        CurrentFile = null;
-        IsPlaying = false;
+        try
+        {
+            stream.Dispose();
+        }
+        catch
+        {
+            /* best effort */
+        }
     }
 
     // Resolve audioFileName relative to the audio root, rejecting anything
