@@ -261,7 +261,7 @@ Version: $DEB_VERSION
 Section: utils
 Priority: optional
 Architecture: amd64
-Maintainer: TypeWhisper Linux <noreply@typewhisper.local>
+Maintainer: Excel on the Web <noreply@excelontheweb.com>
 Installed-Size: $INSTALLED_SIZE
 Recommends: libpulse0, pulseaudio-utils, playerctl, xdotool
 Description: Speech-to-text dictation for Linux desktop
@@ -339,7 +339,7 @@ Version:        $RPM_VERSION_CLEAN
 Release:        1%{?dist}
 Summary:        Speech-to-text dictation for Linux desktop
 License:        GPL-3.0-or-later
-URL:            https://github.com/typewhisper
+URL:            https://github.com/csmashe/typewhisper-linux
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      x86_64
 AutoReqProv:    no

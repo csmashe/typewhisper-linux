@@ -1550,6 +1550,13 @@ public sealed class DictationOrchestrator : IDisposable
                 await YieldFocusForInsertionAsync().ConfigureAwait(false);
             }
 
+            // Pad the injected text with a trailing space (when it doesn't
+            // already end in whitespace) so back-to-back dictations don't run
+            // together. Only the inserted text and the TextInsertedEvent use
+            // this; history, recent transcriptions, and completion events keep
+            // the unpadded finalText.
+            var insertionText = DictationInsertionTextFormatter.TextForInsertion(finalText);
+
             InsertionResult insertion;
             try
             {
@@ -1559,7 +1566,7 @@ public sealed class DictationOrchestrator : IDisposable
                         : actionPlugin is null
                             ? await _textInsertion.InsertTextAsync(
                                 new TextInsertionRequest(
-                                    finalText,
+                                    insertionText,
                                     _settings.Current.AutoPaste,
                                     context.WindowId,
                                     context.AppProcess,
@@ -1635,7 +1642,7 @@ public sealed class DictationOrchestrator : IDisposable
             )
             {
                 _models.PluginManager.EventBus.Publish(
-                    new TextInsertedEvent { Text = finalText, TargetApp = context.AppProcess }
+                    new TextInsertedEvent { Text = insertionText, TargetApp = context.AppProcess }
                 );
             }
 

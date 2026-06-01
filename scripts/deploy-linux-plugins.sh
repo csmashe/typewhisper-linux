@@ -75,6 +75,7 @@ declare -A PLUGINS=(
   ["com.typewhisper.gladia"]="TypeWhisper.Plugin.Gladia"
   ["com.typewhisper.speechmatics"]="TypeWhisper.Plugin.Speechmatics"
   ["com.typewhisper.soniox"]="TypeWhisper.Plugin.Soniox"
+  ["com.typewhisper.reson8"]="TypeWhisper.Plugin.Reson8"
   ["com.typewhisper.google-cloud-stt"]="TypeWhisper.Plugin.GoogleCloudStt"
   ["com.typewhisper.voxtral"]="TypeWhisper.Plugin.Voxtral"
   ["com.typewhisper.qwen3-stt"]="TypeWhisper.Plugin.Qwen3Stt"

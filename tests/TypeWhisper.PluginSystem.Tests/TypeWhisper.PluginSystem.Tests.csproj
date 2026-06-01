@@ -27,6 +27,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAi\TypeWhisper.Plugin.OpenAi.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAiCompatible\TypeWhisper.Plugin.OpenAiCompatible.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenRouter\TypeWhisper.Plugin.OpenRouter.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Reson8\TypeWhisper.Plugin.Reson8.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Script\TypeWhisper.Plugin.Script.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.SherpaOnnx\TypeWhisper.Plugin.SherpaOnnx.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.SmallestAi\TypeWhisper.Plugin.SmallestAi.csproj"/>
