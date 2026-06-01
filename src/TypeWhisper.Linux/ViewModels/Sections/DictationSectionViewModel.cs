@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -37,7 +38,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private CleanupLevel _cleanupLevel = CleanupLevel.None;
 
     [ObservableProperty]
-    private string _computeBackend = "cpu";
+    private string _localModelAcceleration = AppSettings.LocalModelAccelerationAuto;
 
     [ObservableProperty]
     private string _cudaSetupStatus = "";
@@ -58,6 +59,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private string? _lastTranscription;
 
     [ObservableProperty]
+    private bool _liveTranscriptionEnabled;
+
+    [ObservableProperty]
     private string _microphoneStatus = "";
 
     [ObservableProperty]
@@ -73,6 +77,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private TextInsertionStrategy _newInsertionStrategy = TextInsertionStrategy.Auto;
+
+    [ObservableProperty]
+    private bool _onlineAsrBatchLiveTranscriptionEnabled;
 
     [ObservableProperty]
     private bool _pauseMediaDuringRecording;
@@ -174,8 +181,12 @@ public partial class DictationSectionViewModel : ObservableObject
     public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
     public ObservableCollection<AudioInputDevice> Devices { get; } = [];
 
-    public ObservableCollection<ComputeBackendOption> ComputeBackendOptions { get; } =
-        [new("cpu", "CPU"), new("cuda", "CUDA")];
+    public ObservableCollection<AccelerationOption> AccelerationOptions { get; } =
+        [
+            new(AppSettings.LocalModelAccelerationAuto, "Auto"),
+            new(AppSettings.LocalModelAccelerationCpu, "CPU"),
+            new(AppSettings.LocalModelAccelerationNvidiaCuda, "NVIDIA CUDA")
+        ];
 
     public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
     [
@@ -241,48 +252,56 @@ public partial class DictationSectionViewModel : ObservableObject
     public string CudaLibraryPathActionText => "Fix CUDA path";
     public bool CanUseCuda => _commands.HasCudaGpu && _commands.HasCudaRuntimeLibraries;
 
-    public string ComputeBackendHint
+    public string AccelerationStatusText
     {
         get
         {
-            if (string.Equals(ComputeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
+            var status = _models.ActiveTranscriptionPlugin?.AccelerationStatus;
+            if (status is null)
             {
-                return ShowCudaLibraryPathAction
-                    ? "CPU mode is active. CUDA 12 is installed, but TypeWhisper cannot see it yet."
-                    : "CPU mode is active.";
+                return LocalModelAcceleration switch
+                {
+                    AppSettings.LocalModelAccelerationCpu => "CPU mode is active.",
+                    AppSettings.LocalModelAccelerationNvidiaCuda when !CanUseCuda =>
+                        FindCuda12LibraryPath() is null
+                            ? "CUDA 12 runtime libraries are not installed yet."
+                            : "CUDA 12 is installed, but TypeWhisper cannot see it yet.",
+                    AppSettings.LocalModelAccelerationNvidiaCuda =>
+                        "CUDA is ready for whisper.cpp models. Other local plugins use CPU.",
+                    _ => "Auto: CUDA will be used when available, otherwise CPU.",
+                };
             }
 
-            if (CanUseCuda)
+            var text = status.DisplayText;
+            if (!string.IsNullOrWhiteSpace(status.Detail))
             {
-                return "CUDA is ready for whisper.cpp models. Other local plugins use CPU.";
+                text += " — " + status.Detail;
             }
 
-            if (!_commands.HasCudaGpu)
+            if (status.RequiresRestart)
             {
-                return "CUDA unavailable: no NVIDIA GPU/driver was detected. CPU is used.";
+                text += " Restart TypeWhisper to apply.";
             }
 
-            return FindCuda12LibraryPath() is null
-                ? "CUDA 12 runtime libraries are not installed yet. CPU is used."
-                : "CUDA 12 is installed, but TypeWhisper cannot see it yet.";
+            return text;
         }
     }
 
-    public ComputeBackendOption? SelectedComputeBackendOption
+    public AccelerationOption? SelectedAccelerationOption
     {
         get =>
-            ComputeBackendOptions.FirstOrDefault(option =>
-                string.Equals(option.Value, ComputeBackend, StringComparison.OrdinalIgnoreCase)
+            AccelerationOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, LocalModelAcceleration, StringComparison.OrdinalIgnoreCase)
             );
         set
         {
-            var selected = value?.Value ?? "cpu";
-            if (string.Equals(selected, ComputeBackend, StringComparison.OrdinalIgnoreCase))
+            var selected = value?.Value ?? AppSettings.LocalModelAccelerationAuto;
+            if (string.Equals(selected, LocalModelAcceleration, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
 
-            ComputeBackend = selected;
+            LocalModelAcceleration = selected;
             OnPropertyChanged();
         }
     }
@@ -460,9 +479,13 @@ public partial class DictationSectionViewModel : ObservableObject
         Language = string.IsNullOrWhiteSpace(settings.Language) ? "auto" : settings.Language;
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
         CleanupLevel = settings.CleanupLevel;
-        ComputeBackend = NormalizeComputeBackend(settings.ComputeBackend);
+        LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
+            settings.LocalModelAcceleration
+        );
         AutoPaste = settings.AutoPaste;
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
+        LiveTranscriptionEnabled = settings.LiveTranscriptionEnabled;
+        OnlineAsrBatchLiveTranscriptionEnabled = settings.OnlineAsrBatchLiveTranscriptionEnabled;
         RefreshAppInsertionStrategies(settings.AppInsertionStrategies);
         WhisperModeEnabled = settings.WhisperModeEnabled;
         SoundFeedbackEnabled = settings.SoundFeedbackEnabled && CanUseSoundFeedback;
@@ -485,7 +508,8 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
         OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
-        OnPropertyChanged(nameof(SelectedComputeBackendOption));
+        OnPropertyChanged(nameof(SelectedAccelerationOption));
+        OnPropertyChanged(nameof(AccelerationStatusText));
         RefreshModelState();
     }
 
@@ -541,7 +565,7 @@ public partial class DictationSectionViewModel : ObservableObject
         };
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
-        OnPropertyChanged(nameof(ComputeBackendHint));
+        OnPropertyChanged(nameof(AccelerationStatusText));
     }
 
     partial void OnSelectedModelChanged(DictationModelOption? value)
@@ -557,32 +581,65 @@ public partial class DictationSectionViewModel : ObservableObject
         _ = DownloadAndLoadSelectedModelAsync(value);
     }
 
-    partial void OnComputeBackendChanged(string value)
+    partial void OnLocalModelAccelerationChanged(string value)
     {
-        var normalized = NormalizeComputeBackend(value);
-        if (normalized == "cuda" && !CanUseCuda)
+        var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
+
+        // Preserve today's "can't pick explicit CUDA on a system without it" guard.
+        // Auto is always selectable and resolves to CPU at load time when CUDA is absent.
+        if (normalized == AppSettings.LocalModelAccelerationNvidiaCuda && !CanUseCuda)
         {
-            ComputeBackend = "cpu";
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
             StatusText = _commands.HasCudaGpu
                 ? "CUDA is not ready yet. Click Fix CUDA path, then restart TypeWhisper."
                 : "CUDA is not available on this system. Using CPU.";
-            OnPropertyChanged(nameof(ComputeBackendHint));
+            OnPropertyChanged(nameof(AccelerationStatusText));
             OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
             return;
         }
 
-        if (_settings.Current.ComputeBackend != normalized)
+        if (
+            !string.Equals(
+                _settings.Current.LocalModelAcceleration,
+                normalized,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
-            _settings.Save(_settings.Current with { ComputeBackend = normalized });
+            _settings.Save(_settings.Current with { LocalModelAcceleration = normalized });
         }
 
-        OnPropertyChanged(nameof(SelectedComputeBackendOption));
-        OnPropertyChanged(nameof(ComputeBackendHint));
+        OnPropertyChanged(nameof(SelectedAccelerationOption));
+        OnPropertyChanged(nameof(AccelerationStatusText));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
 
-        if (SelectedModel is { } selected && _models.IsDownloaded(selected.ModelId))
+        // Trigger a reload so EnsureModelLoadedAsync re-evaluates against the new
+        // preference; the plugin's AccelerationStatus surfaces RequiresRestart when
+        // the process-pinned runtime can no longer match.
+        if (
+            _models.ActiveTranscriptionPlugin is not null
+            && SelectedModel is { } selected
+            && _models.IsDownloaded(selected.ModelId)
+        )
         {
-            _ = DownloadAndLoadSelectedModelAsync(selected);
+            _ = ReloadActiveModelForAccelerationChangeAsync(selected);
+        }
+    }
+
+    private async Task ReloadActiveModelForAccelerationChangeAsync(DictationModelOption selected)
+    {
+        try
+        {
+            await _models.EnsureModelLoadedAsync(selected.ModelId);
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Model reload failed: {FormatModelStatusError(ex.Message)}";
+        }
+        finally
+        {
+            OnPropertyChanged(nameof(AccelerationStatusText));
+            RefreshModelState();
         }
     }
 
@@ -630,11 +687,6 @@ public partial class DictationSectionViewModel : ObservableObject
 
             cts.Dispose();
         }
-    }
-
-    private static string NormalizeComputeBackend(string? backend)
-    {
-        return string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
     }
 
     [RelayCommand]
@@ -807,6 +859,16 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings.Save(_settings.Current with { AutoAddDictionaryCorrections = value });
     }
 
+    partial void OnLiveTranscriptionEnabledChanged(bool value)
+    {
+        _settings.Save(_settings.Current with { LiveTranscriptionEnabled = value });
+    }
+
+    partial void OnOnlineAsrBatchLiveTranscriptionEnabledChanged(bool value)
+    {
+        _settings.Save(_settings.Current with { OnlineAsrBatchLiveTranscriptionEnabled = value });
+    }
+
     [RelayCommand]
     private void AddAppInsertionStrategy()
     {
@@ -957,7 +1019,7 @@ public sealed record DictationModelOption(string ModelId, string DisplayName, st
     public string DisplayLabel => $"{EngineName} / {DisplayName}";
 }
 
-public sealed record ComputeBackendOption(string Value, string DisplayName);
+public sealed record AccelerationOption(string Value, string DisplayName);
 
 public sealed record SpokenLanguageOption(string Code, string DisplayName);
 

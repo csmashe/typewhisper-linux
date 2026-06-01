@@ -46,8 +46,16 @@ public sealed class HotkeyService : IDisposable
     private EventHandler? _onDictationStopRequested;
     private EventHandler? _onDictationToggleRequested;
     private EventHandler? _onPromptPaletteRequested;
+    private EventHandler<string>? _onPromptActionRequested;
     private EventHandler? _onRecentTranscriptionsRequested;
     private EventHandler? _onTransformSelectionRequested;
+
+    // Direct-execution prompt action hotkeys (B12). The list is rebuilt
+    // wholesale by SetPromptActionHotkeys; the snapshot pushed to the
+    // backend captures it by reference, so mutations after push are not
+    // observed by the running matcher.
+    private IReadOnlyList<PromptActionHotkey> _promptActionHotkeys =
+        Array.Empty<PromptActionHotkey>();
 
     // Serializes backend updates so a burst of TrySet*/Mode= calls can't apply
     // out of order and leave the backend listening for stale bindings.
@@ -247,6 +255,8 @@ public sealed class HotkeyService : IDisposable
             _onTransformSelectionRequested = (_, _) =>
                 TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
             _onCancelRequested = (_, _) => CancelRequested?.Invoke(this, EventArgs.Empty);
+            _onPromptActionRequested = (_, actionId) =>
+                PromptActionHotkeyTriggered?.Invoke(this, actionId);
             _onBackendFailed = (_, message) => HookFailed?.Invoke(this, message);
             backend.DictationToggleRequested += _onDictationToggleRequested;
             backend.DictationStartRequested += _onDictationStartRequested;
@@ -256,6 +266,7 @@ public sealed class HotkeyService : IDisposable
             backend.CopyLastTranscriptionRequested += _onCopyLastTranscriptionRequested;
             backend.TransformSelectionRequested += _onTransformSelectionRequested;
             backend.CancelRequested += _onCancelRequested;
+            backend.PromptActionRequested += _onPromptActionRequested;
             backend.Failed += _onBackendFailed;
             _backend = backend;
         }
@@ -461,6 +472,7 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? CopyLastTranscriptionRequested;
     public event EventHandler? TransformSelectionRequested;
     public event EventHandler? CancelRequested;
+    public event EventHandler<string>? PromptActionHotkeyTriggered;
     public event EventHandler<string>? HookFailed;
 
     // Placeholder for instrumentation on backend switch; left as a named
@@ -514,6 +526,11 @@ public sealed class HotkeyService : IDisposable
             backend.CancelRequested -= _onCancelRequested;
         }
 
+        if (_onPromptActionRequested is not null)
+        {
+            backend.PromptActionRequested -= _onPromptActionRequested;
+        }
+
         if (_onBackendFailed is not null)
         {
             backend.Failed -= _onBackendFailed;
@@ -527,6 +544,7 @@ public sealed class HotkeyService : IDisposable
         _onCopyLastTranscriptionRequested = null;
         _onTransformSelectionRequested = null;
         _onCancelRequested = null;
+        _onPromptActionRequested = null;
         _onBackendFailed = null;
     }
 
@@ -546,8 +564,108 @@ public sealed class HotkeyService : IDisposable
             _cancelKey,
             _cancelModifiers,
             _mode,
-            _cancelShortcutEnabled
+            _cancelShortcutEnabled,
+            _promptActionHotkeys
         );
+    }
+
+    /// <summary>
+    ///     Replaces the dynamic per-action hotkey list atomically. Entries that
+    ///     collide with an existing fixed binding (Dictation, PromptPalette,
+    ///     RecentTranscriptions, CopyLastTranscription, TransformSelection) or
+    ///     with an earlier accepted prompt-action entry are dropped with a
+    ///     <see cref="Trace.WriteLine" />, matching the silent-rejection style
+    ///     of <c>TrySet*HotkeyFromString</c>. Pushes a fresh snapshot to the
+    ///     backend so the matcher sees the new list immediately.
+    /// </summary>
+    public void SetPromptActionHotkeys(IReadOnlyList<PromptActionHotkey> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        // Clear the previous list before reconciling so GetBoundHotkeys()
+        // doesn't report the same chord as already-bound when an unchanged
+        // entry is re-submitted (the common case — ActionsChanged fires on
+        // every add/update/delete and reuses most existing entries). Intra-
+        // batch deduplication is handled by the `accepted.Any(...)` check
+        // below.
+        _promptActionHotkeys = Array.Empty<PromptActionHotkey>();
+
+        var accepted = new List<PromptActionHotkey>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.ActionId))
+            {
+                Trace.WriteLine(
+                    "[HotkeyService] Refusing prompt-action hotkey with empty action id."
+                );
+                continue;
+            }
+
+            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with another shortcut."
+                );
+                continue;
+            }
+
+            // Intra-batch collision: reuse the full HotkeyMatches so the
+            // prefix-collision rule applies between prompt-action entries
+            // too (e.g. a batch containing both `Left Ctrl` and `Ctrl+F9`
+            // would otherwise accept both and shadow the chord at runtime).
+            if (
+                accepted.Any(prior =>
+                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
+                )
+            )
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with an earlier entry."
+                );
+                continue;
+            }
+
+            accepted.Add(entry);
+        }
+
+        _promptActionHotkeys = accepted;
+        PushShortcutsIfRunning();
+    }
+
+    /// <summary>
+    ///     Translates the JSON-stored <see cref="PromptAction.HotkeyKey" />
+    ///     strings into parsed <see cref="PromptActionHotkey" /> entries.
+    ///     Actions with a missing or unparseable hotkey are silently skipped
+    ///     (matches the <c>TrySet*HotkeyFromString</c> rejection pattern); the
+    ///     caller decides what to do with the resulting list (typically pass
+    ///     it to <see cref="SetPromptActionHotkeys" />).
+    /// </summary>
+    public static IReadOnlyList<PromptActionHotkey> ParsePromptActionHotkeys(
+        IEnumerable<PromptAction> actions
+    )
+    {
+        ArgumentNullException.ThrowIfNull(actions);
+
+        var result = new List<PromptActionHotkey>();
+        foreach (var action in actions)
+        {
+            if (!action.IsEnabled || string.IsNullOrWhiteSpace(action.HotkeyKey))
+            {
+                continue;
+            }
+
+            if (!TryParseHotkey(action.HotkeyKey, out var key, out var modifiers) || key is null)
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Unparseable prompt-action hotkey for '{action.Id}': '{action.HotkeyKey}'."
+                );
+                continue;
+            }
+
+            result.Add(new PromptActionHotkey(action.Id, key.Value, modifiers));
+        }
+
+        return result;
     }
 
     private void PushShortcutsIfRunning()
@@ -613,7 +731,78 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        return key == otherKey.Value && modifiers == otherModifiers;
+        // Use ShortcutMatcher.ModifiersMatch so collision detection treats
+        // LeftCtrl/RightCtrl (and Shift/Alt/Meta variants) as equivalent —
+        // otherwise a chord like RightCtrl+Space could slip past the check
+        // and collide with a LeftCtrl+Space binding at runtime, since the
+        // dispatcher uses ModifiersMatch when resolving presses.
+        if (key == otherKey.Value
+            && ShortcutMatcher.ModifiersMatch(modifiers, otherModifiers))
+        {
+            return true;
+        }
+
+        // B8 prefix collision: a side-specific single-modifier binding (e.g.
+        // `Left Ctrl` → `(VcLeftControl, None)`) fires on the bare modifier
+        // press, which is also the first keystroke of every chord that uses
+        // the same physical modifier. Reject either direction at config
+        // time so users can't shadow their own chord bindings. The chord
+        // side is checked against BOTH left and right flags because the
+        // matcher collapses them — pressing the modifier-only's bound side
+        // also satisfies any chord storing the opposite-side flag.
+        if (CollidesAsModifierPrefix(key, modifiers, otherKey.Value, otherModifiers)
+            || CollidesAsModifierPrefix(otherKey.Value, otherModifiers, key, modifiers))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool CollidesAsModifierPrefix(
+        KeyCode modifierOnlyKey,
+        ModifierMask modifierOnlyMods,
+        KeyCode chordKey,
+        ModifierMask chordMods
+    )
+    {
+        if (modifierOnlyMods != ModifierMask.None)
+        {
+            return false;
+        }
+
+        var physicalGroup = PhysicalModifierGroup(modifierOnlyKey);
+        if (physicalGroup == ModifierMask.None)
+        {
+            return false;
+        }
+
+        // The chord must use the same physical modifier (in either side
+        // flag — the matcher collapses them) AND must have a different
+        // terminal key, otherwise the existing exact-match branch already
+        // caught the collision and we'd double-count.
+        if (chordKey == modifierOnlyKey && chordMods == modifierOnlyMods)
+        {
+            return false;
+        }
+
+        return (chordMods & physicalGroup) != ModifierMask.None;
+    }
+
+    private static ModifierMask PhysicalModifierGroup(KeyCode key)
+    {
+        return key switch
+        {
+            KeyCode.VcLeftControl or KeyCode.VcRightControl
+                => ModifierMask.LeftCtrl | ModifierMask.RightCtrl,
+            KeyCode.VcLeftShift or KeyCode.VcRightShift
+                => ModifierMask.LeftShift | ModifierMask.RightShift,
+            KeyCode.VcLeftAlt or KeyCode.VcRightAlt
+                => ModifierMask.LeftAlt | ModifierMask.RightAlt,
+            KeyCode.VcLeftMeta or KeyCode.VcRightMeta
+                => ModifierMask.LeftMeta | ModifierMask.RightMeta,
+            _ => ModifierMask.None
+        };
     }
 
     private IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> GetBoundHotkeys(
@@ -644,6 +833,19 @@ public sealed class HotkeyService : IDisposable
         {
             yield return (_transformSelectionKey, _transformSelectionModifiers);
         }
+
+        // Dynamic per-action prompt-action bindings (B12). Including them
+        // here makes the collision check symmetric: TrySet*HotkeyFromString
+        // rejects a fixed-binding change that would shadow an existing
+        // prompt-action chord, mirroring SetPromptActionHotkeys' rejection
+        // of a new entry that collides with a fixed binding. The
+        // PromptAction enum value is intentionally absent — SetPromptActionHotkeys
+        // clears _promptActionHotkeys before its reconcile loop, so this
+        // method never has to exclude a "current prompt action" entry.
+        foreach (var entry in _promptActionHotkeys)
+        {
+            yield return (entry.Key, entry.Modifiers);
+        }
     }
 
     private static bool HotkeyMatchesAny(
@@ -657,6 +859,29 @@ public sealed class HotkeyService : IDisposable
 
     private static string FormatHotkey(KeyCode key, ModifierMask mods)
     {
+        // Tier-A side-specific single modifier round-trip: the binding's "key"
+        // is itself a side-specific modifier with no extra mods. Emit the
+        // parser-symmetric spelling so format → parse → format is stable.
+        if (mods == ModifierMask.None)
+        {
+            var sideSpecific = key switch
+            {
+                KeyCode.VcLeftControl => "Left Ctrl",
+                KeyCode.VcRightControl => "Right Ctrl",
+                KeyCode.VcLeftShift => "Left Shift",
+                KeyCode.VcRightShift => "Right Shift",
+                KeyCode.VcLeftAlt => "Left Alt",
+                KeyCode.VcRightAlt => "Right Alt",
+                KeyCode.VcLeftMeta => "Left Meta",
+                KeyCode.VcRightMeta => "Right Meta",
+                _ => null
+            };
+            if (sideSpecific is not null)
+            {
+                return sideSpecific;
+            }
+        }
+
         var parts = new List<string>();
         if (mods.HasFlag(ModifierMask.LeftCtrl) || mods.HasFlag(ModifierMask.RightCtrl))
         {
@@ -695,6 +920,19 @@ public sealed class HotkeyService : IDisposable
         if (string.IsNullOrWhiteSpace(text))
         {
             return false;
+        }
+
+        // Tier-A side-specific single modifier: "Right Alt", "Left Ctrl", etc.
+        // Checked before the '+' split so a stray chord like "Right Alt+R"
+        // falls through to the normal loop instead of silently absorbing the
+        // side prefix here.
+        var trimmed = text.Trim();
+        if (!trimmed.Contains('+')
+            && TryParseSideSpecificSingleModifier(trimmed, out var sideModifierKey))
+        {
+            key = sideModifierKey;
+            modifiers = ModifierMask.None;
+            return true;
         }
 
         var parts = text.Split(
@@ -797,6 +1035,23 @@ public sealed class HotkeyService : IDisposable
         }
 
         return key is not null;
+    }
+
+    private static bool TryParseSideSpecificSingleModifier(string token, out KeyCode key)
+    {
+        key = token.ToLowerInvariant() switch
+        {
+            "left ctrl" or "left control" => KeyCode.VcLeftControl,
+            "right ctrl" or "right control" => KeyCode.VcRightControl,
+            "left shift" => KeyCode.VcLeftShift,
+            "right shift" => KeyCode.VcRightShift,
+            "left alt" => KeyCode.VcLeftAlt,
+            "right alt" => KeyCode.VcRightAlt,
+            "left meta" or "left super" or "left win" => KeyCode.VcLeftMeta,
+            "right meta" or "right super" or "right win" => KeyCode.VcRightMeta,
+            _ => KeyCode.VcUndefined
+        };
+        return key != KeyCode.VcUndefined;
     }
 
     private enum HotkeyBinding

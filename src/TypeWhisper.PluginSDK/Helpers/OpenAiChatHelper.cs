@@ -20,8 +20,26 @@ public static class OpenAiChatHelper
     /// <param name="systemPrompt">System prompt text.</param>
     /// <param name="userText">User message text.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <param name="maxOutputTokens">
+    ///     Optional cap on response tokens. Pass <c>null</c> to omit the field
+    ///     entirely (some endpoints reject zero/empty values).
+    /// </param>
+    /// <param name="maxOutputTokenParameter">
+    ///     Body field name for the token cap. Defaults to <c>"max_tokens"</c>;
+    ///     newer GPT-5 / o-series chat-completion endpoints use
+    ///     <c>"max_completion_tokens"</c>.
+    /// </param>
+    /// <param name="reasoningEffort">
+    ///     Optional reasoning effort hint (low/medium/high). Only emitted when
+    ///     non-empty.
+    /// </param>
+    /// <param name="temperature">
+    ///     Optional sampling temperature. Pass <c>null</c> to omit the field —
+    ///     required for models (e.g. GPT-5 with reasoning_effort set) that
+    ///     reject the parameter outright.
+    /// </param>
     /// <returns>The assistant's response content text.</returns>
-    public static async Task<string> SendChatCompletionAsync(
+    public static Task<string> SendChatCompletionAsync(
         HttpClient httpClient,
         string baseUrl,
         string apiKey,
@@ -29,22 +47,54 @@ public static class OpenAiChatHelper
         string systemPrompt,
         string userText,
         CancellationToken ct
+    ) =>
+        SendChatCompletionAsync(
+            httpClient,
+            baseUrl,
+            apiKey,
+            model,
+            systemPrompt,
+            userText,
+            ct,
+            maxOutputTokens: 2048,
+            maxOutputTokenParameter: "max_tokens",
+            reasoningEffort: null,
+            temperature: 0.1
+        );
+
+    /// <inheritdoc cref="SendChatCompletionAsync(HttpClient, string, string, string, string, string, CancellationToken)" />
+    public static async Task<string> SendChatCompletionAsync(
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        string systemPrompt,
+        string userText,
+        CancellationToken ct,
+        int? maxOutputTokens = 2048,
+        string maxOutputTokenParameter = "max_tokens",
+        string? reasoningEffort = null,
+        double? temperature = 0.1
     )
     {
-        var requestBody = JsonSerializer.Serialize(
-            new
+        var body = new Dictionary<string, object?>
+        {
+            ["model"] = model,
+            ["messages"] = new object[]
             {
-                model,
-                messages = new object[]
-                {
-                    new { role = "system", content = systemPrompt },
-                    new { role = "user", content = userText }
-                },
-                temperature =
-                    0.1, // near-deterministic; tasks like translation/correction don't benefit from creativity
-                max_tokens = 2048
+                new { role = "system", content = systemPrompt },
+                new { role = "user", content = userText }
             }
-        );
+        };
+
+        if (temperature is not null)
+            body["temperature"] = temperature.Value;
+        if (maxOutputTokens is not null)
+            body[maxOutputTokenParameter] = maxOutputTokens.Value;
+        if (!string.IsNullOrWhiteSpace(reasoningEffort))
+            body["reasoning_effort"] = reasoningEffort;
+
+        var requestBody = JsonSerializer.Serialize(body);
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,

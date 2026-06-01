@@ -25,6 +25,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private const string PasteSmokeExpectedText = "typewhisper paste test";
     private readonly AudioRecordingService _audio;
     private readonly SystemCommandAvailabilityService _commands;
+    private readonly IDictionaryService _dictionary;
     private readonly HotkeyService _hotkey;
     private readonly ModelManagerService _models;
     private readonly PropertyChangedEventHandler _modelStateChangedHandler;
@@ -85,6 +86,9 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private string _pasteTestStatus = "Run the paste test to verify text can land in this wizard.";
 
     [ObservableProperty]
+    private string _selectedIndustryPresetId = "general";
+
+    [ObservableProperty]
     private AudioInputDevice? _selectedMic;
 
     [ObservableProperty]
@@ -107,6 +111,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         SystemCommandAvailabilityService commands,
         TextInsertionService textInsertion,
         YdotoolSetupHelper ydotoolSetup,
+        IDictionaryService dictionary,
         ISettingsService settings
     )
     {
@@ -117,6 +122,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         _commands = commands;
         _textInsertion = textInsertion;
         _ydotoolSetup = ydotoolSetup;
+        _dictionary = dictionary;
         _settings = settings;
 
         _pluginStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(RefreshPluginState);
@@ -125,6 +131,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         _models.PropertyChanged += _modelStateChangedHandler;
         _audio.LevelChanged += OnAudioLevelChanged;
 
+        LoadIndustryPresets();
         LoadModels();
         LoadExtensions();
         LoadMics();
@@ -139,6 +146,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public ObservableCollection<WelcomeDiagnosticRow> Diagnostics { get; } = [];
     public ObservableCollection<WelcomeStepDot> StepDots { get; } = [];
     public ObservableCollection<AudioInputDevice> Mics { get; } = [];
+    public ObservableCollection<IndustryPreset> IndustryPresets { get; } = [];
 
     public int StepCount => 6;
     public bool IsFirstStep => StepIndex == 0;
@@ -248,6 +256,22 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     // Events consumed by the view to close itself.
     public event EventHandler? RequestClose;
+
+    private void LoadIndustryPresets()
+    {
+        IndustryPresets.Clear();
+        foreach (var preset in IndustryPreset.All)
+        {
+            IndustryPresets.Add(preset);
+        }
+
+        var saved = _settings.Current.SelectedIndustryPresetId;
+        SelectedIndustryPresetId = IndustryPresets.Any(p =>
+            string.Equals(p.Id, saved, StringComparison.OrdinalIgnoreCase)
+        )
+            ? saved
+            : "general";
+    }
 
     private void LoadModels()
     {
@@ -531,7 +555,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         if (IsLastStep)
         {
-            _settings.Save(_settings.Current with { HasCompletedOnboarding = true });
+            FinishOnboardingWithIndustryPreset();
             RequestClose?.Invoke(this, EventArgs.Empty);
             return;
         }
@@ -542,8 +566,24 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private void Skip()
     {
-        _settings.Save(_settings.Current with { HasCompletedOnboarding = true });
+        FinishOnboardingWithIndustryPreset();
         RequestClose?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void FinishOnboardingWithIndustryPreset()
+    {
+        _dictionary.ApplyIndustryPreset(SelectedIndustryPresetId);
+        _settings.Save(
+            _settings.Current with
+            {
+                HasCompletedOnboarding = true,
+                SelectedIndustryPresetId = SelectedIndustryPresetId,
+                EnabledPackIds = IndustryPreset.MergeIntoEnabledPackIds(
+                    _settings.Current.EnabledPackIds,
+                    SelectedIndustryPresetId
+                )
+            }
+        );
     }
 
     [RelayCommand]

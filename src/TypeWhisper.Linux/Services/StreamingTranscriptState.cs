@@ -25,11 +25,9 @@ internal sealed class StreamingTranscriptState
 
     public string StopSession()
     {
-        // If the last displayed text diverged from confirmed (e.g. a partial
-        // that the corrector hasn't committed yet), discard both to avoid
-        // surfacing a half-baked result as the final transcript.
-        var hasUncommittedPreview = _lastDisplayedText != _confirmedText;
-        var finalText = hasUncommittedPreview ? "" : _confirmedText;
+        var finalText = !string.IsNullOrWhiteSpace(_lastDisplayedText)
+            ? _lastDisplayedText
+            : _confirmedText;
         InvalidateSession();
         _confirmedText = "";
         _lastDisplayedText = "";

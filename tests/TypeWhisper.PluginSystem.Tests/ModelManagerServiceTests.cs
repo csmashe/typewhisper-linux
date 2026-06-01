@@ -306,6 +306,284 @@ public class ModelManagerServiceTests
         Assert.IsNotType<ObjectDisposedException>(exception);
     }
 
+    [Theory]
+    [InlineData(
+        AppSettings.LocalModelAccelerationCpu,
+        TranscriptionAccelerationPreference.Cpu
+    )]
+    [InlineData(
+        AppSettings.LocalModelAccelerationAuto,
+        TranscriptionAccelerationPreference.Cpu // Auto resolves to Cpu when CUDA preflight fails.
+    )]
+    [InlineData(
+        AppSettings.LocalModelAccelerationNvidiaCuda,
+        TranscriptionAccelerationPreference.NvidiaCuda
+    )]
+    public async Task LoadModelAsync_AppliesSavedAccelerationPreferenceBeforeLoading(
+        string savedPreference,
+        TranscriptionAccelerationPreference expectedPlugin)
+    {
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = savedPreference
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            // NvidiaCuda preference needs the preflight to succeed; Cpu/Auto don't care
+            // about the success path. Set it to succeed so the explicit-NvidiaCuda case
+            // doesn't throw, then verify the plugin saw the right resolved value.
+            CudaRuntimePreflight = () => savedPreference == AppSettings.LocalModelAccelerationNvidiaCuda
+                ? (true, "preflight ok")
+                : (false, "no cuda"),
+        };
+
+        await sut.LoadModelAsync(fullModelId);
+
+        Assert.Equal(expectedPlugin, fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_AutoPreferenceWithoutGpu_ResolvesToCpu_EvenWhenCudaLibsLoad()
+    {
+        // Regression: pre-fix, `TryPreloadCuda12RuntimeLibraries` succeeding was the
+        // sole signal for Auto → NvidiaCuda. On a machine with the CUDA 12 runtime
+        // installed but no NVIDIA GPU, that produced a whisper.cpp UseGpu=true load
+        // that failed at runtime. The default preflight now gates on GPU presence
+        // first; the test seam asserts the resolver respects a "no GPU" preflight.
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            // Simulates "CUDA libs present, GPU absent" — preflight reports failure.
+            CudaRuntimePreflight = () => (false, "No NVIDIA GPU/driver detected."),
+        };
+
+        await sut.LoadModelAsync(fullModelId);
+
+        Assert.Equal(
+            TranscriptionAccelerationPreference.Cpu,
+            fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_AutoPreferenceResolvesViaPreflight_PluginSeesResolvedBackend()
+    {
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () => (true, "preflight ok"),
+        };
+
+        await sut.LoadModelAsync(fullModelId);
+
+        // Auto must resolve to a concrete backend before the plugin sees it.
+        Assert.Equal(
+            TranscriptionAccelerationPreference.NvidiaCuda,
+            fake.AccelerationPreferenceAtLoad);
+        Assert.NotEqual(
+            TranscriptionAccelerationPreference.Auto,
+            fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_NvidiaCudaPreferenceWithoutCuda_Throws()
+    {
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () => (false, "CUDA 12 runtime libraries are not installed."),
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.LoadModelAsync(fullModelId));
+        Assert.Contains("CUDA", ex.Message);
+        // Plugin must not have been told to load with NvidiaCuda — the throw happens first.
+        Assert.Null(fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_AutoPreferenceOnCpuOnlyPlugin_ResolvesToCpu_NoPreflight()
+    {
+        // SDK contract: plugins must never see TranscriptionAccelerationPreference.Auto.
+        // For CPU-only plugins, the host resolves Auto → Cpu directly (no preflight
+        // since there's no CUDA path to consider for this plugin).
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true)
+        {
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu],
+        };
+        var preflightCalls = 0;
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () =>
+            {
+                preflightCalls++;
+                return (false, "should not be called");
+            },
+        };
+
+        await sut.LoadModelAsync(fullModelId);
+
+        Assert.Equal(0, preflightCalls);
+        Assert.Equal(
+            TranscriptionAccelerationPreference.Cpu,
+            fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_NvidiaCudaPreferenceOnCpuOnlyPlugin_LoadsWithCpu_NoPreflightThrow()
+    {
+        // SherpaOnnx / Granite report SupportedAccelerationBackends = [Cpu] only.
+        // When the saved preference is NvidiaCuda (e.g. migrated from the legacy
+        // computeBackend setting or shared across machines), the host must not
+        // run the CUDA preflight + hard-error path — the plugin's own
+        // SetAccelerationPreference already warns and falls back to CPU.
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true)
+        {
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu],
+        };
+        var preflightCalls = 0;
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () =>
+            {
+                preflightCalls++;
+                return (false, "should not be called");
+            },
+        };
+
+        await sut.LoadModelAsync(fullModelId);
+
+        Assert.Equal(0, preflightCalls);
+        // Plugin sees the user's NvidiaCuda preference unchanged; its own
+        // SetAccelerationPreference implementation is what falls back to CPU.
+        Assert.Equal(
+            TranscriptionAccelerationPreference.NvidiaCuda,
+            fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoadedAsync_PreferenceChange_TriggersReload()
+    {
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+
+        var currentSettings = new AppSettings
+        {
+            SelectedModelId = fullModelId,
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu
+        };
+        _settings.Setup(s => s.Current).Returns(() => currentSettings);
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            // Make the preflight always succeed so the explicit-NvidiaCuda case
+            // can take the load path (rather than throwing).
+            CudaRuntimePreflight = () => (true, "ok"),
+        };
+
+        await sut.EnsureModelLoadedAsync(fullModelId);
+        Assert.Equal(
+            TranscriptionAccelerationPreference.Cpu,
+            fake.AccelerationPreferenceAtLoad);
+
+        currentSettings = currentSettings with
+        {
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+        };
+
+        await sut.EnsureModelLoadedAsync(fullModelId);
+
+        // The reload re-applied the new preference.
+        Assert.Equal(
+            TranscriptionAccelerationPreference.NvidiaCuda,
+            fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoadedAsync_PreferenceUnchanged_DoesNotReload()
+    {
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () => (false, "no cuda"),
+        };
+
+        await sut.EnsureModelLoadedAsync(fullModelId);
+        var firstLoadCallCount = fake.SetAccelerationPreferenceCount;
+
+        // Second EnsureModelLoadedAsync with no preference change: fast path.
+        await sut.EnsureModelLoadedAsync(fullModelId);
+
+        Assert.Equal(firstLoadCallCount, fake.SetAccelerationPreferenceCount);
+    }
+
     private ModelManagerService CreateServiceWithLoadableModel(
         out string fullModelId,
         out ITranscriptionEnginePlugin plugin
@@ -322,7 +600,10 @@ public class ModelManagerServiceTests
             true
         );
         plugin = fake;
-        return new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+        var service = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+        // Default to no CUDA so tests don't depend on the host having CUDA installed.
+        service.CudaRuntimePreflight = () => (false, "CUDA not available in test");
+        return service;
     }
 
     private PluginManager CreatePluginManager(
@@ -395,6 +676,23 @@ public class ModelManagerServiceTests
         public string? SelectedModelId { get; private set; }
         public bool SupportsTranslation => false;
 
+        public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; set; } =
+            [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
+
+        /// <summary>Last preference passed to <see cref="SetAccelerationPreference" />.</summary>
+        public TranscriptionAccelerationPreference? LastAccelerationPreference { get; private set; }
+
+        /// <summary>Preference observed at the moment <see cref="LoadModelAsync" /> ran.</summary>
+        public TranscriptionAccelerationPreference? AccelerationPreferenceAtLoad { get; private set; }
+
+        public int SetAccelerationPreferenceCount { get; private set; }
+
+        public void SetAccelerationPreference(TranscriptionAccelerationPreference preference)
+        {
+            LastAccelerationPreference = preference;
+            SetAccelerationPreferenceCount++;
+        }
+
         public Task ActivateAsync(IPluginHostServices host)
         {
             return Task.CompletedTask;
@@ -420,6 +718,7 @@ public class ModelManagerServiceTests
 
             LastLoadedModelId = modelId;
             SelectedModelId = modelId;
+            AccelerationPreferenceAtLoad = LastAccelerationPreference;
         }
 
         public async Task UnloadModelAsync()

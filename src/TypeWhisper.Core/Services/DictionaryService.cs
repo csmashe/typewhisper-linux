@@ -287,6 +287,148 @@ public sealed class DictionaryService : IDictionaryService
         EntriesChanged?.Invoke();
     }
 
+    public bool DeleteTerm(string term)
+    {
+        if (string.IsNullOrWhiteSpace(term))
+        {
+            return false;
+        }
+
+        EnsureCacheLoaded();
+        bool removed;
+        lock (_gate)
+        {
+            var newCache = _cache.Where(e =>
+                e.EntryType != DictionaryEntryType.Term
+                || !e.Original.Trim().Equals(term.Trim(), StringComparison.OrdinalIgnoreCase)
+            ).ToList();
+            removed = newCache.Count != _cache.Count;
+
+            if (removed)
+            {
+                SaveToDisk(newCache);
+                _cache = newCache;
+            }
+        }
+
+        if (removed)
+        {
+            EntriesChanged?.Invoke();
+        }
+
+        return removed;
+    }
+
+    public IReadOnlyList<DictionaryCorrection> GetCorrections()
+    {
+        EnsureCacheLoaded();
+        lock (_gate)
+        {
+            return _cache
+                .Where(e =>
+                    e.IsEnabled
+                    && e.EntryType == DictionaryEntryType.Correction
+                    && e.Replacement is not null
+                )
+                .Select(e => new DictionaryCorrection(e.Original, e.Replacement!, e.CaseSensitive))
+                .ToList();
+        }
+    }
+
+    public DictionaryCorrection UpsertCorrection(
+        string original,
+        string replacement,
+        bool caseSensitive
+    )
+    {
+        if (string.IsNullOrWhiteSpace(original))
+        {
+            throw new ArgumentException("Original must not be empty.", nameof(original));
+        }
+
+        if (replacement is null)
+        {
+            throw new ArgumentNullException(nameof(replacement));
+        }
+
+        EnsureCacheLoaded();
+
+        lock (_gate)
+        {
+            var newCache = _cache.ToList();
+            var existing = newCache.FirstOrDefault(e =>
+                e.EntryType == DictionaryEntryType.Correction
+                && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
+            );
+
+            if (existing is not null)
+            {
+                var idx = newCache.FindIndex(e => e.Id == existing.Id);
+                if (idx >= 0)
+                {
+                    newCache[idx] = existing with
+                    {
+                        Replacement = replacement,
+                        CaseSensitive = caseSensitive,
+                        IsEnabled = true
+                    };
+                }
+            }
+            else
+            {
+                newCache.Add(
+                    new DictionaryEntry
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        EntryType = DictionaryEntryType.Correction,
+                        Original = original,
+                        Replacement = replacement,
+                        CaseSensitive = caseSensitive,
+                        Source = DictionaryEntrySource.Manual
+                    }
+                );
+            }
+
+            SaveToDisk(newCache);
+            _cache = newCache;
+        }
+
+        EntriesChanged?.Invoke();
+        return new DictionaryCorrection(original, replacement, caseSensitive);
+    }
+
+    public bool DeleteCorrection(string original)
+    {
+        if (string.IsNullOrWhiteSpace(original))
+        {
+            return false;
+        }
+
+        EnsureCacheLoaded();
+        bool removed;
+        lock (_gate)
+        {
+            var newCache = _cache.Where(e =>
+                e.EntryType != DictionaryEntryType.Correction
+                || !e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
+            ).ToList();
+            removed = newCache.Count != _cache.Count;
+
+            if (removed)
+            {
+                SaveToDisk(newCache);
+                _cache = newCache;
+            }
+        }
+
+        if (removed)
+        {
+            EntriesChanged?.Invoke();
+        }
+
+        return removed;
+    }
+
     public void LearnCorrection(string original, string replacement)
     {
         EnsureCacheLoaded();

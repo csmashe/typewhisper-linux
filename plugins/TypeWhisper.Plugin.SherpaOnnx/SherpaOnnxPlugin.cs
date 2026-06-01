@@ -64,6 +64,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string? _loadedModelDir;
     private string? _selectedModelId;
     private string _computeBackend = "cpu";
+    private TranscriptionAccelerationPreference _accelerationPreference =
+        TranscriptionAccelerationPreference.Auto;
+    private TranscriptionAccelerationStatus _accelerationStatus =
+        new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
     private string _canarySrcLang = "en";
     private string _canaryTgtLang = "en";
@@ -78,6 +82,13 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => _selectedModelId == "canary-180m-flash";
     public bool SupportsModelDownload => true;
+
+    public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
+        [TranscriptionAccelerationBackend.Cpu];
+
+    public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
+
+    public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
         Models
@@ -133,6 +144,35 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         }
 
         return Task.CompletedTask;
+    }
+
+    public void SetAccelerationPreference(TranscriptionAccelerationPreference preference)
+    {
+        _accelerationPreference = preference;
+        if (preference == TranscriptionAccelerationPreference.NvidiaCuda)
+        {
+            _host?.Log(
+                PluginLogLevel.Warning,
+                "SherpaOnnx does not support CUDA on Linux; falling back to CPU."
+            );
+            _accelerationStatus = new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Cpu,
+                "Using CPU",
+                "SherpaOnnx does not support CUDA on Linux; falling back to CPU."
+            );
+        }
+        else
+        {
+            _accelerationStatus = new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Cpu,
+                "Using CPU"
+            );
+        }
+
+        // ConfigureComputeBackendAsync completes synchronously for SherpaOnnx
+        // (no awaits in the body), so the swap is fully applied by the time
+        // SetAccelerationPreference returns.
+        _ = ConfigureComputeBackendAsync("cpu");
     }
 
     public bool IsModelDownloaded(string modelId)

@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using System.Text;
+using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Linux.Services;
 using Xunit;
@@ -134,6 +135,86 @@ public class HttpApiRequestParserTests
         );
         Assert.Equal(400, ex.StatusCode);
         Assert.Contains("file", ex.Message);
+    }
+
+    [Fact]
+    public void ParseTranscribeLocalFile_DeserializesFullBody()
+    {
+        var json = """
+            {
+              "path": "/tmp/clip.wav",
+              "language": "en",
+              "language_hints": ["de", "fr"],
+              "task": "translate",
+              "target_language": "es",
+              "response_format": "verbose_json",
+              "prompt": "Names",
+              "engine": "groq",
+              "model": "whisper-large-v3",
+              "await_download": true
+            }
+            """;
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            PropertyNameCaseInsensitive = true
+        };
+
+        var parsed = JsonSerializer.Deserialize<LocalFileTranscribeRequest>(json, options)!;
+
+        Assert.Equal("/tmp/clip.wav", parsed.Path);
+        Assert.Equal("en", parsed.Language);
+        Assert.Equal(["de", "fr"], parsed.LanguageHints);
+        Assert.Equal("translate", parsed.Task);
+        Assert.Equal("es", parsed.TargetLanguage);
+        Assert.Equal("verbose_json", parsed.ResponseFormat);
+        Assert.Equal("Names", parsed.Prompt);
+        Assert.Equal("groq", parsed.Engine);
+        Assert.Equal("whisper-large-v3", parsed.Model);
+        Assert.True(parsed.AwaitDownload);
+    }
+
+    [Fact]
+    public void ParseDictionaryTermDelete_RequiresTerm()
+    {
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            PropertyNameCaseInsensitive = true
+        };
+
+        var withTerm = JsonSerializer.Deserialize<DictionaryTermDeleteRequest>(
+            """{"term":"FooCorp"}""",
+            options
+        );
+        Assert.Equal("FooCorp", withTerm!.Term);
+
+        var empty = JsonSerializer.Deserialize<DictionaryTermDeleteRequest>("{}", options);
+        Assert.Null(empty!.Term);
+    }
+
+    [Fact]
+    public void ParseCorrectionUpsert_AcceptsOptionalCaseSensitive()
+    {
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            PropertyNameCaseInsensitive = true
+        };
+
+        var parsed = JsonSerializer.Deserialize<CorrectionUpsertRequest>(
+            """{"original":"teh","replacement":"the"}""",
+            options
+        );
+        Assert.Equal("teh", parsed!.Original);
+        Assert.Equal("the", parsed.Replacement);
+        Assert.Null(parsed.CaseSensitive);
+
+        var withFlag = JsonSerializer.Deserialize<CorrectionUpsertRequest>(
+            """{"original":"teh","replacement":"the","case_sensitive":true}""",
+            options
+        );
+        Assert.True(withFlag!.CaseSensitive);
     }
 
     private static byte[] Multipart(

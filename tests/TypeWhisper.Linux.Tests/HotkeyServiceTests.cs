@@ -1,4 +1,5 @@
 using SharpHook.Native;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey;
 using Xunit;
@@ -109,6 +110,240 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public async Task SetPromptActionHotkeys_RaisesPromptActionHotkeyTriggeredWithActionId()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("alpha", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        string? observed = null;
+        hotkey.PromptActionHotkeyTriggered += (_, id) => observed = id;
+
+        backend.RaisePromptAction("alpha");
+
+        Assert.Equal("alpha", observed);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_DropsEntryCollidingWithDictation()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        // Default dictation hotkey is Ctrl+Shift+Space — the collision check
+        // must reject a prompt-action entry that names the same chord.
+        hotkey.SetPromptActionHotkeys(
+            [
+                new PromptActionHotkey(
+                    "collides",
+                    KeyCode.VcSpace,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftShift
+                ),
+                new PromptActionHotkey(
+                    "keeper",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                )
+            ]
+        );
+
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        Assert.Equal("keeper", kept.ActionId);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_KeepsFirstDuplicateAndDropsSecond()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetPromptActionHotkeys(
+            [
+                new PromptActionHotkey(
+                    "first",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                ),
+                new PromptActionHotkey(
+                    "second",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                )
+            ]
+        );
+
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        Assert.Equal("first", kept.ActionId);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_DropsIntraBatchPrefixCollision()
+    {
+        // Adversarial-review follow-up: the intra-batch collision check
+        // must also honor the side-specific modifier prefix-collision rule.
+        // A batch containing both `Left Ctrl` (modifier-only) and a Ctrl
+        // chord would otherwise accept both and shadow the chord at
+        // runtime — the fixed-bindings collision check at GetBoundHotkeys()
+        // can't see in-flight prompt-action entries during the reconcile.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        // Reset dictation to a non-Ctrl chord so the fixed-bindings check
+        // doesn't pre-reject "Left Ctrl" before the intra-batch check runs.
+        Assert.True(hotkey.TrySetHotkeyFromString("Shift+F9"));
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys(
+            [
+                new PromptActionHotkey("modifier-only", KeyCode.VcLeftControl, ModifierMask.None),
+                new PromptActionHotkey(
+                    "ctrl-chord",
+                    KeyCode.VcF12,
+                    ModifierMask.LeftCtrl
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        Assert.Equal("modifier-only", kept.ActionId);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_SecondCallReplacesPreviousList()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("old", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("new", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var entry = Assert.Single(snapshot!.PromptActionHotkeys);
+        Assert.Equal("new", entry.ActionId);
+        Assert.Equal(KeyCode.VcT, entry.Key);
+    }
+
+    [Fact]
+    public async Task TrySetHotkeyFromString_RejectsChordAlreadyBoundToPromptAction()
+    {
+        // Symmetry guard: SetPromptActionHotkeys already refuses entries
+        // colliding with fixed bindings; the inverse must hold too, or the
+        // matcher's prompt-action arm silently shadows the fixed binding.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys(
+            [
+                new PromptActionHotkey(
+                    "alpha",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetHotkeyFromString("Ctrl+Alt+R");
+
+        Assert.False(accepted);
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentHotkeyString);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_AcceptsUnchangedListWithoutSelfConflict()
+    {
+        // Regression: ActionsChanged fires on every add/update/delete, so
+        // most calls re-submit the same list. The reconcile must not treat
+        // existing entries as colliding with themselves.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var entries = new[]
+        {
+            new PromptActionHotkey("alpha", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
+            new PromptActionHotkey("beta", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)
+        };
+
+        hotkey.SetPromptActionHotkeys(entries);
+        await backend.WaitUntilSettledAsync();
+        hotkey.SetPromptActionHotkeys(entries);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(2, snapshot!.PromptActionHotkeys.Count);
+    }
+
+    [Fact]
+    public void ParsePromptActionHotkeys_SkipsDisabledOrUnparseableActions()
+    {
+        var parsed = HotkeyService.ParsePromptActionHotkeys(
+            [
+                new PromptAction
+                {
+                    Id = "enabled",
+                    Name = "E",
+                    SystemPrompt = "x",
+                    HotkeyKey = "Ctrl+Alt+R"
+                },
+                new PromptAction
+                {
+                    Id = "disabled",
+                    Name = "D",
+                    SystemPrompt = "x",
+                    IsEnabled = false,
+                    HotkeyKey = "Ctrl+Alt+T"
+                },
+                new PromptAction
+                {
+                    Id = "no-hotkey",
+                    Name = "N",
+                    SystemPrompt = "x"
+                },
+                new PromptAction
+                {
+                    Id = "bad",
+                    Name = "B",
+                    SystemPrompt = "x",
+                    HotkeyKey = "Not+a+real+combo"
+                }
+            ]
+        );
+
+        var entry = Assert.Single(parsed);
+        Assert.Equal("enabled", entry.ActionId);
+        Assert.Equal(KeyCode.VcR, entry.Key);
+    }
+
+    [Fact]
     public async Task PushShortcuts_AppliesUpdatesInOrder()
     {
         // Backend records each set it sees. A burst of TrySet* calls must
@@ -127,6 +362,230 @@ public sealed class HotkeyServiceTests
         var lastSeen = backend.LastSet;
         Assert.NotNull(lastSeen);
         Assert.Equal(KeyCode.VcF3, lastSeen!.DictationKey);
+    }
+
+    [Theory]
+    [InlineData("Left Ctrl", KeyCode.VcLeftControl)]
+    [InlineData("Right Ctrl", KeyCode.VcRightControl)]
+    [InlineData("Left Control", KeyCode.VcLeftControl)]
+    [InlineData("Right Control", KeyCode.VcRightControl)]
+    [InlineData("Left Shift", KeyCode.VcLeftShift)]
+    [InlineData("Right Shift", KeyCode.VcRightShift)]
+    [InlineData("Left Alt", KeyCode.VcLeftAlt)]
+    [InlineData("Right Alt", KeyCode.VcRightAlt)]
+    [InlineData("Left Meta", KeyCode.VcLeftMeta)]
+    [InlineData("Right Meta", KeyCode.VcRightMeta)]
+    [InlineData("Left Super", KeyCode.VcLeftMeta)]
+    [InlineData("Right Win", KeyCode.VcRightMeta)]
+    [InlineData("right alt", KeyCode.VcRightAlt)]
+    [InlineData("RIGHT ALT", KeyCode.VcRightAlt)]
+    [InlineData("  Right Alt  ", KeyCode.VcRightAlt)]
+    public async Task TrySetHotkeyFromString_SideSpecificSingleModifier_ParsesAndPushesEmptyMask(
+        string input,
+        KeyCode expectedKey
+    )
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var parsed = hotkey.TrySetHotkeyFromString(input);
+        await backend.WaitUntilSettledAsync();
+
+        Assert.True(parsed);
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(expectedKey, snapshot!.DictationKey);
+        Assert.Equal(ModifierMask.None, snapshot.DictationModifiers);
+    }
+
+    [Theory]
+    [InlineData("Left Ctrl")]
+    [InlineData("Right Alt")]
+    [InlineData("Right Meta")]
+    public void TrySetHotkeyFromString_SideSpecificSingleModifier_RoundTripsThroughCurrentHotkeyString(
+        string input
+    )
+    {
+        var hotkey = new HotkeyService();
+
+        Assert.True(hotkey.TrySetHotkeyFromString(input));
+        Assert.Equal(input, hotkey.CurrentHotkeyString);
+    }
+
+    [Fact]
+    public void TrySetHotkeyFromString_SideSpecificChord_FallsThroughAndIsRejected()
+    {
+        // Pins the Tier-A/Tier-B boundary: "Right Alt+R" must NOT take the
+        // single-modifier early-return path (which would silently absorb the
+        // side prefix). It falls through to the chord loop, which can't
+        // resolve "right alt" as a single token and rejects the input.
+        var hotkey = new HotkeyService();
+        hotkey.SetHotkey(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift);
+
+        var parsed = hotkey.TrySetHotkeyFromString("Right Alt+R");
+
+        Assert.False(parsed);
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentHotkeyString);
+    }
+
+    [Fact]
+    public void FormatHotkey_SideSpecificModifierWithExtraMask_FallsBackToDefaultFormat()
+    {
+        // Round-trip stability: the side-specific shorthand "Right Alt" is
+        // emitted ONLY when the binding has no other modifier flags. A
+        // (VcRightAlt, Shift) chord must format unambiguously (not "Right
+        // Alt", which would round-trip to (VcRightAlt, None)).
+        var hotkey = new HotkeyService();
+        hotkey.SetHotkey(KeyCode.VcRightAlt, ModifierMask.LeftShift);
+
+        Assert.Equal("Shift+RightAlt", hotkey.CurrentHotkeyString);
+    }
+
+    [Fact]
+    public async Task TrySetHotkeyFromString_SideSpecificModifiers_LeftAndRightDoNotCollide()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        Assert.True(hotkey.TrySetHotkeyFromString("Right Alt"));
+        Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Left Alt"));
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(KeyCode.VcRightAlt, snapshot!.DictationKey);
+        Assert.Equal(KeyCode.VcLeftAlt, snapshot.PromptPaletteKey);
+    }
+
+    [Fact]
+    public async Task TrySetPromptPaletteHotkeyFromString_SideSpecificModifierAlreadyBound_IsRejected()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        Assert.True(hotkey.TrySetHotkeyFromString("Right Alt"));
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetPromptPaletteHotkeyFromString("Right Alt");
+
+        Assert.False(accepted);
+    }
+
+    [Fact]
+    public async Task TrySetHotkeyFromString_SideSpecificModifierPrefixesExistingChord_IsRejected()
+    {
+        // Adversarial-review regression: a modifier-only binding fires on
+        // the bare modifier press, which is also the first keystroke of
+        // any chord using that physical modifier. Without prefix-collision
+        // detection, "Left Ctrl" as one action + "Ctrl+Shift+Space" as
+        // dictation would both fire when the user presses Left Ctrl +
+        // Shift + Space, silently shadowing the chord.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        // Dictation default is Ctrl+Shift+Space.
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetPromptPaletteHotkeyFromString("Left Ctrl");
+
+        Assert.False(accepted);
+    }
+
+    [Fact]
+    public async Task TrySetHotkeyFromString_ChordUsingModifierAlreadyBoundAsModifierOnly_IsRejected()
+    {
+        // Inverse direction of the prefix-collision rule: once a modifier
+        // is bound as a single-modifier action, a chord that uses that
+        // same physical modifier must also be rejected — symmetric, or
+        // the user could create the collision in either order.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Right Alt"));
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetHotkeyFromString("Alt+F9");
+
+        Assert.False(accepted);
+        // Original default dictation hotkey is preserved.
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentHotkeyString);
+    }
+
+    [Fact]
+    public async Task TrySetHotkeyFromString_SideSpecificModifierAndChordUsingDifferentModifier_AreAllowed()
+    {
+        // The prefix-collision rule must be scoped to the SAME physical
+        // modifier group. Binding "Left Ctrl" must not block an unrelated
+        // chord like "Alt+F9" — only Ctrl chords collide. Reset dictation
+        // to a non-Ctrl chord first so the default Ctrl+Shift+Space doesn't
+        // itself shadow the modifier-only binding.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        Assert.True(hotkey.TrySetHotkeyFromString("Shift+F9"));
+        await backend.WaitUntilSettledAsync();
+
+        Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Left Ctrl"));
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(KeyCode.VcF9, snapshot!.DictationKey);
+        Assert.Equal(ModifierMask.LeftShift, snapshot.DictationModifiers);
+        Assert.Equal(KeyCode.VcLeftControl, snapshot.PromptPaletteKey);
+    }
+
+    [Fact]
+    public async Task TrySetHotkeyFromString_LeftCtrlModifierOnly_CollidesWithRightCtrlChord()
+    {
+        // Cross-side regression: because ShortcutMatcher.ModifiersMatch
+        // collapses Left/Right, a chord stored with RightCtrl can still be
+        // satisfied by a LeftCtrl press. The modifier-only binding's
+        // physical group must cover both sides so the chord is rejected
+        // regardless of which side flag the chord was parsed with.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        // Construct a chord that stores RightCtrl explicitly (the public
+        // parser always normalizes to LeftCtrl, so use SetHotkey directly).
+        hotkey.SetHotkey(KeyCode.VcSpace, ModifierMask.RightCtrl | ModifierMask.RightShift);
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetPromptPaletteHotkeyFromString("Left Ctrl");
+
+        Assert.False(accepted);
+    }
+
+    [Fact]
+    public async Task SetPromptActionHotkeys_DropsEntryThatPrefixesExistingChord()
+    {
+        // Prompt-action hotkeys share the same collision check via
+        // HotkeyMatchesAny, so the prefix rule must apply there too —
+        // otherwise the B12 dynamic binding list would be the back door.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        // Default dictation is Ctrl+Shift+Space, so any Ctrl-prefix
+        // modifier-only entry should be dropped from the prompt-action list.
+        hotkey.SetPromptActionHotkeys(
+            [
+                new PromptActionHotkey("collides", KeyCode.VcLeftControl, ModifierMask.None),
+                new PromptActionHotkey(
+                    "keeper",
+                    KeyCode.VcR,
+                    ModifierMask.LeftAlt | ModifierMask.LeftMeta
+                )
+            ]
+        );
+
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        Assert.Equal("keeper", kept.ActionId);
     }
 
     private sealed class TestShortcutBackend : IGlobalShortcutBackend
@@ -205,10 +664,17 @@ public sealed class HotkeyServiceTests
             remove { }
         }
 
+        public event EventHandler<string>? PromptActionRequested;
+
         public event EventHandler<string>? Failed
         {
             add { }
             remove { }
+        }
+
+        public void RaisePromptAction(string actionId)
+        {
+            PromptActionRequested?.Invoke(this, actionId);
         }
 
         public Task<GlobalShortcutRegistrationResult> RegisterAsync(

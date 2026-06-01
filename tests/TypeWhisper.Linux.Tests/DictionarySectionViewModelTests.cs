@@ -112,6 +112,58 @@ public sealed class DictionarySectionViewModelTests : IDisposable
         );
     }
 
+    [Fact]
+    public void ReconcileEnabledPacksFromSettings_PicksUpExternallySavedEnabledPackId()
+    {
+        var dictionary = CreateDictionaryService();
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var sut = new DictionarySectionViewModel(dictionary, settings);
+        var realEstatePack = sut.Packs.Single(p => p.Pack.Id == "real-estate");
+        Assert.False(realEstatePack.IsEnabled);
+        Assert.Empty(dictionary.Entries);
+
+        settings.Save(settings.Current with { EnabledPackIds = ["real-estate"] });
+        sut.ReconcileEnabledPacksFromSettings();
+
+        Assert.True(realEstatePack.IsEnabled);
+        Assert.NotEmpty(dictionary.Entries);
+        Assert.All(dictionary.Entries, e => Assert.StartsWith("pack:real-estate:", e.Id));
+    }
+
+    [Fact]
+    public void ReconcileEnabledPacksFromSettings_IsNoOpWhenAlreadyInSync()
+    {
+        var dictionary = CreateDictionaryService();
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        settings.Save(settings.Current with { EnabledPackIds = ["real-estate"] });
+        var sut = new DictionarySectionViewModel(dictionary, settings);
+        var realEstatePack = sut.Packs.Single(p => p.Pack.Id == "real-estate");
+        Assert.True(realEstatePack.IsEnabled);
+
+        sut.ReconcileEnabledPacksFromSettings();
+
+        Assert.True(realEstatePack.IsEnabled);
+    }
+
+    [Fact]
+    public void ReconcileEnabledPacksFromSettings_DeactivatesPackTermsWhenRemovedFromSettings()
+    {
+        var dictionary = CreateDictionaryService();
+        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var sut = new DictionarySectionViewModel(dictionary, settings);
+        settings.Save(settings.Current with { EnabledPackIds = ["real-estate"] });
+        sut.ReconcileEnabledPacksFromSettings();
+        var realEstatePack = sut.Packs.Single(p => p.Pack.Id == "real-estate");
+        Assert.True(realEstatePack.IsEnabled);
+        Assert.NotEmpty(dictionary.Entries);
+
+        settings.Save(settings.Current with { EnabledPackIds = [] });
+        sut.ReconcileEnabledPacksFromSettings();
+
+        Assert.False(realEstatePack.IsEnabled);
+        Assert.Empty(dictionary.Entries);
+    }
+
     private DictionaryService CreateDictionaryService()
     {
         return new DictionaryService(Path.Combine(_tempDir, "dictionary.json"));

@@ -181,6 +181,10 @@ public sealed class WhisperCppPlugin
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
     private bool _runtimeLibraryOrderInitialized;
+    private TranscriptionAccelerationPreference _accelerationPreference =
+        TranscriptionAccelerationPreference.Auto;
+    private TranscriptionAccelerationStatus _accelerationStatus =
+        new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
     private float _noSpeechThreshold = DefaultNoSpeechThreshold;
 
     public string PluginId => "com.typewhisper.whisper-cpp";
@@ -194,6 +198,13 @@ public sealed class WhisperCppPlugin
     public bool SupportsTranslation => true;
     public bool SupportsModelDownload => true;
     public IReadOnlyList<string> SupportedLanguages => [];
+
+    public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
+        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
+
+    public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
+
+    public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
         Models
@@ -248,7 +259,12 @@ public sealed class WhisperCppPlugin
         _host?.SetSetting("selectedModel", modelId);
     }
 
-    public async Task ConfigureComputeBackendAsync(string backend)
+    // Hop to the thread pool so a UI-thread caller doesn't block on _gate.Wait()
+    // inside the sync helper that backs SetAccelerationPreference.
+    public Task ConfigureComputeBackendAsync(string backend) =>
+        Task.Run(() => TryConfigureComputeBackend(backend));
+
+    private bool TryConfigureComputeBackend(string backend)
     {
         var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? "cuda"
@@ -256,13 +272,11 @@ public sealed class WhisperCppPlugin
 
         // Hold the same gate used by load/transcribe paths so the backend
         // swap and the factory disposal don't race a concurrent operation.
-        // Use WaitAsync to avoid sync-over-async deadlocks if a caller on a
-        // captured SynchronizationContext is awaiting transcription/load.
-        await _gate.WaitAsync().ConfigureAwait(false);
+        _gate.Wait();
         try
         {
             if (_computeBackend == normalized)
-                return;
+                return true;
 
             // RuntimeLibraryOrder is consulted once when the native library first
             // loads (see EnsureRuntimeLibraryOrderInitialized). Once that has run,
@@ -274,7 +288,7 @@ public sealed class WhisperCppPlugin
                     PluginLogLevel.Warning,
                     $"Cannot switch compute backend to '{normalized}' after the native runtime has loaded ({_computeBackend}). Restart the app to change backends."
                 );
-                return;
+                return false;
             }
 
             _computeBackend = normalized;
@@ -283,11 +297,33 @@ public sealed class WhisperCppPlugin
                 DisposeFactoryUnsafe();
                 _loadedModelId = null;
             }
+            return true;
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    public void SetAccelerationPreference(TranscriptionAccelerationPreference preference)
+    {
+        var backend = preference switch
+        {
+            TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
+            TranscriptionAccelerationPreference.Cpu => "cpu",
+            _ => "cpu",
+        };
+
+        // Always record the host's last requested preference so the SDK getter
+        // reflects user intent, even when the runtime can't honour it yet.
+        _accelerationPreference = preference;
+
+        _accelerationStatus = TryConfigureComputeBackend(backend)
+            ? CreatePendingAccelerationStatus(preference)
+            // Swap was rejected because the native runtime is already pinned.
+            // Report the still-active backend with RequiresRestart=true so the UI
+            // surfaces the mismatch instead of silently dropping the request.
+            : CreateLoadedAccelerationStatus(_computeBackend, preference);
     }
 
     public bool IsModelDownloaded(string modelId) => File.Exists(GetModelPath(modelId));
@@ -389,6 +425,10 @@ public sealed class WhisperCppPlugin
             _loadedModelId = modelId;
             _selectedModelId = modelId;
             _host?.SetSetting("selectedModel", modelId);
+            _accelerationStatus = CreateLoadedAccelerationStatus(
+                _computeBackend,
+                _accelerationPreference
+            );
             _host?.Log(
                 PluginLogLevel.Info,
                 $"Loaded model {modelId} using {_computeBackend.ToUpperInvariant()}"
@@ -654,6 +694,63 @@ public sealed class WhisperCppPlugin
             ? [RuntimeLibrary.Cuda]
             : [RuntimeLibrary.Cpu];
         _runtimeLibraryOrderInitialized = true;
+    }
+
+    private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
+        TranscriptionAccelerationPreference preference
+    )
+    {
+        return preference switch
+        {
+            TranscriptionAccelerationPreference.NvidiaCuda => new(
+                TranscriptionAccelerationBackend.NvidiaCuda,
+                "Preparing NVIDIA CUDA",
+                "Will apply on next model load."
+            ),
+            TranscriptionAccelerationPreference.Cpu => new(
+                TranscriptionAccelerationBackend.Cpu,
+                "Preparing CPU",
+                "Will apply on next model load."
+            ),
+            _ => new(
+                TranscriptionAccelerationBackend.Cpu,
+                "Preparing acceleration",
+                "Will apply on next model load."
+            ),
+        };
+    }
+
+    private TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
+        string loadedBackend,
+        TranscriptionAccelerationPreference preference
+    )
+    {
+        var loaded = string.Equals(loadedBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? TranscriptionAccelerationBackend.NvidiaCuda
+            : TranscriptionAccelerationBackend.Cpu;
+
+        var displayText =
+            loaded == TranscriptionAccelerationBackend.NvidiaCuda
+                ? "Using NVIDIA CUDA"
+                : "Using CPU";
+
+        var requestedBackend = preference switch
+        {
+            TranscriptionAccelerationPreference.NvidiaCuda =>
+                TranscriptionAccelerationBackend.NvidiaCuda,
+            TranscriptionAccelerationPreference.Cpu => TranscriptionAccelerationBackend.Cpu,
+            _ => loaded,
+        };
+
+        if (requestedBackend != loaded)
+        {
+            var detail = loaded == TranscriptionAccelerationBackend.Cpu
+                ? "Process is pinned to CPU. Restart to switch to NVIDIA CUDA."
+                : "Process is pinned to NVIDIA CUDA. Restart to switch to CPU.";
+            return new TranscriptionAccelerationStatus(loaded, displayText, detail, true);
+        }
+
+        return new TranscriptionAccelerationStatus(loaded, displayText);
     }
 
     private static void TryDeleteFile(string path)

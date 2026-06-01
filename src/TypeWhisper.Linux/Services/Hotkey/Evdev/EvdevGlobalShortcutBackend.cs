@@ -55,6 +55,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         _dispatcher.CopyLastTranscriptionRequested += () =>
             CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.CancelRequested += () => CancelRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.PromptActionRequested += actionId =>
+            PromptActionRequested?.Invoke(this, actionId);
     }
 
     public string Id => BackendId;
@@ -70,6 +72,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? RecentTranscriptionsRequested;
     public event EventHandler? CopyLastTranscriptionRequested;
     public event EventHandler? CancelRequested;
+    public event EventHandler<string>? PromptActionRequested;
     public event EventHandler<string>? Failed;
 
     public bool IsAvailable()

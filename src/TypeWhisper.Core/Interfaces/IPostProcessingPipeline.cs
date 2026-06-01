@@ -39,6 +39,9 @@ public sealed record PipelineOptions
     /// <summary>Runs LLM prompt processing on text. Returns processed text.</summary>
     public Func<string, CancellationToken, Task<string>>? LlmHandler { get; init; }
 
+    /// <summary>When true, LLM failures abort processing instead of falling back to the current text.</summary>
+    public bool RequireLlmSuccess { get; init; }
+
     /// <summary>Applies cleanup before prompt actions and snippets.</summary>
     public Func<string, CancellationToken, Task<string>>? CleanupHandler { get; init; }
 
@@ -97,6 +100,12 @@ public static class PostProcessingStepNames
     public const string VocabularyBoosting = "VocabularyBoosting";
     public const string Dictionary = "Dictionary";
     public const string Translation = "Translation";
+
+    /// <summary>
+    ///     Prefix of the synthesized step name for plugin post-processors, which
+    ///     are reported as <c>Plugin(&lt;priority&gt;)</c>.
+    /// </summary>
+    public const string PluginPrefix = "Plugin(";
 }
 
 public sealed record PostProcessingStepResult(

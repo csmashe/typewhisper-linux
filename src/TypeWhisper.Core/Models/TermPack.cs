@@ -2,6 +2,9 @@ namespace TypeWhisper.Core.Models;
 
 public sealed record TermPack(string Id, string Name, string Icon, string[] Terms)
 {
+    public static TermPack? FindById(string id) =>
+        AllPacks.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+
     public static readonly TermPack[] AllPacks =
     [
         new(
@@ -305,6 +308,170 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Phaser",
                 "Arpeggiator"
             ]
+        ),
+        new(
+            "real-estate",
+            "Real Estate",
+            "\U0001F3E1",
+            [
+                "Escrow",
+                "Contingency",
+                "MLS",
+                "Listing",
+                "Buyer's agent",
+                "Seller's agent",
+                "Closing costs",
+                "Earnest money",
+                "Appraisal",
+                "Inspection",
+                "Contingency period",
+                "Title insurance",
+                "Deed",
+                "Easement",
+                "Encumbrance",
+                "Lien",
+                "Mortgage",
+                "Refinance",
+                "Amortization",
+                "Equity",
+                "HOA",
+                "Condominium",
+                "Townhouse",
+                "Single-family",
+                "Multifamily",
+                "Lease",
+                "Sublet",
+                "Tenant",
+                "Landlord",
+                "Property tax",
+                "Capital gains",
+                "1031 exchange",
+                "Comparative market analysis",
+                "Comp",
+                "Cap rate",
+                "ROI",
+                "Cash flow",
+                "Fixer-upper",
+                "Turnkey",
+                "Walkthrough",
+                "Open house",
+                "Pre-approval",
+                "Pre-qualification",
+                "FHA",
+                "VA loan",
+                "Conventional loan",
+                "ARM",
+                "PITI",
+                "Disclosure",
+                "Zoning"
+            ]
+        ),
+        new(
+            "architecture",
+            "Architecture",
+            "\U0001F3DB️",
+            [
+                "Rendering",
+                "Façade",
+                "Joist",
+                "Truss",
+                "Rafter",
+                "Beam",
+                "Column",
+                "Cantilever",
+                "Load-bearing",
+                "Foundation",
+                "Footing",
+                "Slab",
+                "Drywall",
+                "Stud",
+                "Sheathing",
+                "Cladding",
+                "Curtain wall",
+                "Mullion",
+                "Eaves",
+                "Soffit",
+                "Fascia",
+                "Parapet",
+                "Atrium",
+                "Mezzanine",
+                "Vestibule",
+                "Cornice",
+                "Pilaster",
+                "Buttress",
+                "Vault",
+                "Cupola",
+                "Bauhaus",
+                "Brutalism",
+                "Modernism",
+                "Vernacular",
+                "Massing",
+                "Elevation",
+                "Section",
+                "Plan view",
+                "Isometric",
+                "Axonometric",
+                "BIM",
+                "CAD",
+                "Revit",
+                "AutoCAD",
+                "SketchUp",
+                "Rhino",
+                "Grasshopper",
+                "RFI",
+                "Schematic design",
+                "Construction documents"
+            ]
+        )
+    ];
+}
+
+public sealed record IndustryPreset(string Id, string Name, string Description, string? TermPackId)
+{
+    public static string[] MergeIntoEnabledPackIds(string[] enabledPackIds, string presetId)
+    {
+        var preset = All.FirstOrDefault(p =>
+            string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)
+        );
+        if (preset?.TermPackId is not { } packId)
+        {
+            return enabledPackIds;
+        }
+
+        if (enabledPackIds.Any(id =>
+            string.Equals(id, packId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return enabledPackIds;
+        }
+
+        return [.. enabledPackIds, packId];
+    }
+
+    public static readonly IndustryPreset[] All =
+    [
+        new(
+            "general",
+            "General",
+            "No industry-specific vocabulary.",
+            null
+        ),
+        new(
+            "real-estate",
+            "Real Estate",
+            "Listings, escrow, financing, and walk-through terms.",
+            "real-estate"
+        ),
+        new(
+            "architecture",
+            "Architecture",
+            "Structural, façade, and design-document terms.",
+            "architecture"
+        ),
+        new(
+            "legal",
+            "Legal",
+            "Contract, compliance, and litigation terms.",
+            "legal"
         )
     ];
 }

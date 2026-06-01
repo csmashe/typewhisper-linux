@@ -154,14 +154,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
     }
 
-    [Fact]
-    public void FormatPromptActionInput_LabelsInputText()
-    {
-        var result = PromptProcessingService.FormatPromptActionInput("Ryan, this is a test.");
-
-        Assert.Contains("Text to process:", result);
-        Assert.Contains("Ryan, this is a test.", result);
-    }
+    // Framing behavior (FormatPromptActionInput) is covered by PromptProcessingInputFramingTests.
 
     private static Mock<ISettingsService> CreateSettings(AppSettings current)
     {

@@ -8,6 +8,92 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class ShortcutDispatcherTests
 {
     [Fact]
+    public void PromptActionPress_FiresPromptActionRequestedWithId()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithPromptAction(
+                "alpha",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+            )
+        );
+        string? observed = null;
+        int count = 0;
+        d.PromptActionRequested += id =>
+        {
+            observed = id;
+            count++;
+        };
+
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+
+        Assert.Equal("alpha", observed);
+        Assert.Equal(1, count);
+    }
+
+    [Fact]
+    public void PromptActionRelease_ClearsDedupEvenAfterShortcutsReplaced()
+    {
+        // Scenario: user holds Ctrl+Alt+R (alpha fires once). Mid-hold,
+        // the prompt-action list is replaced (action deleted, rebound,
+        // etc.). The release must still clear the press-time entry so a
+        // subsequent press of the same physical key fires again instead
+        // of being dedup'd against a ghost.
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithPromptAction(
+                "alpha",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+            )
+        );
+        int count = 0;
+        d.PromptActionRequested += _ => count++;
+
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+
+        // Replace shortcut set mid-hold — alpha is gone, beta is now on R.
+        d.UpdateShortcuts(
+            SetWithPromptAction(
+                "beta",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+            )
+        );
+
+        d.Handle(KeyCode.VcR, ModifierMask.None, false);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+
+        // Two distinct presses (alpha then beta) must both fire — the
+        // dedup dictionary must have cleared on release of the physical
+        // key despite the set no longer naming the original action.
+        Assert.Equal(2, count);
+    }
+
+    [Fact]
+    public void PromptActionRepeatedPress_DedupsUntilRelease()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithPromptAction(
+                "alpha",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+            )
+        );
+        int count = 0;
+        d.PromptActionRequested += _ => count++;
+
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        d.Handle(KeyCode.VcR, ModifierMask.None, false);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+
+        Assert.Equal(2, count);
+    }
+
+    [Fact]
     public void TogglePress_FiresToggle_NotStart()
     {
         var d = new ShortcutDispatcher();
@@ -118,6 +204,31 @@ public sealed class ShortcutDispatcherTests
             ModifierMask.None,
             mode,
             cancelEnabled
+        );
+    }
+
+    private static GlobalShortcutSet SetWithPromptAction(
+        string actionId,
+        KeyCode key,
+        ModifierMask mods
+    )
+    {
+        return new GlobalShortcutSet(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            RecordingMode.Toggle,
+            false,
+            new[] { new PromptActionHotkey(actionId, key, mods) }
         );
     }
 }

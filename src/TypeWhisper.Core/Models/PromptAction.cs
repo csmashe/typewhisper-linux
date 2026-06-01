@@ -13,6 +13,7 @@ public sealed record PromptAction
     public string? ModelOverride { get; init; }
     public string? TargetActionPluginId { get; init; }
     public string? HotkeyKey { get; init; }
+    public bool IsManualOnly { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
 }

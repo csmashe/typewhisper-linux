@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -25,6 +26,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(PreviewRightText))]
     private OverlayWidgetOption? _selectedRightWidget;
 
+    [ObservableProperty]
+    private double _previewBubbleAutoHideSeconds =
+        AppSettings.DefaultPreviewBubbleAutoHideMilliseconds / 1000d;
+
     public AppearanceSectionViewModel(ISettingsService settings)
     {
         _settings = settings;
@@ -47,6 +52,17 @@ public partial class AppearanceSectionViewModel : ObservableObject
         new(OverlayWidget.AppName, "App name")
     ];
 
+    public string PreviewBubbleAutoHideSecondsText => $"{PreviewBubbleAutoHideSeconds:0.##} s";
+
+    public bool IsOverlayPositionCustomized =>
+        _settings.Current.OverlayCustomLeft is not null
+        && _settings.Current.OverlayCustomTop is not null;
+
+    public string OverlayPositionStatusText =>
+        IsOverlayPositionCustomized
+            ? $"Custom position: {(int)Math.Round(_settings.Current.OverlayCustomLeft ?? 0)}, {(int)Math.Round(_settings.Current.OverlayCustomTop ?? 0)}"
+            : "Using default (Top/Bottom)";
+
     public bool PreviewLeftIsIndicator => SelectedLeftWidget?.Value == OverlayWidget.Indicator;
     public bool PreviewLeftIsWaveform => SelectedLeftWidget?.Value == OverlayWidget.Waveform;
     public bool PreviewLeftIsText => IsTextWidget(SelectedLeftWidget?.Value);
@@ -56,6 +72,21 @@ public partial class AppearanceSectionViewModel : ObservableObject
     public bool PreviewRightIsWaveform => SelectedRightWidget?.Value == OverlayWidget.Waveform;
     public bool PreviewRightIsText => IsTextWidget(SelectedRightWidget?.Value);
     public string PreviewRightText => SampleText(SelectedRightWidget?.Value);
+
+    [RelayCommand]
+    private void ResetOverlayPosition()
+    {
+        if (!IsOverlayPositionCustomized)
+        {
+            return;
+        }
+
+        _settings.Save(_settings.Current with
+        {
+            OverlayCustomLeft = null,
+            OverlayCustomTop = null,
+        });
+    }
 
     private void Refresh(AppSettings settings)
     {
@@ -68,6 +99,13 @@ public partial class AppearanceSectionViewModel : ObservableObject
         SelectedRightWidget =
             OverlayWidgets.FirstOrDefault(option => option.Value == settings.OverlayRightWidget)
             ?? OverlayWidgets[0];
+        PreviewBubbleAutoHideSeconds =
+            AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                settings.PreviewBubbleAutoHideMilliseconds) / 1000d;
+
+        OnPropertyChanged(nameof(IsOverlayPositionCustomized));
+        OnPropertyChanged(nameof(OverlayPositionStatusText));
+        ResetOverlayPositionCommand.NotifyCanExecuteChanged();
 
         // Mode changes elsewhere don't flip the selected widget, but HotkeyMode
         // preview text still needs to refresh.
@@ -132,6 +170,22 @@ public partial class AppearanceSectionViewModel : ObservableObject
         }
 
         _settings.Save(_settings.Current with { OverlayRightWidget = value.Value });
+    }
+
+    partial void OnPreviewBubbleAutoHideSecondsChanged(double value)
+    {
+        OnPropertyChanged(nameof(PreviewBubbleAutoHideSecondsText));
+
+        var milliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+            (int)Math.Round(value * 1000, MidpointRounding.AwayFromZero));
+
+        if (_settings.Current.PreviewBubbleAutoHideMilliseconds == milliseconds)
+        {
+            return;
+        }
+
+        _settings.Save(
+            _settings.Current with { PreviewBubbleAutoHideMilliseconds = milliseconds });
     }
 }
 

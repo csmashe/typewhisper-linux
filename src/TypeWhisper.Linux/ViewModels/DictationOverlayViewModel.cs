@@ -68,10 +68,13 @@ public partial class DictationOverlayViewModel : ObservableObject
         _recordingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _recordingTimer.Tick += (_, _) => RefreshRecordingSeconds();
 
-        // Auto-hide feedback after 2 seconds. New events call
-        // RestartFeedbackTimer() to re-arm even when ShowFeedback is already true
-        // (a plain re-assignment skips OnShowFeedbackChanged due to value equality).
-        _feedbackTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        // Auto-hide feedback after a user-configurable delay
+        // (AppSettings.PreviewBubbleAutoHideMilliseconds). Interval is set per
+        // arm via ArmFeedbackAutoHideTimer so live setting changes apply on
+        // the next feedback event. New events call RestartFeedbackTimer() to
+        // re-arm even when ShowFeedback is already true (a plain re-assignment
+        // skips OnShowFeedbackChanged due to value equality).
+        _feedbackTimer = new DispatcherTimer();
         _feedbackTimer.Tick += (_, _) =>
         {
             _feedbackTimer.Stop();
@@ -181,13 +184,31 @@ public partial class DictationOverlayViewModel : ObservableObject
         _feedbackTimer.Stop();
         if (value)
         {
-            _feedbackTimer.Start();
+            ArmFeedbackAutoHideTimer();
         }
     }
 
     private void RestartFeedbackTimer()
     {
         _feedbackTimer.Stop();
+        ArmFeedbackAutoHideTimer();
+    }
+
+    private void ArmFeedbackAutoHideTimer()
+    {
+        var milliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+            _settings.Current.PreviewBubbleAutoHideMilliseconds);
+
+        if (milliseconds <= 0)
+        {
+            _feedbackTimer.Stop();
+            ShowFeedback = false;
+            FeedbackText = null;
+            OnPropertyChanged(nameof(HasVisibleContent));
+            return;
+        }
+
+        _feedbackTimer.Interval = TimeSpan.FromMilliseconds(milliseconds);
         _feedbackTimer.Start();
     }
 

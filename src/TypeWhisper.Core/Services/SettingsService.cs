@@ -109,7 +109,14 @@ public sealed class SettingsService : ISettingsService
 
             var json = File.ReadAllText(path);
             var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
-            return settings is null ? null : ApplyHistoryRetentionMigration(settings, json);
+            if (settings is null)
+            {
+                return null;
+            }
+
+            settings = ApplyHistoryRetentionMigration(settings, json);
+            settings = ApplyAccelerationMigration(settings, json);
+            return settings;
         }
         catch (Exception ex)
         {
@@ -181,6 +188,50 @@ public sealed class SettingsService : ISettingsService
         }
 
         return settings;
+    }
+
+    /// <summary>
+    ///     Migrates settings written by older builds that stored compute selection as
+    ///     <c>computeBackend</c> (string "cpu"/"cuda") to the current
+    ///     <c>localModelAcceleration</c> field (Auto/Cpu/NvidiaCuda).
+    ///     Only runs when the legacy field exists AND the new field does not, so it's
+    ///     idempotent and safe to call on every load.
+    /// </summary>
+    private static AppSettings ApplyAccelerationMigration(AppSettings settings, string json)
+    {
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(json);
+        }
+        catch
+        {
+            return settings with
+            {
+                LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
+                    settings.LocalModelAcceleration
+                )
+            };
+        }
+
+        if (root is JsonObject obj
+            && !obj.ContainsKey("localModelAcceleration")
+            && obj.TryGetPropertyValue("computeBackend", out var legacyNode))
+        {
+            var legacy = legacyNode?.GetValue<string?>();
+            var migrated = string.Equals(legacy, "cuda", StringComparison.OrdinalIgnoreCase)
+                ? AppSettings.LocalModelAccelerationNvidiaCuda
+                : AppSettings.LocalModelAccelerationCpu;
+
+            return settings with { LocalModelAcceleration = migrated };
+        }
+
+        return settings with
+        {
+            LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
+                settings.LocalModelAcceleration
+            )
+        };
     }
 
     private static void LogWarning(string message)

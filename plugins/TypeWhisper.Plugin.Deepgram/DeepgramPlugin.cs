@@ -88,9 +88,9 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         var langParam =
             string.IsNullOrEmpty(language) || language == "auto"
                 ? "&detect_language=true"
-                : $"&language={language}";
+                : $"&language={Uri.EscapeDataString(language)}";
         var url =
-            $"{BaseUrl}/v1/listen?model={_selectedModelId}&smart_format=true&punctuate=true{langParam}";
+            $"{BaseUrl}/v1/listen?model={Uri.EscapeDataString(_selectedModelId)}&smart_format=true&punctuate=true{langParam}";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Token", _apiKey);

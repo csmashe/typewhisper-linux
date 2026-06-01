@@ -119,6 +119,9 @@ public class App : Application
             tray.DictationToggleRequested += (_, _) => _ = dictation.ToggleAsync();
             BootTrace.Stage("dictation.Initialize");
 
+            var sessionResults = services.GetRequiredService<DictationSessionResultStore>();
+            dictation.SessionCompleted += sessionResults.Record;
+
             // Bring up the IPC control socket so `typewhisper` (with no args)
             // from a second terminal can toggle dictation in this instance.
             // The bind itself is the single-instance guard; if another live
@@ -161,6 +164,14 @@ public class App : Application
             // "Ctrl+Shift+F9" that the user never chose.
             var hotkey = services.GetRequiredService<HotkeyService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
+            var promptActions = services.GetRequiredService<IPromptActionService>();
+            hotkey.SetPromptActionHotkeys(
+                HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
+            );
+            promptActions.ActionsChanged += () =>
+                hotkey.SetPromptActionHotkeys(
+                    HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
+                );
             var lastApplied = hotkey.CurrentHotkeyString;
             var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
             var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
@@ -223,6 +234,8 @@ public class App : Application
 
             var promptPalette = services.GetRequiredService<PromptPaletteService>();
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
+            hotkey.PromptActionHotkeyTriggered += (_, actionId) =>
+                _ = promptPalette.ExecuteActionDirectAsync(actionId);
 
             var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
             recentTranscriptions.FeedbackRequested += (message, isError) =>
@@ -245,6 +258,10 @@ public class App : Application
 
             BootTrace.Stage("synchronous init complete; starting BootstrapDeferredAsync");
             var bootstrapTask = BootstrapDeferredAsync(services);
+
+            // Detached from bootstrapTask so a slow update check can't delay
+            // first-run onboarding (which awaits bootstrap below).
+            _ = RunStartupUpdateCheckAsync(services);
 
             // First-run onboarding wizard. Wait for bootstrap so bundled
             // plugins are deployed and initialized before the model picker loads.
@@ -459,6 +476,16 @@ public class App : Application
             Debug.WriteLine($"[App] HTTP API dispose failed: {ex.Message}");
         }
 
+        try
+        {
+            var sessionResults = services.GetService<DictationSessionResultStore>();
+            sessionResults?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Dictation session result store dispose failed: {ex.Message}");
+        }
+
         // Placeholder: keeps the method async for future awaitable teardown
         // steps without forcing callers to change the signature.
         await Task.CompletedTask;
@@ -488,22 +515,11 @@ public class App : Application
         await pluginManager.InitializeAsync();
         BootTrace.Stage("PluginManager.InitializeAsync");
 
-        var pluginRegistry = services.GetRequiredService<PluginRegistryService>();
-        _ = pluginRegistry
-            .FirstRunAutoInstallAsync()
-            .ContinueWith(_ => pluginRegistry.CheckForUpdatesAsync(), TaskScheduler.Default)
-            .ContinueWith(
-                t =>
-                {
-                    if (t.IsFaulted)
-                    {
-                        Debug.WriteLine(
-                            $"[App] Plugin registry check failed: {t.Exception?.Message}"
-                        );
-                    }
-                },
-                TaskScheduler.Default
-            );
+        // The remote plugin registry (PluginRegistryService) targets the
+        // upstream Windows registry, which serves Windows-built plugin
+        // artifacts. The Linux fork ships its own rewritten plugins via
+        // BundledPluginDeployer above, so the registry's first-run
+        // auto-install and update check are intentionally not run here.
 
         var historyRetention = services.GetRequiredService<HistoryRetentionCoordinator>();
         historyRetention.Initialize();
@@ -522,6 +538,29 @@ public class App : Application
             {
                 Debug.WriteLine($"[App] Auto-load model failed: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>
+    ///     Fire-and-forget once-per-day GitHub release check. Kept off the
+    ///     bootstrap task on purpose: first-run onboarding awaits bootstrap, and
+    ///     update checking is unrelated to the model/plugin setup the wizard
+    ///     needs, so a slow or unreachable network must not delay the wizard by
+    ///     the HTTP timeout. Network failures are swallowed inside the service;
+    ///     a found update drives the main window's banner via
+    ///     UpdateCheckService.ResultChanged (already subscribed by the VMs).
+    /// </summary>
+    private static async Task RunStartupUpdateCheckAsync(IServiceProvider services)
+    {
+        try
+        {
+            var updateCheck = services.GetRequiredService<UpdateCheckService>();
+            await updateCheck.CheckOnStartupAsync();
+            BootTrace.Stage("UpdateCheckService.CheckOnStartupAsync");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Startup update check failed: {ex.Message}");
         }
     }
 

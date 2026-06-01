@@ -31,7 +31,7 @@ public sealed class LlmCleanupServiceTests
 
         Assert.Equal("polished text", result);
         Assert.Equal(CleanupService.MediumSystemPrompt, provider.LastSystemPrompt);
-        Assert.Equal("Hello", provider.LastUserText);
+        Assert.Equal(PromptProcessingService.FormatPromptActionInput("Hello"), provider.LastUserText);
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public sealed class LlmCleanupServiceTests
 
         Assert.Equal("concise text", result);
         Assert.Equal(CleanupService.HighSystemPrompt, provider.LastSystemPrompt);
-        Assert.Equal("Hello there", provider.LastUserText);
+        Assert.Equal(PromptProcessingService.FormatPromptActionInput("Hello there"), provider.LastUserText);
     }
 
     [Fact]

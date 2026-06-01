@@ -191,6 +191,12 @@
                                 <TextBox Text="{Binding EditName}"
                                          Margin="0,0,0,14" />
 
+                                <TextBlock
+                                    Text="No matchers — this profile will apply to any app that no other profile matches."
+                                    Classes="page-subtitle"
+                                    Margin="0,0,0,14"
+                                    IsVisible="{Binding IsGlobalFallbackProfile}" />
+
                                 <TextBlock Text="Apps"
                                            Classes="field-label" />
                                 <ItemsControl ItemsSource="{Binding ProcessNameChips}"

@@ -69,6 +69,31 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_RequiredLlmHandlerFailure_Throws()
+    {
+        var options = new PipelineOptions
+        {
+            LlmHandler = (_, _) => throw new InvalidOperationException("LLM failed"),
+            RequireLlmSuccess = true
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _sut.ProcessAsync("raw transcript", options)
+        );
+        Assert.Equal("LLM failed", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RequiredLlmWithoutHandler_Throws()
+    {
+        var options = new PipelineOptions { RequireLlmSuccess = true };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _sut.ProcessAsync("raw transcript", options)
+        );
+    }
+
+    [Fact]
     public async Task ProcessAsync_Translation_Applied()
     {
         var options = new PipelineOptions
@@ -426,5 +451,21 @@ public class PostProcessingPipelineTests
         var result = await _sut.ProcessAsync("type whisper", options);
 
         Assert.Equal("type whisper", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_OutlookFormatting_DoesNotEmitHtmlTags()
+    {
+        var options = new PipelineOptions
+        {
+            AppFormatter = AppFormatterService.Format,
+            TargetProcessName = "OUTLOOK"
+        };
+
+        var result = await _sut.ProcessAsync("- one\n- two", options);
+
+        Assert.Equal("- one\n- two", result.Text);
+        Assert.DoesNotContain("<", result.Text);
+        Assert.DoesNotContain(">", result.Text);
     }
 }

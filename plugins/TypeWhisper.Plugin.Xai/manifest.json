@@ -1,0 +1,10 @@
+{
+  "id": "com.typewhisper.xai",
+  "name": "xAI / Grok",
+  "version": "1.0.0",
+  "author": "TypeWhisper",
+  "description": "Cloud LLM, speech-to-text, and text-to-speech via xAI Grok APIs. Requires an xAI API key.",
+  "category": "transcription",
+  "assemblyName": "TypeWhisper.Plugin.Xai.dll",
+  "pluginClass": "TypeWhisper.Plugin.Xai.XaiPlugin"
+}

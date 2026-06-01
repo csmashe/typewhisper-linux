@@ -5,6 +5,7 @@
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
         xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
         xmlns:svc="using:TypeWhisper.Linux.Services"
+        xmlns:models="using:TypeWhisper.Core.Models"
         xmlns:local="using:TypeWhisper.Linux"
         mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="720"
         x:Class="TypeWhisper.Linux.Views.WelcomeWizard"
@@ -81,6 +82,28 @@
                     </ComboBox>
                     <TextBlock Text="{Binding ModelStatus}" FontSize="11"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
+                    <StackPanel Spacing="6" Margin="0,10,0,0">
+                        <TextBlock Text="Writing focus" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Optional: pick an industry to enable a matching vocabulary pack on finish." />
+                        <ComboBox ItemsSource="{Binding IndustryPresets}"
+                                  SelectedValueBinding="{Binding Id}"
+                                  SelectedValue="{Binding SelectedIndustryPresetId}"
+                                  HorizontalAlignment="Stretch">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="models:IndustryPreset">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="{Binding Name}" />
+                                        <TextBlock Text="{Binding Description}" FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
                 </StackPanel>
             </TabItem>
 

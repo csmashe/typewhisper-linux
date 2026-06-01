@@ -123,7 +123,10 @@ internal static class ServiceRegistrations
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
+        services.AddSingleton<UpdateCheckService>();
         services.AddSingleton<SettingsBackupService>();
+        services.AddSingleton<ApiDiscoveryFile>();
+        services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();
         services.AddSingleton<CliInstallService>();
         services.AddSingleton<WatchFolderService>();

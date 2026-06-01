@@ -133,11 +133,16 @@ public sealed class SpeechFeedbackService : IDisposable
         SpeakCore(new TtsSpeakRequest(text, language), true);
     }
 
-    public void SpeakAutomaticTranscription(string text, string? language = null)
+    public void SpeakAutomaticTranscription(
+        string text,
+        string? language = null,
+        bool useConfiguredLanguageFallback = true
+    )
     {
         SpeakCore(
             new TtsSpeakRequest(text, language, TtsPurpose.Transcription),
-            true
+            true,
+            useConfiguredLanguageFallback
         );
     }
 
@@ -160,9 +165,13 @@ public sealed class SpeechFeedbackService : IDisposable
         Speak("Recording");
     }
 
-    public void AnnounceTranscriptionComplete(string text, string? language = null)
+    public void AnnounceTranscriptionComplete(
+        string text,
+        string? language = null,
+        bool useConfiguredLanguageFallback = true
+    )
     {
-        SpeakAutomaticTranscription(text, language);
+        SpeakAutomaticTranscription(text, language, useConfiguredLanguageFallback);
     }
 
     public void AnnounceError(string reason)
@@ -203,7 +212,11 @@ public sealed class SpeechFeedbackService : IDisposable
 
     public event EventHandler? ProvidersChanged;
 
-    private void SpeakCore(TtsSpeakRequest request, bool requireEnabled)
+    private void SpeakCore(
+        TtsSpeakRequest request,
+        bool requireEnabled,
+        bool useConfiguredLanguageFallback = true
+    )
     {
         if (_disposed || string.IsNullOrWhiteSpace(request.Text))
         {
@@ -213,6 +226,14 @@ public sealed class SpeechFeedbackService : IDisposable
         if (requireEnabled && !_settings.Current.SpokenFeedbackEnabled)
         {
             return;
+        }
+
+        // Callers that have already resolved the readback language (e.g. the
+        // dictation orchestrator) opt out so the configured-language fallback
+        // does not override their decision — see ApplyConfiguredLanguageFallback.
+        if (useConfiguredLanguageFallback)
+        {
+            request = ApplyConfiguredLanguageFallback(request);
         }
 
         Stop();
@@ -227,6 +248,36 @@ public sealed class SpeechFeedbackService : IDisposable
         }
 
         _ = SpeakAsync(request, cts, version);
+    }
+
+    // When a transcription / manual-readback request carries no language, fall
+    // back to the configured app language so the TTS provider speaks it in the
+    // expected language rather than guessing. Ported from upstream 552ad88.
+    private TtsSpeakRequest ApplyConfiguredLanguageFallback(TtsSpeakRequest request)
+    {
+        if (
+            !ShouldUseConfiguredLanguageFallback(request.Purpose)
+            || !string.IsNullOrWhiteSpace(request.Language)
+        )
+        {
+            return request;
+        }
+
+        var configuredLanguage = _settings.Current.Language;
+        if (
+            string.IsNullOrWhiteSpace(configuredLanguage)
+            || string.Equals(configuredLanguage, "auto", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return request;
+        }
+
+        return request with { Language = configuredLanguage };
+    }
+
+    private static bool ShouldUseConfiguredLanguageFallback(TtsPurpose purpose)
+    {
+        return purpose is TtsPurpose.Transcription or TtsPurpose.ManualReadback;
     }
 
     private async Task SpeakAsync(

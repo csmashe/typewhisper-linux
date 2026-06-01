@@ -55,7 +55,7 @@
                     Text="Keep capture keyboard-first. Start with one main hotkey, then adjust activation behavior or add the prompt palette shortcut as needed."
                     Classes="page-subtitle" />
                 <TextBlock
-                    Text="Single modifier keys like Win are not allowed. Use a combination like Ctrl+Shift, Alt+F9, or Ctrl+Shift+Space."
+                    Text="Use a combination like Ctrl+Shift, Alt+F9, or Ctrl+Shift+Space, or a single side-specific modifier like Right Alt or Left Ctrl."
                     FontSize="11"
                     Foreground="#AFC0D3"
                     TextWrapping="Wrap"

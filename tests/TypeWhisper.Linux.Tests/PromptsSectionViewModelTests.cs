@@ -57,6 +57,94 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SaveAction_PersistsHotkeyAndManualOnlyForNewAction()
+    {
+        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Manual rewrite";
+        sut.EditSystemPrompt = "Do it";
+        sut.EditHotkeyKey = " Ctrl+Alt+R ";
+        sut.EditIsManualOnly = true;
+        sut.SaveActionCommand.Execute(null);
+
+        var action = Assert.Single(prompts.Actions);
+        Assert.Equal("Ctrl+Alt+R", action.HotkeyKey);
+        Assert.True(action.IsManualOnly);
+    }
+
+    [Fact]
+    public void SaveAction_PersistsHotkeyAndManualOnlyForExistingAction()
+    {
+        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "existing",
+                Name = "Existing",
+                SystemPrompt = "x"
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        sut.SelectedAction = sut.Actions.Single(a => a.Id == "existing");
+        sut.EditHotkeyKey = "Ctrl+Alt+T";
+        sut.EditIsManualOnly = true;
+        sut.SaveActionCommand.Execute(null);
+
+        var action = Assert.Single(prompts.Actions);
+        Assert.Equal("Ctrl+Alt+T", action.HotkeyKey);
+        Assert.True(action.IsManualOnly);
+    }
+
+    [Fact]
+    public void OnSelectedActionChanged_PopulatesHotkeyAndManualOnlyFromAction()
+    {
+        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "existing",
+                Name = "Existing",
+                SystemPrompt = "x",
+                HotkeyKey = "Ctrl+Alt+R",
+                IsManualOnly = true
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        sut.SelectedAction = sut.Actions.Single(a => a.Id == "existing");
+
+        Assert.Equal("Ctrl+Alt+R", sut.EditHotkeyKey);
+        Assert.True(sut.EditIsManualOnly);
+    }
+
+    [Fact]
+    public void SaveAction_BlankHotkeyKeyPersistsAsNull()
+    {
+        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Blank";
+        sut.EditSystemPrompt = "x";
+        sut.EditHotkeyKey = "   ";
+        sut.SaveActionCommand.Execute(null);
+
+        var action = Assert.Single(prompts.Actions);
+        Assert.Null(action.HotkeyKey);
+    }
+
+    [Fact]
     public void SelectedEditProvider_UpdatesProviderOverride()
     {
         var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));

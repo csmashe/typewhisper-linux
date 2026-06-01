@@ -114,6 +114,51 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
+                <Border Grid.Column="0"
+                        IsVisible="{Binding UpdateBannerVisible}"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Center"
+                        Background="#16263A"
+                        BorderBrush="#2A3C55"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="2">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="2"
+                                VerticalAlignment="Center">
+                        <Button Command="{Binding OpenUpdateCommand}"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="8,4"
+                                MinHeight="0"
+                                ToolTip.Tip="Open About to download the update">
+                            <StackPanel Orientation="Horizontal"
+                                        Spacing="7"
+                                        VerticalAlignment="Center">
+                                <TextBlock Text="↓"
+                                           FontSize="14"
+                                           FontWeight="Bold"
+                                           Foreground="#8FB7FF"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding UpdateBannerText}"
+                                           FontSize="12"
+                                           Foreground="#CFE0F5"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding DismissUpdateCommand}"
+                                Content="✕"
+                                AutomationProperties.Name="Dismiss update"
+                                FontSize="11"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="6,4"
+                                MinHeight="0"
+                                Foreground="#8A9AAE"
+                                ToolTip.Tip="Dismiss" />
+                    </StackPanel>
+                </Border>
+
                 <StackPanel Grid.Column="1"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">

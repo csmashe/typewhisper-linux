@@ -43,6 +43,25 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
         return Task.CompletedTask;
     }
 
+    /// <summary>Acceleration backends this engine can run on. Default: CPU only.</summary>
+    IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
+        [TranscriptionAccelerationBackend.Cpu];
+
+    /// <summary>Acceleration preference last requested by the host. Default: Auto.</summary>
+    TranscriptionAccelerationPreference AccelerationPreference =>
+        TranscriptionAccelerationPreference.Auto;
+
+    /// <summary>Reports what acceleration the engine actually loaded with.</summary>
+    TranscriptionAccelerationStatus AccelerationStatus =>
+        new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
+
+    /// <summary>
+    ///     Sets the host's resolved acceleration preference. The host resolves <c>Auto</c> to a
+    ///     concrete backend before calling, so plugins only see <c>Cpu</c> or <c>NvidiaCuda</c>
+    ///     in practice.
+    /// </summary>
+    void SetAccelerationPreference(TranscriptionAccelerationPreference preference) { }
+
     /// <summary>Transcribes WAV audio data and returns the result.</summary>
     Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,

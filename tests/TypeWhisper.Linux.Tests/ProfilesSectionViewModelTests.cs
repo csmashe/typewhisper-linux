@@ -154,6 +154,47 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void RefreshPromptActionOptions_ExcludesManualOnlyActions()
+    {
+        var service = CreateProfileService();
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        promptActions.AddAction(
+            new PromptAction
+            {
+                Id = "auto",
+                Name = "Auto",
+                SystemPrompt = "a"
+            }
+        );
+        promptActions.AddAction(
+            new PromptAction
+            {
+                Id = "manual",
+                Name = "Manual",
+                SystemPrompt = "m",
+                IsManualOnly = true
+            }
+        );
+
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        );
+
+        // First entry is the "No prompt action" placeholder; the manual-only
+        // action must be missing from the rest.
+        Assert.DoesNotContain(sut.PromptActionOptions, option => option.Value == "manual");
+        Assert.Contains(sut.PromptActionOptions, option => option.Value == "auto");
+    }
+
+    [Fact]
     public void AddCurrentProcessRule_AddsFocusedProcessToSelectedProfileDraft()
     {
         var service = CreateProfileService();

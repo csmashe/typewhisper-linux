@@ -13,7 +13,7 @@ TestResults/
 *.swp
 *~
 .DS_Store
-/releases/
+releases/
 /dist/
 # Ignore everything under docs/ except published release notes
 docs/*

@@ -36,6 +36,48 @@ public sealed class ShortcutMatcherTests
     }
 
     [Fact]
+    public void Match_PromptActionTakesPriorityOverDictation()
+    {
+        // Same chord as dictation but bound as a prompt-action — the
+        // prompt-action arm sits between PromptPalette and Dictation in
+        // priority, so the dictation match must NOT win.
+        var set = new GlobalShortcutSet(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            RecordingMode.Toggle,
+            false,
+            new[]
+            {
+                new PromptActionHotkey(
+                    "alpha",
+                    KeyCode.VcSpace,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftShift
+                )
+            }
+        );
+
+        var kind = ShortcutMatcher.Match(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            set,
+            out var actionId
+        );
+
+        Assert.Equal(ShortcutMatchKind.PromptAction, kind);
+        Assert.Equal("alpha", actionId);
+    }
+
+    [Fact]
     public void Match_RightCtrlSubstitutesForLeftCtrl()
     {
         // Live keyboards routinely report RightCtrl for chords pressed on the
@@ -48,6 +90,37 @@ public sealed class ShortcutMatcherTests
         );
 
         Assert.Equal(ShortcutMatchKind.Dictation, kind);
+    }
+
+    [Fact]
+    public void Match_SideSpecificSingleModifierBinding_MatchesOnlyThatSide()
+    {
+        // B8: when the dictation key IS a side-specific modifier (e.g.
+        // VcRightAlt with no mods), the matcher distinguishes left/right
+        // naturally because the key field — not the modifier mask — carries
+        // the side information.
+        var set = new GlobalShortcutSet(
+            KeyCode.VcRightAlt,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            RecordingMode.Toggle,
+            false
+        );
+
+        var rightMatch = ShortcutMatcher.Match(KeyCode.VcRightAlt, ModifierMask.None, set);
+        var leftMatch = ShortcutMatcher.Match(KeyCode.VcLeftAlt, ModifierMask.None, set);
+
+        Assert.Equal(ShortcutMatchKind.Dictation, rightMatch);
+        Assert.Equal(ShortcutMatchKind.None, leftMatch);
     }
 
     private static GlobalShortcutSet DefaultSet()

@@ -45,6 +45,29 @@ internal sealed record MultipartPart(
     byte[] Data
 );
 
+internal sealed record LocalFileTranscribeRequest(
+    string Path,
+    string? Language,
+    IReadOnlyList<string> LanguageHints,
+    string? Task,
+    string? TargetLanguage,
+    string? ResponseFormat,
+    string? Prompt,
+    string? Engine,
+    string? Model,
+    bool AwaitDownload
+);
+
+internal sealed record CorrectionUpsertRequest(
+    string Original,
+    string Replacement,
+    bool? CaseSensitive
+);
+
+internal sealed record CorrectionDeleteRequest(string Original);
+
+internal sealed record DictionaryTermDeleteRequest(string Term);
+
 /// <summary>
 ///     Hand-rolled multipart/form-data parser for the local HTTP API. Custom
 ///     because HttpListener has no multipart support and System.Net.Http's
