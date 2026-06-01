@@ -74,6 +74,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private string? _editPromptActionId;
 
     [ObservableProperty]
+    private string? _editHotkeyData;
+
+    [ObservableProperty]
+    private ProfileHotkeyBehavior _editHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
+
+    [ObservableProperty]
     private ProfileStylePreset _editStylePreset = ProfileStylePreset.Raw;
 
     [ObservableProperty]
@@ -189,6 +195,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
         new(ProfileStylePreset.MeetingNotes, "Meeting notes")
     ];
 
+    public ObservableCollection<ProfileHotkeyBehaviorOption> HotkeyBehaviorOptions { get; } =
+    [
+        new(ProfileHotkeyBehavior.StartDictation, "Start dictation"),
+        new(ProfileHotkeyBehavior.ProcessSelectedText, "Process selected text")
+    ];
+
     public ObservableCollection<NullableCleanupLevelOption> CleanupOverrideOptions { get; } =
     [
         new(null, "Use style preset"),
@@ -216,10 +228,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
     ///     Global cascade tier picks this profile up for any window that no
     ///     other Profile matches — making it the de-facto fallback profile.
     ///     Surfaced as a contextual hint in the editor so users don't have to
-    ///     know the empty-matchers convention.
+    ///     know the empty-matchers convention. A profile that also has a hotkey
+    ///     is hotkey-only (excluded from the Global tier), so it is NOT a
+    ///     fallback — keep the hint in sync with that matching rule.
     /// </summary>
     public bool IsGlobalFallbackProfile =>
-        ProcessNameChips.Count == 0 && UrlPatternChips.Count == 0;
+        ProcessNameChips.Count == 0
+        && UrlPatternChips.Count == 0
+        && string.IsNullOrWhiteSpace(EditHotkeyData);
 
     public IReadOnlyList<string> LanguageChoices { get; } =
         ["", "auto", "en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
@@ -331,6 +347,21 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    public ProfileHotkeyBehaviorOption? SelectedHotkeyBehaviorOption
+    {
+        get => HotkeyBehaviorOptions.FirstOrDefault(o => o.Value == EditHotkeyBehavior);
+        set
+        {
+            var selected = value?.Value ?? ProfileHotkeyBehavior.StartDictation;
+            if (selected == EditHotkeyBehavior)
+            {
+                return;
+            }
+
+            EditHotkeyBehavior = selected;
+        }
+    }
+
     public NullableBooleanOption? SelectedWhisperModeOption
     {
         get => WhisperModeOptions.FirstOrDefault(option => option.Value == EditWhisperModeOverride);
@@ -398,6 +429,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             EditWhisperModeOverride = null;
             EditModelId = null;
             EditPromptActionId = null;
+            EditHotkeyData = null;
+            EditHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
             EditStylePreset = ProfileStylePreset.Raw;
             EditCleanupLevelOverride = null;
             EditDeveloperFormattingOverride = null;
@@ -414,6 +447,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditWhisperModeOverride = value.WhisperModeOverride;
         EditModelId = value.TranscriptionModelOverride;
         EditPromptActionId = value.PromptActionId;
+        EditHotkeyData = value.HotkeyData;
+        EditHotkeyBehavior = value.HotkeyBehavior;
         EditStylePreset = value.StylePreset;
         EditCleanupLevelOverride = value.CleanupLevelOverride;
         EditDeveloperFormattingOverride = value.DeveloperFormattingOverride;
@@ -452,6 +487,18 @@ public partial class ProfilesSectionViewModel : ObservableObject
     partial void OnEditStylePresetChanged(ProfileStylePreset value)
     {
         OnPropertyChanged(nameof(SelectedStylePresetOption));
+    }
+
+    partial void OnEditHotkeyBehaviorChanged(ProfileHotkeyBehavior value)
+    {
+        OnPropertyChanged(nameof(SelectedHotkeyBehaviorOption));
+    }
+
+    partial void OnEditHotkeyDataChanged(string? value)
+    {
+        // A hotkey turns an empty-matcher profile into a hotkey-only profile,
+        // which is no longer the global fallback — refresh the editor hint.
+        OnPropertyChanged(nameof(IsGlobalFallbackProfile));
     }
 
     partial void OnEditCleanupLevelOverrideChanged(CleanupLevel? value)
@@ -515,6 +562,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             PromptActionId = string.IsNullOrWhiteSpace(EditPromptActionId)
                 ? null
                 : EditPromptActionId,
+            HotkeyData = string.IsNullOrWhiteSpace(EditHotkeyData) ? null : EditHotkeyData.Trim(),
+            HotkeyBehavior = EditHotkeyBehavior,
             StylePreset = EditStylePreset,
             CleanupLevelOverride = EditCleanupLevelOverride,
             DeveloperFormattingOverride = EditDeveloperFormattingOverride,
@@ -1053,6 +1102,8 @@ public sealed record ProfileModelOption(string? Value, string Label);
 public sealed record PromptActionOption(string? Value, string Label);
 
 public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label);
+
+public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, string Label);
 
 public sealed record NullableBooleanOption(bool? Value, string Label);
 

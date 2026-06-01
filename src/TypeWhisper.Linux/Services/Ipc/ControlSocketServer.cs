@@ -314,7 +314,7 @@ internal sealed class ControlSocketServer : IDisposable
                 // toggle happens to be the recording->idle direction. Phase 4
                 // clients use a 2 s receive timeout that StopAsync can blow
                 // through on any normal-length recording.
-                DispatchOrchestratorAsync(_orchestrator.ToggleAsync, "Legacy ToggleAsync");
+                DispatchOrchestratorAsync(() => _orchestrator.ToggleAsync(), "Legacy ToggleAsync");
                 await writer.WriteLineAsync("ok").ConfigureAwait(false);
             }
             else
@@ -529,7 +529,7 @@ internal sealed class ControlSocketServer : IDisposable
         // from recording → idle (it routes through StopAsync). Fire-and-
         // forget so the client gets a snappy ack regardless of which way
         // the toggle goes.
-        DispatchOrchestratorAsync(_orchestrator.ToggleAsync, "ToggleAsync");
+        DispatchOrchestratorAsync(() => _orchestrator.ToggleAsync(), "ToggleAsync");
         // The wire response reflects the intent: if we were recording,
         // we're about to stop (-> idle); if idle, about to start
         // (-> recording). The orchestrator's own idempotency keeps state

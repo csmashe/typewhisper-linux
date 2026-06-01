@@ -123,8 +123,19 @@ public sealed class ProfileService : IProfileService
             {
                 appOnly.Add(profile);
             }
-            else if (profile.ProcessNames.Count == 0 && profile.UrlPatterns.Count == 0)
+            else if (
+                profile.ProcessNames.Count == 0
+                && profile.UrlPatterns.Count == 0
+                && string.IsNullOrWhiteSpace(profile.HotkeyData)
+            )
             {
+                // A profile with no app/URL matchers is normally the global
+                // fallback. But if it ALSO has a hotkey, it's a hotkey-only
+                // profile — the user bound it to an explicit trigger, not to
+                // "match everything." Excluding it here keeps it out of the
+                // ambient context cascade so it never hijacks plain dictation;
+                // it remains reachable through forcedProfileId (ManualOverride)
+                // when its chord is pressed.
                 global.Add(profile);
             }
         }

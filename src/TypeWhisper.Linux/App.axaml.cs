@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using System.Net.Sockets;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Ipc;
@@ -172,6 +173,14 @@ public class App : Application
                 hotkey.SetPromptActionHotkeys(
                     HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
                 );
+            var profileService = services.GetRequiredService<IProfileService>();
+            hotkey.SetProfileHotkeys(
+                HotkeyService.ParseProfileHotkeys(profileService.Profiles)
+            );
+            profileService.ProfilesChanged += () =>
+                hotkey.SetProfileHotkeys(
+                    HotkeyService.ParseProfileHotkeys(profileService.Profiles)
+                );
             var lastApplied = hotkey.CurrentHotkeyString;
             var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
             var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
@@ -236,6 +245,29 @@ public class App : Application
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
             hotkey.PromptActionHotkeyTriggered += (_, actionId) =>
                 _ = promptPalette.ExecuteActionDirectAsync(actionId);
+
+            // Per-profile hotkeys. ProcessSelectedText runs the profile's
+            // linked prompt action against the current selection; the dictation
+            // variants force this profile through DictationOrchestrator's match.
+            hotkey.ProfileTextProcessingRequested += (_, profileId) =>
+            {
+                var profile = profileService.Profiles.FirstOrDefault(p => p.Id == profileId);
+                if (profile?.HotkeyBehavior != ProfileHotkeyBehavior.ProcessSelectedText)
+                {
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(profile.PromptActionId))
+                {
+                    _ = promptPalette.ExecuteActionDirectAsync(profile.PromptActionId);
+                }
+                // else: nothing linked — no-op.
+            };
+            hotkey.ProfileDictationToggleRequested += (_, profileId) =>
+                _ = dictation.ToggleAsync(profileId);
+            hotkey.ProfileDictationStartRequested += (_, profileId) =>
+                _ = dictation.StartAsync(profileId);
+            hotkey.ProfileDictationStopRequested += (_, _) => _ = dictation.StopAsync();
 
             var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
             recentTranscriptions.FeedbackRequested += (message, isError) =>

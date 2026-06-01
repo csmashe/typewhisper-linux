@@ -57,6 +57,14 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         _dispatcher.CancelRequested += () => CancelRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.PromptActionRequested += actionId =>
             PromptActionRequested?.Invoke(this, actionId);
+        _dispatcher.ProfileDictationToggleRequested += id =>
+            ProfileDictationToggleRequested?.Invoke(this, id);
+        _dispatcher.ProfileDictationStartRequested += id =>
+            ProfileDictationStartRequested?.Invoke(this, id);
+        _dispatcher.ProfileDictationStopRequested += () =>
+            ProfileDictationStopRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.ProfileTextProcessingRequested += id =>
+            ProfileTextProcessingRequested?.Invoke(this, id);
     }
 
     public string Id => BackendId;
@@ -73,6 +81,10 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? CopyLastTranscriptionRequested;
     public event EventHandler? CancelRequested;
     public event EventHandler<string>? PromptActionRequested;
+    public event EventHandler<string>? ProfileDictationToggleRequested;
+    public event EventHandler<string>? ProfileDictationStartRequested;
+    public event EventHandler? ProfileDictationStopRequested;
+    public event EventHandler<string>? ProfileTextProcessingRequested;
     public event EventHandler<string>? Failed;
 
     public bool IsAvailable()

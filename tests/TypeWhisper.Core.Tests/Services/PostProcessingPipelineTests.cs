@@ -15,6 +15,49 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_SpokenLineBreaks_Disabled_LeavesCommandWords()
+    {
+        var result = await _sut.ProcessAsync(
+            "When is reading club new line should be tomorrow.",
+            new PipelineOptions { NormalizeSpokenLineBreaks = false }
+        );
+        Assert.Equal("When is reading club new line should be tomorrow.", result.Text);
+    }
+
+    [Theory]
+    // "new line" becomes a single break; the trailing period/space is absorbed.
+    [InlineData("When is reading club new line should be tomorrow.",
+        "When is reading club\nshould be tomorrow.")]
+    // A preceding ? is preserved.
+    [InlineData("When is Reading Club? New Line. Should be tomorrow.",
+        "When is Reading Club?\nShould be tomorrow.")]
+    // "new paragraph" -> blank line; the preceding sentence period stays.
+    [InlineData("First point. New paragraph. Second point.",
+        "First point.\n\nSecond point.")]
+    // single-token "newline" spelling works too.
+    [InlineData("line one newline line two", "line one\nline two")]
+    public async Task ProcessAsync_SpokenLineBreaks_Enabled_Converts(string input, string expected)
+    {
+        var result = await _sut.ProcessAsync(
+            input,
+            new PipelineOptions { NormalizeSpokenLineBreaks = true }
+        );
+        Assert.Equal(expected, result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_SpokenLineBreaks_NewParagraphTakesPrecedenceOverNewLine()
+    {
+        // The longer phrase must win so "new paragraph" isn't half-eaten by the
+        // "new line" pattern.
+        var result = await _sut.ProcessAsync(
+            "a new paragraph b",
+            new PipelineOptions { NormalizeSpokenLineBreaks = true }
+        );
+        Assert.Equal("a\n\nb", result.Text);
+    }
+
+    [Fact]
     public async Task ProcessAsync_DictionaryCorrections_Applied()
     {
         var options = new PipelineOptions

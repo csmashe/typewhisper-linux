@@ -45,6 +45,16 @@ public sealed record PipelineOptions
     /// <summary>Applies cleanup before prompt actions and snippets.</summary>
     public Func<string, CancellationToken, Task<string>>? CleanupHandler { get; init; }
 
+    /// <summary>
+    ///     When true, spoken line-break commands ("new line", "new paragraph")
+    ///     are converted to actual line breaks as the very first step, before
+    ///     any LLM/cleanup runs. LLMs are unreliable at honoring these verbal
+    ///     commands, so we do it deterministically. Enabled for live dictation;
+    ///     left off for file transcription (where "new line" is content, not a
+    ///     command).
+    /// </summary>
+    public bool NormalizeSpokenLineBreaks { get; init; }
+
     /// <summary>Translates text. Params: text, sourceLang, targetLang. Returns translated text.</summary>
     public Func<
         string,
@@ -93,6 +103,7 @@ public sealed record PostProcessingResult
 
 public static class PostProcessingStepNames
 {
+    public const string SpokenCommands = "SpokenCommands";
     public const string Formatting = "Formatting";
     public const string Cleanup = "Cleanup";
     public const string Llm = "LLM";

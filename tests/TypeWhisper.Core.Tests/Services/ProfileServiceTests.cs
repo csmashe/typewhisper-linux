@@ -160,4 +160,141 @@ public class ProfileServiceTests : IDisposable
         Assert.True(result.SmartFormattingEnabled);
         Assert.False(result.TerminalSafe);
     }
+
+    [Fact]
+    public void HotkeyBehavior_RoundTrips()
+    {
+        var profile = new Profile
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "Selection",
+            HotkeyData = "Ctrl+Shift+S",
+            HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText
+        };
+
+        _sut.AddProfile(profile);
+
+        var freshService = new ProfileService(_filePath);
+        var loaded = freshService.Profiles.First(p => p.Id == profile.Id);
+        Assert.Equal(ProfileHotkeyBehavior.ProcessSelectedText, loaded.HotkeyBehavior);
+    }
+
+    [Fact]
+    public void HotkeyBehavior_DefaultsToStartDictationForLegacyJson()
+    {
+        File.WriteAllText(
+            _filePath,
+            """
+            [
+              {
+                "Id": "legacy",
+                "Name": "Legacy"
+              }
+            ]
+            """
+        );
+
+        var freshService = new ProfileService(_filePath);
+
+        var loaded = Assert.Single(freshService.Profiles);
+        Assert.Equal(ProfileHotkeyBehavior.StartDictation, loaded.HotkeyBehavior);
+    }
+
+    [Fact]
+    public void MatchProfile_ForcedEnabledProfile_ReturnsManualOverride()
+    {
+        var forced = new Profile
+        {
+            Id = "forced",
+            Name = "Forced",
+            ProcessNames = ["never-matches"]
+        };
+        _sut.AddProfile(forced);
+
+        // No process/url context matches the forced profile, yet the forced id
+        // wins as a ManualOverride.
+        var result = _sut.MatchProfile("some-other-app", null, "forced");
+
+        Assert.Equal(MatchKind.ManualOverride, result.Kind);
+        Assert.NotNull(result.Profile);
+        Assert.Equal("forced", result.Profile!.Id);
+    }
+
+    [Fact]
+    public void MatchProfile_ForcedDisabledProfile_FallsThrough()
+    {
+        var forced = new Profile
+        {
+            Id = "forced",
+            Name = "Forced",
+            IsEnabled = false
+        };
+        _sut.AddProfile(forced);
+
+        var result = _sut.MatchProfile(null, null, "forced");
+
+        Assert.NotEqual(MatchKind.ManualOverride, result.Kind);
+    }
+
+    [Fact]
+    public void MatchProfile_ForcedMissingProfile_FallsThrough()
+    {
+        var result = _sut.MatchProfile(null, null, "does-not-exist");
+
+        Assert.NotEqual(MatchKind.ManualOverride, result.Kind);
+    }
+
+    [Fact]
+    public void MatchProfile_HotkeyOnlyProfileWithNoMatchers_IsExcludedFromGlobalFallback()
+    {
+        // A profile with no app/URL matchers but a hotkey is hotkey-only: it
+        // must NOT act as the global fallback, or it would hijack plain
+        // dictation in every window.
+        _sut.AddProfile(new Profile
+        {
+            Id = "hotkey-only",
+            Name = "Hotkey Only",
+            HotkeyData = "Ctrl+Alt+E"
+        });
+
+        var result = _sut.MatchProfile("some-app", null);
+
+        Assert.Equal(MatchKind.NoMatch, result.Kind);
+        Assert.Null(result.Profile);
+    }
+
+    [Fact]
+    public void MatchProfile_HotkeyOnlyProfile_StillForceMatchesByHotkey()
+    {
+        // The exclusion only applies to the ambient cascade; forcing the
+        // profile by id (its chord was pressed) must still win.
+        _sut.AddProfile(new Profile
+        {
+            Id = "hotkey-only",
+            Name = "Hotkey Only",
+            HotkeyData = "Ctrl+Alt+E"
+        });
+
+        var result = _sut.MatchProfile("some-app", null, "hotkey-only");
+
+        Assert.Equal(MatchKind.ManualOverride, result.Kind);
+        Assert.Equal("hotkey-only", result.Profile!.Id);
+    }
+
+    [Fact]
+    public void MatchProfile_EmptyMatcherProfileWithoutHotkey_RemainsGlobalFallback()
+    {
+        // Regression guard: the exclusion is gated on having a hotkey. A plain
+        // no-matcher profile is still the global fallback as before.
+        _sut.AddProfile(new Profile
+        {
+            Id = "global",
+            Name = "Global"
+        });
+
+        var result = _sut.MatchProfile("some-app", null);
+
+        Assert.Equal(MatchKind.Global, result.Kind);
+        Assert.Equal("global", result.Profile!.Id);
+    }
 }

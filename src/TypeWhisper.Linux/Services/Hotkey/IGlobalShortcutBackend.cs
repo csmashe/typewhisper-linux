@@ -38,5 +38,15 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     event EventHandler? CopyLastTranscriptionRequested;
     event EventHandler? CancelRequested;
     event EventHandler<string>? PromptActionRequested;
+
+    // Profile hotkeys. Dictation variants carry the forced profile id;
+    // stop is parameterless (the id was consumed at session start). Only the
+    // dispatcher-backed backends (SharpHook, evdev) wire these to real events;
+    // the portal stub leaves them empty.
+    event EventHandler<string>? ProfileDictationToggleRequested;
+    event EventHandler<string>? ProfileDictationStartRequested;
+    event EventHandler? ProfileDictationStopRequested;
+    event EventHandler<string>? ProfileTextProcessingRequested;
+
     event EventHandler<string>? Failed;
 }

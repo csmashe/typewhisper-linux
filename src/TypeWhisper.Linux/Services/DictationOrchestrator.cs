@@ -318,8 +318,11 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        _toggleHandler = (_, _) => FireAndLog(ToggleAsync, nameof(ToggleAsync));
-        _startHandler = (_, _) => FireAndLog(StartAsync, nameof(StartAsync));
+        // Lambdas (not method-group conversions) because StartAsync/ToggleAsync
+        // now take an optional forcedProfileId — a method group with an optional
+        // parameter no longer converts to the zero-arg Func<Task> FireAndLog wants.
+        _toggleHandler = (_, _) => FireAndLog(() => ToggleAsync(), nameof(ToggleAsync));
+        _startHandler = (_, _) => FireAndLog(() => StartAsync(), nameof(StartAsync));
         _stopHandler = (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
         _cancelHandler = (_, _) => FireAndLog(CancelAsync, nameof(CancelAsync));
         _hookFailedHandler = (_, message) =>
@@ -358,7 +361,7 @@ public sealed class DictationOrchestrator : IDisposable
         _initialized = true;
     }
 
-    public async Task ToggleAsync()
+    public async Task ToggleAsync(string? forcedProfileId = null)
     {
         if (_audio.IsRecording)
         {
@@ -366,7 +369,9 @@ public sealed class DictationOrchestrator : IDisposable
         }
         else
         {
-            await StartAsync();
+            // Only the start branch honors the forced profile — a profile
+            // hotkey pressed while recording just stops, like the main key.
+            await StartAsync(forcedProfileId);
         }
     }
 
@@ -404,7 +409,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    public async Task<int> StartAsync()
+    public async Task<int> StartAsync(string? forcedProfileId = null)
     {
         if (!await _toggleGate.WaitAsync(0))
         {
@@ -603,7 +608,9 @@ public sealed class DictationOrchestrator : IDisposable
                         .ConfigureAwait(false);
                     appProcess = initialSnap?.ProcessName;
                     appTitle = initialSnap?.Title;
-                    initialMatch = _profiles.MatchProfile(appProcess, null);
+                    // A forced profile id (from a Profile hotkey) yields a
+                    // MatchKind.ManualOverride and bypasses window/URL context.
+                    initialMatch = _profiles.MatchProfile(appProcess, null, forcedProfileId);
                     matchedProfile = initialMatch.Profile;
 
                     if (initialSnap is null)
@@ -737,32 +744,42 @@ public sealed class DictationOrchestrator : IDisposable
                                 _recordingAppUrl = deferredUrl;
                             }
 
-                            var rematch = _profiles.MatchProfile(appProcess, deferredUrl);
-                            if (
-                                rematch.Profile is not null
-                                && (int)rematch.Kind < (int)initialMatch.Kind
-                            )
+                            // A forced profile (Profile hotkey) is exclusive for
+                            // the invocation: we still captured the URL above for
+                            // history/diagnostics, but we must not let a
+                            // context rematch swap the profile out. ManualOverride
+                            // is the highest MatchKind value, so an ungated
+                            // rematch (e.g. Website=1 < ManualOverride=4) would
+                            // override it — gate the whole rematch+swap here.
+                            if (forcedProfileId is null)
                             {
-                                lock (_recordingSessionLock)
+                                var rematch = _profiles.MatchProfile(appProcess, deferredUrl);
+                                if (
+                                    rematch.Profile is not null
+                                    && (int)rematch.Kind < (int)initialMatch.Kind
+                                )
                                 {
-                                    if (_recordingSession != sessionId)
+                                    lock (_recordingSessionLock)
                                     {
-                                        return;
+                                        if (_recordingSession != sessionId)
+                                        {
+                                            return;
+                                        }
+
+                                        _recordingProfile = rematch.Profile;
                                     }
 
-                                    _recordingProfile = rematch.Profile;
+                                    SetOverlayState(state =>
+                                        state with
+                                        {
+                                            ActiveProfileName = rematch.Profile.Name
+                                        }
+                                    );
+
+                                    _audio.WhisperModeEnabled =
+                                        rematch.Profile.WhisperModeOverride
+                                        ?? _settings.Current.WhisperModeEnabled;
                                 }
-
-                                SetOverlayState(state =>
-                                    state with
-                                    {
-                                        ActiveProfileName = rematch.Profile.Name
-                                    }
-                                );
-
-                                _audio.WhisperModeEnabled =
-                                    rematch.Profile.WhisperModeOverride
-                                    ?? _settings.Current.WhisperModeEnabled;
                             }
                         }
                     }
@@ -1434,6 +1451,7 @@ public sealed class DictationOrchestrator : IDisposable
                 rawText,
                 new PipelineOptions
                 {
+                    NormalizeSpokenLineBreaks = true,
                     AppFormatter = AppFormatterService.Format,
                     TargetProcessName = context.AppProcess,
                     DictionaryCorrector = _dictionary.ApplyCorrections,

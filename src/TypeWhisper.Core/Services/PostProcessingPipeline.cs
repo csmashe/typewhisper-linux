@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 
 namespace TypeWhisper.Core.Services;
@@ -16,6 +17,7 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public sealed class PostProcessingPipeline : IPostProcessingPipeline
 {
+    private const int SpokenCommandsPriority = 50;
     private const int FormattingPriority = 150;
     private const int CleanupPriority = 250;
     private const int LlmPriority = 300;
@@ -90,6 +92,19 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
         )> BuildSteps(PipelineOptions options)
     {
         var steps = new List<(int, string, Func<string, CancellationToken, Task<string>>)>();
+
+        // Spoken line-break commands run first so the LLM (and everything
+        // after) sees real line breaks instead of the words "new line".
+        if (options.NormalizeSpokenLineBreaks)
+        {
+            steps.Add(
+                (
+                    SpokenCommandsPriority,
+                    PostProcessingStepNames.SpokenCommands,
+                    (text, _) => Task.FromResult(NormalizeSpokenLineBreaks(text))
+                )
+            );
+        }
 
         if (options.AppFormatter is not null)
         {
@@ -212,5 +227,41 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
 
         steps.Sort((a, b) => a.Item1.CompareTo(b.Item1));
         return steps;
+    }
+
+    // STT renders the spoken command in varied ways ("new line", "New Line.",
+    // "newline"), often as its own little sentence with stray punctuation
+    // around it ("Club? New Line. Should"). These patterns absorb the command
+    // plus the trailing comma/period and surrounding spaces the recognizer pads
+    // it with, while leaving any preceding sentence punctuation intact
+    // ("Club?\nShould"). Order matters: "new paragraph" before "new line" so the
+    // longer phrase wins.
+    private static readonly Regex s_newParagraph = new(
+        @"[ \t]*\bnew\s+paragraph\b[ \t]*[.,]?[ \t]*",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled
+    );
+
+    private static readonly Regex s_newLine = new(
+        @"[ \t]*\b(?:new\s+line|newline)\b[ \t]*[.,]?[ \t]*",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled
+    );
+
+    /// <summary>
+    ///     Converts the spoken commands "new paragraph" and "new line"/"newline"
+    ///     into literal line breaks. Deterministic on purpose — LLMs do not
+    ///     reliably honor these verbal commands. Caveat: this also fires when
+    ///     "new line" is meant literally (e.g. "a new line of code"); that's the
+    ///     accepted trade-off dictation tools make for the command.
+    /// </summary>
+    internal static string NormalizeSpokenLineBreaks(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        text = s_newParagraph.Replace(text, "\n\n");
+        text = s_newLine.Replace(text, "\n");
+        return text;
     }
 }

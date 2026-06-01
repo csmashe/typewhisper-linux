@@ -187,6 +187,178 @@ public sealed class ShortcutDispatcherTests
         Assert.Equal(1, palette);
     }
 
+    [Fact]
+    public void ProfileStartDictation_Toggle_FiresToggleWithId()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithProfileHotkey(
+                "email",
+                KeyCode.VcE,
+                ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+                ProfileHotkeyBehavior.StartDictation,
+                RecordingMode.Toggle
+            )
+        );
+        string? toggled = null;
+        var toggleCount = 0;
+        var startCount = 0;
+        d.ProfileDictationToggleRequested += id =>
+        {
+            toggled = id;
+            toggleCount++;
+        };
+        d.ProfileDictationStartRequested += _ => startCount++;
+
+        d.Handle(KeyCode.VcE, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal("email", toggled);
+        Assert.Equal(1, toggleCount);
+        Assert.Equal(0, startCount);
+    }
+
+    [Fact]
+    public void ProfileStartDictation_PushToTalk_FiresStartThenStop()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithProfileHotkey(
+                "email",
+                KeyCode.VcE,
+                ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+                ProfileHotkeyBehavior.StartDictation,
+                RecordingMode.PushToTalk
+            )
+        );
+        string? started = null;
+        var startCount = 0;
+        var stopCount = 0;
+        d.ProfileDictationStartRequested += id =>
+        {
+            started = id;
+            startCount++;
+        };
+        d.ProfileDictationStopRequested += () => stopCount++;
+
+        d.Handle(KeyCode.VcE, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcE, ModifierMask.None, false);
+
+        Assert.Equal("email", started);
+        Assert.Equal(1, startCount);
+        Assert.Equal(1, stopCount);
+    }
+
+    [Fact]
+    public void ProfileStartDictation_HybridShortPress_DoesNotStopOnRelease()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithProfileHotkey(
+                "email",
+                KeyCode.VcE,
+                ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+                ProfileHotkeyBehavior.StartDictation,
+                RecordingMode.Hybrid
+            )
+        );
+        var toggleCount = 0;
+        var stopCount = 0;
+        d.ProfileDictationToggleRequested += _ => toggleCount++;
+        d.ProfileDictationStopRequested += () => stopCount++;
+
+        d.Handle(KeyCode.VcE, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcE, ModifierMask.None, false);
+
+        Assert.Equal(1, toggleCount);
+        Assert.Equal(0, stopCount);
+    }
+
+    [Fact]
+    public void ProfileStartDictation_OsAutoRepeat_DoesNotDoubleFire()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithProfileHotkey(
+                "email",
+                KeyCode.VcE,
+                ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+                ProfileHotkeyBehavior.StartDictation,
+                RecordingMode.Toggle
+            )
+        );
+        var toggleCount = 0;
+        d.ProfileDictationToggleRequested += _ => toggleCount++;
+
+        d.Handle(KeyCode.VcE, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcE, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal(1, toggleCount);
+    }
+
+    [Fact]
+    public void ProfileProcessSelectedText_FiresOncePerKeyDown_NotDictation()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithProfileHotkey(
+                "summarize",
+                KeyCode.VcS,
+                ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+                ProfileHotkeyBehavior.ProcessSelectedText,
+                RecordingMode.Toggle
+            )
+        );
+        string? observed = null;
+        var textCount = 0;
+        var dictationCount = 0;
+        d.ProfileTextProcessingRequested += id =>
+        {
+            observed = id;
+            textCount++;
+        };
+        d.ProfileDictationToggleRequested += _ => dictationCount++;
+        d.ProfileDictationStartRequested += _ => dictationCount++;
+
+        // Auto-repeat: two presses without a release fire only once.
+        d.Handle(KeyCode.VcS, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcS, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        // Release then press again fires a second time.
+        d.Handle(KeyCode.VcS, ModifierMask.None, false);
+        d.Handle(KeyCode.VcS, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal("summarize", observed);
+        Assert.Equal(2, textCount);
+        Assert.Equal(0, dictationCount);
+    }
+
+    private static GlobalShortcutSet SetWithProfileHotkey(
+        string profileId,
+        KeyCode key,
+        ModifierMask mods,
+        ProfileHotkeyBehavior behavior,
+        RecordingMode mode = RecordingMode.Toggle
+    )
+    {
+        return new GlobalShortcutSet(
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            null,
+            ModifierMask.None,
+            KeyCode.VcEscape,
+            ModifierMask.None,
+            mode,
+            false,
+            Array.Empty<PromptActionHotkey>(),
+            new[] { new ProfileHotkey(profileId, key, mods, behavior) }
+        );
+    }
+
     private static GlobalShortcutSet Set(RecordingMode mode, bool cancelEnabled = false)
     {
         return new GlobalShortcutSet(
@@ -228,7 +400,8 @@ public sealed class ShortcutDispatcherTests
             ModifierMask.None,
             RecordingMode.Toggle,
             false,
-            new[] { new PromptActionHotkey(actionId, key, mods) }
+            new[] { new PromptActionHotkey(actionId, key, mods) },
+            Array.Empty<ProfileHotkey>()
         );
     }
 }

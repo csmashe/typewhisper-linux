@@ -34,6 +34,15 @@ internal sealed class ShortcutDispatcher
     // cycle would strand the action ID in the dedup set and silently
     // suppress all future presses of that action.
     private readonly Dictionary<KeyCode, string> _promptActionKeyDown = new();
+    // Profile-hotkey dedup, keyed by the physical KeyCode matched at press
+    // time — same reasoning as _promptActionKeyDown above (release-time
+    // cleanup is independent of the current shortcut set). The dictation
+    // variant also records when the key went down so the release-time hold
+    // duration can be computed for PushToTalk/Hybrid, mirroring the main
+    // dictation key's _dictationKeyDownTime.
+    private readonly Dictionary<KeyCode, (string ProfileId, DateTime DownAt)>
+        _profileDictationKeyDown = new();
+    private readonly Dictionary<KeyCode, string> _profileTextKeyDown = new();
     private bool _recentKeyDown;
 
     private GlobalShortcutSet? _shortcuts;
@@ -81,9 +90,24 @@ internal sealed class ShortcutDispatcher
     public event Action? CancelRequested;
     public event Action<string>? PromptActionRequested;
 
+    // Profile hotkeys. The dictation variants carry the forced profile id to
+    // start/toggle; stop is parameterless because the id was already consumed
+    // when the session started (mirrors DictationStopRequested).
+    public event Action<string>? ProfileDictationToggleRequested;
+    public event Action<string>? ProfileDictationStartRequested;
+    public event Action? ProfileDictationStopRequested;
+    public event Action<string>? ProfileTextProcessingRequested;
+
     private void HandlePress(KeyCode key, ModifierMask mods, GlobalShortcutSet set)
     {
-        var match = ShortcutMatcher.Match(key, mods, set, out var promptActionId);
+        var match = ShortcutMatcher.Match(
+            key,
+            mods,
+            set,
+            out var promptActionId,
+            out var profileId,
+            out var profileBehavior
+        );
 
         // Cancel: only fires while a dictation is active and only when it
         // doesn't collide with another binding — otherwise we fall through
@@ -112,7 +136,9 @@ internal sealed class ShortcutDispatcher
                 key,
                 mods,
                 set with { CancelKey = KeyCode.VcUndefined },
-                out promptActionId
+                out promptActionId,
+                out profileId,
+                out profileBehavior
             );
         }
 
@@ -135,6 +161,74 @@ internal sealed class ShortcutDispatcher
                 }
 
                 RaisePromptAction(promptActionId);
+                return;
+            case ShortcutMatchKind.Profile:
+                if (profileId is null)
+                {
+                    return;
+                }
+
+                if (profileBehavior == ProfileHotkeyBehavior.ProcessSelectedText)
+                {
+                    lock (_lock)
+                    {
+                        if (_profileTextKeyDown.ContainsKey(key))
+                        {
+                            return;
+                        }
+
+                        _profileTextKeyDown[key] = profileId;
+                    }
+
+                    RaiseProfile(
+                        ProfileTextProcessingRequested,
+                        profileId,
+                        nameof(ProfileTextProcessingRequested)
+                    );
+                    return;
+                }
+
+                // StartDictation: mirror the main Dictation case so a profile
+                // dictation hotkey obeys the same recording mode, but carry the
+                // forced profile id on start/toggle.
+                lock (_lock)
+                {
+                    if (_profileDictationKeyDown.ContainsKey(key))
+                    {
+                        return;
+                    }
+
+                    _profileDictationKeyDown[key] = (profileId, DateTime.UtcNow);
+                }
+
+                switch (set.Mode)
+                {
+                    case RecordingMode.Toggle:
+                        RaiseProfile(
+                            ProfileDictationToggleRequested,
+                            profileId,
+                            nameof(ProfileDictationToggleRequested)
+                        );
+                        break;
+                    case RecordingMode.PushToTalk:
+                        RaiseProfile(
+                            ProfileDictationStartRequested,
+                            profileId,
+                            nameof(ProfileDictationStartRequested)
+                        );
+                        break;
+                    case RecordingMode.Hybrid:
+                        // Always toggle on press; if held past the threshold,
+                        // HandleRelease additionally fires Stop — same as the
+                        // main dictation key.
+                        RaiseProfile(
+                            ProfileDictationToggleRequested,
+                            profileId,
+                            nameof(ProfileDictationToggleRequested)
+                        );
+                        break;
+                }
+
                 return;
             case ShortcutMatchKind.RecentTranscriptions:
                 if (!TryClaimKeyDown(ref _recentKeyDown))
@@ -252,6 +346,47 @@ internal sealed class ShortcutDispatcher
             // but our own dictionary still remembers the press and must
             // release it to keep dedup honest for the next press.
             _promptActionKeyDown.Remove(key);
+
+            // ProcessSelectedText profile hotkeys fire on key-down only; just
+            // clear the dedup entry so the next press is honored.
+            _profileTextKeyDown.Remove(key);
+        }
+
+        // StartDictation profile hotkeys mirror the main dictation key's
+        // release semantics, but keyed off the physical key so an edit/remove
+        // mid-hold still releases cleanly.
+        (string ProfileId, DateTime DownAt) profileHeld;
+        bool hadProfileDictation;
+        lock (_lock)
+        {
+            hadProfileDictation = _profileDictationKeyDown.Remove(key, out profileHeld);
+        }
+
+        if (hadProfileDictation)
+        {
+            var profileHeldMs = (DateTime.UtcNow - profileHeld.DownAt).TotalMilliseconds;
+            switch (set.Mode)
+            {
+                case RecordingMode.PushToTalk:
+                    Raise(
+                        ProfileDictationStopRequested,
+                        nameof(ProfileDictationStopRequested)
+                    );
+                    break;
+                case RecordingMode.Hybrid:
+                    if (profileHeldMs >= PushToTalkThresholdMs)
+                    {
+                        Raise(
+                            ProfileDictationStopRequested,
+                            nameof(ProfileDictationStopRequested)
+                        );
+                    }
+
+                    break;
+                case RecordingMode.Toggle:
+                    // No-op — Toggle is handled on press.
+                    break;
+            }
         }
 
         if (key != set.DictationKey)
@@ -314,6 +449,23 @@ internal sealed class ShortcutDispatcher
         try
         {
             handler();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[ShortcutDispatcher] {name} handler threw: {ex.Message}");
+        }
+    }
+
+    private static void RaiseProfile(Action<string>? handler, string profileId, string name)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handler(profileId);
         }
         catch (Exception ex)
         {

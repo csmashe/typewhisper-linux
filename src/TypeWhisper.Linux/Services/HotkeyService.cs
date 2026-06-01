@@ -47,6 +47,10 @@ public sealed class HotkeyService : IDisposable
     private EventHandler? _onDictationToggleRequested;
     private EventHandler? _onPromptPaletteRequested;
     private EventHandler<string>? _onPromptActionRequested;
+    private EventHandler<string>? _onProfileDictationToggleRequested;
+    private EventHandler<string>? _onProfileDictationStartRequested;
+    private EventHandler? _onProfileDictationStopRequested;
+    private EventHandler<string>? _onProfileTextProcessingRequested;
     private EventHandler? _onRecentTranscriptionsRequested;
     private EventHandler? _onTransformSelectionRequested;
 
@@ -56,6 +60,11 @@ public sealed class HotkeyService : IDisposable
     // observed by the running matcher.
     private IReadOnlyList<PromptActionHotkey> _promptActionHotkeys =
         Array.Empty<PromptActionHotkey>();
+
+    // Per-profile hotkeys (one chord per profile). Rebuilt wholesale by
+    // SetProfileHotkeys; captured by reference in the snapshot exactly like
+    // _promptActionHotkeys above.
+    private IReadOnlyList<ProfileHotkey> _profileHotkeys = Array.Empty<ProfileHotkey>();
 
     // Serializes backend updates so a burst of TrySet*/Mode= calls can't apply
     // out of order and leave the backend listening for stale bindings.
@@ -257,6 +266,14 @@ public sealed class HotkeyService : IDisposable
             _onCancelRequested = (_, _) => CancelRequested?.Invoke(this, EventArgs.Empty);
             _onPromptActionRequested = (_, actionId) =>
                 PromptActionHotkeyTriggered?.Invoke(this, actionId);
+            _onProfileDictationToggleRequested = (_, profileId) =>
+                ProfileDictationToggleRequested?.Invoke(this, profileId);
+            _onProfileDictationStartRequested = (_, profileId) =>
+                ProfileDictationStartRequested?.Invoke(this, profileId);
+            _onProfileDictationStopRequested = (_, _) =>
+                ProfileDictationStopRequested?.Invoke(this, EventArgs.Empty);
+            _onProfileTextProcessingRequested = (_, profileId) =>
+                ProfileTextProcessingRequested?.Invoke(this, profileId);
             _onBackendFailed = (_, message) => HookFailed?.Invoke(this, message);
             backend.DictationToggleRequested += _onDictationToggleRequested;
             backend.DictationStartRequested += _onDictationStartRequested;
@@ -267,6 +284,10 @@ public sealed class HotkeyService : IDisposable
             backend.TransformSelectionRequested += _onTransformSelectionRequested;
             backend.CancelRequested += _onCancelRequested;
             backend.PromptActionRequested += _onPromptActionRequested;
+            backend.ProfileDictationToggleRequested += _onProfileDictationToggleRequested;
+            backend.ProfileDictationStartRequested += _onProfileDictationStartRequested;
+            backend.ProfileDictationStopRequested += _onProfileDictationStopRequested;
+            backend.ProfileTextProcessingRequested += _onProfileTextProcessingRequested;
             backend.Failed += _onBackendFailed;
             _backend = backend;
         }
@@ -473,6 +494,10 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? TransformSelectionRequested;
     public event EventHandler? CancelRequested;
     public event EventHandler<string>? PromptActionHotkeyTriggered;
+    public event EventHandler<string>? ProfileDictationToggleRequested;
+    public event EventHandler<string>? ProfileDictationStartRequested;
+    public event EventHandler? ProfileDictationStopRequested;
+    public event EventHandler<string>? ProfileTextProcessingRequested;
     public event EventHandler<string>? HookFailed;
 
     // Placeholder for instrumentation on backend switch; left as a named
@@ -531,6 +556,26 @@ public sealed class HotkeyService : IDisposable
             backend.PromptActionRequested -= _onPromptActionRequested;
         }
 
+        if (_onProfileDictationToggleRequested is not null)
+        {
+            backend.ProfileDictationToggleRequested -= _onProfileDictationToggleRequested;
+        }
+
+        if (_onProfileDictationStartRequested is not null)
+        {
+            backend.ProfileDictationStartRequested -= _onProfileDictationStartRequested;
+        }
+
+        if (_onProfileDictationStopRequested is not null)
+        {
+            backend.ProfileDictationStopRequested -= _onProfileDictationStopRequested;
+        }
+
+        if (_onProfileTextProcessingRequested is not null)
+        {
+            backend.ProfileTextProcessingRequested -= _onProfileTextProcessingRequested;
+        }
+
         if (_onBackendFailed is not null)
         {
             backend.Failed -= _onBackendFailed;
@@ -545,6 +590,10 @@ public sealed class HotkeyService : IDisposable
         _onTransformSelectionRequested = null;
         _onCancelRequested = null;
         _onPromptActionRequested = null;
+        _onProfileDictationToggleRequested = null;
+        _onProfileDictationStartRequested = null;
+        _onProfileDictationStopRequested = null;
+        _onProfileTextProcessingRequested = null;
         _onBackendFailed = null;
     }
 
@@ -565,7 +614,8 @@ public sealed class HotkeyService : IDisposable
             _cancelModifiers,
             _mode,
             _cancelShortcutEnabled,
-            _promptActionHotkeys
+            _promptActionHotkeys,
+            _profileHotkeys
         );
     }
 
@@ -663,6 +713,99 @@ public sealed class HotkeyService : IDisposable
             }
 
             result.Add(new PromptActionHotkey(action.Id, key.Value, modifiers));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    ///     Replaces the per-profile hotkey list atomically. Clone of
+    ///     <see cref="SetPromptActionHotkeys" />: entries with an empty profile
+    ///     id, or that collide with a fixed binding (<see cref="GetBoundHotkeys" />
+    ///     — which now also covers prompt-action and other profile chords), or
+    ///     with an earlier accepted entry in this batch, are dropped with a
+    ///     <see cref="Trace.WriteLine" />. Pushes a fresh snapshot so the matcher
+    ///     sees the new list immediately.
+    /// </summary>
+    public void SetProfileHotkeys(IReadOnlyList<ProfileHotkey> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        // Clear first so GetBoundHotkeys() doesn't report a re-submitted
+        // unchanged entry as already-bound (ProfilesChanged fires on every
+        // add/update/delete and reuses most existing entries). Intra-batch
+        // dedup is handled by the accepted.Any(...) check below.
+        _profileHotkeys = Array.Empty<ProfileHotkey>();
+
+        var accepted = new List<ProfileHotkey>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.ProfileId))
+            {
+                Trace.WriteLine(
+                    "[HotkeyService] Refusing profile hotkey with empty profile id."
+                );
+                continue;
+            }
+
+            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with another shortcut."
+                );
+                continue;
+            }
+
+            if (
+                accepted.Any(prior =>
+                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
+                )
+            )
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with an earlier entry."
+                );
+                continue;
+            }
+
+            accepted.Add(entry);
+        }
+
+        _profileHotkeys = accepted;
+        PushShortcutsIfRunning();
+    }
+
+    /// <summary>
+    ///     Translates the JSON-stored <see cref="Profile.HotkeyData" /> chords
+    ///     into parsed <see cref="ProfileHotkey" /> entries, carrying each
+    ///     profile's <see cref="Profile.HotkeyBehavior" />. Disabled profiles,
+    ///     blank chords, and unparseable chords are skipped (matching
+    ///     <see cref="ParsePromptActionHotkeys" />). The caller typically passes
+    ///     the result to <see cref="SetProfileHotkeys" />.
+    /// </summary>
+    public static IReadOnlyList<ProfileHotkey> ParseProfileHotkeys(
+        IEnumerable<Profile> profiles
+    )
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        var result = new List<ProfileHotkey>();
+        foreach (var profile in profiles)
+        {
+            if (!profile.IsEnabled || string.IsNullOrWhiteSpace(profile.HotkeyData))
+            {
+                continue;
+            }
+
+            if (!TryParseHotkey(profile.HotkeyData, out var key, out var modifiers) || key is null)
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Unparseable profile hotkey for '{profile.Id}': '{profile.HotkeyData}'."
+                );
+                continue;
+            }
+
+            result.Add(new ProfileHotkey(profile.Id, key.Value, modifiers, profile.HotkeyBehavior));
         }
 
         return result;
@@ -843,6 +986,15 @@ public sealed class HotkeyService : IDisposable
         // clears _promptActionHotkeys before its reconcile loop, so this
         // method never has to exclude a "current prompt action" entry.
         foreach (var entry in _promptActionHotkeys)
+        {
+            yield return (entry.Key, entry.Modifiers);
+        }
+
+        // Per-profile bindings, for the same symmetry reason as the
+        // prompt-action loop above. SetProfileHotkeys clears _profileHotkeys
+        // before its reconcile loop, so this never reports a "current profile"
+        // entry against itself.
+        foreach (var entry in _profileHotkeys)
         {
             yield return (entry.Key, entry.Modifiers);
         }

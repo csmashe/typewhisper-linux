@@ -344,6 +344,235 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public async Task SetProfileHotkeys_RaisesProfileDictationToggleRequestedWithId()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetProfileHotkeys(
+            [
+                new ProfileHotkey(
+                    "email",
+                    KeyCode.VcE,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        string? observed = null;
+        hotkey.ProfileDictationToggleRequested += (_, id) => observed = id;
+
+        backend.RaiseProfileDictationToggle("email");
+
+        Assert.Equal("email", observed);
+    }
+
+    [Fact]
+    public async Task SetProfileHotkeys_RaisesProfileTextProcessingRequestedWithId()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetProfileHotkeys(
+            [
+                new ProfileHotkey(
+                    "summarize",
+                    KeyCode.VcS,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.ProcessSelectedText
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        string? observed = null;
+        hotkey.ProfileTextProcessingRequested += (_, id) => observed = id;
+
+        backend.RaiseProfileTextProcessing("summarize");
+
+        Assert.Equal("summarize", observed);
+    }
+
+    [Fact]
+    public async Task SetProfileHotkeys_DropsEntryCollidingWithDictation()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        // Default dictation hotkey is Ctrl+Shift+Space.
+        hotkey.SetProfileHotkeys(
+            [
+                new ProfileHotkey(
+                    "collides",
+                    KeyCode.VcSpace,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+                    ProfileHotkeyBehavior.StartDictation
+                ),
+                new ProfileHotkey(
+                    "keeper",
+                    KeyCode.VcE,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.ProfileHotkeys);
+        Assert.Equal("keeper", kept.ProfileId);
+    }
+
+    [Fact]
+    public async Task SetProfileHotkeys_DropsEntryCollidingWithPromptAction()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetProfileHotkeys(
+            [
+                new ProfileHotkey(
+                    "collides",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                ),
+                new ProfileHotkey(
+                    "keeper",
+                    KeyCode.VcE,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.ProfileHotkeys);
+        Assert.Equal("keeper", kept.ProfileId);
+    }
+
+    [Fact]
+    public async Task SetProfileHotkeys_KeepsFirstDuplicateAndDropsSecond()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetProfileHotkeys(
+            [
+                new ProfileHotkey(
+                    "first",
+                    KeyCode.VcE,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                ),
+                new ProfileHotkey(
+                    "second",
+                    KeyCode.VcE,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.ProcessSelectedText
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        var kept = Assert.Single(snapshot!.ProfileHotkeys);
+        Assert.Equal("first", kept.ProfileId);
+    }
+
+    [Fact]
+    public void ParseProfileHotkeys_SkipsDisabledBlankUnparseable_AndCarriesBehavior()
+    {
+        var parsed = HotkeyService.ParseProfileHotkeys(
+            [
+                new Profile
+                {
+                    Id = "dictate",
+                    Name = "Dictate",
+                    HotkeyData = "Ctrl+Alt+E",
+                    HotkeyBehavior = ProfileHotkeyBehavior.StartDictation
+                },
+                new Profile
+                {
+                    Id = "selection",
+                    Name = "Selection",
+                    HotkeyData = "Ctrl+Alt+S",
+                    HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText
+                },
+                new Profile
+                {
+                    Id = "disabled",
+                    Name = "Disabled",
+                    IsEnabled = false,
+                    HotkeyData = "Ctrl+Alt+T"
+                },
+                new Profile
+                {
+                    Id = "no-hotkey",
+                    Name = "None"
+                },
+                new Profile
+                {
+                    Id = "bad",
+                    Name = "Bad",
+                    HotkeyData = "Not+a+real+combo"
+                }
+            ]
+        );
+
+        Assert.Equal(2, parsed.Count);
+        var dictate = parsed.Single(p => p.ProfileId == "dictate");
+        Assert.Equal(KeyCode.VcE, dictate.Key);
+        Assert.Equal(ProfileHotkeyBehavior.StartDictation, dictate.Behavior);
+        var selection = parsed.Single(p => p.ProfileId == "selection");
+        Assert.Equal(ProfileHotkeyBehavior.ProcessSelectedText, selection.Behavior);
+    }
+
+    [Fact]
+    public async Task TrySetHotkeyFromString_RejectsChordAlreadyBoundToProfile()
+    {
+        // Symmetry guard mirroring the prompt-action case: a fixed-binding
+        // change must be refused if it would shadow an existing profile chord.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetProfileHotkeys(
+            [
+                new ProfileHotkey(
+                    "email",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetHotkeyFromString("Ctrl+Alt+R");
+
+        Assert.False(accepted);
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentHotkeyString);
+    }
+
+    [Fact]
     public async Task PushShortcuts_AppliesUpdatesInOrder()
     {
         // Backend records each set it sees. A burst of TrySet* calls must
@@ -666,6 +895,17 @@ public sealed class HotkeyServiceTests
 
         public event EventHandler<string>? PromptActionRequested;
 
+        public event EventHandler<string>? ProfileDictationToggleRequested;
+        public event EventHandler<string>? ProfileDictationStartRequested;
+
+        public event EventHandler? ProfileDictationStopRequested
+        {
+            add { }
+            remove { }
+        }
+
+        public event EventHandler<string>? ProfileTextProcessingRequested;
+
         public event EventHandler<string>? Failed
         {
             add { }
@@ -675,6 +915,21 @@ public sealed class HotkeyServiceTests
         public void RaisePromptAction(string actionId)
         {
             PromptActionRequested?.Invoke(this, actionId);
+        }
+
+        public void RaiseProfileDictationToggle(string profileId)
+        {
+            ProfileDictationToggleRequested?.Invoke(this, profileId);
+        }
+
+        public void RaiseProfileDictationStart(string profileId)
+        {
+            ProfileDictationStartRequested?.Invoke(this, profileId);
+        }
+
+        public void RaiseProfileTextProcessing(string profileId)
+        {
+            ProfileTextProcessingRequested?.Invoke(this, profileId);
         }
 
         public Task<GlobalShortcutRegistrationResult> RegisterAsync(
