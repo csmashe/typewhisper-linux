@@ -26,6 +26,29 @@ public sealed class ProfileService : IProfileService
 
     public event Action? ProfilesChanged;
 
+    public void SeedFirstRunDefaultsIfMissing()
+    {
+        // Seed only on a genuine first run — when the profiles file has never
+        // been written. If the user later disables or deletes the seeded
+        // profile the file still exists, so we never resurrect it.
+        if (File.Exists(_filePath))
+        {
+            return;
+        }
+
+        EnsureCacheLoaded();
+        if (_cache.Any(p => p.Id == FirstRunDefaults.AutoFormatProfileId))
+        {
+            return;
+        }
+
+        var newCache = new List<Profile>(_cache) { FirstRunDefaults.CreateAutoFormatProfile() };
+        SortList(newCache);
+        SaveToDisk(newCache);
+        _cache = newCache;
+        ProfilesChanged?.Invoke();
+    }
+
     public void AddProfile(Profile profile)
     {
         EnsureCacheLoaded();

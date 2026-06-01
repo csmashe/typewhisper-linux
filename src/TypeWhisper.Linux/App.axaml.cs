@@ -166,6 +166,10 @@ public class App : Application
             var hotkey = services.GetRequiredService<HotkeyService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
             var promptActions = services.GetRequiredService<IPromptActionService>();
+            // Seed the disabled auto-cleanup prompt + profile on a first install,
+            // before the hotkey snapshots below read them (both are disabled, so
+            // their Ctrl+Alt+E binding stays inert until the user enables them).
+            promptActions.SeedFirstRunDefaultsIfMissing();
             hotkey.SetPromptActionHotkeys(
                 HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
             );
@@ -174,6 +178,7 @@ public class App : Application
                     HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
                 );
             var profileService = services.GetRequiredService<IProfileService>();
+            profileService.SeedFirstRunDefaultsIfMissing();
             hotkey.SetProfileHotkeys(
                 HotkeyService.ParseProfileHotkeys(profileService.Profiles)
             );

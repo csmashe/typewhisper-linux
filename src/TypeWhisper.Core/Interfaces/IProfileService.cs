@@ -9,6 +9,7 @@ public interface IProfileService
     void AddProfile(Profile profile);
     void UpdateProfile(Profile profile);
     void DeleteProfile(string id);
+    void SeedFirstRunDefaultsIfMissing();
     MatchResult MatchProfile(string? processName, string? url, string? forcedProfileId = null);
     event Action? ProfilesChanged;
 }

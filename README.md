@@ -252,6 +252,21 @@ reproduction steps, and any relevant logs (the Error Log section on the
 About page has a per-window AT-SPI walk diagnostic for URL detection
 issues).
 
+## My Setup
+
+I run this branch as my daily driver and tune it to feel as close to [Wispr Flow](https://wisprflow.ai/) as I can get on Linux: press a key, talk, and have clean, punctuated text land in whatever app I'm in.
+
+The stack I actually use day to day:
+
+- **Transcription** — the bundled whisper.cpp engine on the GPU (CUDA 12), running the `large-v3-turbo` model. It's fully local, fast enough on my GTX 1070, and accurate enough that I rarely re-record.
+- **Cleanup** — an OpenAI-compatible LLM server (Ollama) running on a separate machine on my LAN — an RTX 3090 box — serving `mistral-small:24b`. My **Auto Clean Up Text** prompt drives it, and it's written to clean dictation the way Wispr Flow does: strip filler words ("um", "uh", "like"), fix capitalization and punctuation, apply spoken self-corrections in place, and format lists when I clearly ask for one — without ever adding, answering, or dropping anything I actually said. The **Auto Format** profile binds that prompt to a single hotkey (`Ctrl+Alt+E`), so dictation goes straight through cleanup before it's inserted. Both ship seeded but disabled on a fresh install, so you can turn them on and point the cleanup at your own LLM.
+- **Insertion** — auto-paste is on, and on GNOME Wayland the text is delivered through `ydotool`.
+- **Hotkeys** — global shortcuts use the Wayland evdev backend (reads `/dev/input/event*`, with my user in the `input` group) so the hotkey fires no matter which window is focused. I run in **Hybrid** activation mode: a quick tap toggles recording, while holding past ~600 ms acts as push-to-talk.
+
+I keep the rest deliberately minimal for latency and predictability — audio ducking, media pause, sound feedback, live/streaming transcription, and silence auto-stop are all off. The cleanup LLM is the only network hop, and it lives on a separate box on my own LAN, so nothing leaves the machines I control.
+
+**Where this is going:** right now the cleanup is a general-purpose model steered by a long system prompt (see [`docs/prompts/`](docs/prompts/)). I plan to train — or fine-tune — a model purpose-built for dictation cleanup so the behavior lives in the weights instead of being carried by the prompt. That should make it faster, more consistent, and far less sensitive to prompt wording than leaning on a general model. If you find a model that works better than Mistral let me know and I will update the documentation.
+
 ## Download a Prebuilt Release
 
 Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four formats for `linux-x64`. Pick whichever fits your distribution and root preference:
@@ -484,6 +499,7 @@ Known plugin gaps:
 - Marketplace/store browsing is intentionally not active in the Linux UI right now.
 - Plugin update handling is limited compared with the intended full marketplace workflow.
 - Some plugins may depend on external binaries, API keys, local model files, or services that must be configured separately.
+- Plugins have been ported but I do not use all of them, so I can't say that they all work 100%. If you find one that is having issues let me know or create a pull request.
 
 ## Plugin SDK
 

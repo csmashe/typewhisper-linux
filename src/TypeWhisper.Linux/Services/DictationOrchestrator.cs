@@ -452,6 +452,32 @@ public sealed class DictationOrchestrator : IDisposable
                 return 0;
             }
 
+            // Flip the overlay to "Recording…" now that capture is genuinely
+            // live (audio stream confirmed open above) — but BEFORE the slow
+            // startup work below (the playerctl subprocess in PauseMedia, sound
+            // playback). Doing it here keeps the overlay honest (we never claim
+            // "Recording" before the stream is open) while still clearing the
+            // previous session's "Typed N char(s)." feedback and showing the
+            // status promptly. The earlier ordering ran this after the
+            // playerctl/sound work, so on Wayland the stale feedback bubble
+            // lingered and "Recording…" appeared late.
+            SetOverlayState(state =>
+                state with
+                {
+                    IsOverlayVisible = true,
+                    ShowFeedback = false,
+                    FeedbackIsError = false,
+                    FeedbackText = null,
+                    PartialText = null,
+                    LlmResponseText = null,
+                    IsRecording = true,
+                    StatusText = "Recording… press the hotkey again to stop.",
+                    ActiveProfileName = null,
+                    ActiveAppName = null,
+                    SessionStartedAtUtc = DateTime.UtcNow
+                }
+            );
+
             try
             {
                 if (_settings.Current.AudioDuckingEnabled)
@@ -471,22 +497,6 @@ public sealed class DictationOrchestrator : IDisposable
 
                 _speechFeedback.AnnounceRecordingStarted();
                 RecordingStateChanged?.Invoke(this, true);
-                SetOverlayState(state =>
-                    state with
-                    {
-                        IsOverlayVisible = true,
-                        ShowFeedback = false,
-                        FeedbackIsError = false,
-                        FeedbackText = null,
-                        PartialText = null,
-                        LlmResponseText = null,
-                        IsRecording = true,
-                        StatusText = "Recording… press the hotkey again to stop.",
-                        ActiveProfileName = null,
-                        ActiveAppName = null,
-                        SessionStartedAtUtc = DateTime.UtcNow
-                    }
-                );
                 // Bump the partial-transcript session version ONCE per recording.
                 // Both the polling loop (always) and the streaming coordinator
                 // (when active) share this version so partials from either path
