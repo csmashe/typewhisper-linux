@@ -1,10 +1,12 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FluentIcons.Common;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.ObjectModel;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
 
@@ -13,6 +15,7 @@ namespace TypeWhisper.Linux.ViewModels;
 public partial class MainWindowViewModel : ObservableObject
 {
     private readonly IServiceProvider _services;
+    private readonly UpdateCheckService _updateCheck;
 
     [ObservableProperty]
     private object? _currentSection;
@@ -20,8 +23,15 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private NavItem? _selectedItem;
 
+    [ObservableProperty]
+    private bool _updateBannerVisible;
+
+    [ObservableProperty]
+    private string _updateBannerText = string.Empty;
+
     public MainWindowViewModel(
         IServiceProvider services,
+        UpdateCheckService updateCheck,
         DashboardSectionViewModel dashboard,
         DictationSectionViewModel dictation,
         ShortcutsSectionViewModel shortcuts,
@@ -41,6 +51,9 @@ public partial class MainWindowViewModel : ObservableObject
     )
     {
         _services = services;
+        _updateCheck = updateCheck;
+        _updateCheck.ResultChanged += OnUpdateResultChanged;
+        ApplyUpdateResult(_updateCheck.LastResult);
         Dashboard = dashboard;
         Dictation = dictation;
         Shortcuts = shortcuts;
@@ -160,6 +173,44 @@ public partial class MainWindowViewModel : ObservableObject
         {
             SelectedItem = item;
         }
+    }
+
+    [RelayCommand]
+    private void OpenUpdate()
+    {
+        // Take the user to About, where the full status and a Download button
+        // live. Non-destructive — just navigates.
+        Navigate<AboutSectionViewModel>();
+    }
+
+    [RelayCommand]
+    private void DismissUpdate()
+    {
+        _updateCheck.DismissUpdate(_updateCheck.LastResult.LatestVersion);
+        UpdateBannerVisible = false;
+    }
+
+    private void OnUpdateResultChanged(UpdateCheckResult result)
+    {
+        // The startup check raises this off the UI thread.
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            ApplyUpdateResult(result);
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(() => ApplyUpdateResult(result));
+        }
+    }
+
+    private void ApplyUpdateResult(UpdateCheckResult result)
+    {
+        var show =
+            result is { Checked: true, UpdateAvailable: true }
+            && !_updateCheck.IsDismissed(result.LatestVersion);
+
+        UpdateBannerVisible = show;
+        UpdateBannerText = show ? $"Update available — v{result.LatestVersion}" : string.Empty;
     }
 }
 

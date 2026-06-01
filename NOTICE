@@ -1,0 +1,70 @@
+TypeWhisper for Linux
+=====================
+
+Copyright © 2026 Excel on the Web.
+Portions © 2026 TypeWhisper (incorporated from the upstream TypeWhisper
+project).
+
+This product is licensed under the GNU General Public License v3.0 or
+later (GPL-3.0-or-later). See the LICENSE file for the full license text.
+
+
+Origin and relationship to upstream
+------------------------------------
+
+TypeWhisper for Linux is developed and maintained by Excel on the Web.
+It is the Linux edition of TypeWhisper and is owned by Excel on the Web,
+which holds copyright in this product as a whole.
+
+It began as, and remains, a derivative work that incorporates code from
+the upstream TypeWhisper project (which provides the macOS and Windows
+versions), © 2026 TypeWhisper, licensed under GPL-3.0-or-later. It has
+diverged into an independently maintained branch and continues to
+incorporate changes from upstream where they apply, while adding and
+maintaining its own Linux-specific functionality that is not part of the
+upstream macOS/Windows project.
+
+Copyright in the Linux product — the Linux port, the Linux-specific
+additions, and the work as assembled — is held by Excel on the Web.
+Copyright in the underlying upstream code that this product incorporates
+remains with TypeWhisper. Both notices above are retained as required by
+the GPL.
+
+
+Linux-specific additions
+-------------------------
+
+Functionality original to this branch (not part of the upstream
+macOS/Windows project) includes, among other work:
+
+- Linux desktop integration via Avalonia, XDG autostart, Linux tray
+  behavior, and a user-level desktop launcher and installer.
+- Wayland global hotkey detection via an evdev backend, with XDG-portal
+  and focused-only fallbacks, plus per-desktop shortcut writers
+  (GNOME, KDE, Hyprland, Sway) and a one-click auto-setup flow.
+- CUDA GPU support for the bundled whisper.cpp transcription engine on
+  compatible NVIDIA systems.
+- A local HTTP API and installable CLI for desktop automation.
+- Per-app text-insertion strategies and smart Auto insertion tuned for
+  Linux browsers, terminals, and Wayland/X11 sessions.
+- Linux transcription cleanup pipeline, profile style presets,
+  developer-safe formatting, voice command suffixes, and IDE file
+  references.
+- Correction suggestions with optional auto-learning, extended
+  dictionary/snippet metadata, and additional dashboard metrics.
+
+This list is illustrative, not exhaustive; see the README and the
+per-release notes under docs/releases/ for details. Additional
+Linux-specific functionality is ongoing.
+
+
+Attribution
+-----------
+
+- TypeWhisper for Linux — developed and maintained by Excel on the Web,
+  © 2026 Excel on the Web (GPL-3.0-or-later)
+- Incorporated upstream code: TypeWhisper — © 2026 TypeWhisper
+  (GPL-3.0-or-later)
+
+Modifications to upstream source files are tracked in this repository's
+Git history.

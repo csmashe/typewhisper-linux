@@ -38,6 +38,12 @@ public partial class HistorySectionViewModel : ObservableObject
     // finish updating correction suggestions before the rows are torn down.
     private bool _suppressRefresh;
 
+    // History can hold thousands of entries; materializing every row up front
+    // is slow, so rows are built in pages and appended as the user scrolls.
+    private const int PageSize = 40;
+    private readonly List<TranscriptionRecord> _filtered = [];
+    private int _shownCount;
+
     public HistorySectionViewModel(
         IHistoryService history,
         IDictionaryService dictionary,
@@ -71,6 +77,7 @@ public partial class HistorySectionViewModel : ObservableObject
     public bool ShowTimeline => !IsLoading && HasVisibleRecords;
     public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
     public bool HasVisibleRecords => Groups.Any(group => group.Entries.Count > 0);
+    public bool HasMore => _shownCount < _filtered.Count;
 
     public void ClearAll()
     {
@@ -310,24 +317,58 @@ public partial class HistorySectionViewModel : ObservableObject
     {
         RebuildAppFilter();
 
-        Groups.Clear();
-        foreach (
-            var group in GetVisibleRecords().GroupBy(record => ComputeDateGroup(record.Timestamp))
-        )
-        {
-            var groupViewModel = new HistoryGroupViewModel(group.Key);
-            foreach (var record in group)
-            {
-                groupViewModel.Entries.Add(new HistoryRecordRow(record, this));
-            }
+        _filtered.Clear();
+        _filtered.AddRange(GetVisibleRecords());
+        _shownCount = 0;
 
-            Groups.Add(groupViewModel);
-        }
+        Groups.Clear();
+        AppendNextPage();
 
         Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
         OnPropertyChanged(nameof(HasVisibleRecords));
         OnPropertyChanged(nameof(ShowTimeline));
         OnPropertyChanged(nameof(ShowEmptyState));
+        OnPropertyChanged(nameof(HasMore));
+    }
+
+    /// <summary>
+    /// Materializes the next page of rows. Called on initial load and as the
+    /// user scrolls toward the bottom of the timeline.
+    /// </summary>
+    public void LoadMore()
+    {
+        if (!HasMore)
+        {
+            return;
+        }
+
+        AppendNextPage();
+        OnPropertyChanged(nameof(HasMore));
+    }
+
+    private void AppendNextPage()
+    {
+        var end = Math.Min(_shownCount + PageSize, _filtered.Count);
+        for (var i = _shownCount; i < end; i++)
+        {
+            var record = _filtered[i];
+            var groupName = ComputeDateGroup(record.Timestamp);
+
+            // Records are sorted newest-first and date buckets are contiguous
+            // along that order, so a record either continues the last group or
+            // begins a new one.
+            var group =
+                Groups.Count > 0 && Groups[^1].Name == groupName ? Groups[^1] : null;
+            if (group is null)
+            {
+                group = new HistoryGroupViewModel(groupName);
+                Groups.Add(group);
+            }
+
+            group.Entries.Add(new HistoryRecordRow(record, this));
+        }
+
+        _shownCount = end;
     }
 
     private void RefreshPlaybackState()

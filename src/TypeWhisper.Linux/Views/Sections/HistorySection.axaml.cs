@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -11,6 +12,40 @@ public partial class HistorySection : UserControl
     public HistorySection()
     {
         InitializeComponent();
+    }
+
+    private void OnHistoryScrollChanged(object? sender, ScrollChangedEventArgs e)
+    {
+        LoadMoreIfNearBottom();
+    }
+
+    // Loads further pages while the bottom of the content is within the
+    // threshold of the viewport. Appending rows only grows the extent on the
+    // next layout pass, so the follow-up check is posted: this keeps loading
+    // when a page is too short to fill the viewport (which would otherwise
+    // leave no scrollbar and fire no further ScrollChanged to resume loading).
+    private void LoadMoreIfNearBottom()
+    {
+        if (DataContext is not HistorySectionViewModel viewModel || !viewModel.HasMore)
+        {
+            return;
+        }
+
+        const double threshold = 300;
+        var distanceToBottom =
+            HistoryScroll.Extent.Height
+            - (HistoryScroll.Offset.Y + HistoryScroll.Viewport.Height);
+        if (distanceToBottom > threshold)
+        {
+            return;
+        }
+
+        viewModel.LoadMore();
+
+        if (viewModel.HasMore)
+        {
+            Dispatcher.UIThread.Post(LoadMoreIfNearBottom, DispatcherPriority.Background);
+        }
     }
 
     private async void OnCopyRecord(object? sender, RoutedEventArgs e)

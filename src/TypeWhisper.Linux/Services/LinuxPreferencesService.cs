@@ -21,6 +21,42 @@ public sealed record LinuxPreferences
     /// </summary>
     public bool CloseToTray { get; init; }
 
+    /// <summary>
+    ///     When true (default), the app checks GitHub for a newer release once
+    ///     per day on startup and surfaces a non-obtrusive banner if one is
+    ///     found. The manual "Check for Updates" button in About works
+    ///     regardless of this setting.
+    /// </summary>
+    public bool CheckForUpdatesOnStartup { get; init; } = true;
+
+    /// <summary>
+    ///     UTC timestamp of the last successful update check. Used to rate-limit
+    ///     the startup check to once per day. Null until the first check runs.
+    /// </summary>
+    public DateTime? LastUpdateCheckUtc { get; init; }
+
+    /// <summary>
+    ///     The latest release version seen by the most recent successful check
+    ///     (e.g. "0.6.0"). Lets the startup path re-surface a known update
+    ///     without hitting the network when a check isn't yet due.
+    /// </summary>
+    public string? LastKnownLatestVersion { get; init; }
+
+    /// <summary>
+    ///     The release page URL for <see cref="LastKnownLatestVersion"/>, cached
+    ///     so the startup path can point Download at the correct release without
+    ///     re-querying (and without falling back to GitHub's /latest endpoint,
+    ///     which can resolve to a republished older tag).
+    /// </summary>
+    public string? LastKnownLatestUrl { get; init; }
+
+    /// <summary>
+    ///     The version the user dismissed from the update banner. The banner
+    ///     stays hidden for this exact version but reappears when a newer one
+    ///     is published.
+    /// </summary>
+    public string? DismissedUpdateVersion { get; init; }
+
     public static LinuxPreferences Default => new();
 }
 
