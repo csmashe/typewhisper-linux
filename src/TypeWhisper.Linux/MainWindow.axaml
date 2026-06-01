@@ -148,6 +148,7 @@
                         </Button>
                         <Button Command="{Binding DismissUpdateCommand}"
                                 Content="✕"
+                                AutomationProperties.Name="Dismiss update"
                                 FontSize="11"
                                 Background="Transparent"
                                 BorderThickness="0"
