@@ -211,7 +211,7 @@ internal sealed class XaiPcmTtsPlaybackSession : ITtsPlaybackSession, IDisposabl
         return path.Split(
                 Path.PathSeparator,
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(dir => File.Exists(Path.Combine(dir, name)));
+            .Any(dir => File.Exists(Path.Join(dir, name)));
     }
 
     private static void TryDeleteFile(string path)
