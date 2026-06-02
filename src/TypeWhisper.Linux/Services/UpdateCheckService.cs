@@ -170,6 +170,13 @@ public sealed class UpdateCheckService
                     };
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Caller-requested cancellation is not a fault; let it propagate.
+                // (HttpClient timeouts also throw here but with the token not
+                // requested, so they still fall through to the fault path below.)
+                throw;
+            }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[UpdateCheckService] Check failed: {ex.Message}");
