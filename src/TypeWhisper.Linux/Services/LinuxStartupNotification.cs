@@ -1,0 +1,245 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace TypeWhisper.Linux.Services;
+
+/// <summary>
+///     Completes the freedesktop startup-notification sequence that the desktop
+///     environment opens when it launches us from a <c>.desktop</c> entry with
+///     <c>StartupNotify=true</c>.
+///     <para>
+///         GNOME/Mutter shows the "launching" busy cursor (and a bouncing dash
+///         icon) from the moment of the click until the sequence is completed.
+///         A sequence is completed automatically only when the app maps a window
+///         carrying a matching <c>_NET_STARTUP_ID</c> property, or when the app
+///         broadcasts the SN "remove" message itself. Avalonia (running under
+///         XWayland here) does neither, so without this the cursor spins until
+///         Mutter's ~15–20s timeout — looking like a hang even though the app is
+///         up in ~2s. Our single-instance launches are worse: a second
+///         <c>typewhisper</c> click toggles the running instance and exits
+///         without mapping any window at all, so there is nothing for Mutter to
+///         match — only the broadcast can end it.
+///     </para>
+///     <para>
+///         So we send the spec's "remove: ID=&lt;id&gt;" message ourselves the
+///         moment we're ready (window shown) or just before a no-window exit.
+///         This keeps real launch feedback on slow cold starts while ending it
+///         immediately once we're up. Best-effort: any failure is swallowed so
+///         startup is never blocked, and it no-ops when there is no pending
+///         sequence (no <c>DESKTOP_STARTUP_ID</c>) or no X display.
+///     </para>
+/// </summary>
+internal static class LinuxStartupNotification
+{
+    private const string Lib = "libX11.so.6";
+    private const int ClientMessage = 33;
+    private const int Format8 = 8;
+
+    // X event masks the launcher selects for on the root window.
+    private const long PropertyChangeMask = 1L << 22;
+    private const long StructureNotifyMask = 1L << 17;
+
+    // XEvent is a union padded to its largest member; 192 bytes covers it on
+    // LP64. XSendEvent only reads the XClientMessageEvent fields, but we hand it
+    // a full-size, zeroed buffer so it can never read past our allocation.
+    private const int XEventSize = 192;
+
+    // XClientMessageEvent field offsets on LP64 (see <X11/Xlib.h>).
+    private const int OffType = 0; // int
+    private const int OffDisplay = 24; // Display*
+    private const int OffWindow = 32; // Window (unsigned long)
+    private const int OffMessageType = 40; // Atom (unsigned long)
+    private const int OffFormat = 48; // int
+    private const int OffData = 56; // union { char b[20]; ... }
+    private const int DataBytes = 20;
+
+    private static int s_done;
+
+    /// <summary>
+    ///     Broadcast the startup-notification completion for this process's
+    ///     pending launch, then clear the env vars so child processes (spawned
+    ///     plugins, helpers) don't inherit a stale token. Safe to call from any
+    ///     thread; runs at most once per process.
+    /// </summary>
+    public static void NotifyComplete()
+    {
+        // Idempotent: GUI window-open and the various exit paths may both fire.
+        if (Interlocked.Exchange(ref s_done, 1) != 0)
+        {
+            return;
+        }
+
+        var startupId = Environment.GetEnvironmentVariable("DESKTOP_STARTUP_ID");
+
+        // Clear regardless so children never inherit a consumed token.
+        Environment.SetEnvironmentVariable("DESKTOP_STARTUP_ID", null);
+        Environment.SetEnvironmentVariable("XDG_ACTIVATION_TOKEN", null);
+
+        if (string.IsNullOrEmpty(startupId))
+        {
+            return;
+        }
+
+        try
+        {
+            Broadcast(startupId);
+        }
+        catch (Exception ex)
+        {
+            // Never let launch feedback cleanup affect startup.
+            Debug.WriteLine($"[StartupNotification] Completion broadcast failed: {ex.Message}");
+        }
+    }
+
+    private static void Broadcast(string startupId)
+    {
+        var display = XOpenDisplay(null);
+        if (display == IntPtr.Zero)
+        {
+            return; // No X server (e.g. headless / pure-Wayland without XWayland).
+        }
+
+        var ev = IntPtr.Zero;
+        nuint window = 0;
+        try
+        {
+            var screen = XDefaultScreen(display);
+            var root = XRootWindow(display, screen);
+
+            // A throwaway, never-mapped window owns the broadcast, per the spec
+            // and libstartup-notification's sn_internal_broadcast_xmessage.
+            window = XCreateSimpleWindow(display, root, -100, -100, 1, 1, 0, 0, 0);
+            XSelectInput(display, window, (nint)(PropertyChangeMask | StructureNotifyMask));
+
+            var begin = XInternAtom(display, "_NET_STARTUP_INFO_BEGIN", false);
+            var info = XInternAtom(display, "_NET_STARTUP_INFO", false);
+
+            var payload = BuildRemoveMessage(startupId);
+
+            ev = Marshal.AllocHGlobal(XEventSize);
+            var offset = 0;
+            var first = true;
+            // Messages are split into 20-byte (format-8) ClientMessage chunks;
+            // the first carries _NET_STARTUP_INFO_BEGIN, the rest
+            // _NET_STARTUP_INFO. The trailing NUL is part of the stream.
+            while (offset < payload.Length)
+            {
+                ZeroEvent(ev);
+                Marshal.WriteInt32(ev, OffType, ClientMessage);
+                Marshal.WriteIntPtr(ev, OffDisplay, display);
+                Marshal.WriteInt64(ev, OffWindow, (long)window);
+                Marshal.WriteInt64(ev, OffMessageType, (long)(first ? begin : info));
+                Marshal.WriteInt32(ev, OffFormat, Format8);
+
+                var n = Math.Min(DataBytes, payload.Length - offset);
+                for (var i = 0; i < n; i++)
+                {
+                    Marshal.WriteByte(ev, OffData + i, payload[offset + i]);
+                }
+
+                XSendEvent(display, root, false, (nint)PropertyChangeMask, ev);
+                offset += DataBytes;
+                first = false;
+            }
+
+            XFlush(display);
+        }
+        finally
+        {
+            if (ev != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(ev);
+            }
+
+            if (window != 0)
+            {
+                XDestroyWindow(display, window);
+            }
+
+            XCloseDisplay(display);
+        }
+    }
+
+    /// <summary>
+    ///     "remove: ID=&lt;id&gt;\0" with spaces, quotes and backslashes in the
+    ///     id escaped, per the startup-notification message spec.
+    /// </summary>
+    private static byte[] BuildRemoveMessage(string startupId)
+    {
+        var sb = new StringBuilder("remove: ID=");
+        foreach (var c in startupId)
+        {
+            if (c is ' ' or '"' or '\\')
+            {
+                sb.Append('\\');
+            }
+
+            sb.Append(c);
+        }
+
+        var text = Encoding.UTF8.GetBytes(sb.ToString());
+        var withNul = new byte[text.Length + 1];
+        Array.Copy(text, withNul, text.Length);
+        // last byte already 0 — the terminating NUL the launcher expects.
+        return withNul;
+    }
+
+    private static void ZeroEvent(IntPtr ev)
+    {
+        for (var i = 0; i < XEventSize; i += 8)
+        {
+            Marshal.WriteInt64(ev, i, 0);
+        }
+    }
+
+    [DllImport(Lib)]
+    private static extern IntPtr XOpenDisplay(string? name);
+
+    [DllImport(Lib)]
+    private static extern int XCloseDisplay(IntPtr display);
+
+    [DllImport(Lib)]
+    private static extern int XDefaultScreen(IntPtr display);
+
+    [DllImport(Lib)]
+    private static extern nuint XRootWindow(IntPtr display, int screen);
+
+    [DllImport(Lib)]
+    private static extern nuint XCreateSimpleWindow(
+        IntPtr display,
+        nuint parent,
+        int x,
+        int y,
+        uint width,
+        uint height,
+        uint borderWidth,
+        nuint border,
+        nuint background
+    );
+
+    [DllImport(Lib, CharSet = CharSet.Ansi)]
+    private static extern nuint XInternAtom(
+        IntPtr display,
+        string name,
+        [MarshalAs(UnmanagedType.Bool)] bool onlyIfExists
+    );
+
+    [DllImport(Lib)]
+    private static extern int XSelectInput(IntPtr display, nuint window, nint eventMask);
+
+    [DllImport(Lib)]
+    private static extern int XSendEvent(
+        IntPtr display,
+        nuint window,
+        [MarshalAs(UnmanagedType.Bool)] bool propagate,
+        nint eventMask,
+        IntPtr eventSend
+    );
+
+    [DllImport(Lib)]
+    private static extern int XFlush(IntPtr display);
+
+    [DllImport(Lib)]
+    private static extern int XDestroyWindow(IntPtr display, nuint window);
+}

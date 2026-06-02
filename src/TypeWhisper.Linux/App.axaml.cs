@@ -64,6 +64,10 @@ public class App : Application
             desktop.MainWindow = main;
             BootTrace.Stage("MainWindow constructed");
             main.Opened += (_, _) => BootTrace.Stage("MainWindow.Opened fired");
+            // We're up and on screen — end the desktop's "launching" busy
+            // cursor. Avalonia never completes the startup-notification
+            // sequence itself, so without this it spins until Mutter's timeout.
+            main.Opened += (_, _) => LinuxStartupNotification.NotifyComplete();
 
             var prefs = services.GetRequiredService<LinuxPreferencesService>();
 
