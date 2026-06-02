@@ -195,9 +195,11 @@ internal sealed class Reson8StreamingSession : IStreamingSession
         _receiveCts.Cancel();
         _flushConfirmed.TrySetResult();
 
-        await _sendLock.WaitAsync(CancellationToken.None);
+        // Bound the wait so a stalled in-flight send can't hang Dispose forever.
+        var sendLockAcquired = false;
         try
         {
+            sendLockAcquired = await _sendLock.WaitAsync(TimeSpan.FromSeconds(5));
             if (_ws.State == WebSocketState.Open)
             {
                 try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
@@ -217,7 +219,8 @@ internal sealed class Reson8StreamingSession : IStreamingSession
         }
         finally
         {
-            _sendLock.Release();
+            if (sendLockAcquired)
+                _sendLock.Release();
         }
 
         if (_receiveTask is not null)
