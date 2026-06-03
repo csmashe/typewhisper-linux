@@ -58,6 +58,86 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_SpokenPunctuation_Disabled_LeavesPhrase()
+    {
+        var result = await _sut.ProcessAsync(
+            "can you review this question mark",
+            new PipelineOptions { NormalizeSpokenPunctuation = false }
+        );
+        Assert.Equal("can you review this question mark", result.Text);
+    }
+
+    [Theory]
+    // End-of-utterance "question mark" -> "?", trailing space trimmed.
+    [InlineData("can you review this question mark", "can you review this?")]
+    // STT often pads the phrase with its own period; it's absorbed.
+    [InlineData("can you review this question mark.", "can you review this?")]
+    // Sentence-internal: a single following space is preserved.
+    [InlineData("is this right question mark and then we ship",
+        "is this right? and then we ship")]
+    // "exclamation point" and "exclamation mark" both -> "!".
+    [InlineData("we won the deal exclamation point", "we won the deal!")]
+    [InlineData("we won the deal exclamation mark", "we won the deal!")]
+    // STT already emitted the symbol AND left the words: dedupe to one symbol.
+    [InlineData("can you review this question mark?", "can you review this?")]
+    public async Task ProcessAsync_SpokenPunctuation_Enabled_Converts(string input, string expected)
+    {
+        var result = await _sut.ProcessAsync(
+            input,
+            new PipelineOptions { NormalizeSpokenPunctuation = true }
+        );
+        Assert.Equal(expected, result.Text);
+    }
+
+    [Theory]
+    // Common content words are deliberately NOT converted (collision risk);
+    // the model handles these.
+    [InlineData("the price went up during that period")]
+    [InlineData("we forgot the oxford comma again")]
+    public async Task ProcessAsync_SpokenPunctuation_LeavesContentWords(string input)
+    {
+        var result = await _sut.ProcessAsync(
+            input,
+            new PipelineOptions { NormalizeSpokenPunctuation = true }
+        );
+        Assert.Equal(input, result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_SpokenPunctuation_DoesNotEatTrailingSentence()
+    {
+        // The capital is left for the LLM; this pass only fixes the symbol and
+        // spacing, it does not collapse the following sentence into the prior.
+        var result = await _sut.ProcessAsync(
+            "are we done question mark. Let me know",
+            new PipelineOptions { NormalizeSpokenPunctuation = true }
+        );
+        Assert.Equal("are we done? Let me know", result.Text);
+    }
+
+    [Theory]
+    // Whitespace cleanup must be LOCAL to the converted phrase — indentation,
+    // tabs, and aligned columns elsewhere in the transcript must survive even
+    // when a spoken-punctuation phrase is present.
+    [InlineData("we won the deal exclamation point\n\tstill   aligned",
+        "we won the deal!\n\tstill   aligned")]
+    [InlineData("is it ready question mark\ncol1   col2\tcol3",
+        "is it ready?\ncol1   col2\tcol3")]
+    // Multiple spaces with no spoken-punctuation phrase are left untouched.
+    [InlineData("plain   text\twith\tgaps", "plain   text\twith\tgaps")]
+    public async Task ProcessAsync_SpokenPunctuation_PreservesUnrelatedWhitespace(
+        string input,
+        string expected
+    )
+    {
+        var result = await _sut.ProcessAsync(
+            input,
+            new PipelineOptions { NormalizeSpokenPunctuation = true }
+        );
+        Assert.Equal(expected, result.Text);
+    }
+
+    [Fact]
     public async Task ProcessAsync_DictionaryCorrections_Applied()
     {
         var options = new PipelineOptions

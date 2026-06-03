@@ -358,7 +358,8 @@
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding ModelOptions}"
-                                                  SelectedItem="{Binding SelectedModelOption}">
+                                                  SelectedItem="{Binding SelectedModelOption}"
+                                                  DropDownOpened="OnModelDropDownOpened">
                                             <ComboBox.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:ProfileModelOption">
                                                     <TextBlock Text="{Binding Label}" />

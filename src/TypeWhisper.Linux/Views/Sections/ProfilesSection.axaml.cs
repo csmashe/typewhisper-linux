@@ -12,6 +12,16 @@ public partial class ProfilesSection : UserControl
         InitializeComponent();
     }
 
+    // Re-poll providers for current models whenever the per-profile model
+    // dropdown opens, so newly added models appear without a manual "Validate".
+    private void OnModelDropDownOpened(object? sender, System.EventArgs e)
+    {
+        if (DataContext is ProfilesSectionViewModel viewModel)
+        {
+            _ = viewModel.RefreshProviderModelsAsync();
+        }
+    }
+
     private void OnProcessNameKeyDown(object? sender, KeyEventArgs e)
     {
         // Commit the typed process name as a chip when the user presses Enter,

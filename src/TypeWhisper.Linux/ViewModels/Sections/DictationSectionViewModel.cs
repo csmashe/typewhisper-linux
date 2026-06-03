@@ -453,6 +453,14 @@ public partial class DictationSectionViewModel : ObservableObject
                 : $"{Devices.Count} input device(s) available.";
     }
 
+    /// <summary>
+    ///     Re-polls providers for their current model list when the model
+    ///     dropdown opens, so newly added models appear without a manual
+    ///     "Validate". The dropdown rebuilds via the PluginStateChanged
+    ///     subscription; debounce/guard live in <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
+
     private void RefreshModels()
     {
         var previousSelectedId = SelectedModel?.ModelId ?? _settings.Current.SelectedModelId;

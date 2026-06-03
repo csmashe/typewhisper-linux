@@ -10,7 +10,8 @@ namespace TypeWhisper.Plugin.OpenAiCompatible;
 public sealed partial class OpenAiCompatiblePlugin
     : ITranscriptionEnginePlugin,
         ILlmProviderPlugin,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IModelCatalogProvider
 {
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
@@ -434,6 +435,27 @@ public sealed partial class OpenAiCompatiblePlugin
             true,
             $"Connection OK. Fetched {models.Count} model(s)."
         );
+    }
+
+    // IModelCatalogProvider: read-only model-list refresh for dropdown-open.
+    // Only the model catalog is touched — no connection-validation message, no
+    // asset downloads, no auto-selecting a model. Keeps the cached list on
+    // failure (FetchModelsAsync returns [] on error) so an unreachable endpoint
+    // doesn't empty the dropdown.
+    public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(_baseUrl))
+            return;
+
+        var models = await FetchModelsAsync(ct);
+        if (models.Count == 0)
+            return;
+
+        var changed =
+            models.Count != _fetchedModels.Count
+            || !models.Select(m => m.Id).SequenceEqual(_fetchedModels.Select(m => m.Id));
+        if (changed)
+            SetFetchedModels(models);
     }
 
     private IReadOnlyList<PluginSettingOption>? BuildModelOptions()

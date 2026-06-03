@@ -805,6 +805,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    ///     Re-polls providers for their current model list when the per-profile
+    ///     model dropdown opens, so newly added models appear without a manual
+    ///     "Validate". The dropdown rebuilds via the PluginStateChanged
+    ///     subscription; debounce/guard live in <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
+
     private void RefreshModelOptions()
     {
         var selected = EditModelId;

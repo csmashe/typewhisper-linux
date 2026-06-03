@@ -1462,6 +1462,7 @@ public sealed class DictationOrchestrator : IDisposable
                 new PipelineOptions
                 {
                     NormalizeSpokenLineBreaks = true,
+                    NormalizeSpokenPunctuation = true,
                     AppFormatter = AppFormatterService.Format,
                     TargetProcessName = context.AppProcess,
                     DictionaryCorrector = _dictionary.ApplyCorrections,
