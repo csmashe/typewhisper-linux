@@ -39,9 +39,12 @@ public sealed class AudioRecordingService : IDisposable
     private int _sampleCount;
     private PaStream? _stream;
 
+    // PortAudio is initialized lazily on first stream use (EnsureInputStreamStarted)
+    // and by GetInputDevices, both via the idempotent EnsurePortAudioInitialized.
+    // Constructing the service no longer loads the native library, so the
+    // buffer-processing path can be unit-tested on hosts without portaudio.
     public AudioRecordingService()
     {
-        EnsurePortAudioInitialized();
     }
 
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
@@ -504,6 +507,8 @@ public sealed class AudioRecordingService : IDisposable
         {
             return true;
         }
+
+        EnsurePortAudioInitialized();
 
         var deviceIndex = ResolveSelectedDeviceIndex();
         if (deviceIndex is null)
