@@ -129,7 +129,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          path: artifacts
+          path: release-assets
           merge-multiple: true
 
       - name: Create GitHub Release
@@ -153,17 +153,17 @@ jobs:
 
           if [ "$EXISTING_DRAFT" = "true" ]; then
             echo "Draft release found for $TAG. Uploading assets and publishing..."
-            gh release upload "$TAG" artifacts/* --clobber
+            gh release upload "$TAG" release-assets/* --clobber
             gh release edit "$TAG" "${EDIT_ARGS[@]}"
           elif [ "$EXISTING_DRAFT" = "false" ]; then
             echo "Published release found for $TAG. Uploading assets..."
-            gh release upload "$TAG" artifacts/* --clobber
+            gh release upload "$TAG" release-assets/* --clobber
             if [ "$IS_PRERELEASE" = "true" ]; then
               gh release edit "$TAG" --prerelease
             fi
           elif [ -f "$NOTES_FILE" ]; then
             echo "Using curated release notes from $NOTES_FILE"
-            CREATE_ARGS=("$TAG" artifacts/* --title "$TAG" --notes-file "$NOTES_FILE")
+            CREATE_ARGS=("$TAG" release-assets/* --title "$TAG" --notes-file "$NOTES_FILE")
             CREATE_ARGS+=("${CREATE_FLAGS[@]}")
             gh release create "${CREATE_ARGS[@]}"
           else
@@ -229,7 +229,7 @@ jobs:
               NOTES="Maintenance release ${TAG}"
             fi
 
-            CREATE_ARGS=("$TAG" artifacts/* --title "$TAG" --notes "$(printf '%b' "$NOTES")")
+            CREATE_ARGS=("$TAG" release-assets/* --title "$TAG" --notes "$(printf '%b' "$NOTES")")
             CREATE_ARGS+=("${CREATE_FLAGS[@]}")
             gh release create "${CREATE_ARGS[@]}"
           fi
