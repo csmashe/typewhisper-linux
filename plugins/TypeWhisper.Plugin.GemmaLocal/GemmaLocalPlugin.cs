@@ -49,6 +49,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private LLamaWeights? _weights;
     private LLamaContext? _context;
     private string? _loadedModelId;
+    private bool _streamResponses = true;
     private CancellationTokenSource? _startupCts;
     private Task? _startupTask;
 
@@ -60,6 +61,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     {
         _host = host;
         _selectedModelId = host.GetSetting<string>("selectedModel");
+        _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
 
         // A persisted ID may name a model that no longer exists in Models
@@ -168,10 +170,24 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     ))
                     .ToList()
             ),
+            new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: "Stream responses",
+                Description: "Render prompt-action output token-by-token as the "
+                    + "local model generates it, instead of waiting for the full reply.",
+                Kind: PluginSettingKind.Boolean
+            ),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key == "selectedModel" ? _selectedModelId : null);
+        Task.FromResult(
+            key switch
+            {
+                "selectedModel" => _selectedModelId,
+                LlmStreamingSettings.StreamResponsesSettingKey => _streamResponses ? "true" : "false",
+                _ => null,
+            }
+        );
 
     public async Task SetSettingValueAsync(
         string key,
@@ -179,6 +195,12 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         CancellationToken ct = default
     )
     {
+        if (key == LlmStreamingSettings.StreamResponsesSettingKey)
+        {
+            SetStreamResponses(string.Equals(value, "true", StringComparison.OrdinalIgnoreCase));
+            return;
+        }
+
         if (key != "selectedModel")
             return;
 
@@ -299,6 +321,52 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         }
     }
 
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        if (!_streamResponses)
+        {
+            yield return await ProcessAsync(systemPrompt, userText, model, ct);
+            yield break;
+        }
+
+        await _inferenceLock.WaitAsync(ct);
+        try
+        {
+            if (_context is null || _weights is null)
+                throw new InvalidOperationException(
+                    "No model loaded. Download and load a model first."
+                );
+
+            var prompt = FormatGemmaPrompt(systemPrompt, userText);
+
+            var executor = new StatelessExecutor(_weights, _context.Params);
+            var inferenceParams = new InferenceParams
+            {
+                MaxTokens = 2048,
+                AntiPrompts = ["<end_of_turn>", "<eos>"],
+                SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.3f },
+            };
+
+            // InferAsync already produces tokens incrementally; yield them straight
+            // through so the overlay renders the local model's output live. (The
+            // batch sibling trims the accumulated result; the streamed text is not
+            // trimmed — Gemma's model-turn output is normally clean.)
+            await foreach (var token in executor.InferAsync(prompt, inferenceParams, ct))
+            {
+                yield return token;
+            }
+        }
+        finally
+        {
+            _inferenceLock.Release();
+        }
+    }
+
     internal string? SelectedModelId => _selectedModelId;
     internal string? LoadedModelId => _loadedModelId;
     internal IPluginLocalization? Loc => _host?.Localization;
@@ -310,6 +378,12 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _selectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
         _host?.NotifyCapabilitiesChanged();
+    }
+
+    internal void SetStreamResponses(bool enabled)
+    {
+        _streamResponses = enabled;
+        _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
     }
 
     internal bool IsModelDownloaded(string modelId)

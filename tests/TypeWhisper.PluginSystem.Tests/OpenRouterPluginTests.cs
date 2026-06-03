@@ -521,6 +521,102 @@ public class OpenRouterPluginTests
         Assert.Equal("custom", result);
     }
 
+    [Fact]
+    public async Task ProcessStreamingAsync_StreamsDeltas_OmitsTemperatureForProviderDefault()
+    {
+        string? capturedBody = null;
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
+            "",
+            "data: [DONE]",
+            "");
+        var handler = new CapturingHandler((request, body) =>
+        {
+            capturedBody = body;
+            Assert.Equal(
+                "https://openrouter.ai/api/v1/chat/completions",
+                request.RequestUri?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+            };
+        });
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "openrouter-key";
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new OpenRouterPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
+        Assert.Equal("openrouter/free", doc.RootElement.GetProperty("model").GetString());
+        Assert.Equal(2048, doc.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.False(doc.RootElement.TryGetProperty("temperature", out _));
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_StreamsWithCustomTemperature()
+    {
+        string? capturedBody = null;
+        var handler = new CapturingHandler((_, body) =>
+        {
+            capturedBody = body;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n",
+                    Encoding.UTF8, "text/event-stream"),
+            };
+        });
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "openrouter-key";
+        host.SetSetting("llmTemperatureMode", "custom");
+        host.SetSetting("llmTemperatureValue", 1.2);
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new OpenRouterPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "override/model", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Equal(new[] { "x" }, chunks);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.Equal("override/model", doc.RootElement.GetProperty("model").GetString());
+        Assert.Equal(1.2, doc.RootElement.GetProperty("temperature").GetDouble(), precision: 3);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk()
+    {
+        var handler = new CapturingHandler((_, _) =>
+            JsonResponse("""{ "choices": [ { "message": { "content": "bulk" } } ] }"""));
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "openrouter-key";
+        host.SetSetting("streamResponses", false);
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new OpenRouterPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Single(chunks);
+        Assert.Equal("bulk", chunks[0]);
+    }
+
     // Fork-specific: IPluginSettingsProvider coverage (the WPF settings view
     // tests upstream had don't port — fork uses metadata-driven settings).
 
@@ -540,6 +636,7 @@ public class OpenRouterPluginTests
                 "selectedLlmModel",
                 "llmTemperatureMode",
                 "llmTemperatureValue",
+                "streamResponses",
             ],
             keys);
     }

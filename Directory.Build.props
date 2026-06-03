@@ -1,6 +1,6 @@
 <Project>
     <PropertyGroup>
-        <Version Condition="'$(Version)' == ''">0.5.0</Version>
+        <Version Condition="'$(Version)' == ''">0.6.0</Version>
         <Company>Excel on the Web</Company>
         <Product>TypeWhisper</Product>
         <Copyright>Copyright © 2026 Excel on the Web. Portions © 2026 TypeWhisper.</Copyright>

@@ -72,6 +72,26 @@
                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                    IsVisible="False" />
 
+        <!-- Streamed LLM result. Declared after the list so it renders on top and
+             covers it while the picked action runs. Hidden until BeginRunning. -->
+        <Border Grid.Row="1"
+                x:Name="ResultBorder"
+                Margin="0,8,0,0"
+                Padding="10,8"
+                CornerRadius="8"
+                Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                IsVisible="False">
+            <ScrollViewer x:Name="ResultScrollViewer"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <TextBlock x:Name="ResultText"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+            </ScrollViewer>
+        </Border>
+
         <Border Grid.Row="2"
                 x:Name="StatusBorder"
                 Margin="0,8,0,0"

@@ -46,6 +46,171 @@ internal sealed class XaiResponsesClient
         return ParseResponse(json);
     }
 
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        var body = new Dictionary<string, JsonElement>
+        {
+            ["model"] = XaiJson.Element(model),
+            ["store"] = XaiJson.Element(false),
+            ["stream"] = XaiJson.Element(true),
+            ["input"] = XaiJson.Element(new object[]
+            {
+                new { role = "system", content = systemPrompt },
+                new { role = "user", content = userText },
+            }),
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/v1/responses");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        request.Content = XaiJson.CreateJsonContent(body);
+
+        // ResponseHeadersRead so deltas surface as they arrive instead of
+        // buffering the whole SSE body (the batch path's SendWithErrorHandlingAsync
+        // buffers, so we send + check the status line ourselves here).
+        using var response = await _httpClient.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var message = (int)response.StatusCode switch
+            {
+                401 => "Invalid API key",
+                429 => "Rate limit reached, please wait",
+                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}"
+            };
+            throw new InvalidOperationException(message);
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
+
+        while (await reader.ReadLineAsync(ct) is { } rawLine)
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+                continue;
+
+            var payload = line[6..];
+            if (payload == "[DONE]")
+                yield break;
+
+            // The Responses stream returns 200 before generation finishes, so a
+            // mid-stream failure arrives as a typed `error` / `response.failed`
+            // frame rather than an HTTP error. Throw on those so the pump faults
+            // and the caller falls back to batch, instead of silently committing
+            // the partial deltas seen so far as a successful result.
+            if (ParseStreamError(payload) is { } error)
+                throw new InvalidOperationException(error);
+
+            if (ParseStreamDelta(payload) is { Length: > 0 } delta)
+                yield return delta;
+        }
+    }
+
+    /// <summary>
+    ///     Extracts the incremental text from a single xAI Responses SSE
+    ///     <c>data:</c> payload — a <c>response.output_text.delta</c> frame's
+    ///     <c>delta</c> string. Returns <c>null</c> for any other frame type or an
+    ///     unparseable payload. Reflection-free (A18) via <see cref="JsonDocument" />.
+    /// </summary>
+    internal static string? ParseStreamDelta(string dataPayload)
+    {
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(dataPayload);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (root.TryGetProperty("type", out var typeEl)
+                && typeEl.ValueKind == JsonValueKind.String
+                && typeEl.GetString() == "response.output_text.delta"
+                && root.TryGetProperty("delta", out var delta)
+                && delta.ValueKind == JsonValueKind.String)
+            {
+                return delta.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     Returns a provider error message when a single Responses SSE
+    ///     <c>data:</c> payload is a failure frame — a top-level <c>error</c> event
+    ///     or a <c>response.failed</c> lifecycle frame — otherwise <c>null</c>.
+    ///     Used by the streaming reader to surface a post-200 stream failure as a
+    ///     thrown exception. Reflection-free (A18) via <see cref="JsonDocument" />.
+    /// </summary>
+    internal static string? ParseStreamError(string dataPayload)
+    {
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(dataPayload);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeEl)
+                || typeEl.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            switch (typeEl.GetString())
+            {
+                case "error":
+                    return ExtractErrorMessage(root) ?? "xAI streaming error.";
+                case "response.failed":
+                    return root.TryGetProperty("response", out var resp)
+                        && resp.ValueKind == JsonValueKind.Object
+                        ? ExtractErrorMessage(resp) ?? "xAI response failed."
+                        : "xAI response failed.";
+                default:
+                    return null;
+            }
+        }
+    }
+
+    private static string? ExtractErrorMessage(JsonElement element)
+    {
+        if (element.TryGetProperty("error", out var error))
+        {
+            if (error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("message", out var nested)
+                && nested.ValueKind == JsonValueKind.String)
+            {
+                return nested.GetString();
+            }
+
+            if (error.ValueKind == JsonValueKind.String)
+                return error.GetString();
+        }
+
+        return element.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.String
+            ? message.GetString()
+            : null;
+    }
+
     public static string ParseResponse(string json)
     {
         using var doc = JsonDocument.Parse(json);

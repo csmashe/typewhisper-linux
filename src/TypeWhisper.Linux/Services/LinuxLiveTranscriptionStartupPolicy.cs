@@ -6,13 +6,15 @@ namespace TypeWhisper.Linux.Services;
 internal enum LiveTranscriptionMode
 {
     None,
-    Polling
+    Polling,
+    Streaming
 }
 
 // Decides whether the recording loop should run the live-transcription preview
-// poll. Ported from upstream's LiveTranscriptionStartupPolicy (7447cdc),
-// simplified to the fork's single live mechanism: the orchestrator only ever
-// polls (no websocket streaming path exists here).
+// poll or the websocket streaming path. Ported from upstream's
+// LiveTranscriptionStartupPolicy (7447cdc); the fork grew the Streaming arm in
+// C5 once the host-side websocket subsystem landed (scope:
+// docs/plans/2026-05-22-websocket-streaming-subsystem.md).
 internal static class LinuxLiveTranscriptionStartupPolicy
 {
     public static LiveTranscriptionMode Select(
@@ -29,6 +31,15 @@ internal static class LinuxLiveTranscriptionStartupPolicy
             return LiveTranscriptionMode.None;
         }
 
+        // Real-time websocket streaming wins over polling when the plugin
+        // supports it and the user opted in. Strictly cheaper than batch
+        // re-upload (latency in hundreds of ms vs 3 s poll cadence; each
+        // chunk sent once vs the whole growing buffer re-sent every poll).
+        if (plugin.SupportsStreaming && settings.LiveTranscriptionStreamingEnabled)
+        {
+            return LiveTranscriptionMode.Streaming;
+        }
+
         // Local downloadable models transcribe on-device — polling the partial
         // preview is cheap.
         if (plugin.SupportsModelDownload)
@@ -37,9 +48,7 @@ internal static class LinuxLiveTranscriptionStartupPolicy
         }
 
         // Cloud/online providers: each partial poll re-uploads the whole
-        // growing buffer. (SupportsStreaming is deliberately ignored — the
-        // Linux fork polls; it has no real websocket streaming path.) Off
-        // unless the user opts in.
+        // growing buffer. Off unless the user opts in.
         if (settings.OnlineAsrBatchLiveTranscriptionEnabled)
         {
             return LiveTranscriptionMode.Polling;

@@ -57,6 +57,7 @@ public sealed class XaiPlugin
     private string _customVoiceId = "";
     private bool _ttsLowLatency;
     private bool _ttsTextNormalization;
+    private bool _streamResponses = true;
 
     public XaiPlugin()
         : this(CreateHttpClient())
@@ -79,7 +80,7 @@ public sealed class XaiPlugin
 
     public string PluginId => "com.typewhisper.xai";
     public string PluginName => "xAI / Grok";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => "1.1.0";
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -95,6 +96,7 @@ public sealed class XaiPlugin
         _customVoiceId = host.GetSetting<string>(CustomVoiceIdSettingName)?.Trim() ?? "";
         _ttsLowLatency = host.GetSetting<bool?>(TtsLowLatencySettingName) ?? false;
         _ttsTextNormalization = host.GetSetting<bool?>(TtsTextNormalizationSettingName) ?? false;
+        _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         NormalizeSelectedLlmModel(persist: false);
         NormalizeSelectedVoice(persist: false);
@@ -115,6 +117,7 @@ public sealed class XaiPlugin
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => SttModels;
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
+    public bool SupportsStreaming => true;
     public IReadOnlyList<string> SupportedLanguages => Languages;
 
     public void SelectModel(string modelId)
@@ -157,6 +160,17 @@ public sealed class XaiPlugin
         return ParseSttResponse(json, normalizedLanguage);
     }
 
+    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("Plugin not configured. API key required.");
+
+        // Run through the same normalization the batch TranscribeAsync uses
+        // so a setting value like " de " or "auto" doesn't propagate into the
+        // streaming URI as %20de%20 or language=auto.
+        return await XaiStreamingSession.ConnectAsync(_apiKey!, NormalizeLanguage(language), ct);
+    }
+
     // ILlmProviderPlugin
 
     public string ProviderName => "xAI / Grok";
@@ -177,6 +191,30 @@ public sealed class XaiPlugin
             : model;
         var client = new XaiResponsesClient(_httpClient, BaseUrl, _apiKey!);
         return await client.ProcessAsync(systemPrompt, userText, modelId, ct);
+    }
+
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        if (!_streamResponses)
+        {
+            yield return await ProcessAsync(systemPrompt, userText, model, ct);
+            yield break;
+        }
+
+        if (!IsConfigured)
+            throw new InvalidOperationException("API key not configured");
+
+        var modelId = string.IsNullOrWhiteSpace(model)
+            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            : model;
+        var client = new XaiResponsesClient(_httpClient, BaseUrl, _apiKey!);
+        var source = client.ProcessStreamingAsync(systemPrompt, userText, modelId, ct);
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
     }
 
     // ITtsProviderPlugin
@@ -451,6 +489,12 @@ public sealed class XaiPlugin
         _host?.NotifyCapabilitiesChanged();
     }
 
+    private void SetStreamResponses(bool enabled)
+    {
+        _streamResponses = enabled;
+        _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
+    }
+
     internal static PluginTranscriptionResult ParseSttResponse(string json, string? fallbackLanguage)
     {
         using var doc = JsonDocument.Parse(json);
@@ -618,6 +662,13 @@ public sealed class XaiPlugin
                     .ToList()
             ),
             new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: "Stream responses",
+                Description: "Render prompt-action output token-by-token as it is "
+                    + "generated, instead of waiting for the full reply.",
+                Kind: PluginSettingKind.Boolean
+            ),
+            new(
                 Key: SelectedVoiceSettingName,
                 Label: "TTS voice",
                 Description: _fetchedVoices.Count > 0
@@ -655,6 +706,8 @@ public sealed class XaiPlugin
                 ApiKeySecretName => _apiKey,
                 SelectedModelSettingName => _selectedModelId,
                 SelectedLlmModelSettingName => _selectedLlmModelId,
+                LlmStreamingSettings.StreamResponsesSettingKey
+                    => _streamResponses ? "true" : "false",
                 SelectedVoiceSettingName => _selectedVoiceId,
                 CustomVoiceIdSettingName => _customVoiceId,
                 TtsLowLatencySettingName => _ttsLowLatency ? "true" : "false",
@@ -677,6 +730,9 @@ public sealed class XaiPlugin
             case SelectedLlmModelSettingName:
                 if (!string.IsNullOrWhiteSpace(value))
                     SelectLlmModel(value);
+                break;
+            case LlmStreamingSettings.StreamResponsesSettingKey:
+                SetStreamResponses(ParseBool(value));
                 break;
             case SelectedVoiceSettingName:
                 if (!string.IsNullOrWhiteSpace(value))

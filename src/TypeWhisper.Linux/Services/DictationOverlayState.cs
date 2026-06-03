@@ -17,6 +17,10 @@ public sealed record DictationOverlayState
     public bool IsRecording { get; init; }
     public string StatusText { get; init; } = "Ready";
     public string? PartialText { get; init; }
+
+    /// <summary>Accumulated LLM response text, streamed token-by-token during a
+    /// prompt-action step. Null when no LLM step is running.</summary>
+    public string? LlmResponseText { get; init; }
     public string? FeedbackText { get; init; }
     public string? ActiveProfileName { get; init; }
     public string? ActiveAppName { get; init; }

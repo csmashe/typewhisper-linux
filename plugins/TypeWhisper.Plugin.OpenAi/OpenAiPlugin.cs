@@ -62,6 +62,7 @@ public sealed class OpenAiPlugin
     private bool _forgetChatGptLogin;
     private string _temperatureMode = TemperatureModeProviderDefault;
     private double _temperatureValue = 0.3;
+    private bool _streamResponses = true;
 
     private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
     [
@@ -79,6 +80,14 @@ public sealed class OpenAiPlugin
             "gpt-4o-mini-transcribe",
             "json",
             SupportsTranslation: false
+        ),
+        new(
+            OpenAiRealtimeStreamingSession.ModelId,
+            "GPT Realtime Whisper",
+            OpenAiRealtimeStreamingSession.ModelId,
+            "json",
+            SupportsTranslation: false,
+            SupportsStreaming: true
         ),
     ];
 
@@ -129,7 +138,7 @@ public sealed class OpenAiPlugin
 
     public string PluginId => "com.typewhisper.openai";
     public string PluginName => "OpenAI / ChatGPT";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => "1.2.0";
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -149,6 +158,7 @@ public sealed class OpenAiPlugin
         _oauthExpiresAt = LoadExpiresAt(host);
         _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
         _temperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
+        _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         SelectModelCore(
             host.GetSetting<string>(SelectedModelSettingName) ?? TranscriptionModelEntries[0].Id,
@@ -177,6 +187,15 @@ public sealed class OpenAiPlugin
     public bool SupportsTranslation =>
         IsConfigured && SelectedModelEntry is { SupportsTranslation: true };
 
+    // Realtime streaming uses an API-key-authenticated WebSocket. ChatGPT
+    // OAuth tokens are scoped for the consumer chat backend and 401 at
+    // wss://api.openai.com/v1/realtime, so we gate streaming off when the
+    // user is in OAuth mode even with the realtime model selected.
+    public bool SupportsStreaming =>
+        IsConfigured
+        && _authMode != OpenAiAuthMode.ChatGpt
+        && SelectedModelEntry is { SupportsStreaming: true };
+
     public void SelectModel(string modelId) => SelectModelCore(modelId, persist: true);
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -192,6 +211,22 @@ public sealed class OpenAiPlugin
                 "Plugin not configured. API key and model required."
             );
 
+        if (_selectedModelId == OpenAiRealtimeStreamingSession.ModelId)
+        {
+            if (translate)
+                throw new InvalidOperationException(
+                    "GPT Realtime Whisper does not support translation."
+                );
+
+            return await OpenAiRealtimeStreamingSession.TranscribeWavAsync(
+                _apiKey!,
+                wavAudio,
+                NormalizeLanguage(language),
+                prompt,
+                ct
+            );
+        }
+
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             BaseUrl,
@@ -203,6 +238,29 @@ public sealed class OpenAiPlugin
             _selectedResponseFormat,
             ct,
             prompt
+        );
+    }
+
+    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    {
+        if (_authMode == OpenAiAuthMode.ChatGpt)
+            throw new InvalidOperationException(
+                "OpenAI realtime streaming requires an API key. "
+                + "ChatGPT login can't authenticate the realtime endpoint."
+            );
+        if (!IsConfigured)
+            throw new InvalidOperationException("API key not configured");
+        if (_selectedModelId != OpenAiRealtimeStreamingSession.ModelId)
+            throw new NotSupportedException(
+                "Select GPT Realtime Whisper to use OpenAI realtime streaming."
+            );
+
+        return await OpenAiRealtimeStreamingSession.ConnectAsync(
+            _apiKey!,
+            NormalizeLanguage(language),
+            prompt: null,
+            useServerVad: true,
+            ct
         );
     }
 
@@ -273,6 +331,50 @@ public sealed class OpenAiPlugin
             reasoningEffort: SupportsReasoningEffort(modelId) ? _reasoningEffort : null,
             temperature: ResolvedTemperature(modelId)
         );
+    }
+
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        var modelId = string.IsNullOrWhiteSpace(model)
+            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            : model;
+
+        // Self-gated per the C7 per-provider toggle. Also bulk-yield the
+        // ChatGPT-OAuth and Responses-API sub-paths: only /v1/chat/completions has
+        // a streaming reader so far (the shared helper). The other two stay
+        // byte-identical to ProcessAsync — see the C7 Phase 3 doc's scope note.
+        if (!_streamResponses
+            || _authMode == OpenAiAuthMode.ChatGpt
+            || UsesResponsesApi(modelId))
+        {
+            yield return await ProcessAsync(systemPrompt, userText, modelId, ct);
+            yield break;
+        }
+
+        if (!IsConfigured)
+            throw new InvalidOperationException("API key not configured");
+
+        var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            modelId,
+            systemPrompt,
+            userText,
+            ct,
+            maxOutputTokens: 2048,
+            maxOutputTokenParameter: OutputTokenParameter(modelId),
+            reasoningEffort: SupportsReasoningEffort(modelId) ? _reasoningEffort : null,
+            temperature: ResolvedTemperature(modelId)
+        );
+
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
     }
 
     // ITtsProviderPlugin
@@ -914,6 +1016,15 @@ public sealed class OpenAiPlugin
                 Kind: PluginSettingKind.Text
             ),
             new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: "Stream responses",
+                Description: "Render prompt-action and cleanup output token-by-token "
+                    + "as the model generates it, instead of waiting for the full reply. "
+                    + "Applies to the chat-completions models; reasoning models fall back "
+                    + "to a single render.",
+                Kind: PluginSettingKind.Boolean
+            ),
+            new(
                 Key: SelectedVoiceSettingName,
                 Label: "Text-to-speech voice",
                 Description: "Choose the OpenAI text-to-speech voice.",
@@ -952,6 +1063,7 @@ public sealed class OpenAiPlugin
                 SelectedVoiceSettingName => _selectedVoiceId,
                 TtsInstructionsSettingName => _ttsInstructions,
                 ForgetChatGptLoginSettingName => _forgetChatGptLogin ? "true" : "false",
+                LlmStreamingSettings.StreamResponsesSettingKey => _streamResponses ? "true" : "false",
                 _ => null,
             }
         );
@@ -1007,7 +1119,16 @@ public sealed class OpenAiPlugin
             case ForgetChatGptLoginSettingName:
                 _forgetChatGptLogin = ParseBool(value);
                 break;
+            case LlmStreamingSettings.StreamResponsesSettingKey:
+                SetStreamResponses(ParseBool(value));
+                break;
         }
+    }
+
+    internal void SetStreamResponses(bool enabled)
+    {
+        _streamResponses = enabled;
+        _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
     }
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
@@ -1126,7 +1247,8 @@ public sealed class OpenAiPlugin
         string DisplayName,
         string ApiModelName,
         string ResponseFormat,
-        bool SupportsTranslation
+        bool SupportsTranslation,
+        bool SupportsStreaming = false
     );
 
     private sealed record OpenAiModelsResponse(List<OpenAiFetchedModel> Data);

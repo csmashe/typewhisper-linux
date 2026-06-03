@@ -49,6 +49,28 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
     public bool SupportsTranslation => false;
 
+    public bool SupportsStreaming => true;
+
+    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("Plugin not configured. API key required.");
+
+        // Speechmatics v2 requires an explicit language code; it has no automatic
+        // language detection. The host maps an "auto" profile to null before calling
+        // here, so reject null/empty/"auto" rather than silently streaming as English
+        // (which produces garbage for non-English audio). Mirrors the batch
+        // TranscribeAsync guard; throwing makes the host fall back to batch, which
+        // applies the same guard and surfaces a clear error.
+        var normalized = language?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(normalized) || normalized == "auto")
+            throw new NotSupportedException(
+                "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
+            );
+
+        return await SpeechmaticsStreamingSession.ConnectAsync(_apiKey!, normalized, ct);
+    }
+
     public void SelectModel(string modelId)
     {
         if (Models.All(m => m.Id != modelId))
@@ -68,17 +90,19 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         if (!IsConfigured)
             throw new InvalidOperationException("Plugin not configured. API key required.");
 
-        // Speechmatics v2 requires an explicit language code; "auto" is not supported.
-        // Surface this clearly rather than silently transcribing as English, which
-        // produces garbage output for non-English audio. Normalize first so " Auto " /
-        // "AUTO" / etc. from less-careful callers hit the same guard.
+        // Speechmatics v2 requires an explicit language code; it has no automatic
+        // language detection. Reject null/empty/"auto" rather than silently
+        // transcribing as English, which produces garbage output for non-English
+        // audio. Normalize first so " Auto " / "AUTO" / etc. from less-careful
+        // callers hit the same guard. Mirrors the StartStreamingAsync guard so the
+        // streaming→batch fallback path surfaces the same clear error.
         var normalized = language?.Trim().ToLowerInvariant();
-        if (normalized == "auto")
+        if (string.IsNullOrEmpty(normalized) || normalized == "auto")
             throw new NotSupportedException(
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
 
-        var lang = string.IsNullOrEmpty(normalized) ? "en" : normalized;
+        var lang = normalized;
 
         var config = JsonSerializer.Serialize(
             new

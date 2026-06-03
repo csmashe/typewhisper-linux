@@ -6,6 +6,15 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GoogleCloudStt;
 
+// NOTE (2026-05-29): This plugin is intentionally BATCH-ONLY for now — it does not
+// implement real-time streaming (no SupportsStreaming override). Other cloud STT
+// providers here stream over a WebSocket reusing their existing API key, but Google
+// has no REST/WebSocket real-time API: StreamingRecognize is gRPC-only. Adding it
+// would mean a heavy new gRPC + protobuf dependency (with AOT-trim risk) AND
+// migrating auth from the plain API key used below to a service-account / ADC
+// credential. That is a research spike, not a drop-in change, so it is parked:
+// leaving the plugin as-is until that cost is justified or a streaming reference
+// to follow exists.
 public sealed partial class GoogleCloudSttPlugin
     : ITranscriptionEnginePlugin,
         IPluginSettingsProvider

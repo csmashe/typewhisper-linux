@@ -12,6 +12,7 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class PromptPaletteService
 {
+    private readonly ActiveWindowService _activeWindow;
     private readonly PluginManager _pluginManager;
     private readonly PromptProcessingService _processing;
     private readonly IPromptActionService _promptActions;
@@ -25,7 +26,8 @@ public sealed class PromptPaletteService
         IPromptActionService promptActions,
         PromptProcessingService processing,
         TextInsertionService textInsertion,
-        PluginManager pluginManager
+        PluginManager pluginManager,
+        ActiveWindowService activeWindow
     )
     {
         _services = services;
@@ -33,6 +35,7 @@ public sealed class PromptPaletteService
         _processing = processing;
         _textInsertion = textInsertion;
         _pluginManager = pluginManager;
+        _activeWindow = activeWindow;
     }
 
     public async Task TogglePaletteAsync()
@@ -61,23 +64,39 @@ public sealed class PromptPaletteService
             return;
         }
 
+        // Capture the target window now, while the user's editor is still focused
+        // — the palette is about to steal focus. The paste re-activates this window
+        // before inserting (FocusTargetWindowAsync), so the result lands back in
+        // the editor even though the palette held focus while streaming.
+        var targetWindowId = _activeWindow.GetActiveWindowId();
+
         var capturedText = await _textInsertion.CaptureSelectedTextAsync();
 
         PromptAction? selectedAction = null;
+        PromptPaletteWindow? window = null;
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
-            var window = _services.GetRequiredService<PromptPaletteWindow>();
+            window = _services.GetRequiredService<PromptPaletteWindow>();
             window.SourceText = capturedText;
             window.SetActions(actions);
             selectedAction = await window.ShowAndWaitAsync();
         });
 
-        if (selectedAction is null || string.IsNullOrWhiteSpace(capturedText))
+        // On a null pick the window already closed itself (Complete(null)). On a
+        // real pick it stays open in its running state so the result can stream
+        // into it; ExecuteActionAsync owns closing it from here on.
+        if (selectedAction is null)
         {
             return;
         }
 
-        await ExecuteActionAsync(selectedAction, capturedText);
+        if (string.IsNullOrWhiteSpace(capturedText))
+        {
+            await CloseWindowAsync(window);
+            return;
+        }
+
+        await ExecuteActionAsync(selectedAction, capturedText, window, targetWindowId);
     }
 
     /// <summary>
@@ -97,19 +116,30 @@ public sealed class PromptPaletteService
             return;
         }
 
+        var targetWindowId = _activeWindow.GetActiveWindowId();
+
         var captured = await _textInsertion.CaptureSelectedTextAsync();
         if (string.IsNullOrWhiteSpace(captured))
         {
             return;
         }
 
-        await ExecuteActionAsync(action, captured);
+        // Direct-hotkey path: no palette window, so streaming has no UI sink
+        // (window: null → no-op renders). The result still streams + falls back
+        // to batch and is pasted exactly as before.
+        await ExecuteActionAsync(action, captured, window: null, targetWindowId);
     }
 
-    private async Task ExecuteActionAsync(PromptAction action, string capturedText)
+    private async Task ExecuteActionAsync(
+        PromptAction action,
+        string capturedText,
+        PromptPaletteWindow? window,
+        string? targetWindowId
+    )
     {
         if (!_processing.IsAnyProviderAvailable)
         {
+            await CloseWindowAsync(window);
             await ShowWarningAsync(
                 "TypeWhisper",
                 "No LLM provider available. Please configure an API key in Plugins."
@@ -117,29 +147,127 @@ public sealed class PromptPaletteService
             return;
         }
 
+        // userCts is tripped only by a genuine user abort — closing the palette or
+        // pressing Escape while it runs (wired via AttachRunCancellation). It is
+        // kept separate from the per-attempt timeout budgets so that a user abort
+        // skips both insertion and the batch fallback, while a streaming timeout /
+        // stall (no user action) still falls back to batch.
+        using var userCts = new CancellationTokenSource();
+        if (window is not null)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => window.AttachRunCancellation(userCts));
+        }
+
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            var result = await _processing.ProcessAsync(action, capturedText, cts.Token);
+            var result = await RunActionAsync(action, capturedText, window, userCts.Token);
+
+            // If the user aborted while the result was being finalized, do not
+            // paste a result they tried to cancel.
+            userCts.Token.ThrowIfCancellationRequested();
+
+            // Close the palette BEFORE inserting so focus returns to the target
+            // app and the paste lands where the user selected the text.
+            await CloseWindowAsync(window);
+
             var actionPlugin = ResolveActionPlugin(action);
             if (actionPlugin is not null)
             {
                 var context = new ActionContext(null, null, null, null, capturedText);
-                await actionPlugin.ExecuteAsync(result, context, cts.Token);
+                using var execCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                await actionPlugin.ExecuteAsync(result, context, execCts.Token);
                 return;
             }
 
-            await _textInsertion.InsertTextAsync(result);
+            await _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId);
         }
         catch (OperationCanceledException)
         {
-            /* best effort */
+            // User abort or everything timed out — best effort, no insertion.
+            await CloseWindowAsync(window);
         }
         catch (Exception ex)
         {
+            await CloseWindowAsync(window);
             Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
             await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    ///     Runs the prompt action, streaming into the palette when present, and
+    ///     returns the final text. A user abort (<paramref name="userToken" />)
+    ///     propagates as <see cref="OperationCanceledException" /> with no fallback;
+    ///     a streaming fault, an empty stream, or a streaming-attempt timeout that
+    ///     the user did NOT trigger falls back to a fresh batch request — so a
+    ///     provider whose streaming path stalls or breaks still degrades to the
+    ///     known-good batch path (keeps the default-on toggle safe).
+    /// </summary>
+    private async Task<string> RunActionAsync(
+        PromptAction action,
+        string capturedText,
+        PromptPaletteWindow? window,
+        CancellationToken userToken
+    )
+    {
+        // Stream the response into the palette's result area at ~30 Hz; the pump
+        // marshals each coalesced flush onto the UI thread.
+        var pump = new LlmStreamPump(accumulated =>
+            Dispatcher.UIThread.Post(() => window?.UpdateResult(accumulated))
+        );
+
+        using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(userToken);
+        streamCts.CancelAfter(TimeSpan.FromSeconds(60));
+
+        string streamed;
+        try
+        {
+            streamed = await pump.RunAsync(
+                _processing.ProcessStreamingAsync(action, capturedText, streamCts.Token),
+                streamCts.Token
+            );
+        }
+        catch (OperationCanceledException) when (userToken.IsCancellationRequested)
+        {
+            throw; // genuine user abort — do not fall back, do not insert.
+        }
+        catch (OperationCanceledException)
+        {
+            // Streaming stalled until the attempt timeout but the user did not
+            // cancel: treat it as a recoverable streaming failure and fall back.
+            return await BatchAsync(action, capturedText, userToken);
+        }
+
+        // Streaming→batch lossless fallback (mirrors DictationOrchestrator): retry
+        // once with the known-good batch path when the pump faulted OR the stream
+        // yielded nothing at all. A legitimately empty result delivered as a single
+        // chunk (toggle-off / bulk-yield) sets ReceivedAnyChunk, so it is NOT re-run.
+        return pump.Faulted || !pump.ReceivedAnyChunk
+            ? await BatchAsync(action, capturedText, userToken)
+            : streamed;
+    }
+
+    private async Task<string> BatchAsync(
+        PromptAction action,
+        string capturedText,
+        CancellationToken userToken
+    )
+    {
+        // Fresh timeout budget so a streaming attempt that burned its budget does
+        // not leave the batch fallback with no time to succeed.
+        using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(userToken);
+        batchCts.CancelAfter(TimeSpan.FromSeconds(60));
+        return await _processing.ProcessAsync(action, capturedText, batchCts.Token);
+    }
+
+    private static async Task CloseWindowAsync(PromptPaletteWindow? window)
+    {
+        if (window is null)
+        {
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(window.ClosePalette);
     }
 
     private IActionPlugin? ResolveActionPlugin(PromptAction action)

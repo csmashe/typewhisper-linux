@@ -51,11 +51,7 @@ public class XaiPluginTests
         Assert.Equal("xAI / Grok", sut.ProviderDisplayName);
         Assert.True(sut.IsConfigured);
         Assert.True(sut.IsAvailable);
-        // Streaming is not ported to the fork (see B1 / C5) — the polling
-        // orchestrator runs xAI STT via batch TranscribeAsync only, so the
-        // plugin leaves the ITranscriptionEnginePlugin.SupportsStreaming
-        // default (false) in place.
-        Assert.False(((ITranscriptionEnginePlugin)sut).SupportsStreaming);
+        Assert.True(sut.SupportsStreaming);
         Assert.False(sut.SupportsTranslation);
         Assert.Equal("grok-stt", sut.SelectedModelId);
         Assert.Equal(["grok-stt"], sut.TranscriptionModels.Select(m => m.Id).ToArray());
@@ -148,6 +144,126 @@ public class XaiPluginTests
     }
 
     [Fact]
+    public async Task ProcessStreamingAsync_StreamsResponsesApiDeltasInOrder()
+    {
+        string? capturedBody = null;
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.created\"}",
+            "",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}",
+            "",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"lo\"}",
+            "",
+            "data: {\"type\":\"response.completed\"}",
+            "",
+            "data: [DONE]",
+            "");
+        var handler = new CapturingHandler((request, body) =>
+        {
+            capturedBody = body;
+            Assert.Equal("https://api.x.ai/v1/responses", request.RequestUri?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+            };
+        });
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "xai-key";
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
+        Assert.Equal("grok-4.3", doc.RootElement.GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk()
+    {
+        var handler = new CapturingHandler((_, _) =>
+            JsonResponse("""{ "output_text": "bulk" }"""));
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "xai-key";
+        host.SetSetting("streamResponses", false);
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Single(chunks);
+        Assert.Equal("bulk", chunks[0]);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"response.output_text.delta","delta":"hi"}""", "hi")]
+    [InlineData("""{"type":"response.output_text.done","text":"ignored"}""", null)]
+    [InlineData("""{"type":"response.created"}""", null)]
+    [InlineData("not json", null)]
+    public void XaiResponsesClient_ParseStreamDelta_ExtractsOnlyDeltaFrames(string payload, string? expected)
+    {
+        Assert.Equal(expected, XaiResponsesClient.ParseStreamDelta(payload));
+    }
+
+    [Theory]
+    [InlineData("""{"type":"error","error":{"message":"boom"}}""", "boom")]
+    [InlineData("""{"type":"error","message":"top-level boom"}""", "top-level boom")]
+    [InlineData("""{"type":"response.failed","response":{"error":{"message":"failed badly"}}}""", "failed badly")]
+    [InlineData("""{"type":"response.output_text.delta","delta":"hi"}""", null)]
+    [InlineData("""{"type":"response.completed"}""", null)]
+    [InlineData("not json", null)]
+    public void XaiResponsesClient_ParseStreamError_DetectsFailureFrames(string payload, string? expected)
+    {
+        Assert.Equal(expected, XaiResponsesClient.ParseStreamError(payload));
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsOnResponseFailedFrameAfterPartialDeltas()
+    {
+        // A Responses stream returns 200 then can fail mid-flight via a typed
+        // frame. The reader must throw so LlmStreamPump faults and the caller
+        // falls back to batch, rather than committing the partial deltas as success.
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}",
+            "",
+            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"server overloaded\"}}}",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices();
+        host.Secrets["api-key"] = "xai-key";
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+                chunks.Add(chunk);
+        });
+
+        Assert.Equal(new[] { "Hel" }, chunks);
+        Assert.Contains("server overloaded", ex.Message);
+    }
+
+    [Fact]
     public void XaiResponsesClient_ParseResponse_ExtractsNestedOutputText()
     {
         var result = XaiResponsesClient.ParseResponse("""
@@ -225,6 +341,215 @@ public class XaiPluginTests
             sut.TranscribeAsync([1, 2, 3], "en", translate: true, prompt: null, CancellationToken.None));
 
         Assert.Contains("does not support translation", ex.Message);
+    }
+
+    [Fact]
+    public void StreamingSession_BuildsExpectedUriAndExposesAuthHeader()
+    {
+        var uri = XaiStreamingSession.BuildStreamingUri("de", interimResults: true);
+        Assert.Equal("wss", uri.Scheme);
+        Assert.Equal("api.x.ai", uri.Host);
+        Assert.Equal("/v1/stt", uri.AbsolutePath);
+        Assert.Contains("sample_rate=16000", uri.Query);
+        Assert.Contains("encoding=pcm", uri.Query);
+        Assert.Contains("interim_results=true", uri.Query);
+        Assert.Contains("language=de", uri.Query);
+
+        var headers = XaiStreamingSession.CreateStreamingHeaders("xai-key");
+        Assert.Equal("Bearer xai-key", headers["Authorization"]);
+    }
+
+    [Fact]
+    public void TranscriptCollector_EmitsPerSegmentDeltasAndSuppressesCumulativeFinals()
+    {
+        // Coordinator contract: every IsFinal=true event appends to
+        // _finalSegments. Cumulative final text would double-append, so the
+        // collector must emit segment deltas only.
+        var collector = new XaiTranscriptCollector();
+
+        Assert.Null(collector.ApplyEvent("""{"type":"transcript.created"}"""));
+
+        // Non-final partial: interim text passes through.
+        var interim = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":false,"speech_final":false}""");
+        Assert.NotNull(interim);
+        Assert.Equal("hello", interim!.Text);
+        Assert.False(interim.IsFinal);
+
+        // First final segment.
+        var seg1 = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello world","is_final":true,"speech_final":false}""");
+        Assert.NotNull(seg1);
+        Assert.Equal("hello world", seg1!.Text);
+        Assert.True(seg1.IsFinal);
+
+        // Second final segment: emits the new segment as a delta (not cumulative).
+        var seg2 = collector.ApplyEvent("""{"type":"transcript.partial","text":"how are you","is_final":true,"speech_final":false}""");
+        Assert.NotNull(seg2);
+        Assert.Equal("how are you", seg2!.Text);
+
+        // speech_final=true after per-segment finals is xAI's cumulative
+        // summary — must be suppressed to avoid re-appending.
+        var summary = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello world how are you","is_final":true,"speech_final":true}""");
+        Assert.Null(summary);
+
+        // transcript.done after finals is also cumulative; suppress.
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world how are you","language":"en","duration":1.25}""");
+        Assert.Null(done);
+
+        // FinalResult (used outside the coordinator path) reflects metadata + done text.
+        var final = collector.FinalResult("en");
+        Assert.Equal("hello world how are you", final.Text);
+        Assert.Equal("en", final.DetectedLanguage);
+        Assert.Equal(1.25, final.DurationSeconds);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneEmitsSuffixWhenItExtendsPriorFinals()
+    {
+        // Regression: previously the done event was suppressed any time
+        // per-segment finals had arrived, dropping a trailing utterance that
+        // xAI only finalized via transcript.done. Now the done text is
+        // checked against the joined finals — exact match suppresses, but a
+        // strict extension (joined + " " + suffix) emits the suffix as a
+        // delta so the coordinator captures the tail.
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","language":"en","duration":0.5}""");
+        Assert.NotNull(done);
+        Assert.Equal("world", done!.Text);
+        Assert.True(done.IsFinal);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneSuppressesExactCumulative()
+    {
+        // The other half of the extends-prior-finals rule: when done text
+        // matches the joined finals exactly, it's a redundant summary and
+        // must NOT re-emit (would double-append).
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+        collector.ApplyEvent("""{"type":"transcript.partial","text":"world","is_final":true,"speech_final":false}""");
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","language":"en","duration":0.5}""");
+        Assert.Null(done);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneEmitsAsFinalWhenNoSegmentFinalsArrived()
+    {
+        // Edge case: xAI sends transcript.done without preceding per-segment
+        // finals. The done text must reach the coordinator as a single final.
+        var collector = new XaiTranscriptCollector();
+
+        Assert.Null(collector.ApplyEvent("""{"type":"transcript.created"}"""));
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"single shot transcript","language":"en","duration":0.5}""");
+        Assert.NotNull(done);
+        Assert.Equal("single shot transcript", done!.Text);
+        Assert.True(done.IsFinal);
+    }
+
+    [Fact]
+    public void TranscriptCollector_IsTerminalFlipsOnDoneEvent()
+    {
+        // The session uses this to unblock FinalizeAsync as soon as xAI
+        // declares the stream complete.
+        var collector = new XaiTranscriptCollector();
+        Assert.False(collector.IsTerminal);
+
+        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+        Assert.False(collector.IsTerminal);
+
+        collector.ApplyEvent("""{"type":"transcript.done","text":"hello","language":"en","duration":0.5}""");
+        Assert.True(collector.IsTerminal);
+    }
+
+    [Fact]
+    public void TranscriptCollector_SpeechFinalOnFreshSegmentIsNotSuppressed()
+    {
+        // speech_final=true alone is NOT a cumulative-summary signal — it's
+        // just an end-of-utterance marker that can appear on a normal final
+        // segment. The cumulative-summary suppression only fires when the
+        // text actually starts with the joined existing finals.
+        var collector = new XaiTranscriptCollector();
+
+        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"first","is_final":true,"speech_final":false}""");
+        Assert.NotNull(first);
+        Assert.Equal("first", first!.Text);
+
+        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"second","is_final":true,"speech_final":true}""");
+        Assert.NotNull(second);
+        Assert.Equal("second", second!.Text);
+        Assert.True(second.IsFinal);
+    }
+
+    [Fact]
+    public void TranscriptCollector_SpeechFinalPrefixWithoutWordBoundaryIsNotSuppressed()
+    {
+        // Regression: bare StartsWith would suppress a fresh segment that
+        // happens to begin with the same letters as the previous final
+        // (e.g. previous "I", next "I'm here"). The cumulative-summary
+        // suppression must require the prefix to end on a word boundary.
+        var collector = new XaiTranscriptCollector();
+
+        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"I","is_final":true,"speech_final":false}""");
+        Assert.Equal("I", first?.Text);
+
+        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"I'm here","is_final":true,"speech_final":true}""");
+        Assert.NotNull(second);
+        Assert.Equal("I'm here", second!.Text);
+        Assert.True(second.IsFinal);
+    }
+
+    [Fact]
+    public void TranscriptCollector_PreservesRepeatedFinalSegments()
+    {
+        // A user genuinely saying the same word twice (e.g. "yes" then "yes")
+        // produces two finalized segments with identical text. Both must
+        // reach the coordinator — exact-text alone is not a retransmission
+        // signal, only cumulative speech_final=true after segment finals is.
+        var collector = new XaiTranscriptCollector();
+
+        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"yes","is_final":true,"speech_final":false}""");
+        Assert.NotNull(first);
+        Assert.Equal("yes", first!.Text);
+
+        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"yes","is_final":true,"speech_final":false}""");
+        Assert.NotNull(second);
+        Assert.Equal("yes", second!.Text);
+        Assert.True(second.IsFinal);
+    }
+
+    [Fact]
+    public void TranscriptCollector_ThrowsOnProviderErrorEvent()
+    {
+        // Receive loop relies on this throw to capture _receiveLoopException
+        // and surface it on the next SendAudioAsync / FinalizeAsync call —
+        // the coordinator's sender then faults and triggers batch fallback.
+        var collector = new XaiTranscriptCollector();
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            collector.ApplyEvent("""{"type":"error","error":{"message":"quota exceeded"}}"""));
+        Assert.Contains("quota exceeded", ex.Message);
+
+        var bareEx = Assert.Throws<InvalidOperationException>(() =>
+            collector.ApplyEvent("""{"type":"error"}"""));
+        Assert.Contains("Unknown xAI STT error", bareEx.Message);
+    }
+
+    [Fact]
+    public async Task StartStreamingAsync_ThrowsWhenNotConfigured()
+    {
+        var host = new TestPluginHostServices();
+        var sut = new XaiPlugin();
+        await sut.ActivateAsync(host);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.StartStreamingAsync(language: null, CancellationToken.None));
+
+        Assert.Contains("API key required", ex.Message);
     }
 
     [Fact]
@@ -349,6 +674,7 @@ public class XaiPluginTests
                 "api-key",
                 "selectedModel",
                 "selectedLlmModel",
+                "streamResponses",
                 "selectedVoice",
                 "customVoiceId",
                 "ttsLowLatency",

@@ -12,9 +12,20 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai";
     private const string DefaultModel = "gemini-2.5-flash";
 
-    private readonly HttpClient _httpClient = new();
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
+    private bool _streamResponses = true;
+
+    public GeminiPlugin()
+        : this(new HttpClient())
+    {
+    }
+
+    internal GeminiPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
 
     public string PluginId => "com.typewhisper.gemini";
     public string PluginName => "Google Gemini";
@@ -28,6 +39,7 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         // every request while IsAvailable still reports true.
         var loaded = await host.LoadSecretAsync("api-key");
         _apiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
+        _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsAvailable})");
     }
 
@@ -69,6 +81,36 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
             userText,
             ct
         );
+    }
+
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        if (!_streamResponses)
+        {
+            yield return await ProcessAsync(systemPrompt, userText, model, ct);
+            yield break;
+        }
+
+        if (!IsAvailable)
+            throw new InvalidOperationException("API key not configured");
+
+        var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            model,
+            systemPrompt,
+            userText,
+            ct
+        );
+
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
     }
 
     internal string? ApiKey => _apiKey;
@@ -118,10 +160,25 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
                 Placeholder: "AIza...",
                 Description: "Required for Gemini LLM requests."
             ),
+            new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: "Stream responses",
+                Description: "Render prompt-action output token-by-token as it is "
+                    + "generated, instead of waiting for the full reply.",
+                Kind: PluginSettingKind.Boolean
+            ),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key == "api-key" ? _apiKey : null);
+        Task.FromResult(
+            key switch
+            {
+                "api-key" => _apiKey,
+                LlmStreamingSettings.StreamResponsesSettingKey
+                    => _streamResponses ? "true" : "false",
+                _ => null,
+            }
+        );
 
     public async Task SetSettingValueAsync(
         string key,
@@ -129,11 +186,25 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         CancellationToken ct = default
     )
     {
-        if (key != "api-key")
-            return;
-
-        await SetApiKeyAsync(value ?? string.Empty);
+        switch (key)
+        {
+            case "api-key":
+                await SetApiKeyAsync(value ?? string.Empty);
+                break;
+            case LlmStreamingSettings.StreamResponsesSettingKey:
+                SetStreamResponses(ParseBool(value));
+                break;
+        }
     }
+
+    private void SetStreamResponses(bool enabled)
+    {
+        _streamResponses = enabled;
+        _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
+    }
+
+    private static bool ParseBool(string? value) =>
+        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {

@@ -30,6 +30,7 @@ public sealed class AudioRecordingService : IDisposable
     private readonly List<float[]> _sampleChunks = [];
     private readonly object _sampleLock = new();
     private int _captureSampleRate = SampleRate;
+    internal int CaptureSampleRate => _captureSampleRate;
     private float _currentRmsLevel;
     private int _disposed;
     private int _isPreviewing;
@@ -38,9 +39,12 @@ public sealed class AudioRecordingService : IDisposable
     private int _sampleCount;
     private PaStream? _stream;
 
+    // PortAudio is initialized lazily on first stream use (EnsureInputStreamStarted)
+    // and by GetInputDevices, both via the idempotent EnsurePortAudioInitialized.
+    // Constructing the service no longer loads the native library, so the
+    // buffer-processing path can be unit-tested on hosts without portaudio.
     public AudioRecordingService()
     {
-        EnsurePortAudioInitialized();
     }
 
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
@@ -348,6 +352,19 @@ public sealed class AudioRecordingService : IDisposable
 
     public event EventHandler<float>? LevelChanged;
 
+    // Per-frame tap fired from the PortAudio realtime thread when copySamples
+    // is true. Realtime-thread contract: invocation must be allocation-free
+    // and non-blocking; the sink borrows processedBuffer (freshly allocated
+    // per callback — no defensive copy). A throw is caught and the sink is
+    // detached so the same exception can't fire every frame and kill capture.
+    // Stays null in production until the Phase-4 coordinator wires it.
+    private Action<float[]>? _liveFrameSink;
+    internal Action<float[]>? LiveFrameSink
+    {
+        get => _liveFrameSink;
+        set => _liveFrameSink = value;
+    }
+
     private StreamCallbackResult InputAudioCallback(
         IntPtr input,
         IntPtr output,
@@ -380,9 +397,46 @@ public sealed class AudioRecordingService : IDisposable
                 _sampleChunks.Add(processedBuffer);
                 _sampleCount += processedBuffer.Length;
             }
+
+            var sink = _liveFrameSink;
+            if (sink is not null)
+            {
+                try
+                {
+                    sink(processedBuffer);
+                }
+                catch (Exception ex)
+                {
+                    // Catch-Exception is deliberate: the only worse outcome is
+                    // crashing the PortAudio realtime thread. Detach via CAS so
+                    // a newer sink installed by a concurrent stop/start (Phase 4
+                    // session rewiring) isn't clobbered by an older throw.
+                    Trace.WriteLine(
+                        $"[AudioRecordingService] LiveFrameSink threw, detaching: {ex.Message}"
+                    );
+                    Interlocked.CompareExchange(ref _liveFrameSink, null, sink);
+                }
+            }
         }
 
         return StreamCallbackResult.Continue;
+    }
+
+    internal StreamCallbackResult ProcessAudioBufferForTest(float[] frame, bool copySamples)
+    {
+        var handle = GCHandle.Alloc(frame, GCHandleType.Pinned);
+        try
+        {
+            return ProcessAudioBuffer(
+                handle.AddrOfPinnedObject(),
+                (uint)frame.Length,
+                copySamples
+            );
+        }
+        finally
+        {
+            handle.Free();
+        }
     }
 
     private void UpdateLevel(float level)
@@ -453,6 +507,8 @@ public sealed class AudioRecordingService : IDisposable
         {
             return true;
         }
+
+        EnsurePortAudioInitialized();
 
         var deviceIndex = ResolveSelectedDeviceIndex();
         if (deviceIndex is null)
@@ -653,7 +709,7 @@ public sealed class AudioRecordingService : IDisposable
         return ms.ToArray();
     }
 
-    private static short ToPcm16(float sample)
+    internal static short ToPcm16(float sample)
     {
         var clamped = Math.Clamp(sample, -1f, 1f);
         return (short)(clamped * short.MaxValue);

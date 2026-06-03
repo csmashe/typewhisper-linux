@@ -25,7 +25,12 @@ internal sealed record RecordingContext(
     string? WindowId,
     Profile? Profile,
     CancellationToken CancelToken,
-    string RecoveredPartialPreview
+    string RecoveredPartialPreview,
+    string? StreamingFinalText,
+    bool StreamingFaulted,
+    string? StreamingProviderId,
+    string? StreamingModelId,
+    string? StreamingLanguageHint
 );
 
 public sealed class DictationOrchestrator : IDisposable
@@ -46,6 +51,11 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly ModelManagerService _models;
     private readonly object _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
+    private StreamingTranscriptionCoordinator? _streamingCoordinator;
+    private CancellationTokenSource? _streamingStartupCts;
+    private string? _streamingProviderId;
+    private string? _streamingModelId;
+    private string? _streamingLanguageHint;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
@@ -258,6 +268,37 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         ShutdownPartialTranscriptionSession();
+
+        // Tear down any live streaming session on dispose. Dispose is
+        // synchronous; null the audio tap and snapshot the coordinator before
+        // awaiting close so no stray frames or shared-field reads can race
+        // teardown.
+        var disposingCoordinator = _streamingCoordinator;
+        var disposingStartupCts = _streamingStartupCts;
+        _streamingCoordinator = null;
+        _streamingStartupCts = null;
+        _streamingProviderId = null;
+        _streamingModelId = null;
+        _streamingLanguageHint = null;
+        if (disposingCoordinator is not null)
+        {
+            _audio.LiveFrameSink = null;
+        }
+        var streamingTeardown = TeardownStreamingSessionAsync(
+            disposingCoordinator,
+            disposingStartupCts,
+            finalize: false,
+            CancellationToken.None
+        );
+        try
+        {
+            streamingTeardown.Wait(TimeSpan.FromMilliseconds(500));
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Streaming teardown on dispose failed: {ex.Message}");
+        }
+
         try
         {
             _recordingSnapshotTask?.Wait(TimeSpan.FromMilliseconds(300));
@@ -433,6 +474,7 @@ public sealed class DictationOrchestrator : IDisposable
                         FeedbackIsError = false,
                         FeedbackText = null,
                         PartialText = null,
+                        LlmResponseText = null,
                         IsRecording = true,
                         StatusText = "Recording… press the hotkey again to stop.",
                         ActiveProfileName = null,
@@ -440,13 +482,69 @@ public sealed class DictationOrchestrator : IDisposable
                         SessionStartedAtUtc = DateTime.UtcNow
                     }
                 );
-                StartPartialTranscriptionSession();
+                // Bump the partial-transcript session version ONCE per recording.
+                // Both the polling loop (always) and the streaming coordinator
+                // (when active) share this version so partials from either path
+                // pass the IsCurrentSession guard. Bumping twice would invalidate
+                // the streaming session immediately after starting it.
+                var sessionVersion = _partialTranscriptState.StartSession();
+
+                var startupSettings = _settings.Current;
+                var startupLanguage =
+                    _recordingProfile?.InputLanguage ?? startupSettings.Language;
+                var startupLanguageHint =
+                    startupLanguage is { Length: > 0 } lang && lang != "auto"
+                        ? lang
+                        : null;
+                var startupPlugin = _models.ActiveTranscriptionPlugin;
+                var startupMode = LinuxLiveTranscriptionStartupPolicy.Select(
+                    startupSettings, startupPlugin);
+                // StartStreamingAsync exposes only a language hint — there's no
+                // way to request translation through the streaming endpoint, so
+                // the final path rejects streaming results when `translate` is
+                // selected. Skip the WebSocket entirely in that case to avoid
+                // burning provider bandwidth on a session we'd discard.
+                var startupTaskName =
+                    _recordingProfile?.SelectedTask ?? startupSettings.TranscriptionTask;
+                var startupIsTranslate = string.Equals(
+                    startupTaskName, "translate", StringComparison.OrdinalIgnoreCase
+                );
+
+                if (
+                    startupMode == LiveTranscriptionMode.Streaming
+                    && startupPlugin is not null
+                    && !startupIsTranslate
+                )
+                {
+                    StartStreamingTranscriptionSession(
+                        startupPlugin, startupLanguageHint, sessionVersion);
+                }
+
+                // Always start the partial loop — it drives silence-auto-stop.
+                // When streaming is the active mode the in-loop policy check
+                // short-circuits PollPartialTranscriptOnceAsync so polling
+                // stays a no-op while streaming feeds partials directly.
+                StartPartialTranscriptionSession(sessionVersion);
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Dictation] Post-start setup failed: {ex}");
                 RollBackStartedRecording();
                 _ = await StopPartialTranscriptionSessionAsync();
+                var faultedCoordinator = _streamingCoordinator;
+                var faultedStartupCts = _streamingStartupCts;
+                _streamingCoordinator = null;
+                _streamingStartupCts = null;
+                _streamingProviderId = null;
+                _streamingModelId = null;
+                _streamingLanguageHint = null;
+                _audio.LiveFrameSink = null;
+                _ = await TeardownStreamingSessionAsync(
+                    faultedCoordinator,
+                    faultedStartupCts,
+                    finalize: false,
+                    CancellationToken.None
+                );
                 throw;
             }
 
@@ -750,11 +848,34 @@ public sealed class DictationOrchestrator : IDisposable
             // Capture the just-stopped session id in the context so the
             // post-stop pipeline can suppress overlay/status writes once a
             // newer dictation has taken ownership of the overlay.
+            // Snapshot the streaming coordinator and the bound engine identity
+            // BEFORE releasing the toggle gate. After release, a new StartAsync
+            // can install a fresh _streamingCoordinator on the shared field; if
+            // we read the field from the finalize/dispose path below we'd tear
+            // down the new recording's session instead of this one's. Detach
+            // the audio tap too so the next dictation's StartRecording cannot
+            // briefly feed frames into the just-finished coordinator.
+            StreamingTranscriptionCoordinator? stoppedStreamingCoordinator;
+            CancellationTokenSource? stoppedStreamingStartupCts;
+            string? stoppedStreamingProviderId;
+            string? stoppedStreamingModelId;
+            string? stoppedStreamingLanguageHint;
             RecordingContext recordingContext;
             lock (_recordingSessionLock)
             {
                 var stoppedSessionId = _recordingSession;
                 _recordingSession++;
+                stoppedStreamingCoordinator = _streamingCoordinator;
+                stoppedStreamingStartupCts = _streamingStartupCts;
+                stoppedStreamingProviderId = _streamingProviderId;
+                stoppedStreamingModelId = _streamingModelId;
+                stoppedStreamingLanguageHint = _streamingLanguageHint;
+                _streamingCoordinator = null;
+                _streamingStartupCts = null;
+                _streamingProviderId = null;
+                _streamingModelId = null;
+                _streamingLanguageHint = null;
+
                 recordingContext = new RecordingContext(
                     stoppedSessionId,
                     _recordingStart,
@@ -764,7 +885,12 @@ public sealed class DictationOrchestrator : IDisposable
                     _recordingWindowId,
                     _recordingProfile,
                     snapshotCts?.Token ?? CancellationToken.None,
-                    recoveredPartialPreview
+                    recoveredPartialPreview,
+                    StreamingFinalText: null,
+                    StreamingFaulted: false,
+                    StreamingProviderId: stoppedStreamingProviderId,
+                    StreamingModelId: stoppedStreamingModelId,
+                    StreamingLanguageHint: stoppedStreamingLanguageHint
                 );
 
                 _recordingAppProcess = null;
@@ -773,6 +899,11 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingWindowId = null;
                 _recordingProfile = null;
                 _recordingStart = default;
+            }
+
+            if (stoppedStreamingCoordinator is not null)
+            {
+                _audio.LiveFrameSink = null;
             }
 
             // Release the toggle gate now: audio capture is fully torn down
@@ -808,6 +939,12 @@ public sealed class DictationOrchestrator : IDisposable
                             wav
                         )
                     }
+                );
+                _ = await TeardownStreamingSessionAsync(
+                    stoppedStreamingCoordinator,
+                    stoppedStreamingStartupCts,
+                    finalize: false,
+                    CancellationToken.None
                 );
                 FinalizeSession(recordingContext.SessionId, "canceled", "Canceled");
                 return;
@@ -851,6 +988,12 @@ public sealed class DictationOrchestrator : IDisposable
                     }
                 );
                 StatusMessage?.Invoke(this, "Too short");
+                _ = await TeardownStreamingSessionAsync(
+                    stoppedStreamingCoordinator,
+                    stoppedStreamingStartupCts,
+                    finalize: false,
+                    CancellationToken.None
+                );
                 FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
                 return;
             }
@@ -870,8 +1013,37 @@ public sealed class DictationOrchestrator : IDisposable
                     }
                 );
                 StatusMessage?.Invoke(this, "No speech detected");
+                _ = await TeardownStreamingSessionAsync(
+                    stoppedStreamingCoordinator,
+                    stoppedStreamingStartupCts,
+                    finalize: false,
+                    CancellationToken.None
+                );
                 FinalizeSession(recordingContext.SessionId, "discarded", "No speech detected");
                 return;
+            }
+
+            // Normal stop path: streaming finalize must run BEFORE pad/save so
+            // the trailing FinalizeAsync flush captures any partials emitted
+            // during the EOF grace window. Rebind recordingContext via `with`
+            // so TranscribeAndInsertAsync sees the streaming results. Read
+            // fault state from the just-torn-down coordinator (returned by the
+            // helper) — never from a shared field that a racing StartAsync
+            // could have reset.
+            if (stoppedStreamingCoordinator is not null)
+            {
+                var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
+                var (streamingFinalText, streamingFaulted) = await TeardownStreamingSessionAsync(
+                    stoppedStreamingCoordinator,
+                    stoppedStreamingStartupCts,
+                    finalize: true,
+                    streamingCancelToken
+                );
+                recordingContext = recordingContext with
+                {
+                    StreamingFinalText = streamingFinalText,
+                    StreamingFaulted = streamingFaulted
+                };
             }
 
             wav = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(wav, duration);
@@ -1063,13 +1235,77 @@ public sealed class DictationOrchestrator : IDisposable
             PluginTranscriptionResult? result;
             try
             {
-                result = await plugin.TranscribeAsync(
-                    wav,
+                // Streaming bound itself to whatever plugin was active at
+                // recording start. If a profile override (resolved post-start)
+                // or any other model swap pushed the effective transcription
+                // model to a different engine, the streaming transcript would
+                // come from a different engine/model than the user expects —
+                // refuse it and fall through to batch on the captured WAV.
+                // The same race applies to the language hint: streaming starts
+                // with the global settings language because the active-window
+                // snapshot hasn't resolved a profile yet; if the profile's
+                // InputLanguage differs from the global, the streaming text
+                // was transcribed under the wrong hint and must be discarded.
+                //
+                // Translate task is also incompatible: StartStreamingAsync
+                // takes only a language hint, so the streaming endpoint can't
+                // honor `translate`. Fall through to batch when translation
+                // is requested.
+                var streamingEngineMatches =
+                    context.StreamingProviderId is not null
+                    && string.Equals(
+                        context.StreamingProviderId,
+                        plugin.ProviderId,
+                        StringComparison.Ordinal
+                    )
+                    && string.Equals(
+                        context.StreamingModelId,
+                        plugin.SelectedModelId,
+                        StringComparison.Ordinal
+                    );
+                var streamingLanguageMatches = string.Equals(
+                    context.StreamingLanguageHint,
                     languageHint,
-                    translate,
-                    null,
-                    cancelToken
+                    StringComparison.Ordinal
                 );
+
+                if (
+                    !string.IsNullOrWhiteSpace(context.StreamingFinalText)
+                    && !context.StreamingFaulted
+                    && streamingEngineMatches
+                    && streamingLanguageMatches
+                    && !translate
+                )
+                {
+                    // Streaming gave us a clean final transcript — skip the
+                    // redundant batch call. Saves a TranscribeAsync round-trip
+                    // in the hot path.
+                    result = new PluginTranscriptionResult(
+                        Text: context.StreamingFinalText!,
+                        DetectedLanguage: languageHint,
+                        DurationSeconds: duration
+                    );
+                }
+                else
+                {
+                    // Streaming produced nothing OR faulted (or wasn't running
+                    // at all). Fall back to batch on the captured WAV.
+                    //
+                    // DELIBERATE FORK DIVERGENCE: upstream's
+                    // StreamingHandler.cs:290 (CleanupStreamingSessionAfterFailure)
+                    // leaves the user with whatever transcript was accumulated
+                    // before the fault. The fork's audio tap is non-destructive
+                    // — _sampleChunks keeps accumulating in parallel with
+                    // streaming — so the WAV is complete at stop time and
+                    // batch fallback is lossless.
+                    result = await plugin.TranscribeAsync(
+                        wav,
+                        languageHint,
+                        translate,
+                        null,
+                        cancelToken
+                    );
+                }
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
@@ -1566,7 +1802,45 @@ public sealed class DictationOrchestrator : IDisposable
             var message = $"Running prompt action '{promptAction.Name}'...";
             Trace.WriteLine($"[Dictation] {message}");
             ReportStatus(context, message);
-            return await _promptProcessing.ProcessAsync(promptAction, text, token);
+
+            var pump = new LlmStreamPump(accumulated =>
+            {
+                SetOverlayState(state => state with { LlmResponseText = accumulated });
+                _models.PluginManager.EventBus.Publish(
+                    new LlmResponseTokenEvent
+                    {
+                        AccumulatedText = accumulated,
+                        StepName = PostProcessingStepNames.Llm
+                    });
+            });
+
+            var streamed = await pump.RunAsync(
+                _promptProcessing.ProcessStreamingAsync(promptAction, text, token),
+                token);
+
+            // Streaming→batch lossless fallback: retry once with the known-good
+            // batch path before the step is allowed to fail (RequireLlmSuccess)
+            // when either the pump faulted (mid-stream error / parse failure) OR
+            // the stream yielded nothing at all (proxy EOF, empty 200, silent
+            // parser regression) — those leave Faulted false, so ReceivedAnyChunk
+            // is what stops an empty stream from erasing the prompt-action output.
+            // A legitimately empty result delivered as a single chunk (toggle-off /
+            // bulk-yield) sets ReceivedAnyChunk, so it is NOT retried — that lone
+            // chunk is already a completed ProcessAsync call.
+            var result = pump.Faulted || !pump.ReceivedAnyChunk
+                ? await _promptProcessing.ProcessAsync(promptAction, text, token)
+                : streamed;
+
+            _models.PluginManager.EventBus.Publish(
+                new LlmResponseTokenEvent
+                {
+                    AccumulatedText = result,
+                    IsFinal = true,
+                    Faulted = pump.Faulted,
+                    StepName = PostProcessingStepNames.Llm
+                });
+
+            return result;
         }
         catch (OperationCanceledException)
         {
@@ -1996,6 +2270,7 @@ public sealed class DictationOrchestrator : IDisposable
                 FeedbackIsError = isError,
                 FeedbackText = text,
                 PartialText = null,
+                LlmResponseText = null,
                 IsRecording = false,
                 ActiveProfileName = null,
                 ActiveAppName = null,
@@ -2085,6 +2360,7 @@ public sealed class DictationOrchestrator : IDisposable
                 FeedbackIsError = false,
                 FeedbackText = null,
                 PartialText = null,
+                LlmResponseText = null,
                 IsRecording = false,
                 StatusText = "Ready",
                 ActiveProfileName = null,
@@ -2108,18 +2384,134 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private void StartPartialTranscriptionSession()
+    private void StartPartialTranscriptionSession(int sessionVersion)
     {
         _partialTranscriptionCts?.Cancel();
         _partialTranscriptionCts?.Dispose();
 
         _lastPublishedPartialText = null;
-        var sessionVersion = _partialTranscriptState.StartSession();
         var cts = new CancellationTokenSource();
         _partialTranscriptionCts = cts;
         _partialTranscriptionTask = Task.Run(() =>
             RunPartialTranscriptionLoopAsync(sessionVersion, cts.Token)
         );
+    }
+
+    private void StartStreamingTranscriptionSession(
+        ITranscriptionEnginePlugin plugin,
+        string? language,
+        int sessionVersion
+    )
+    {
+        var coordinator = new StreamingTranscriptionCoordinator(
+            plugin,
+            language,
+            sessionVersion,
+            onPartial: TryPublishPartialTranscript,
+            onFault: ex =>
+            {
+                // Coordinator already sets its own Faulted flag — just log.
+                // Keeping fault state per-coordinator avoids cross-session
+                // races (rapid stop/start) where a shared field could be
+                // reset by a new dictation before the previous teardown reads it.
+                Trace.WriteLine(
+                    $"[Dictation] Streaming fault: {ex.GetType().Name}: {ex.Message}"
+                );
+            }
+        );
+
+        // Wire the audio tap BEFORE StartAsync resolves so frames captured
+        // during the connect handshake queue in the coordinator's pending
+        // buffer (1 MB cap, drop-oldest). Detached in
+        // TeardownStreamingSessionAsync.
+        _audio.LiveFrameSink = samples =>
+            coordinator.AcceptAudioFrame(samples, _audio.CaptureSampleRate);
+
+        // Owns cancellation of the queued connect handshake. The coordinator
+        // creates its own internal _cts inside StartAsync, but if teardown
+        // runs BEFORE the queued Task.Run executes, the coordinator's _cts
+        // doesn't exist yet — DisposeAsync's _cts?.Cancel() is a no-op and
+        // the plugin's StartStreamingAsync would still fire after the recording
+        // had ended. Owning a startup CTS here lets teardown cancel the
+        // connect at any point in its lifecycle.
+        var startupCts = new CancellationTokenSource();
+        _streamingStartupCts = startupCts;
+
+        _streamingCoordinator = coordinator;
+        // Capture the engine identity AND language hint bound to this
+        // streaming session so the post-stop path can detect a profile-driven
+        // model swap or language switch (the active-window snapshot resolves
+        // a profile asynchronously, so streaming may have started before the
+        // profile's InputLanguage / TranscriptionModelOverride was known) and
+        // refuse to insert a streaming transcript that was transcribed under
+        // the wrong settings. SelectedModelId is set during plugin activation
+        // and is stable for the recording's duration.
+        _streamingProviderId = plugin.ProviderId;
+        _streamingModelId = plugin.SelectedModelId;
+        _streamingLanguageHint = language;
+
+        // Fire-and-forget the connect. The coordinator owns its internal CTS
+        // and its own Faulted flag once StartAsync runs; before then, our
+        // startupCts is the only thing teardown can cancel.
+        _ = Task.Run(async () =>
+        {
+            if (startupCts.IsCancellationRequested) return;
+            try
+            {
+                await coordinator.StartAsync(startupCts.Token);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Unexpected streaming start error: {ex.Message}"
+                );
+            }
+        });
+    }
+
+    private async Task<(string? FinalText, bool Faulted)> TeardownStreamingSessionAsync(
+        StreamingTranscriptionCoordinator? coordinator,
+        CancellationTokenSource? startupCts,
+        bool finalize,
+        CancellationToken ct
+    )
+    {
+        // Cancel the startup CTS only on non-finalize paths (cancel / discard
+        // / dispose). On the finalize path the coordinator's internal _cts is
+        // linked from this token; cancelling here would propagate into
+        // RunSenderAsync's ReadAllAsync(ct) and abort the queued-audio drain
+        // mid-FinalizeAsync, truncating the streamed transcript. DisposeAsync
+        // (called below after FinalizeAsync) cancels the coordinator's _cts
+        // anyway, so the startup CTS gets implicitly cancelled too.
+        if (startupCts is not null && !finalize)
+        {
+            try { startupCts.Cancel(); } catch { /* ignore */ }
+        }
+
+        if (coordinator is null)
+        {
+            startupCts?.Dispose();
+            return (null, false);
+        }
+
+        string? finalText = null;
+        var finalizeThrew = false;
+        if (finalize)
+        {
+            try
+            {
+                finalText = await coordinator.FinalizeAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Streaming finalize error: {ex.Message}");
+                finalizeThrew = true;
+            }
+        }
+
+        await coordinator.DisposeAsync();
+        startupCts?.Dispose();
+        return (finalText, coordinator.Faulted || finalizeThrew);
     }
 
     private async Task<string> StopPartialTranscriptionSessionAsync()

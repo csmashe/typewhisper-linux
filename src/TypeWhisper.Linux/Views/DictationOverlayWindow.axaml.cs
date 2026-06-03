@@ -83,6 +83,25 @@ public partial class DictationOverlayWindow : Window
                 },
                 DispatcherPriority.Background);
         }
+        else if (e.PropertyName == nameof(DictationOverlayViewModel.LlmResponseText))
+        {
+            // Same after-layout auto-scroll as PartialText, for the streamed
+            // LLM response area.
+            var llmText = _viewModel?.LlmResponseText;
+            Dispatcher.UIThread.Post(
+                () =>
+                {
+                    if (string.IsNullOrWhiteSpace(llmText))
+                    {
+                        LlmResponseScrollViewer?.ScrollToHome();
+                    }
+                    else
+                    {
+                        LlmResponseScrollViewer?.ScrollToEnd();
+                    }
+                },
+                DispatcherPriority.Background);
+        }
     }
 
     private void UpdateWindowVisibility()

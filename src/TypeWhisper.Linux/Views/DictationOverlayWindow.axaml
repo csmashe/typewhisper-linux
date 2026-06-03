@@ -124,6 +124,18 @@
                                FontSize="12"
                                Foreground="#E6FFFFFF" />
                 </ScrollViewer>
+
+                <ScrollViewer x:Name="LlmResponseScrollViewer"
+                              MaxHeight="120"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              IsVisible="{Binding LlmResponseText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Text="{Binding LlmResponseText}"
+                               TextWrapping="Wrap"
+                               MaxWidth="420"
+                               FontSize="12"
+                               Foreground="#E6FFFFFF" />
+                </ScrollViewer>
             </StackPanel>
         </Border>
 

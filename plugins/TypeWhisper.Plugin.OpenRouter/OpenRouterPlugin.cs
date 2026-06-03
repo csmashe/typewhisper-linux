@@ -45,6 +45,7 @@ public sealed class OpenRouterPlugin
     private double _temperatureValue = 0.3;
     private List<OpenRouterFetchedModel> _fetchedTranscriptionModels = [];
     private List<OpenRouterFetchedModel> _fetchedModels = [];
+    private bool _streamResponses = true;
 
     private static readonly IReadOnlyList<PluginModelInfo> FallbackTranscriptionModels =
     [
@@ -97,6 +98,7 @@ public sealed class OpenRouterPlugin
         _hasUserSelectedLlmModel = host.GetSetting<bool?>(UserSelectedLlmModelSettingName) == true;
         _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
         _temperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
+        _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         NormalizeSelectedTranscriptionModel(persist: true);
         NormalizeSelectedLlmModel(persist: true);
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsAvailable})");
@@ -168,6 +170,44 @@ public sealed class OpenRouterPlugin
             : model;
 
         return await SendChatCompletionAsync(modelId, systemPrompt, userText, ct);
+    }
+
+    public async IAsyncEnumerable<string> ProcessStreamingAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        if (!_streamResponses)
+        {
+            yield return await ProcessAsync(systemPrompt, userText, model, ct);
+            yield break;
+        }
+
+        if (!IsAvailable)
+            throw new InvalidOperationException("API key not configured");
+
+        var modelId = string.IsNullOrWhiteSpace(model)
+            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            : model;
+
+        // OpenRouter's batch body emits the same chat.completion shape as the
+        // shared helper: always max_tokens 2048, and temperature only in custom
+        // mode (provider default otherwise). It sets no extra headers, so the
+        // shared streaming helper is a lossless route.
+        var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            _httpClient,
+            BaseUrl,
+            _apiKey!,
+            modelId,
+            systemPrompt,
+            userText,
+            ct,
+            maxOutputTokens: 2048,
+            temperature: _temperatureMode == TemperatureModeCustom ? _temperatureValue : (double?)null);
+
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
     }
 
     // API key / catalog management
@@ -755,6 +795,13 @@ public sealed class OpenRouterPlugin
                 Description: "Sampling temperature 0.0–2.0. Applied when Temperature is set to Custom.",
                 Kind: PluginSettingKind.Text
             ),
+            new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: "Stream responses",
+                Description: "Render prompt-action output token-by-token as it is "
+                    + "generated, instead of waiting for the full reply.",
+                Kind: PluginSettingKind.Boolean
+            ),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -766,6 +813,8 @@ public sealed class OpenRouterPlugin
                 SelectedLlmModelSettingName => _selectedLlmModelId,
                 TemperatureModeSettingName => _temperatureMode,
                 TemperatureValueSettingName => _temperatureValue.ToString(CultureInfo.InvariantCulture),
+                LlmStreamingSettings.StreamResponsesSettingKey
+                    => _streamResponses ? "true" : "false",
                 _ => null,
             });
 
@@ -803,8 +852,20 @@ public sealed class OpenRouterPlugin
                     SetTemperatureValue(parsedTemperature);
                 }
                 break;
+            case LlmStreamingSettings.StreamResponsesSettingKey:
+                SetStreamResponses(ParseBool(value));
+                break;
         }
     }
+
+    private void SetStreamResponses(bool enabled)
+    {
+        _streamResponses = enabled;
+        _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
+    }
+
+    private static bool ParseBool(string? value) =>
+        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
