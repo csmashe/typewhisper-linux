@@ -589,6 +589,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
         {
             Id = Guid.NewGuid().ToString(),
             Name = $"{SelectedProfile.Name} Copy",
+            // Drop the source profile's hotkey: two profiles can't share a
+            // chord (SetProfileHotkeys keeps only the first and rejects the
+            // collision), so a clone that copied it would have a dead hotkey.
+            // The user can assign a fresh chord to the copy.
+            HotkeyData = null,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };

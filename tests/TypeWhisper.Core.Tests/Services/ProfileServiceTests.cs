@@ -223,25 +223,34 @@ public class ProfileServiceTests : IDisposable
     [Fact]
     public void MatchProfile_ForcedDisabledProfile_FallsThrough()
     {
-        var forced = new Profile
+        // A normal enabled profile with no matchers acts as the global
+        // fallback; the forced id pointing at a disabled profile must fall
+        // through to it rather than honoring the disabled selection.
+        _sut.AddProfile(new Profile { Id = "fallback", Name = "Fallback" });
+        _sut.AddProfile(new Profile
         {
             Id = "forced",
             Name = "Forced",
             IsEnabled = false
-        };
-        _sut.AddProfile(forced);
+        });
 
         var result = _sut.MatchProfile(null, null, "forced");
 
-        Assert.NotEqual(MatchKind.ManualOverride, result.Kind);
+        Assert.Equal(MatchKind.Global, result.Kind);
+        Assert.NotNull(result.Profile);
+        Assert.Equal("fallback", result.Profile!.Id);
     }
 
     [Fact]
     public void MatchProfile_ForcedMissingProfile_FallsThrough()
     {
+        _sut.AddProfile(new Profile { Id = "fallback", Name = "Fallback" });
+
         var result = _sut.MatchProfile(null, null, "does-not-exist");
 
-        Assert.NotEqual(MatchKind.ManualOverride, result.Kind);
+        Assert.Equal(MatchKind.Global, result.Kind);
+        Assert.NotNull(result.Profile);
+        Assert.Equal("fallback", result.Profile!.Id);
     }
 
     [Fact]

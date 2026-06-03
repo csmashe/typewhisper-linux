@@ -505,8 +505,26 @@ public sealed class DictationOrchestrator : IDisposable
                 var sessionVersion = _partialTranscriptState.StartSession();
 
                 var startupSettings = _settings.Current;
+                // A profile hotkey forces a specific profile. The background
+                // snapshot task below resolves the context match asynchronously
+                // and won't have run yet, so resolve the forced profile
+                // synchronously here — otherwise the streaming/language/task
+                // startup decisions below would use the stale _recordingProfile
+                // (the previous session's, or null) instead of the forced one.
+                // The background task still runs and reconciles _recordingProfile
+                // for the non-forced (context-match) path.
+                var startupProfile = _recordingProfile;
+                if (forcedProfileId is not null)
+                {
+                    var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
+                    if (forcedMatch.Kind == MatchKind.ManualOverride)
+                    {
+                        startupProfile = forcedMatch.Profile;
+                    }
+                }
+
                 var startupLanguage =
-                    _recordingProfile?.InputLanguage ?? startupSettings.Language;
+                    startupProfile?.InputLanguage ?? startupSettings.Language;
                 var startupLanguageHint =
                     startupLanguage is { Length: > 0 } lang && lang != "auto"
                         ? lang
@@ -520,7 +538,7 @@ public sealed class DictationOrchestrator : IDisposable
                 // selected. Skip the WebSocket entirely in that case to avoid
                 // burning provider bandwidth on a session we'd discard.
                 var startupTaskName =
-                    _recordingProfile?.SelectedTask ?? startupSettings.TranscriptionTask;
+                    startupProfile?.SelectedTask ?? startupSettings.TranscriptionTask;
                 var startupIsTranslate = string.Equals(
                     startupTaskName, "translate", StringComparison.OrdinalIgnoreCase
                 );

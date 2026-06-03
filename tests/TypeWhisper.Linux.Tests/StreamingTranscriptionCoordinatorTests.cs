@@ -530,7 +530,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         cts.CancelAfter(100);
 
         var sw = Stopwatch.StartNew();
-        var result = await coord.FinalizeAsync(cts.Token);
+        await coord.FinalizeAsync(cts.Token);
         sw.Stop();
 
         // Without ct propagation this would block ~2s (sessionTimeout) + 500ms grace.

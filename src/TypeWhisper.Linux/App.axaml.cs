@@ -142,6 +142,11 @@ public class App : Application
                 Console.Error.WriteLine("TypeWhisper is already running.");
                 ShuttingDown = true;
                 TearDownAsync(services).GetAwaiter().GetResult();
+                // The window never opens on this early-exit path, so the
+                // main.Opened handler that normally ends the GNOME launch
+                // cursor won't fire — clear it here or the spinner spins
+                // until Mutter's timeout.
+                LinuxStartupNotification.NotifyComplete();
                 desktop.Shutdown();
                 return;
             }

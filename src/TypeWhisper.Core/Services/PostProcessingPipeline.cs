@@ -8,6 +8,9 @@ namespace TypeWhisper.Core.Services;
 ///     Priority-based post-processing pipeline. Steps are sorted by priority (ascending)
 ///     and executed sequentially. Built-in priorities:
 ///     Plugin PostProcessors: their own Priority value
+///     Spoken Commands: 50
+///     Spoken Punctuation: 60
+///     Formatting: 150
 ///     Cleanup: 250
 ///     LLM Prompt Action: 300
 ///     Snippet Expansion: 500

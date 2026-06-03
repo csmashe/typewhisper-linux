@@ -204,6 +204,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         {
             await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", CancellationToken.None))
             {
+                // Drain the stream to force enumeration so the throw surfaces.
             }
         });
     }

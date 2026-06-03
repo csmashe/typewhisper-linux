@@ -507,17 +507,25 @@ public sealed class PluginManager : IDisposable
     /// </summary>
     public async Task RefreshProviderModelsAsync()
     {
-        if (_isRefreshingModels)
+        // Claim the refresh under the lock so two near-simultaneous callers
+        // can't both read a stale guard, pass it, and run overlapping
+        // refreshes. The lock only guards the cheap claim — never the awaits
+        // below.
+        lock (_lock)
         {
-            return;
+            if (_isRefreshingModels)
+            {
+                return;
+            }
+
+            if (DateTime.UtcNow - _lastModelRefresh < TimeSpan.FromSeconds(2))
+            {
+                return;
+            }
+
+            _isRefreshingModels = true;
         }
 
-        if (DateTime.UtcNow - _lastModelRefresh < TimeSpan.FromSeconds(2))
-        {
-            return;
-        }
-
-        _isRefreshingModels = true;
         try
         {
             List<IModelCatalogProvider> providers;
@@ -548,11 +556,17 @@ public sealed class PluginManager : IDisposable
                 }
             }
 
-            _lastModelRefresh = DateTime.UtcNow;
+            lock (_lock)
+            {
+                _lastModelRefresh = DateTime.UtcNow;
+            }
         }
         finally
         {
-            _isRefreshingModels = false;
+            lock (_lock)
+            {
+                _isRefreshingModels = false;
+            }
         }
     }
 

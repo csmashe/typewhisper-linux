@@ -262,10 +262,14 @@ public sealed partial class OpenAiCompatiblePlugin
             _host?.NotifyCapabilitiesChanged();
     }
 
-    internal async Task<List<FetchedModel>> FetchModelsAsync(CancellationToken ct = default)
+    // Returns null on a fetch/parse failure (so callers can keep their cached
+    // list), and a (possibly empty) list on a successful /v1/models response —
+    // an empty list is a valid "this server has zero models" answer, distinct
+    // from "couldn't reach/parse the server."
+    internal async Task<List<FetchedModel>?> FetchModelsAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(_baseUrl))
-            return [];
+            return null;
 
         try
         {
@@ -275,13 +279,13 @@ public sealed partial class OpenAiCompatiblePlugin
 
             using var response = await _httpClient.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)
-                return [];
+                return null;
 
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
 
             if (!doc.RootElement.TryGetProperty("data", out var data))
-                return [];
+                return null;
 
             return data.EnumerateArray()
                 .Select(e => new FetchedModel(
@@ -298,7 +302,7 @@ public sealed partial class OpenAiCompatiblePlugin
         }
         catch
         {
-            return [];
+            return null;
         }
     }
 
@@ -421,7 +425,7 @@ public sealed partial class OpenAiCompatiblePlugin
         if (!valid)
             return new PluginSettingsValidationResult(false, "Could not connect to the server.");
 
-        var models = await FetchModelsAsync(ct);
+        var models = await FetchModelsAsync(ct) ?? [];
         SetFetchedModels(models, notifyCapabilitiesChanged: false);
 
         if (string.IsNullOrWhiteSpace(_selectedModelId) && models.Count > 0)
@@ -439,16 +443,18 @@ public sealed partial class OpenAiCompatiblePlugin
 
     // IModelCatalogProvider: read-only model-list refresh for dropdown-open.
     // Only the model catalog is touched — no connection-validation message, no
-    // asset downloads, no auto-selecting a model. Keeps the cached list on
-    // failure (FetchModelsAsync returns [] on error) so an unreachable endpoint
-    // doesn't empty the dropdown.
+    // asset downloads, no auto-selecting a model. Keeps the cached list on a
+    // transient failure (FetchModelsAsync returns null) so an unreachable
+    // endpoint doesn't empty the dropdown, but honors a successful empty
+    // response (empty list) so a server that legitimately dropped all its
+    // models clears the cache.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(_baseUrl))
             return;
 
         var models = await FetchModelsAsync(ct);
-        if (models.Count == 0)
+        if (models is null)
             return;
 
         var changed =

@@ -37,10 +37,11 @@ internal sealed class ShortcutDispatcher
     // Profile-hotkey dedup, keyed by the physical KeyCode matched at press
     // time — same reasoning as _promptActionKeyDown above (release-time
     // cleanup is independent of the current shortcut set). The dictation
-    // variant also records when the key went down so the release-time hold
-    // duration can be computed for PushToTalk/Hybrid, mirroring the main
-    // dictation key's _dictationKeyDownTime.
-    private readonly Dictionary<KeyCode, (string ProfileId, DateTime DownAt)>
+    // variant also records the recording mode and when the key went down so
+    // the release-time hold duration can be computed for PushToTalk/Hybrid
+    // against the press-time mode, mirroring the main dictation key's
+    // _dictationKeyDownTime.
+    private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, DateTime DownAt)>
         _profileDictationKeyDown = new();
     private readonly Dictionary<KeyCode, string> _profileTextKeyDown = new();
     private bool _recentKeyDown;
@@ -198,7 +199,10 @@ internal sealed class ShortcutDispatcher
                         return;
                     }
 
-                    _profileDictationKeyDown[key] = (profileId, DateTime.UtcNow);
+                    // Capture the recording mode at press time so the release
+                    // path switches on the mode that was active when the key
+                    // went down — not a mode the user may have changed mid-hold.
+                    _profileDictationKeyDown[key] = (profileId, set.Mode, DateTime.UtcNow);
                 }
 
                 switch (set.Mode)
@@ -355,7 +359,7 @@ internal sealed class ShortcutDispatcher
         // StartDictation profile hotkeys mirror the main dictation key's
         // release semantics, but keyed off the physical key so an edit/remove
         // mid-hold still releases cleanly.
-        (string ProfileId, DateTime DownAt) profileHeld;
+        (string ProfileId, RecordingMode Mode, DateTime DownAt) profileHeld;
         bool hadProfileDictation;
         lock (_lock)
         {
@@ -365,7 +369,10 @@ internal sealed class ShortcutDispatcher
         if (hadProfileDictation)
         {
             var profileHeldMs = (DateTime.UtcNow - profileHeld.DownAt).TotalMilliseconds;
-            switch (set.Mode)
+            // Use the mode captured at press time, not the possibly-changed
+            // current set.Mode, so a mid-hold mode switch can't make the
+            // release fire a Stop the press never set up.
+            switch (profileHeld.Mode)
             {
                 case RecordingMode.PushToTalk:
                     Raise(
