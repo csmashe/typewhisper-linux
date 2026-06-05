@@ -10,6 +10,7 @@
         mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="720"
         x:Class="TypeWhisper.Linux.Views.WelcomeWizard"
         x:DataType="vm:WelcomeWizardViewModel"
+        RequestedThemeVariant="Dark"
         Title="Welcome to TypeWhisper"
         Icon="avares://typewhisper/Resources/typewhisper.ico"
         Width="640" Height="720"

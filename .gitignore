@@ -15,9 +15,10 @@ TestResults/
 .DS_Store
 releases/
 /dist/
-# Ignore everything under docs/ except published release notes
+# Ignore everything under docs/ except published release notes and prompts
 docs/*
 !docs/releases/
+!docs/prompts/
 publish/
 .agents/
 .claude/

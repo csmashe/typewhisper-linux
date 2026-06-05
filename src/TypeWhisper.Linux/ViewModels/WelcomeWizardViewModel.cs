@@ -158,7 +158,13 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public string FirstDictationButtonText =>
         IsFirstDictationRecording ? "Stop and transcribe" : "Record phrase";
 
-    public bool CanRunCudaBenchmark => _commands.GetSnapshot().CanUseCuda;
+    // Gate on the GPU being present, not on CUDA being fully usable: the
+    // check exists to diagnose GPU acceleration *before* it works. When an
+    // NVIDIA GPU is detected but the CUDA 12 runtime libraries are missing,
+    // the user needs to run the check to see that — RunCudaBenchmarkAsync
+    // returns an informative message for that case. Only a machine with no
+    // NVIDIA GPU at all has nothing to check.
+    public bool CanRunCudaBenchmark => _commands.GetSnapshot().HasCudaGpu;
     public bool CudaBenchmarkButtonEnabled => CanRunCudaBenchmark && !IsCudaBenchmarkRunning;
 
     public async Task<bool> RunPasteSmokeTestAsync()

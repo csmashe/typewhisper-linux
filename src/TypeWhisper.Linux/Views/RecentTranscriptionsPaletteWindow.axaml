@@ -3,6 +3,7 @@
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
         x:Class="TypeWhisper.Linux.Views.RecentTranscriptionsPaletteWindow"
         x:DataType="vm:RecentTranscriptionsPaletteViewModel"
+        RequestedThemeVariant="Dark"
         Width="520"
         Height="360"
         WindowStartupLocation="CenterScreen"

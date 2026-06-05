@@ -3,6 +3,7 @@
         xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
         x:Class="TypeWhisper.Linux.Views.ProfilesContextWindow"
         x:DataType="vm:ProfilesSectionViewModel"
+        RequestedThemeVariant="Dark"
         Title="Live Context"
         Width="460"
         Height="320"
