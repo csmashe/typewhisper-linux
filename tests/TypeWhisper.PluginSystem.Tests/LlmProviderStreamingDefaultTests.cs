@@ -34,6 +34,7 @@ public sealed class LlmProviderStreamingDefaultTests
             await foreach (var _ in plugin.ProcessStreamingAsync(
                                "system", "user", "model", cts.Token))
             {
+                // Drain the stream to force enumeration so the throw surfaces.
             }
         });
     }

@@ -288,7 +288,7 @@
 
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
-                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                                 <Border Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
@@ -358,7 +358,8 @@
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding ModelOptions}"
-                                                  SelectedItem="{Binding SelectedModelOption}">
+                                                  SelectedItem="{Binding SelectedModelOption}"
+                                                  DropDownOpened="OnModelDropDownOpened">
                                             <ComboBox.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:ProfileModelOption">
                                                     <TextBlock Text="{Binding Label}" />
@@ -506,6 +507,34 @@
                                                        Minimum="0"
                                                        Maximum="999"
                                                        Value="{Binding EditPriority}" />
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="19" Background="#16FFFFFF" />
+
+                                <Border Grid.Row="20" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="Profile Hotkey"
+                                                       Classes="row-label" />
+                                            <TextBlock
+                                                Text="Global shortcut to trigger this profile. Behavior below decides dictation vs. transforming the current selection."
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="8">
+                                            <TextBox Text="{Binding EditHotkeyData}"
+                                                     PlaceholderText="e.g. Ctrl+Alt+E" />
+                                            <ComboBox HorizontalAlignment="Stretch"
+                                                      ItemsSource="{Binding HotkeyBehaviorOptions}"
+                                                      SelectedItem="{Binding SelectedHotkeyBehaviorOption}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:ProfileHotkeyBehaviorOption">
+                                                        <TextBlock Text="{Binding Label}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
                             </Grid>

@@ -24,7 +24,8 @@ public sealed record GlobalShortcutSet(
     ModifierMask CancelModifiers,
     RecordingMode Mode,
     bool IsCancelEnabled,
-    IReadOnlyList<PromptActionHotkey> PromptActionHotkeys
+    IReadOnlyList<PromptActionHotkey> PromptActionHotkeys,
+    IReadOnlyList<ProfileHotkey> ProfileHotkeys
 )
 {
     public GlobalShortcutSet(
@@ -58,7 +59,8 @@ public sealed record GlobalShortcutSet(
             cancelModifiers,
             mode,
             isCancelEnabled,
-            Array.Empty<PromptActionHotkey>()
+            Array.Empty<PromptActionHotkey>(),
+            Array.Empty<ProfileHotkey>()
         )
     {
     }
@@ -71,3 +73,18 @@ public sealed record GlobalShortcutSet(
 ///     <c>PromptAction.Id</c> the matched chord should execute.
 /// </summary>
 public sealed record PromptActionHotkey(string ActionId, KeyCode Key, ModifierMask Modifiers);
+
+/// <summary>
+///     A Profile bound to a global hotkey. <see cref="Behavior" /> decides
+///     whether pressing the chord starts dictation forced to this profile
+///     (<see cref="ProfileHotkeyBehavior.StartDictation" />) or runs the
+///     profile's linked prompt action against the current selection
+///     (<see cref="ProfileHotkeyBehavior.ProcessSelectedText" />). The
+///     dispatcher needs the behavior to know which path to take, so it travels
+///     with the chord rather than being looked up later.
+/// </summary>
+public sealed record ProfileHotkey(
+    string ProfileId,
+    KeyCode Key,
+    ModifierMask Modifiers,
+    ProfileHotkeyBehavior Behavior);

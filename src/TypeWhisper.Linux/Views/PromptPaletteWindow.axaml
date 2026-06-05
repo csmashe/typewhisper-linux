@@ -6,6 +6,7 @@
         mc:Ignorable="d"
         x:Class="TypeWhisper.Linux.Views.PromptPaletteWindow"
         x:DataType="models:PromptAction"
+        RequestedThemeVariant="Dark"
         Title="Prompt Palette"
         Width="400"
         Height="400"

@@ -81,6 +81,27 @@ public sealed class PromptActionService : IPromptActionService
         ActionsChanged?.Invoke();
     }
 
+    public void SeedFirstRunDefaultsIfMissing()
+    {
+        // Seed only on a genuine first run — when the actions file has never
+        // been written. If the user later disables or deletes the seeded
+        // action the file still exists, so we never resurrect it.
+        if (File.Exists(_filePath))
+        {
+            return;
+        }
+
+        EnsureCacheLoaded();
+        if (_cache.Any(a => a.Id == FirstRunDefaults.AutoCleanupActionId))
+        {
+            return;
+        }
+
+        _cache.Add(FirstRunDefaults.CreateAutoCleanupAction());
+        SaveToDisk();
+        ActionsChanged?.Invoke();
+    }
+
     public void SeedPresets()
     {
         EnsureCacheLoaded();

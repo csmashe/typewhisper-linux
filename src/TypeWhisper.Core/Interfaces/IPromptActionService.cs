@@ -12,5 +12,6 @@ public interface IPromptActionService
     void DeleteAction(string id);
     void Reorder(IReadOnlyList<string> orderedIds);
     void SeedPresets();
+    void SeedFirstRunDefaultsIfMissing();
     event Action? ActionsChanged;
 }

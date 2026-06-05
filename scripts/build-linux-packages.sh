@@ -106,6 +106,7 @@ Icon=typewhisper
 Terminal=false
 Categories=Utility;Accessibility;AudioVideo;
 StartupNotify=true
+StartupWMClass=typewhisper
 EOF
 
 cat > "$TARBALL_STAGE/install.sh" <<'EOF'
@@ -144,6 +145,7 @@ Icon=typewhisper
 Terminal=false
 Categories=Utility;Accessibility;AudioVideo;
 StartupNotify=true
+StartupWMClass=typewhisper
 DESK
 
 ln -sf "$INSTALL_ROOT/typewhisper" "$BIN_DIR/typewhisper"
@@ -185,6 +187,7 @@ Icon=typewhisper
 Terminal=false
 Categories=Utility;Accessibility;AudioVideo;
 StartupNotify=true
+StartupWMClass=typewhisper
 EOF
   cp "$APPDIR/typewhisper.desktop" "$APPDIR/usr/share/applications/typewhisper.desktop"
 
@@ -249,6 +252,7 @@ Icon=typewhisper
 Terminal=false
 Categories=Utility;Accessibility;AudioVideo;
 StartupNotify=true
+StartupWMClass=typewhisper
 EOF
 
   # Strip a leading 'v' if a caller passed a tag; Debian package versions don't take one.
@@ -322,6 +326,7 @@ Icon=typewhisper
 Terminal=false
 Categories=Utility;Accessibility;AudioVideo;
 StartupNotify=true
+StartupWMClass=typewhisper
 EOF
 
   tar -czf "$RPM_TOP/SOURCES/typewhisper-$RPM_VERSION_CLEAN.tar.gz" -C "$RPM_TOP/SOURCES" "typewhisper-$RPM_VERSION_CLEAN"

@@ -418,6 +418,15 @@ public partial class PromptsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 
+    /// <summary>
+    ///     Re-polls configured providers for their current model list so newly
+    ///     added server-side models show up without a manual "Validate". Invoked
+    ///     when the provider/model dropdown opens; the dropdown rebuild happens
+    ///     via the <c>PluginStateChanged</c> subscription once the fetch lands.
+    ///     The debounce/guard and network work live in <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
+
     private string DefaultProviderPlaceholderLabel(IReadOnlyList<ProviderOption> resolvedOptions)
     {
         const string baseLabel = "Use default provider";

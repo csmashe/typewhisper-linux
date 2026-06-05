@@ -124,6 +124,30 @@ public sealed class XdgPortalGlobalShortcutsBackend : IGlobalShortcutBackend
         remove { }
     }
 
+    public event EventHandler<string>? ProfileDictationToggleRequested
+    {
+        add { }
+        remove { }
+    }
+
+    public event EventHandler<string>? ProfileDictationStartRequested
+    {
+        add { }
+        remove { }
+    }
+
+    public event EventHandler? ProfileDictationStopRequested
+    {
+        add { }
+        remove { }
+    }
+
+    public event EventHandler<string>? ProfileTextProcessingRequested
+    {
+        add { }
+        remove { }
+    }
+
     public event EventHandler<string>? Failed
     {
         add { }

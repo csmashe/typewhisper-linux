@@ -286,6 +286,15 @@ public partial class PluginsSectionViewModel : ObservableObject
         await LoadPluginSettingsAsync(row, true);
     }
 
+    /// <summary>
+    ///     Re-polls providers for their current model list when a model setting
+    ///     dropdown opens, so newly added models appear without clicking
+    ///     "Validate". The expanded plugin's fields rebuild via the
+    ///     PluginStateChanged subscription; debounce/guard live in
+    ///     <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
+
     private async Task LoadPluginSettingsAsync(PluginRow row, bool preserveStatus = false)
     {
         row.SettingFields.Clear();

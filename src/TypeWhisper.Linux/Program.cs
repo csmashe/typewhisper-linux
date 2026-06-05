@@ -81,6 +81,9 @@ public static class Program
             {
                 if (ControlSocketClient.TrySendToggle(socketPath, out var probeError))
                 {
+                    // We mapped no window — the running instance handles the
+                    // toggle — so end the launcher's busy cursor explicitly.
+                    LinuxStartupNotification.NotifyComplete();
                     return 0;
                 }
 
@@ -94,6 +97,9 @@ public static class Program
             else if (ControlSocketClient.IsLivePeer(socketPath))
             {
                 Console.Error.WriteLine("TypeWhisper is already running.");
+                // Same as the toggle path: no window will map, so clear the
+                // launcher's busy cursor rather than let it time out.
+                LinuxStartupNotification.NotifyComplete();
                 return 0;
             }
             else

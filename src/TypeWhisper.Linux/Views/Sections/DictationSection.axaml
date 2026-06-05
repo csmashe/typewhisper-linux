@@ -51,6 +51,7 @@
                             <ComboBox Grid.Column="1"
                                       ItemsSource="{Binding ModelOptions}"
                                       SelectedItem="{Binding SelectedModel}"
+                                      DropDownOpened="OnModelDropDownOpened"
                                       HorizontalAlignment="Stretch">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="vm:DictationModelOption">

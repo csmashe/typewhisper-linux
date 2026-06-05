@@ -21,6 +21,11 @@ public sealed class PluginManager : IDisposable
     private readonly Dictionary<string, PluginHostServices> _hostServices = [];
     private readonly PluginLoader _loader;
     private readonly object _lock = new();
+
+    // Guards/debounces on-demand model re-polls (triggered when a model dropdown
+    // opens) so rapid reopens don't fire overlapping network fetches.
+    private bool _isRefreshingModels;
+    private DateTime _lastModelRefresh = DateTime.MinValue;
     private readonly IProfileService _profiles;
     private readonly string[] _searchDirectories;
     private readonly ISettingsService _settings;
@@ -478,6 +483,90 @@ public sealed class PluginManager : IDisposable
                 $"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}"
             );
             return false;
+        }
+    }
+
+    /// <summary>
+    ///     Re-polls activated <see cref="IModelCatalogProvider" /> plugins for
+    ///     their current model list, so newly added server-side models (e.g. a
+    ///     freshly pulled Ollama model) appear in the UI without the user
+    ///     manually hitting "Validate". Each provider's read-only
+    ///     <see cref="IModelCatalogProvider.RefreshModelCatalogAsync" /> refreshes
+    ///     its cached models and raises a capability change, which the section
+    ///     view-models observe (via <see cref="PluginStateChanged" />) to rebuild
+    ///     their model dropdowns. Call this when a model dropdown opens.
+    ///     <para>
+    ///     Deliberately uses the narrow model-catalog contract rather than
+    ///     <c>IPluginSettingsProvider.ValidateAsync</c>: validation can carry
+    ///     heavy/irreversible side effects (e.g. a TTS plugin downloads model
+    ///     assets), which must never be triggered by a passive dropdown open.
+    ///     Debounced and re-entrancy-guarded so repeated opens don't overlap;
+    ///     each provider gets a short timeout and a failure is logged, not
+    ///     swallowed silently; an unreachable endpoint keeps its cached models.
+    ///     </para>
+    /// </summary>
+    public async Task RefreshProviderModelsAsync()
+    {
+        // Claim the refresh under the lock so two near-simultaneous callers
+        // can't both read a stale guard, pass it, and run overlapping
+        // refreshes. The lock only guards the cheap claim — never the awaits
+        // below.
+        lock (_lock)
+        {
+            if (_isRefreshingModels)
+            {
+                return;
+            }
+
+            if (DateTime.UtcNow - _lastModelRefresh < TimeSpan.FromSeconds(2))
+            {
+                return;
+            }
+
+            _isRefreshingModels = true;
+        }
+
+        try
+        {
+            List<IModelCatalogProvider> providers;
+            lock (_lock)
+            {
+                providers = _allPlugins
+                    .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
+                    .Select(p => p.Instance)
+                    .OfType<IModelCatalogProvider>()
+                    .ToList();
+            }
+
+            foreach (var provider in providers)
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    await provider.RefreshModelCatalogAsync(cts.Token);
+                }
+                catch (Exception ex)
+                {
+                    // Best effort — one provider failing must not block the rest,
+                    // but surface it for diagnosability rather than swallowing.
+                    Trace.WriteLine(
+                        $"[PluginManager] Model-catalog refresh failed for "
+                            + $"{provider.GetType().Name}: {ex.Message}"
+                    );
+                }
+            }
+
+            lock (_lock)
+            {
+                _lastModelRefresh = DateTime.UtcNow;
+            }
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _isRefreshingModels = false;
+            }
         }
     }
 

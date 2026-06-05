@@ -34,6 +34,7 @@ public sealed class PostProcessorStreamingDefaultTests
             await foreach (var _ in plugin.ProcessStreamingAsync(
                                "input", new PostProcessingContext(), cts.Token))
             {
+                // Drain the stream to force enumeration so the throw surfaces.
             }
         });
     }

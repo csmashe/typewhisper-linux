@@ -1,4 +1,5 @@
 using SharpHook.Native;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services.Hotkey;
 
@@ -14,7 +15,8 @@ internal enum ShortcutMatchKind
     CopyLastTranscription,
     TransformSelection,
     Cancel,
-    PromptAction
+    PromptAction,
+    Profile
 }
 
 /// <summary>
@@ -32,7 +34,7 @@ internal static class ShortcutMatcher
         GlobalShortcutSet set
     )
     {
-        return Match(key, pressedMods, set, out _);
+        return Match(key, pressedMods, set, out _, out _, out _);
     }
 
     /// <summary>
@@ -46,10 +48,14 @@ internal static class ShortcutMatcher
         KeyCode key,
         ModifierMask pressedMods,
         GlobalShortcutSet set,
-        out string? promptActionId
+        out string? promptActionId,
+        out string? profileId,
+        out ProfileHotkeyBehavior profileBehavior
     )
     {
         promptActionId = null;
+        profileId = null;
+        profileBehavior = default;
 
         // Order matters: cancel takes priority so an active dictation can be
         // discarded even if the cancel key collides with another binding —
@@ -107,6 +113,21 @@ internal static class ShortcutMatcher
             }
         }
 
+        // Profile-bound hotkeys sit after the prompt-action loop so a profile
+        // chord can't shadow a per-action hotkey (honoring the comment above).
+        // Ordering is immaterial in practice because SetProfileHotkeys rejects
+        // any chord that collides with a prompt-action entry — but keep
+        // prompt-action first to preserve that intent.
+        foreach (var entry in set.ProfileHotkeys)
+        {
+            if (key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
+            {
+                profileId = entry.ProfileId;
+                profileBehavior = entry.Behavior;
+                return ShortcutMatchKind.Profile;
+            }
+        }
+
         if (key == set.DictationKey && ModifiersMatch(pressedMods, set.DictationModifiers))
         {
             return ShortcutMatchKind.Dictation;
@@ -146,7 +167,9 @@ internal static class ShortcutMatcher
         }
 
         return set.PromptActionHotkeys.Any(
-            entry => key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers));
+                   entry => key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
+               || set.ProfileHotkeys.Any(
+                   entry => key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers));
     }
 
     /// <summary>

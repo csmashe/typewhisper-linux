@@ -17,9 +17,10 @@ releases/
 /dist/
 # Test result output (e.g. CI writes .trx into artifacts/test-results)
 artifacts/
-# Ignore everything under docs/ except published release notes
+# Ignore everything under docs/ except published release notes and prompts
 docs/*
 !docs/releases/
+!docs/prompts/
 publish/
 .agents/
 .claude/

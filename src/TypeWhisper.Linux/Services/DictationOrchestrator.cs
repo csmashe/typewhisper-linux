@@ -318,8 +318,11 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        _toggleHandler = (_, _) => FireAndLog(ToggleAsync, nameof(ToggleAsync));
-        _startHandler = (_, _) => FireAndLog(StartAsync, nameof(StartAsync));
+        // Lambdas (not method-group conversions) because StartAsync/ToggleAsync
+        // now take an optional forcedProfileId — a method group with an optional
+        // parameter no longer converts to the zero-arg Func<Task> FireAndLog wants.
+        _toggleHandler = (_, _) => FireAndLog(() => ToggleAsync(), nameof(ToggleAsync));
+        _startHandler = (_, _) => FireAndLog(() => StartAsync(), nameof(StartAsync));
         _stopHandler = (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
         _cancelHandler = (_, _) => FireAndLog(CancelAsync, nameof(CancelAsync));
         _hookFailedHandler = (_, message) =>
@@ -358,7 +361,7 @@ public sealed class DictationOrchestrator : IDisposable
         _initialized = true;
     }
 
-    public async Task ToggleAsync()
+    public async Task ToggleAsync(string? forcedProfileId = null)
     {
         if (_audio.IsRecording)
         {
@@ -366,7 +369,9 @@ public sealed class DictationOrchestrator : IDisposable
         }
         else
         {
-            await StartAsync();
+            // Only the start branch honors the forced profile — a profile
+            // hotkey pressed while recording just stops, like the main key.
+            await StartAsync(forcedProfileId);
         }
     }
 
@@ -404,7 +409,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    public async Task<int> StartAsync()
+    public async Task<int> StartAsync(string? forcedProfileId = null)
     {
         if (!await _toggleGate.WaitAsync(0))
         {
@@ -447,6 +452,32 @@ public sealed class DictationOrchestrator : IDisposable
                 return 0;
             }
 
+            // Flip the overlay to "Recording…" now that capture is genuinely
+            // live (audio stream confirmed open above) — but BEFORE the slow
+            // startup work below (the playerctl subprocess in PauseMedia, sound
+            // playback). Doing it here keeps the overlay honest (we never claim
+            // "Recording" before the stream is open) while still clearing the
+            // previous session's "Typed N char(s)." feedback and showing the
+            // status promptly. The earlier ordering ran this after the
+            // playerctl/sound work, so on Wayland the stale feedback bubble
+            // lingered and "Recording…" appeared late.
+            SetOverlayState(state =>
+                state with
+                {
+                    IsOverlayVisible = true,
+                    ShowFeedback = false,
+                    FeedbackIsError = false,
+                    FeedbackText = null,
+                    PartialText = null,
+                    LlmResponseText = null,
+                    IsRecording = true,
+                    StatusText = "Recording… press the hotkey again to stop.",
+                    ActiveProfileName = null,
+                    ActiveAppName = null,
+                    SessionStartedAtUtc = DateTime.UtcNow
+                }
+            );
+
             try
             {
                 if (_settings.Current.AudioDuckingEnabled)
@@ -466,22 +497,6 @@ public sealed class DictationOrchestrator : IDisposable
 
                 _speechFeedback.AnnounceRecordingStarted();
                 RecordingStateChanged?.Invoke(this, true);
-                SetOverlayState(state =>
-                    state with
-                    {
-                        IsOverlayVisible = true,
-                        ShowFeedback = false,
-                        FeedbackIsError = false,
-                        FeedbackText = null,
-                        PartialText = null,
-                        LlmResponseText = null,
-                        IsRecording = true,
-                        StatusText = "Recording… press the hotkey again to stop.",
-                        ActiveProfileName = null,
-                        ActiveAppName = null,
-                        SessionStartedAtUtc = DateTime.UtcNow
-                    }
-                );
                 // Bump the partial-transcript session version ONCE per recording.
                 // Both the polling loop (always) and the streaming coordinator
                 // (when active) share this version so partials from either path
@@ -490,8 +505,26 @@ public sealed class DictationOrchestrator : IDisposable
                 var sessionVersion = _partialTranscriptState.StartSession();
 
                 var startupSettings = _settings.Current;
+                // A profile hotkey forces a specific profile. The background
+                // snapshot task below resolves the context match asynchronously
+                // and won't have run yet, so resolve the forced profile
+                // synchronously here — otherwise the streaming/language/task
+                // startup decisions below would use the stale _recordingProfile
+                // (the previous session's, or null) instead of the forced one.
+                // The background task still runs and reconciles _recordingProfile
+                // for the non-forced (context-match) path.
+                var startupProfile = _recordingProfile;
+                if (forcedProfileId is not null)
+                {
+                    var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
+                    if (forcedMatch.Kind == MatchKind.ManualOverride)
+                    {
+                        startupProfile = forcedMatch.Profile;
+                    }
+                }
+
                 var startupLanguage =
-                    _recordingProfile?.InputLanguage ?? startupSettings.Language;
+                    startupProfile?.InputLanguage ?? startupSettings.Language;
                 var startupLanguageHint =
                     startupLanguage is { Length: > 0 } lang && lang != "auto"
                         ? lang
@@ -505,7 +538,7 @@ public sealed class DictationOrchestrator : IDisposable
                 // selected. Skip the WebSocket entirely in that case to avoid
                 // burning provider bandwidth on a session we'd discard.
                 var startupTaskName =
-                    _recordingProfile?.SelectedTask ?? startupSettings.TranscriptionTask;
+                    startupProfile?.SelectedTask ?? startupSettings.TranscriptionTask;
                 var startupIsTranslate = string.Equals(
                     startupTaskName, "translate", StringComparison.OrdinalIgnoreCase
                 );
@@ -603,7 +636,9 @@ public sealed class DictationOrchestrator : IDisposable
                         .ConfigureAwait(false);
                     appProcess = initialSnap?.ProcessName;
                     appTitle = initialSnap?.Title;
-                    initialMatch = _profiles.MatchProfile(appProcess, null);
+                    // A forced profile id (from a Profile hotkey) yields a
+                    // MatchKind.ManualOverride and bypasses window/URL context.
+                    initialMatch = _profiles.MatchProfile(appProcess, null, forcedProfileId);
                     matchedProfile = initialMatch.Profile;
 
                     if (initialSnap is null)
@@ -737,32 +772,42 @@ public sealed class DictationOrchestrator : IDisposable
                                 _recordingAppUrl = deferredUrl;
                             }
 
-                            var rematch = _profiles.MatchProfile(appProcess, deferredUrl);
-                            if (
-                                rematch.Profile is not null
-                                && (int)rematch.Kind < (int)initialMatch.Kind
-                            )
+                            // A forced profile (Profile hotkey) is exclusive for
+                            // the invocation: we still captured the URL above for
+                            // history/diagnostics, but we must not let a
+                            // context rematch swap the profile out. ManualOverride
+                            // is the highest MatchKind value, so an ungated
+                            // rematch (e.g. Website=1 < ManualOverride=4) would
+                            // override it — gate the whole rematch+swap here.
+                            if (forcedProfileId is null)
                             {
-                                lock (_recordingSessionLock)
+                                var rematch = _profiles.MatchProfile(appProcess, deferredUrl);
+                                if (
+                                    rematch.Profile is not null
+                                    && (int)rematch.Kind < (int)initialMatch.Kind
+                                )
                                 {
-                                    if (_recordingSession != sessionId)
+                                    lock (_recordingSessionLock)
                                     {
-                                        return;
+                                        if (_recordingSession != sessionId)
+                                        {
+                                            return;
+                                        }
+
+                                        _recordingProfile = rematch.Profile;
                                     }
 
-                                    _recordingProfile = rematch.Profile;
+                                    SetOverlayState(state =>
+                                        state with
+                                        {
+                                            ActiveProfileName = rematch.Profile.Name
+                                        }
+                                    );
+
+                                    _audio.WhisperModeEnabled =
+                                        rematch.Profile.WhisperModeOverride
+                                        ?? _settings.Current.WhisperModeEnabled;
                                 }
-
-                                SetOverlayState(state =>
-                                    state with
-                                    {
-                                        ActiveProfileName = rematch.Profile.Name
-                                    }
-                                );
-
-                                _audio.WhisperModeEnabled =
-                                    rematch.Profile.WhisperModeOverride
-                                    ?? _settings.Current.WhisperModeEnabled;
                             }
                         }
                     }
@@ -1434,6 +1479,8 @@ public sealed class DictationOrchestrator : IDisposable
                 rawText,
                 new PipelineOptions
                 {
+                    NormalizeSpokenLineBreaks = true,
+                    NormalizeSpokenPunctuation = true,
                     AppFormatter = AppFormatterService.Format,
                     TargetProcessName = context.AppProcess,
                     DictionaryCorrector = _dictionary.ApplyCorrections,

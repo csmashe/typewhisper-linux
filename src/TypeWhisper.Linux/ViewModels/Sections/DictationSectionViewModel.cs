@@ -453,6 +453,14 @@ public partial class DictationSectionViewModel : ObservableObject
                 : $"{Devices.Count} input device(s) available.";
     }
 
+    /// <summary>
+    ///     Re-polls providers for their current model list when the model
+    ///     dropdown opens, so newly added models appear without a manual
+    ///     "Validate". The dropdown rebuilds via the PluginStateChanged
+    ///     subscription; debounce/guard live in <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
+
     private void RefreshModels()
     {
         var previousSelectedId = SelectedModel?.ModelId ?? _settings.Current.SelectedModelId;
@@ -593,14 +601,38 @@ public partial class DictationSectionViewModel : ObservableObject
         // Auto is always selectable and resolves to CPU at load time when CUDA is absent.
         if (normalized == AppSettings.LocalModelAccelerationNvidiaCuda && !CanUseCuda)
         {
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
-            StatusText = _commands.HasCudaGpu
-                ? "CUDA is not ready yet. Click Fix CUDA path, then restart TypeWhisper."
-                : "CUDA is not available on this system. Using CPU.";
+            // Spell out *why* CUDA can't be selected so the revert isn't silent.
+            // Three distinct cases: no GPU at all, GPU + libs present on disk but
+            // not yet on the loader path, or GPU with the runtime not installed.
+            var message =
+                !_commands.HasCudaGpu
+                    ? "No NVIDIA GPU/driver detected — CUDA is unavailable on this system. Staying on CPU."
+                    : FindCuda12LibraryPath() is not null
+                        ? "CUDA 12 runtime libraries are installed but not on TypeWhisper's library path. "
+                            + "Click \"Fix CUDA path\", then restart TypeWhisper."
+                        : "NVIDIA GPU detected, but the CUDA 12 runtime libraries are not installed "
+                            + "(libcudart.so.12 / libcublas.so.12). Install the CUDA 12 runtime, then "
+                            + "restart TypeWhisper. Staying on CPU until then.";
+            // Revert on the next UI frame, not synchronously: a ComboBox ignores a
+            // SelectedItem reverted inside its own selection-change cycle, which left
+            // the dropdown visually stuck on "NVIDIA CUDA" while settings held CPU.
+            // Set the message *after* the revert — the CPU re-entry clears
+            // CudaSetupStatus, so writing it here keeps the explanation visible.
+            Dispatcher.UIThread.Post(() =>
+            {
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
+                OnPropertyChanged(nameof(SelectedAccelerationOption));
+                CudaSetupStatus = message;
+                StatusText = message;
+            });
+
             OnPropertyChanged(nameof(AccelerationStatusText));
             OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
             return;
         }
+
+        // A successful (re)selection clears any stale CUDA-unavailable warning.
+        CudaSetupStatus = "";
 
         if (
             !string.Equals(
