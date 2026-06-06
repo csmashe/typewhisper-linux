@@ -14,9 +14,11 @@ internal static class StatusCommand
             var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");
             var body = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
+            {
                 return ConsoleOutput.Error(
                     $"Status request failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}"
                 );
+            }
 
             if (json)
             {
@@ -39,6 +41,10 @@ internal static class StatusCommand
         catch (HttpRequestException)
         {
             return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.");
+        }
+        catch (JsonException)
+        {
+            return ConsoleOutput.Error("Received malformed JSON from the API.");
         }
     }
 }

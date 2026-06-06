@@ -19,24 +19,34 @@ internal static class DiscoveryFileReader
             var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
             if (string.IsNullOrWhiteSpace(configHome))
             {
-                configHome = Path.Combine(
+                configHome = Path.Join(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     ".config"
                 );
             }
 
-            var path = Path.Combine(configHome, "typewhisper", "api-discovery.json");
+            var path = Path.Join(configHome, "typewhisper", "api-discovery.json");
             if (!File.Exists(path))
+            {
                 return null;
+            }
 
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
             int? port = null;
             string? token = null;
-            if (root.TryGetProperty("port", out var portEl) && portEl.ValueKind == JsonValueKind.Number)
-                port = portEl.GetInt32();
+            if (root.TryGetProperty("port", out var portEl)
+                && portEl.ValueKind == JsonValueKind.Number
+                && portEl.TryGetInt32(out var portValue)
+                && portValue is >= 1 and <= 65535)
+            {
+                port = portValue;
+            }
+
             if (root.TryGetProperty("token", out var tokenEl) && tokenEl.ValueKind == JsonValueKind.String)
+            {
                 token = tokenEl.GetString();
+            }
 
             return port is null ? null : new DiscoveryFile(port.Value, token);
         }

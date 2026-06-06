@@ -14,9 +14,11 @@ internal static class ModelsCommand
             var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/models");
             var body = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
+            {
                 return ConsoleOutput.Error(
                     $"Models request failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}"
                 );
+            }
 
             if (json)
             {
@@ -26,7 +28,12 @@ internal static class ModelsCommand
 
             using var doc = JsonDocument.Parse(body);
             if (!doc.RootElement.TryGetProperty("models", out var models))
+            {
+                Console.Error.WriteLine(
+                    "Warning: response is missing the 'models' field; the API contract may have changed."
+                );
                 return 0;
+            }
 
             var rows = models.EnumerateArray().ToList();
             if (rows.Count == 0)
@@ -42,7 +49,7 @@ internal static class ModelsCommand
             Console.WriteLine(
                 $"{ConsoleOutput.Pad("ID", idWidth)}  {ConsoleOutput.Pad("ENGINE", engineWidth)}  {ConsoleOutput.Pad("NAME", nameWidth)}  STATUS"
             );
-            Console.WriteLine(new string('-', idWidth + engineWidth + nameWidth + 10));
+            Console.WriteLine(new string('-', idWidth + engineWidth + nameWidth + 12));
 
             foreach (var m in rows)
             {
@@ -58,6 +65,10 @@ internal static class ModelsCommand
         catch (HttpRequestException)
         {
             return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.");
+        }
+        catch (JsonException)
+        {
+            return ConsoleOutput.Error("Received malformed JSON from the API.");
         }
     }
 }

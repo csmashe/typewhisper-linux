@@ -12,22 +12,22 @@ namespace TypeWhisper.Cli.Services;
 /// </summary>
 internal sealed class ApiClient
 {
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(5) };
-    private readonly HttpClient _transcribeHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
-
     public ApiClient(string baseUrl, string? token)
     {
         BaseUrl = baseUrl;
 
         if (string.IsNullOrWhiteSpace(token))
+        {
             return;
+        }
 
         var auth = new AuthenticationHeaderValue("Bearer", token);
-        _http.DefaultRequestHeaders.Authorization = auth;
-        _transcribeHttp.DefaultRequestHeaders.Authorization = auth;
+        Http.DefaultRequestHeaders.Authorization = auth;
+        TranscribeHttp.DefaultRequestHeaders.Authorization = auth;
     }
 
     public string BaseUrl { get; }
-    public HttpClient Http => _http;
-    public HttpClient TranscribeHttp => _transcribeHttp;
+    public HttpClient Http { get; } = new() { Timeout = TimeSpan.FromMinutes(5) };
+
+    public HttpClient TranscribeHttp { get; } = new() { Timeout = Timeout.InfiniteTimeSpan };
 }

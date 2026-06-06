@@ -12,7 +12,9 @@ internal static class JsonFormatting
     public static string Prop(JsonElement el, string name)
     {
         if (!el.TryGetProperty(name, out var value))
+        {
             return "";
+        }
 
         return value.ValueKind switch
         {
@@ -20,7 +22,7 @@ internal static class JsonFormatting
             JsonValueKind.Number => value.ToString(),
             JsonValueKind.True => "true",
             JsonValueKind.False => "false",
-            _ => "",
+            _ => ""
         };
     }
 
@@ -52,10 +54,14 @@ internal static class JsonFormatting
                     error.ValueKind == JsonValueKind.Object
                     && error.TryGetProperty("message", out var message)
                 )
+                {
                     return message.GetString() ?? body;
+                }
 
                 if (error.ValueKind == JsonValueKind.String)
+                {
                     return error.GetString() ?? body;
+                }
             }
         }
         catch

@@ -12,14 +12,22 @@ namespace TypeWhisper.Cli.Commands;
 /// </summary>
 internal static class TranscribeCommand
 {
+    // Mirrors the server's MaxTranscribeRequestBytes (HttpApiService): the API
+    // rejects larger uploads, so there is no point buffering past this.
+    private const long MaxStdinBytes = 100L * 1024 * 1024;
+
     public static async Task<int> RunAsync(ApiClient api, CliOptions options)
     {
         if (!string.IsNullOrEmpty(options.Language) && options.LanguageHints.Count > 0)
+        {
             return ConsoleOutput.Error("--language and --language-hint cannot be used together.");
+        }
 
         var file = options.Positionals.FirstOrDefault();
         if (string.IsNullOrWhiteSpace(file))
+        {
             return ConsoleOutput.Error("Usage: typewhisper transcribe <file|->");
+        }
 
         Stream audioStream;
         string fileName;
@@ -28,9 +36,24 @@ internal static class TranscribeCommand
         {
             // Buffer stdin so we can magic-sniff the first bytes and still
             // forward the whole stream to the API. Audio uploads from
-            // dictation pipelines fit easily in memory at MaxTranscribeRequestBytes.
+            // dictation pipelines fit easily in memory at MaxTranscribeRequestBytes;
+            // cap the read at that limit so an unbounded pipe can't OOM the CLI.
             var buffer = new MemoryStream();
-            await Console.OpenStandardInput().CopyToAsync(buffer);
+            var stdin = Console.OpenStandardInput();
+            var chunk = new byte[81920];
+            int read;
+            while ((read = await stdin.ReadAsync(chunk)) > 0)
+            {
+                if (buffer.Length + read > MaxStdinBytes)
+                {
+                    return ConsoleOutput.Error(
+                        $"stdin audio exceeds the {MaxStdinBytes / (1024 * 1024)} MB limit."
+                    );
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
             buffer.Position = 0;
             audioStream = buffer;
             fileName = $"stdin.{StdinAudioSniffer.Detect(buffer.GetBuffer().AsSpan(0, (int)buffer.Length))}";
@@ -38,9 +61,19 @@ internal static class TranscribeCommand
         else
         {
             if (!File.Exists(file))
+            {
                 return ConsoleOutput.Error($"File not found: {file}");
+            }
 
-            audioStream = File.OpenRead(file);
+            try
+            {
+                audioStream = File.OpenRead(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return ConsoleOutput.Error($"Could not open file: {ex.Message}");
+            }
+
             fileName = Path.GetFileName(file);
         }
 
@@ -57,7 +90,10 @@ internal static class TranscribeCommand
 
                 AddString(content, "language", options.Language);
                 foreach (var hint in options.LanguageHints)
+                {
                     AddString(content, "language_hint", hint);
+                }
+
                 AddString(content, "task", options.Task);
                 AddString(content, "target_language", options.TranslateTo);
                 AddString(content, "response_format", options.ResponseFormat);
@@ -94,9 +130,11 @@ internal static class TranscribeCommand
                 }
 
                 if (!response.IsSuccessStatusCode)
+                {
                     return ConsoleOutput.Error(
                         $"Transcription failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}"
                     );
+                }
 
                 if (options.Json)
                 {
@@ -118,6 +156,8 @@ internal static class TranscribeCommand
     private static void AddString(MultipartFormDataContent content, string name, string? value)
     {
         if (!string.IsNullOrWhiteSpace(value))
+        {
             content.Add(new StringContent(value), name);
+        }
     }
 }

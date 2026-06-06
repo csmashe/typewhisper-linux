@@ -1,5 +1,6 @@
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable CollectionNeverUpdated.Global
+
 namespace TypeWhisper.Cli.Models;
 
 /// <summary>
@@ -75,59 +76,93 @@ internal sealed record CliOptions
                         || port < 1
                         || port > 65535
                     )
-                        return options with
-                        {
-                            ErrorMessage = "--port requires a number between 1 and 65535.",
-                        };
+                    {
+                        return options with { ErrorMessage = "--port requires a number between 1 and 65535." };
+                    }
+
                     portWasExplicit = true;
                     break;
                 case "--token":
                 case "--api-token":
                     if (!TryReadValue(args, ref i, out token))
+                    {
                         return options with { ErrorMessage = $"{arg} requires a value." };
+                    }
+
                     tokenWasExplicit = true;
                     break;
                 case "--language":
                     if (!TryReadValue(args, ref i, out language))
+                    {
                         return options with { ErrorMessage = "--language requires a value." };
+                    }
+
                     break;
                 case "--language-hint":
                     if (!TryReadValue(args, ref i, out var hint))
+                    {
                         return options with { ErrorMessage = "--language-hint requires a value." };
+                    }
+
                     languageHints.Add(hint);
                     break;
                 case "--task":
                     if (!TryReadValue(args, ref i, out task))
+                    {
                         return options with { ErrorMessage = "--task requires a value." };
+                    }
+
                     break;
                 case "--translate-to":
                     if (!TryReadValue(args, ref i, out translateTo))
+                    {
                         return options with { ErrorMessage = "--translate-to requires a value." };
+                    }
+
                     break;
                 case "--response-format":
                     if (!TryReadValue(args, ref i, out responseFormat))
+                    {
                         return options with { ErrorMessage = "--response-format requires a value." };
+                    }
+
                     break;
                 case "--prompt":
                     if (!TryReadValue(args, ref i, out prompt))
+                    {
                         return options with { ErrorMessage = "--prompt requires a value." };
+                    }
+
                     break;
                 case "--engine":
                     if (!TryReadValue(args, ref i, out engine))
+                    {
                         return options with { ErrorMessage = "--engine requires a value." };
+                    }
+
                     break;
                 case "--model":
                     if (!TryReadValue(args, ref i, out model))
+                    {
                         return options with { ErrorMessage = "--model requires a value." };
+                    }
+
                     break;
                 default:
                     if (arg.StartsWith('-') && arg != "-")
+                    {
                         return options with { ErrorMessage = $"Unknown option '{arg}'." };
+                    }
 
                     if (command is null)
+                    {
                         command = arg;
+                    }
                     else
+                    {
                         positionals.Add(arg);
+                    }
+
                     break;
             }
         }
@@ -149,7 +184,7 @@ internal sealed record CliOptions
             Prompt = prompt,
             Engine = engine,
             Model = model,
-            AwaitDownload = awaitDownload,
+            AwaitDownload = awaitDownload
         };
     }
 

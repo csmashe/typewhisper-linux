@@ -13,5 +13,8 @@ internal static class ConsoleOutput
         return 1;
     }
 
-    public static string Pad(string value, int width) => value.PadRight(width);
+    public static string Pad(string value, int width)
+    {
+        return value.PadRight(width);
+    }
 }
