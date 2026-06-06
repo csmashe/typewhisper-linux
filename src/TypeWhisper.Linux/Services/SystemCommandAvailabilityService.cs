@@ -777,7 +777,7 @@ public sealed record LinuxCapabilitySnapshot(
         SessionType == "Wayland"
             ? CompositorRejectsWtype
                 ? "Set up ydotool to enable automatic paste on GNOME / KDE Wayland."
-                : "Install wtype (or ydotool / xdotool) to enable automatic paste."
+                : "Install wtype or ydotool to enable automatic paste."
             : "Install xdotool to enable automatic paste.";
 
     public string CudaStatus =>

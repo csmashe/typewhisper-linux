@@ -471,6 +471,39 @@ public sealed class TextInsertionServiceTests
         );
     }
 
+    [Theory]
+    // Regression: xdotool present on Wayland must NOT disable direct typing.
+    // ydotool is usable (daemon socket up), so an unknown target is typed.
+    [InlineData("Wayland", true, false, "gnome", true, true, true)]
+    // ydotool usable, no xdotool — still types.
+    [InlineData("Wayland", false, false, "gnome", true, true, true)]
+    // wlroots with wtype and no ydotool — wtype is honoured, so types.
+    [InlineData("Wayland", false, true, "wlroots", false, false, true)]
+    // GNOME rejects wtype and ydotool isn't usable — no native backend, paste.
+    [InlineData("Wayland", true, true, "gnome", false, false, false)]
+    // Only xdotool on Wayland — XWayland-only, cannot type natively, paste.
+    [InlineData("Wayland", true, false, "gnome", false, false, false)]
+    // X11 never takes the unknown-target typing path.
+    [InlineData("X11", true, false, "unknown", false, false, false)]
+    public void LinuxTextInsertionPlatform_PrefersDirectTypingForUnknownTarget_GatesOnNativeBackend(
+        string sessionType,
+        bool hasXdotool,
+        bool hasWtype,
+        string compositor,
+        bool hasYdotool,
+        bool hasYdotoolSocket,
+        bool expected
+    )
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor(sessionType, hasXdotool, hasWtype, compositor, hasYdotool, hasYdotoolSocket),
+            runner.Run
+        );
+
+        Assert.Equal(expected, platform.PrefersDirectTypingForUnknownTarget);
+    }
+
     [Fact]
     public async Task LinuxTextInsertionPlatform_X11WithXdotool_UsesXdotool()
     {

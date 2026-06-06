@@ -632,7 +632,21 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public bool IsKdePlasma => _snapshot.Compositor == "kde";
 
-    public bool PrefersDirectTypingForUnknownTarget => _isWayland && !_snapshot.HasXdotool;
+    // On Wayland an unidentified target must be TYPED, never pasted: Ctrl+V
+    // is rejected by terminals (readline quoted-insert), reinterpreted by
+    // Claude Code as image-paste, and garbled by vim normal mode. The old
+    // gate keyed off `!HasXdotool`, but xdotool's presence says nothing about
+    // Wayland — it can neither see Wayland windows nor type into them, yet a
+    // copy installed by some unrelated package would silently flip this off
+    // and route every unknown target through paste. Gate instead on actually
+    // having a Wayland-native typing backend: ydotool (universal, injects
+    // below the compositor) or wtype where the compositor honours it (wlroots).
+    public bool PrefersDirectTypingForUnknownTarget =>
+        _isWayland
+        && (
+            _snapshot.HasYdotoolAvailable
+            || (_snapshot.HasWtype && !_snapshot.CompositorRejectsWtype)
+        );
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
