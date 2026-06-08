@@ -563,7 +563,12 @@ public sealed class YdotoolSetupHelper
                 + UdevRuleContent
                 + "EOF\n"
                 + "  sudo udevadm control --reload && sudo udevadm trigger\n"
-                + "  systemctl --user enable --now ydotoold.service"
+                + "  systemctl --user enable --now ydotoold.service\n"
+                // enable --now won't restart an already-running ydotoold, so a
+                // daemon that started before the rule's uaccess ACL landed keeps
+                // a stale EACCES /dev/uinput handle. Restart forces a fresh open
+                // with current perms — mirrors the automated path's restart.
+                + "  systemctl --user restart ydotoold.service"
             );
         }
 

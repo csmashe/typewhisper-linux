@@ -31,10 +31,6 @@ MARKER="Installed by TypeWhisper"
 # pre-installed, which is exactly why reset is baseline-guarded.
 TARGET_PACKAGES=(ydotool wl-clipboard xclip xdotool wtype ffmpeg)
 
-# Window Calls GNOME extension — detected via its D-Bus object, removed only if
-# it was absent at baseline.
-WINDOW_CALLS_DBUS_PATH="/org/gnome/Shell/Extensions/Windows"
-
 # ---- pretty output ---------------------------------------------------------
 
 c_reset=$'\e[0m'; c_bold=$'\e[1m'; c_red=$'\e[31m'; c_grn=$'\e[32m'; c_ylw=$'\e[33m'; c_blu=$'\e[34m'
@@ -57,7 +53,7 @@ detect_pkg_mgr() {
         *fedora*|*rhel*|*centos*|*rocky*|*almalinux*) command -v dnf >/dev/null && { echo dnf; return; } ;;
         *debian*|*ubuntu*|*mint*)                     command -v apt-get >/dev/null && { echo apt; return; } ;;
         *arch*|*manjaro*)                             command -v pacman >/dev/null && { echo pacman; return; } ;;
-        *suse*|*opensuse*)                            command -v zypper >/dev/null && { echo zypper; return; } ;;
+        *suse*)                                       command -v zypper >/dev/null && { echo zypper; return; } ;;
     esac
     # Fall back to whatever is on PATH.
     command -v dnf    >/dev/null && { echo dnf;    return; }
