@@ -22,6 +22,10 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
     public string DisplayName => "KDE Plasma";
     public bool SupportsPushToTalk => false;
 
+    // KGlobalAccel only loads a dropped .desktop on the next login / daemon
+    // restart, so the bind isn't live the moment we write it.
+    public bool RequiresSessionRestartToApply => true;
+
     public bool IsCurrentDesktop()
     {
         return DesktopDetector.DetectId() == "kde";
@@ -30,6 +34,28 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
     public string PreviewLines(DeShortcutSpec spec)
     {
         return $"~/.local/share/kglobalaccel/{FileName(spec.ShortcutId)}\n" + BuildDesktopFile(spec);
+    }
+
+    public Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
+    {
+        var (_, target) = ResolveTargetPath(spec.ShortcutId);
+        if (!File.Exists(target))
+        {
+            return Task.FromResult(false);
+        }
+
+        // BuildDesktopFile is deterministic (no timestamp), so an exact match
+        // confirms the on-disk entry encodes this spec's trigger + command.
+        // A changed hotkey or a partial write produces different bytes and
+        // correctly reads as not-installed.
+        try
+        {
+            return Task.FromResult(File.ReadAllText(target) == BuildDesktopFile(spec));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Task.FromResult(false);
+        }
     }
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)

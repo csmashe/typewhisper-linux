@@ -37,7 +37,12 @@ public record AppSettings
     }
 
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
-    public RecordingMode Mode { get; init; } = RecordingMode.Toggle;
+    // Hybrid ("auto") by default: a quick tap toggles recording on/off, while
+    // holding the key past the push-to-talk threshold records only while held
+    // and stops on release. This is the most forgiving default — a user who
+    // holds the key (expecting push-to-talk) gets sensible behavior instead of
+    // the rapid on/off thrash a pure Toggle mode produces on a held key.
+    public RecordingMode Mode { get; init; } = RecordingMode.Hybrid;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
     public int HistoryRetentionMinutes { get; init; } = 90 * 24 * 60;
     public int? SelectedMicrophoneDevice { get; init; }

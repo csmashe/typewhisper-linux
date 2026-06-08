@@ -152,6 +152,31 @@ public static class SentinelBlock
         return JoinLines(prefix, contents);
     }
 
+    /// <summary>
+    ///     Return the managed lines between the sentinels (exclusive), trimmed
+    ///     of trailing whitespace, or null when there is no well-formed block.
+    ///     Used to verify an installed block actually matches the lines we'd
+    ///     write for the current spec — presence of the sentinels alone doesn't
+    ///     prove the trigger/command inside are current.
+    /// </summary>
+    public static List<string>? ExtractBlockLines(string contents)
+    {
+        var scan = Scan(contents);
+        if (scan.Mismatched || scan.OpenLine is not int open || scan.CloseLine is not int close)
+        {
+            return null;
+        }
+
+        var lines = SplitLines(contents);
+        var inner = new List<string>();
+        for (var i = open + 1; i < close; i++)
+        {
+            inner.Add(lines[i].TrimEnd());
+        }
+
+        return inner;
+    }
+
     private static List<string> SplitLines(string contents)
     {
         if (contents.Length == 0)

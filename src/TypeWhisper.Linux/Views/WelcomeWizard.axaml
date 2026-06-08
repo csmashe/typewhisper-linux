@@ -68,13 +68,16 @@
                               HorizontalAlignment="Stretch">
                         <ComboBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:WizardModelRow">
+                                <!-- Explicit colors: the ComboBox dropdown popup resolves theme
+                                     DynamicResources against the light variant, so size/Recommended
+                                     would render dark-on-dark. Hardcode readable light tones. -->
                                 <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <TextBlock Text="{Binding DisplayName}" />
+                                    <TextBlock Text="{Binding DisplayName}" Foreground="#ECECEC" />
                                     <TextBlock Text="{Binding SizeDescription}" FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               Foreground="#9CA3AF"
                                                VerticalAlignment="Center" />
                                     <TextBlock Text="— Recommended" FontSize="11"
-                                               Foreground="{DynamicResource SystemAccentColorLight2Brush}"
+                                               Foreground="#5BA3F5"
                                                VerticalAlignment="Center"
                                                IsVisible="{Binding IsRecommended}" />
                                 </StackPanel>
@@ -83,6 +86,17 @@
                     </ComboBox>
                     <TextBlock Text="{Binding ModelStatus}" FontSize="11"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8"
+                          IsVisible="{Binding IsModelDownloading}">
+                        <ProgressBar Grid.Column="0"
+                                     Minimum="0" Maximum="1"
+                                     Value="{Binding ModelDownloadProgress}"
+                                     Height="6" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding ModelDownloadPercentText}"
+                                   FontSize="11" MinWidth="36"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    </Grid>
 
                     <StackPanel Spacing="6" Margin="0,10,0,0">
                         <TextBlock Text="Writing focus" FontWeight="SemiBold" />
@@ -96,9 +110,9 @@
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="models:IndustryPreset">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <TextBlock Text="{Binding Name}" />
+                                        <TextBlock Text="{Binding Name}" Foreground="#ECECEC" />
                                         <TextBlock Text="{Binding Description}" FontSize="11"
-                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   Foreground="#9CA3AF"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
                                 </DataTemplate>
@@ -178,40 +192,80 @@
                 </StackPanel>
             </TabItem>
 
-            <!-- Step 4: system check -->
+            <!-- Step 4: setup checklist (machine-driven) -->
             <TabItem>
                 <StackPanel Spacing="14">
-                    <TextBlock Text="System check"
-                               FontSize="18" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding DiagnosticsSummary}"
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="Set up your system"
+                                   FontSize="18" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Content="Re-check"
+                                Command="{Binding RecheckSetupCommand}" />
+                    </Grid>
+                    <TextBlock Text="{Binding SetupSummary}"
                                TextWrapping="Wrap" FontSize="12"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                     <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
                             CornerRadius="4" Padding="0">
-                        <ScrollViewer MaxHeight="280">
-                            <ItemsControl ItemsSource="{Binding Diagnostics}">
+                        <ScrollViewer MaxHeight="300">
+                            <ItemsControl ItemsSource="{Binding SetupItems}">
                                 <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:WelcomeDiagnosticRow">
+                                    <DataTemplate x:DataType="vm:SetupTaskRow">
                                         <Border Padding="12,9" BorderThickness="0,0,0,1"
                                                 BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
-                                                <CheckBox Grid.Column="0"
-                                                          IsChecked="{Binding IsReady, Mode=OneWay}"
-                                                          IsEnabled="False"
-                                                          VerticalAlignment="Top" />
-                                                <StackPanel Grid.Column="1" Spacing="3">
-                                                    <TextBlock Text="{Binding Title}"
-                                                               FontWeight="SemiBold" />
-                                                    <TextBlock Text="{Binding Status}"
-                                                               TextWrapping="Wrap"
-                                                               FontSize="12"
-                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                                    <TextBlock Text="{Binding Hint}"
-                                                               TextWrapping="Wrap"
-                                                               FontSize="11"
-                                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                                                </StackPanel>
-                                            </Grid>
+                                            <StackPanel Spacing="6">
+                                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding StatusGlyph}"
+                                                               FontWeight="Bold"
+                                                               FontSize="15"
+                                                               VerticalAlignment="Top"
+                                                               Foreground="{Binding IsSatisfied, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#4CAF50|False=#E0A030'}" />
+                                                    <StackPanel Grid.Column="1" Spacing="2">
+                                                        <Grid ColumnDefinitions="*,Auto">
+                                                            <TextBlock Grid.Column="0"
+                                                                       Text="{Binding Title}"
+                                                                       FontWeight="SemiBold" />
+                                                            <TextBlock Grid.Column="1"
+                                                                       Text="{Binding RequirementLabel}"
+                                                                       FontSize="10"
+                                                                       VerticalAlignment="Center"
+                                                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                        </Grid>
+                                                        <TextBlock Text="{Binding Summary}"
+                                                                   TextWrapping="Wrap"
+                                                                   FontSize="12"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                        <TextBlock Text="{Binding Detail}"
+                                                                   TextWrapping="Wrap"
+                                                                   FontSize="11"
+                                                                   IsVisible="{Binding HasDetail}"
+                                                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="2" Spacing="4"
+                                                                VerticalAlignment="Center"
+                                                                MinWidth="90">
+                                                        <ProgressBar IsIndeterminate="True"
+                                                                     Height="4"
+                                                                     IsVisible="{Binding IsBusy}" />
+                                                        <Button Content="{Binding ActionLabel}"
+                                                                HorizontalAlignment="Stretch"
+                                                                IsVisible="{Binding CanRunAction}"
+                                                                Command="{Binding $parent[ItemsControl].((vm:WelcomeWizardViewModel)DataContext).RunSetupActionCommand}"
+                                                                CommandParameter="{Binding}" />
+                                                    </StackPanel>
+                                                </Grid>
+                                                <TextBox Text="{Binding CopyCommand}"
+                                                         IsReadOnly="True"
+                                                         FontFamily="monospace"
+                                                         FontSize="11"
+                                                         IsVisible="{Binding HasCopyCommand}" />
+                                                <TextBlock Text="{Binding ActionMessage}"
+                                                           TextWrapping="Wrap"
+                                                           FontSize="11"
+                                                           IsVisible="{Binding HasActionMessage}"
+                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                            </StackPanel>
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -325,36 +379,50 @@
             <TabItem>
                 <StackPanel Spacing="12" VerticalAlignment="Center">
                     <TextBlock Text="You're ready" FontSize="22" FontWeight="SemiBold"
-                               HorizontalAlignment="Center" />
+                               HorizontalAlignment="Center"
+                               IsVisible="{Binding AllRequiredReady}" />
+                    <TextBlock Text="Almost there" FontSize="22" FontWeight="SemiBold"
+                               HorizontalAlignment="Center"
+                               IsVisible="{Binding !AllRequiredReady}" />
                     <TextBlock TextWrapping="Wrap" HorizontalAlignment="Center" MaxWidth="480"
                                TextAlignment="Center"
+                               IsVisible="{Binding AllRequiredReady}"
                                Text="Open any text field, press your hotkey, speak a sentence, then press the hotkey again. TypeWhisper will transcribe locally and type the result into the focused window." />
 
-                    <!-- Auto-run ydotool setup on entering this step. The
-                         section is hidden when the integration is already
-                         fully configured (or we're on X11 / Snapshot says
-                         Wayland-not-applicable). -->
+                    <!-- Shown when setup added the user to the input group: the
+                         global shortcut only activates after a re-login. -->
+                    <Border Background="#3A2F12"
+                            BorderBrush="#7A5E1E" BorderThickness="1"
+                            CornerRadius="6" Padding="14,12"
+                            MaxWidth="480" HorizontalAlignment="Center"
+                            Margin="0,16,0,0"
+                            IsVisible="{Binding ShowReloginNotice}">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="One more step: log out and back in"
+                                       FontWeight="SemiBold" />
+                            <TextBlock TextWrapping="Wrap" FontSize="12"
+                                       Text="Setup added you to the 'input' group so the global shortcut can read your keyboard (this is what enables hold-to-talk). Log out of your desktop and back in once to activate it." />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- When required setup is incomplete, Finish is disabled.
+                         Point the user back to the setup step (or to Skip). -->
                     <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
                             CornerRadius="6"
                             Padding="14,12"
                             MaxWidth="480"
                             HorizontalAlignment="Center"
                             Margin="0,16,0,0"
-                            IsVisible="{Binding ShowYdotoolSetupSection}">
-                        <Grid ColumnDefinitions="Auto,*"
-                              ColumnSpacing="10">
-                            <ProgressBar Grid.Column="0"
-                                         Width="16"
-                                         Height="16"
-                                         IsIndeterminate="True"
-                                         VerticalAlignment="Center"
-                                         IsVisible="{Binding IsYdotoolSetupRunning}" />
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding YdotoolSetupStatus}"
+                            IsVisible="{Binding !AllRequiredReady}">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="{Binding SetupSummary}"
                                        FontSize="12"
+                                       TextWrapping="Wrap" />
+                            <TextBlock FontSize="11"
                                        TextWrapping="Wrap"
-                                       VerticalAlignment="Center" />
-                        </Grid>
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Text="Go Back to finish those items, or choose Skip to set them up later from Settings." />
+                        </StackPanel>
                     </Border>
                 </StackPanel>
             </TabItem>
@@ -370,6 +438,7 @@
                     Margin="0,0,8,0" />
             <Button Grid.Column="3" Content="{Binding NextLabel}"
                     Command="{Binding NextCommand}"
+                    IsEnabled="{Binding CanAdvance}"
                     Classes="accent" />
         </Grid>
     </Grid>

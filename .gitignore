@@ -30,3 +30,8 @@ granite-speech-onnx/
 granite-speech-onnx-int8/
 granite-speech-genai/
 src/TypeWhisper.Linux/.codex
+# Setup-test reset toolkit: ignore any locally-generated baseline/cache,
+# but keep the scripts under scripts/setup-test/ tracked.
+typewhisper-setup-test/
+scripts/setup-test/baseline*
+scripts/setup-test/*.local

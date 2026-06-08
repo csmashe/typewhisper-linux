@@ -11,6 +11,7 @@ using TypeWhisper.Linux.Services.Hotkey.Portal;
 using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -112,6 +113,17 @@ internal static class ServiceRegistrations
         services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<BrowserAccessibilitySetupHelper>();
         services.AddSingleton<GnomeWindowCallsSetupHelper>();
+
+        // Machine-driven onboarding setup checklist. Each task self-gates on
+        // the detected environment via AppliesToThisMachine(); the wizard
+        // renders whichever apply. Adding a new desktop/session is a matter
+        // of registering more tasks here — the wizard never special-cases one.
+        services.AddSingleton<PackageInstaller>();
+        services.AddSingleton<ISetupTask, ClipboardSetupTask>();
+        services.AddSingleton<ISetupTask, AutoPasteSetupTask>();
+        services.AddSingleton<ISetupTask, GlobalHotkeySetupTask>();
+        services.AddSingleton<ISetupTask, ActiveWindowSetupTask>();
+        services.AddSingleton<ISetupTask, FfmpegSetupTask>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();

@@ -361,8 +361,37 @@ public sealed class DictationOrchestrator : IDisposable
         _initialized = true;
     }
 
+    // ToggleAsync is reachable concurrently from the hook backend thread, the
+    // tray-click UI thread, and the IPC socket handler. The debounce check and
+    // the timestamp write must be atomic as a unit — otherwise two threads can
+    // both read the stale timestamp, both pass the gap check, and both proceed,
+    // defeating the debounce in exactly the in-app-hook-plus-desktop-shortcut
+    // case it exists for. (DateTime can't be `volatile`, and visibility alone
+    // wouldn't close the check-then-set window anyway — a lock is required.)
+    private readonly object _toggleDebounceLock = new();
+    private DateTime _lastToggleUtc = DateTime.MinValue;
+
+    // Below this gap, a second toggle is treated as a spurious repeat, not an
+    // intentional re-press. Covers two cases that otherwise flash the overlay
+    // and capture empty ~0.1s clips: (1) a held hotkey whose key autorepeats,
+    // and (2) two mechanisms bound to the same key both firing — e.g. the
+    // in-app hook AND a desktop gsettings shortcut, which land ~0.1s apart.
+    // 350ms is far above those intervals but below a deliberate tap-tap.
+    private static readonly TimeSpan ToggleDebounce = TimeSpan.FromMilliseconds(350);
+
     public async Task ToggleAsync(string? forcedProfileId = null)
     {
+        lock (_toggleDebounceLock)
+        {
+            var now = DateTime.UtcNow;
+            if (now - _lastToggleUtc < ToggleDebounce)
+            {
+                return;
+            }
+
+            _lastToggleUtc = now;
+        }
+
         if (_audio.IsRecording)
         {
             await StopAsync();

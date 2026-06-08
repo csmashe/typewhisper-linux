@@ -9,16 +9,23 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.ViewModels;
 
 /// <summary>
-///     Onboarding wizard — mirrors the Windows WelcomeWindow flow:
+///     Onboarding wizard. Steps:
 ///     1. Pick a transcription model (with recommended default).
 ///     2. Show available extension plugins and their enable state.
 ///     3. Confirm hotkey + microphone.
-///     4. Done — sets HasCompletedOnboarding.
+///     4. Setup checklist — a machine-driven list of <see cref="ISetupTask" />s
+///        (clipboard, automatic paste, global-hotkey registration, active-window
+///        detection, …). Each task self-gates on the detected desktop/session,
+///        so the same wizard fully configures GNOME/Wayland, KDE, Hyprland, etc.
+///        without hard-coding any one of them. Required tasks gate Finish.
+///     5. First-dictation check.
+///     6. Done — sets HasCompletedOnboarding.
 /// </summary>
 public partial class WelcomeWizardViewModel : ObservableObject
 {
@@ -33,14 +40,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private readonly EventHandler _pluginStateChangedHandler;
     private readonly ISettingsService _settings;
     private readonly TextInsertionService _textInsertion;
-    private readonly YdotoolSetupHelper _ydotoolSetup;
+    private readonly IReadOnlyList<ISetupTask> _setupTasks;
     private bool _cleanedUp;
 
     [ObservableProperty]
     private string _cudaBenchmarkStatus = "Run CUDA check if you plan to use GPU acceleration.";
 
     [ObservableProperty]
-    private string _diagnosticsSummary = "";
+    private string _setupSummary = "";
 
     [ObservableProperty]
     private string _firstDictationStatus =
@@ -65,9 +72,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private bool _isMicTestRunning;
 
     [ObservableProperty]
-    private bool _isYdotoolSetupRunning;
-
-    [ObservableProperty]
     private double _micLevel;
 
     [ObservableProperty]
@@ -75,6 +79,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     [ObservableProperty]
     private string _modelStatus = "";
+
+    [ObservableProperty]
+    private double _modelDownloadProgress;
+
+    [ObservableProperty]
+    private bool _isModelDownloading;
+
+    [ObservableProperty]
+    private bool _showReloginNotice;
 
     [ObservableProperty]
     private string _pasteSmokeText = "";
@@ -95,13 +108,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private WizardModelRow? _selectedModel;
 
     [ObservableProperty]
-    private bool _showYdotoolSetupSection;
-
-    [ObservableProperty]
     private int _stepIndex;
-
-    [ObservableProperty]
-    private string _ydotoolSetupStatus = "";
 
     public WelcomeWizardViewModel(
         ModelManagerService models,
@@ -110,7 +117,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         AudioRecordingService audio,
         SystemCommandAvailabilityService commands,
         TextInsertionService textInsertion,
-        YdotoolSetupHelper ydotoolSetup,
+        IEnumerable<ISetupTask> setupTasks,
         IDictionaryService dictionary,
         ISettingsService settings
     )
@@ -121,12 +128,12 @@ public partial class WelcomeWizardViewModel : ObservableObject
         _audio = audio;
         _commands = commands;
         _textInsertion = textInsertion;
-        _ydotoolSetup = ydotoolSetup;
+        _setupTasks = setupTasks.Where(t => t.AppliesToThisMachine()).ToArray();
         _dictionary = dictionary;
         _settings = settings;
 
         _pluginStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(RefreshPluginState);
-        _modelStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(RefreshModelState);
+        _modelStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(OnModelStatusChanged);
         _pluginManager.PluginStateChanged += _pluginStateChangedHandler;
         _models.PropertyChanged += _modelStateChangedHandler;
         _audio.LevelChanged += OnAudioLevelChanged;
@@ -135,7 +142,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
         LoadModels();
         LoadExtensions();
         LoadMics();
-        RefreshDiagnostics();
         RefreshStepDots();
 
         HotkeyText = _hotkey.CurrentHotkeyString;
@@ -143,7 +149,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     public ObservableCollection<WizardModelRow> AvailableModels { get; } = [];
     public ObservableCollection<PluginRow> ExtensionPlugins { get; } = [];
-    public ObservableCollection<WelcomeDiagnosticRow> Diagnostics { get; } = [];
+    public ObservableCollection<SetupTaskRow> SetupItems { get; } = [];
     public ObservableCollection<WelcomeStepDot> StepDots { get; } = [];
     public ObservableCollection<AudioInputDevice> Mics { get; } = [];
     public ObservableCollection<IndustryPreset> IndustryPresets { get; } = [];
@@ -153,6 +159,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public bool IsLastStep => StepIndex == StepCount - 1;
     public string NextLabel => IsLastStep ? "Finish" : "Next";
     public string StepText => $"Step {StepIndex + 1} of {StepCount}";
+
+    // Required, machine-applicable setup tasks must all be satisfied before the
+    // wizard can be finished — this is what makes "done" mean "fully ready".
+    public bool AllRequiredReady =>
+        SetupItems.Where(r => r.IsRequired).All(r => r.IsSatisfied);
+
+    // Gates the Next/Finish button. Non-final steps always advance; the final
+    // step is blocked until everything required is ready. Skip bypasses this.
+    public bool CanAdvance => !IsLastStep || AllRequiredReady;
     public string MicTestButtonText => IsMicTestRunning ? "Stop mic test" : "Start mic test";
 
     public string FirstDictationButtonText =>
@@ -360,6 +375,26 @@ public partial class WelcomeWizardViewModel : ObservableObject
         LoadModels();
     }
 
+    // Posted on every ModelManagerService status change (download progress
+    // ticks included). Update the progress bar FIRST and independently:
+    // RefreshModelState does heavier per-model file probing that can throw mid
+    // download (the file is being written), and a throw there must not swallow
+    // the progress update.
+    private void OnModelStatusChanged()
+    {
+        UpdateDownloadProgress();
+
+        // While a download is streaming, only the (cheap) progress update runs:
+        // whisper.cpp reports progress on every buffer copy (unthrottled), and
+        // running the heavy per-model RefreshModelState on each tick would
+        // saturate the UI thread so the progress bar never repaints. The
+        // downloaded badges only need refreshing once the download settles.
+        if (!IsModelDownloading)
+        {
+            RefreshModelState();
+        }
+    }
+
     private void RefreshModelState()
     {
         for (var i = 0; i < AvailableModels.Count; i++)
@@ -388,28 +423,51 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
     }
 
+    // Fires on every model status change (download progress ticks included)
+    // so the wizard can show a live progress bar instead of a static label.
+    private void UpdateDownloadProgress()
+    {
+        if (SelectedModel is not { } model)
+        {
+            IsModelDownloading = false;
+            return;
+        }
+
+        var status = _models.GetStatus(model.ModelId);
+        IsModelDownloading = status.Type == ModelStatusType.Downloading;
+        if (IsModelDownloading)
+        {
+            ModelDownloadProgress = Math.Clamp(status.Progress, 0, 1);
+        }
+    }
+
+    public string ModelDownloadPercentText => $"{ModelDownloadProgress * 100:0}%";
+
+    partial void OnModelDownloadProgressChanged(double value)
+    {
+        OnPropertyChanged(nameof(ModelDownloadPercentText));
+    }
+
+    partial void OnSelectedModelChanged(WizardModelRow? value)
+    {
+        UpdateDownloadProgress();
+    }
+
     partial void OnStepIndexChanged(int value)
     {
         OnPropertyChanged(nameof(IsFirstStep));
         OnPropertyChanged(nameof(IsLastStep));
         OnPropertyChanged(nameof(NextLabel));
         OnPropertyChanged(nameof(StepText));
+        OnPropertyChanged(nameof(CanAdvance));
         RefreshStepDots();
 
-        if (value == 3)
+        // Re-evaluate the setup checklist when arriving on the setup step (3)
+        // and again on the final step (5) so the Finish gate reflects the
+        // machine's current state — the user may have fixed things elsewhere.
+        if (value is 3 or 5)
         {
-            RefreshDiagnostics();
-        }
-
-        // Final step: if we're on Wayland and ydotool needs setup, run it
-        // automatically. The user already saw the System Check page, so
-        // arriving here implies they're ready to finalize — surprising
-        // them with the pkexec prompt is fine because it's the explicit
-        // last action of the wizard. If ydotool is already configured
-        // or the binary isn't installed, the section stays hidden.
-        if (value == StepCount - 1)
-        {
-            _ = RunYdotoolSetupIfNeededAsync();
+            _ = RefreshSetupAsync();
         }
     }
 
@@ -421,66 +479,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
     partial void OnIsFirstDictationRecordingChanged(bool value)
     {
         OnPropertyChanged(nameof(FirstDictationButtonText));
-    }
-
-    /// <summary>
-    ///     Runs the ydotool setup helper from inside the wizard's final step
-    ///     when (a) we're on Wayland, (b) the ydotool binary is installed,
-    ///     and (c) the integration isn't already fully configured. The
-    ///     helper itself prompts pkexec for the one udev-rule install.
-    ///     Idempotent: a fully-configured install becomes a no-op and the
-    ///     section stays hidden.
-    /// </summary>
-    private async Task RunYdotoolSetupIfNeededAsync()
-    {
-        var snapshot = _commands.GetSnapshot();
-        if (snapshot.SessionType != "Wayland")
-        {
-            ShowYdotoolSetupSection = false;
-            return;
-        }
-
-        var status = _ydotoolSetup.IsCurrentlyConfigured();
-        if (status.IsFullyConfigured)
-        {
-            ShowYdotoolSetupSection = false;
-            return;
-        }
-
-        if (!status.BinaryInstalled)
-        {
-            ShowYdotoolSetupSection = true;
-            YdotoolSetupStatus =
-                "Automatic paste needs ydotool. Install it through your package manager, "
-                + "then open the Text insertion section to finish the setup.";
-            return;
-        }
-
-        ShowYdotoolSetupSection = true;
-        IsYdotoolSetupRunning = true;
-        YdotoolSetupStatus =
-            "Setting up automatic paste… (you may be asked for your admin password).";
-
-        try
-        {
-            var result = await _ydotoolSetup
-                .SetUpAsync(CancellationToken.None)
-                .ConfigureAwait(true);
-            YdotoolSetupStatus = result.Success
-                ? $"{result.Message} You can now dictate into any Wayland window."
-                : $"{result.Message} {result.Detail} You can retry from the Text insertion section.";
-        }
-        catch (Exception ex)
-        {
-            YdotoolSetupStatus =
-                $"Setup failed: {ex.Message}. Open the Text insertion section to retry.";
-        }
-        finally
-        {
-            IsYdotoolSetupRunning = false;
-            _commands.RefreshSnapshot();
-            RefreshDiagnostics();
-        }
     }
 
     partial void OnIsCudaBenchmarkRunningChanged(bool value)
@@ -515,19 +513,30 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 return;
             }
 
-            ModelStatus = _models.IsDownloaded(row.ModelId)
-                ? $"Loading {row.DisplayName}..."
-                : $"Downloading {row.DisplayName}...";
+            var needsDownload = !_models.IsDownloaded(row.ModelId);
+            ModelStatus = needsDownload
+                ? $"Downloading {row.DisplayName}..."
+                : $"Loading {row.DisplayName}...";
+
+            // Show the progress bar immediately for a real download so it's
+            // visible from 0% — the status-change handler then drives it live.
+            if (needsDownload)
+            {
+                ModelDownloadProgress = 0;
+                IsModelDownloading = true;
+            }
 
             try
             {
                 await _models.DownloadAndLoadModelAsync(row.ModelId);
                 _settings.Save(_settings.Current with { SelectedModelId = row.ModelId });
                 ModelStatus = $"{row.DisplayName} is ready.";
+                IsModelDownloading = false;
                 RefreshModelState();
             }
             catch (Exception ex)
             {
+                IsModelDownloading = false;
                 ModelStatus = $"Failed: {ex.Message}";
                 return;
             }
@@ -561,6 +570,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         if (IsLastStep)
         {
+            // Finish is gated on every required, applicable setup task being
+            // satisfied. The button is disabled in this state too, but guard
+            // here as well so a stray invocation can't bypass it. Skip remains
+            // the explicit escape hatch.
+            if (!AllRequiredReady)
+            {
+                return;
+            }
+
             FinishOnboardingWithIndustryPreset();
             RequestClose?.Invoke(this, EventArgs.Empty);
             return;
@@ -605,98 +623,106 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
     }
 
-    private void RefreshDiagnostics()
+    /// <summary>
+    ///     Re-evaluate every machine-applicable setup task and reflect the
+    ///     result in <see cref="SetupItems" />. Evaluation runs off the UI
+    ///     thread (some tasks spawn gdbus/gsettings) and is reconciled back on
+    ///     it. Rows mid-action are left alone so their progress isn't clobbered.
+    /// </summary>
+    private async Task RefreshSetupAsync()
     {
-        var snapshot = _commands.GetSnapshot();
-        var selectedModelReady =
-            SelectedModel is { } selected
-            && _models.GetStatus(selected.ModelId).Type == ModelStatusType.Ready;
-        var microphoneReady = SelectedMic is not null;
-        var hotkeyReady = !string.IsNullOrWhiteSpace(_hotkey.CurrentHotkeyString);
+        if (SetupItems.Count == 0)
+        {
+            foreach (var task in _setupTasks)
+            {
+                SetupItems.Add(new SetupTaskRow(task));
+            }
+        }
 
-        Diagnostics.Clear();
-        Diagnostics.Add(
-            new WelcomeDiagnosticRow(
-                "Session",
-                snapshot.SessionType,
-                snapshot.SessionType != "Unknown",
-                "TypeWhisper can still run, but desktop automation may be limited."
-            )
-        );
-        Diagnostics.Add(
-            new WelcomeDiagnosticRow(
-                "Clipboard",
-                snapshot.ClipboardStatus,
-                snapshot.HasClipboardTool,
-                $"Install {snapshot.ClipboardToolName} for clipboard fallback."
-            )
-        );
-        Diagnostics.Add(
-            new WelcomeDiagnosticRow(
-                "Automatic paste",
-                snapshot.PasteStatus,
-                snapshot.HasAutomaticPasteTool,
-                snapshot.PasteToolInstallHint
-            )
-        );
-        Diagnostics.Add(
-            new WelcomeDiagnosticRow(
-                "Audio conversion",
-                snapshot.HasFfmpeg ? "ffmpeg available" : "ffmpeg not found",
-                snapshot.HasFfmpeg,
-                "Install ffmpeg for broader file transcription support."
-            )
-        );
-        Diagnostics.Add(
-            new WelcomeDiagnosticRow(
-                "Microphone",
-                microphoneReady ? SelectedMic!.Name : "No input device selected",
-                microphoneReady,
-                "Select a microphone before your first dictation."
-            )
-        );
-        Diagnostics.Add(
-            new WelcomeDiagnosticRow(
-                "Shortcut",
-                hotkeyReady ? _hotkey.CurrentHotkeyString : "No dictation shortcut set",
-                hotkeyReady,
-                "Return to the microphone and shortcut step and set a valid shortcut."
-            )
-        );
-        Diagnostics.Add(
-            new WelcomeDiagnosticRow(
-                "Model",
-                selectedModelReady ? $"{SelectedModel!.DisplayName} ready"
-                : SelectedModel is null ? "No model selected"
-                : $"{SelectedModel.DisplayName} not loaded",
-                selectedModelReady,
-                "Return to the model step and load a transcription model."
-            )
-        );
-        Diagnostics.Add(
-            new WelcomeDiagnosticRow(
-                "CUDA",
-                snapshot.CudaStatus,
-                snapshot.CanUseCuda || !snapshot.HasCudaGpu,
-                "Use CPU or install CUDA 12 runtime libraries before selecting CUDA."
-            )
-        );
+        foreach (var row in SetupItems)
+        {
+            if (row.IsBusy)
+            {
+                continue;
+            }
 
-        var blockingIssues = Diagnostics.Count(row =>
-            !row.IsReady
-            && row.Title
-                is "Clipboard"
-                or "Automatic paste"
-                or "Microphone"
-                or "Shortcut"
-                or "Model"
-        );
-        DiagnosticsSummary =
-            blockingIssues == 0
-                ? "Ready for first dictation."
-                : $"{blockingIssues} setup item(s) need attention before the smoothest first dictation.";
+            SetupTaskState state;
+            try
+            {
+                state = await Task.Run(() => row.Source.EvaluateAsync(CancellationToken.None))
+                    .ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                state = new SetupTaskState(
+                    SetupTaskStatusKind.Failed,
+                    $"Could not check this item: {ex.Message}"
+                );
+            }
+
+            row.Apply(state);
+        }
+
+        RefreshSetupGating();
+    }
+
+    private void RefreshSetupGating()
+    {
+        // Surface a "log out to finish" notice when the global-hotkey task put
+        // the user in the input group — the membership (and thus the shortcut)
+        // only activates after a re-login.
+        var hotkeyRow = SetupItems.FirstOrDefault(r => r.Id == "global-hotkey");
+        ShowReloginNotice =
+            hotkeyRow is not null
+            && hotkeyRow.Summary.Contains("log out", StringComparison.OrdinalIgnoreCase);
+
+        var outstanding = SetupItems.Where(r => r.IsRequired && !r.IsSatisfied).ToList();
+        SetupSummary = SetupItems.All(r => r.IsSatisfied)
+            ? "Everything's set — you're ready to dictate."
+            : outstanding.Count == 0
+                ? "All required items are ready. The remaining items are optional."
+                : $"{outstanding.Count} required item(s) still need attention: "
+                  + $"{string.Join(", ", outstanding.Select(r => r.Title))}.";
+
+        OnPropertyChanged(nameof(AllRequiredReady));
+        OnPropertyChanged(nameof(CanAdvance));
         OnPropertyChanged(nameof(CanRunCudaBenchmark));
         OnPropertyChanged(nameof(CudaBenchmarkButtonEnabled));
+    }
+
+    [RelayCommand]
+    private async Task RunSetupActionAsync(SetupTaskRow? row)
+    {
+        if (row is null || row.IsBusy)
+        {
+            return;
+        }
+
+        row.BeginAction();
+        RefreshSetupGating();
+
+        SetupActionOutcome outcome;
+        try
+        {
+            outcome = await Task.Run(() => row.Source.RunActionAsync(CancellationToken.None))
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            outcome = new SetupActionOutcome(false, $"Action failed: {ex.Message}");
+        }
+
+        row.EndAction(outcome);
+
+        // Re-evaluate everything: an install can satisfy more than one task
+        // (e.g. installing a package the snapshot keys several states off of).
+        await RefreshSetupAsync().ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task RecheckSetupAsync()
+    {
+        await RefreshSetupAsync().ConfigureAwait(true);
     }
 
     [RelayCommand]
@@ -931,4 +957,106 @@ public sealed record WizardModelRow(
     bool IsRecommended
 );
 
-public sealed record WelcomeDiagnosticRow(string Title, string Status, bool IsReady, string Hint);
+/// <summary>
+///     View-model wrapper around one <see cref="ISetupTask" /> for the setup
+///     checklist. Holds the latest evaluated state plus a separate
+///     <see cref="ActionMessage" /> for the outcome of the last action (kept
+///     across re-evaluations so messages like "click Install, then Re-check"
+///     survive the refresh that follows the action).
+/// </summary>
+public sealed partial class SetupTaskRow : ObservableObject
+{
+    public SetupTaskRow(ISetupTask source)
+    {
+        Source = source;
+        Title = source.Title;
+        IsRequired = source.Severity == SetupTaskSeverity.Required;
+    }
+
+    public ISetupTask Source { get; }
+    public string Id => Source.Id;
+    public string Title { get; }
+    public bool IsRequired { get; }
+    public string RequirementLabel => IsRequired ? "Required" : "Recommended";
+
+    [ObservableProperty]
+    private SetupTaskStatusKind _kind = SetupTaskStatusKind.Working;
+
+    [ObservableProperty]
+    private string _summary = "Checking…";
+
+    [ObservableProperty]
+    private string? _detail;
+
+    [ObservableProperty]
+    private string? _actionLabel;
+
+    [ObservableProperty]
+    private string? _copyCommand;
+
+    [ObservableProperty]
+    private string? _actionMessage;
+
+    [ObservableProperty]
+    private bool _isBusy;
+
+    public bool IsSatisfied => Kind == SetupTaskStatusKind.Satisfied;
+    public bool HasDetail => !string.IsNullOrWhiteSpace(Detail);
+    public bool HasCopyCommand => !string.IsNullOrWhiteSpace(CopyCommand);
+    public bool HasActionMessage => !string.IsNullOrWhiteSpace(ActionMessage);
+    public bool CanRunAction => !IsBusy && !string.IsNullOrWhiteSpace(ActionLabel);
+
+    public string StatusTone => Kind switch
+    {
+        SetupTaskStatusKind.Satisfied => "ok",
+        SetupTaskStatusKind.Failed => "error",
+        SetupTaskStatusKind.Working => "busy",
+        _ => "missing"
+    };
+
+    public string StatusGlyph => Kind switch
+    {
+        SetupTaskStatusKind.Satisfied => "✓",
+        SetupTaskStatusKind.Failed => "!",
+        SetupTaskStatusKind.Working => "…",
+        _ => "•"
+    };
+
+    public void Apply(SetupTaskState state)
+    {
+        Kind = state.Kind;
+        Summary = state.Summary;
+        Detail = state.Detail;
+        ActionLabel = state.ActionLabel;
+        CopyCommand = state.CopyCommand;
+        NotifyDerived();
+    }
+
+    public void BeginAction()
+    {
+        IsBusy = true;
+        Kind = SetupTaskStatusKind.Working;
+        ActionMessage = "Working… (you may be prompted for your admin password).";
+        NotifyDerived();
+    }
+
+    public void EndAction(SetupActionOutcome outcome)
+    {
+        IsBusy = false;
+        ActionMessage = string.IsNullOrWhiteSpace(outcome.Detail)
+            ? outcome.Message
+            : $"{outcome.Message} {outcome.Detail}";
+        NotifyDerived();
+    }
+
+    private void NotifyDerived()
+    {
+        OnPropertyChanged(nameof(IsSatisfied));
+        OnPropertyChanged(nameof(HasDetail));
+        OnPropertyChanged(nameof(HasCopyCommand));
+        OnPropertyChanged(nameof(HasActionMessage));
+        OnPropertyChanged(nameof(CanRunAction));
+        OnPropertyChanged(nameof(StatusTone));
+        OnPropertyChanged(nameof(StatusGlyph));
+    }
+}
