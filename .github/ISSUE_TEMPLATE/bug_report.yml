@@ -46,7 +46,7 @@ body:
     id: app-version
     attributes:
       label: TypeWhisper Version
-      placeholder: "e.g. 0.7.2 or commit SHA"
+      placeholder: "e.g. 0.7.3 or commit SHA"
     validations:
       required: true
   - type: textarea

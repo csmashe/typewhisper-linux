@@ -123,6 +123,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISetupTask, AutoPasteSetupTask>();
         services.AddSingleton<ISetupTask, GlobalHotkeySetupTask>();
         services.AddSingleton<ISetupTask, ActiveWindowSetupTask>();
+        services.AddSingleton<ISetupTask, KwinActiveWindowSetupTask>();
         services.AddSingleton<ISetupTask, FfmpegSetupTask>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<DictationOrchestrator>();
