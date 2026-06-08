@@ -51,13 +51,12 @@ public sealed class PackageInstaller
     /// </summary>
     public PackageManager? Detect()
     {
-        foreach (var id in ReadOsReleaseManagerHints())
+        var hinted = ReadOsReleaseManagerHints()
+            .Select(id => Known.FirstOrDefault(m => m.Id == id))
+            .FirstOrDefault(match => match is not null && DesktopDetector.BinaryExists(match.Binary));
+        if (hinted is not null)
         {
-            var match = Known.FirstOrDefault(m => m.Id == id);
-            if (match is not null && DesktopDetector.BinaryExists(match.Binary))
-            {
-                return match;
-            }
+            return hinted;
         }
 
         // os-release didn't point at an installed manager — probe PATH.
@@ -72,8 +71,12 @@ public sealed class PackageInstaller
     /// </summary>
     public string BuildSudoCommand(IReadOnlyList<string> packages)
     {
+        return BuildSudoCommand(packages, Detect());
+    }
+
+    private static string BuildSudoCommand(IReadOnlyList<string> packages, PackageManager? pm)
+    {
         var joined = string.Join(' ', packages);
-        var pm = Detect();
         if (pm is null)
         {
             return $"sudo <your package manager> install {joined}";
@@ -93,8 +96,8 @@ public sealed class PackageInstaller
         CancellationToken ct
     )
     {
-        var fallback = BuildSudoCommand(packages);
         var pm = Detect();
+        var fallback = BuildSudoCommand(packages, pm);
         if (pm is null)
         {
             return new SetupActionOutcome(
@@ -178,20 +181,19 @@ public sealed class PackageInstaller
         {
             if (line.StartsWith("ID=", StringComparison.Ordinal))
             {
-                tokens.Insert(0, Unquote(line.Substring(3)));
+                tokens.Insert(0, Unquote(line[3..]));
             }
             else if (line.StartsWith("ID_LIKE=", StringComparison.Ordinal))
             {
                 tokens.AddRange(
-                    Unquote(line.Substring(8))
+                    Unquote(line[8..])
                         .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 );
             }
         }
 
-        foreach (var token in tokens)
+        foreach (var manager in tokens.Select(MapDistroToManager))
         {
-            var manager = MapDistroToManager(token);
             if (manager is not null)
             {
                 yield return manager;
@@ -216,7 +218,7 @@ public sealed class PackageInstaller
         var s = raw.Trim();
         if (s.Length >= 2 && (s[0] == '"' || s[0] == '\'') && s[^1] == s[0])
         {
-            s = s.Substring(1, s.Length - 2);
+            s = s[1..^1];
         }
 
         return s;
