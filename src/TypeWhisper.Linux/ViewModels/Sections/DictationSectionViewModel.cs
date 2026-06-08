@@ -76,6 +76,12 @@ public partial class DictationSectionViewModel : ObservableObject
     private string _modelStatusText = "Not ready";
 
     [ObservableProperty]
+    private double _modelDownloadProgress;
+
+    [ObservableProperty]
+    private bool _isModelDownloading;
+
+    [ObservableProperty]
     private string _newInsertionAppProcess = "";
 
     [ObservableProperty]
@@ -166,7 +172,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _dictation.StatusMessage += (_, msg) => Dispatcher.UIThread.Post(() => StatusText = msg);
 
         _audio.LevelChanged += OnLevelChanged;
-        _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModelState);
+        _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(OnModelStatusChanged);
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModels);
         _settings.SettingsChanged += settingsValue =>
             Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
@@ -547,6 +553,44 @@ public partial class DictationSectionViewModel : ObservableObject
                 )
             );
         }
+    }
+
+    // Download progress ticks arrive unthrottled; running the heavy per-model
+    // RefreshModelState on each would saturate the UI thread and the bar would
+    // never repaint. So drive the cheap progress update every tick and only
+    // refresh the status badge once the download settles. Mirrors
+    // WelcomeWizardViewModel.OnModelStatusChanged.
+    private void OnModelStatusChanged()
+    {
+        UpdateDownloadProgress();
+
+        if (!IsModelDownloading)
+        {
+            RefreshModelState();
+        }
+    }
+
+    private void UpdateDownloadProgress()
+    {
+        if (SelectedModel is not { } model)
+        {
+            IsModelDownloading = false;
+            return;
+        }
+
+        var status = _models.GetStatus(model.ModelId);
+        IsModelDownloading = status.Type == ModelStatusType.Downloading;
+        if (IsModelDownloading)
+        {
+            ModelDownloadProgress = Math.Clamp(status.Progress, 0, 1);
+        }
+    }
+
+    public string ModelDownloadPercentText => $"{ModelDownloadProgress * 100:0}%";
+
+    partial void OnModelDownloadProgressChanged(double value)
+    {
+        OnPropertyChanged(nameof(ModelDownloadPercentText));
     }
 
     private void RefreshModelState()

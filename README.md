@@ -236,10 +236,13 @@ This Linux branch has been tested on the maintainer's current setups:
 - Pop!_OS 22.04 LTS / GNOME 42.9 / X11 session
 - Fedora 44 / GNOME 46+ / Wayland session (with the Window Calls
   extension installed for active-window detection)
+- Fedora 44 / KDE Plasma 6.6 / Wayland session (global hotkey via the
+  evdev backend with `input`-group membership, `ydotool` for keyboard
+  input, and `kdotool` for active-window detection)
 
-Other Wayland setups (Hyprland, Sway, KDE Plasma, and other GNOME
-versions) should work via their respective compositor-native window
-providers, but have not been tested at this time.
+Other Wayland setups (Hyprland, Sway, and other GNOME versions) should
+work via their respective compositor-native window providers, but have
+not been tested at this time.
 
 Linux desktop behavior can vary by distribution, compositor, desktop
 environment, and especially Wayland implementation. Compositor-native

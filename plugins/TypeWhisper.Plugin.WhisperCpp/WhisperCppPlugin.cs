@@ -363,7 +363,13 @@ public sealed class WhisperCppPlugin
 
                 var buffer = new byte[81920];
                 long bytesCopied = 0;
-                var totalBytes = modelStream.CanSeek ? modelStream.Length : 0;
+                // The download stream isn't seekable, so its Length is unavailable;
+                // fall back to the model's known size as the denominator so the
+                // progress bar grows instead of jumping 0% → 100%. Report(1.0)
+                // below snaps it to exactly 100% regardless of estimate drift.
+                var totalBytes = modelStream.CanSeek
+                    ? modelStream.Length
+                    : model.EstimatedSizeMB * 1024L * 1024L;
 
                 await using (
                     var fileStream = new FileStream(
@@ -386,7 +392,7 @@ public sealed class WhisperCppPlugin
                         bytesCopied += read;
 
                         if (totalBytes > 0)
-                            progress?.Report((double)bytesCopied / totalBytes);
+                            progress?.Report(Math.Min(1.0, (double)bytesCopied / totalBytes));
                     }
 
                     await fileStream.FlushAsync(ct);
