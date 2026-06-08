@@ -28,6 +28,9 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     public string DisplayName => "GNOME";
     public bool SupportsPushToTalk => false;
 
+    // gsettings-daemon applies custom keybindings live.
+    public bool RequiresSessionRestartToApply => false;
+
     public bool IsCurrentDesktop()
     {
         // We accept anything XDG calls GNOME (Ubuntu's "ubuntu:GNOME"
@@ -49,6 +52,75 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
                + $"  name    = {spec.DisplayName}\n"
                + $"  command = {spec.OnPressCommand}\n"
                + $"  binding = {binding}";
+    }
+
+    public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
+    {
+        if (!DesktopDetector.BinaryExists("gsettings"))
+        {
+            return false;
+        }
+
+        var path = BuildCustomPath(spec.ShortcutId);
+        var (ok, listOut, _) = await RunAsync(
+                "gsettings",
+                new[] { "get", MediaKeysSchema, ListKey },
+                ct
+            )
+            .ConfigureAwait(false);
+        if (!ok)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!ParseGSettingsList(listOut).Contains(path))
+            {
+                return false;
+            }
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        // Presence of the path isn't enough: a stale entry (old trigger) or a
+        // partial write leaves the path listed while command/binding are wrong
+        // or missing. Compare the stored command + binding against what we'd
+        // write for this spec.
+        var schemaWithPath = $"{CustomKeybindingSchema}:{path}";
+        var command = await GetStringValueAsync(schemaWithPath, "command", ct).ConfigureAwait(false);
+        var binding = await GetStringValueAsync(schemaWithPath, "binding", ct).ConfigureAwait(false);
+        return command == spec.OnPressCommand && binding == FormatGnomeAccel(spec.Trigger);
+    }
+
+    /// <summary>
+    ///     Read a single string-valued gsettings key and strip the surrounding
+    ///     single quotes gsettings prints (unescaping <c>\'</c> and <c>\\</c>).
+    ///     Returns null when the key can't be read.
+    /// </summary>
+    private static async Task<string?> GetStringValueAsync(
+        string schemaWithPath,
+        string key,
+        CancellationToken ct
+    )
+    {
+        var (ok, raw, _) = await RunAsync("gsettings", new[] { "get", schemaWithPath, key }, ct)
+            .ConfigureAwait(false);
+        if (!ok)
+        {
+            return null;
+        }
+
+        var s = raw.Trim();
+        if (s.Length < 2 || s[0] != '\'' || s[^1] != '\'')
+        {
+            return s;
+        }
+
+        var inner = s.Substring(1, s.Length - 2);
+        return inner.Replace("\\'", "'").Replace("\\\\", "\\");
     }
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)

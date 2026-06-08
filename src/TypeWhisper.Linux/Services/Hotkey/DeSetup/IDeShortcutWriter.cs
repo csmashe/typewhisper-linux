@@ -26,6 +26,17 @@ public interface IDeShortcutWriter
     bool SupportsPushToTalk { get; }
 
     /// <summary>
+    ///     True when a written shortcut only becomes active after the user
+    ///     restarts their session (or the relevant daemon) — KDE's KGlobalAccel
+    ///     doesn't pick up a freshly-dropped <c>.desktop</c> until re-login.
+    ///     GNOME (gsettings-daemon), Hyprland (<c>hyprctl</c>), and Sway
+    ///     (<c>swaymsg reload</c>) all apply live, so they report false. The
+    ///     setup checklist uses this to caveat its "registered" message rather
+    ///     than implying the hotkey is already firing.
+    /// </summary>
+    bool RequiresSessionRestartToApply { get; }
+
+    /// <summary>
     ///     Cheap synchronous check that only reads environment variables
     ///     plus a `which`-style binary lookup. Must not invoke any helper
     ///     command — startup latency budget for the Shortcuts panel is
@@ -40,6 +51,21 @@ public interface IDeShortcutWriter
     ///     — does not touch disk or invoke external commands.
     /// </summary>
     string PreviewLines(DeShortcutSpec spec);
+
+    /// <summary>
+    ///     Best-effort check for whether the managed shortcut currently
+    ///     registered with this desktop matches <paramref name="spec" /> — not
+    ///     merely that *some* entry with that id exists. The setup checklist
+    ///     uses this to decide whether the global-hotkey task is satisfied, so
+    ///     a stale binding (old trigger after the user changed it) or a partial
+    ///     write (entry present but command/binding fields missing) must read as
+    ///     NOT installed. Implementations compare the stored trigger and command
+    ///     against the spec by regenerating what <see cref="WriteAsync" /> would
+    ///     have produced. Reads the desktop's own store only — never mutates —
+    ///     and returns false on any error, since a probe failure is
+    ///     indistinguishable from "not installed" for the checklist's purpose.
+    /// </summary>
+    Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct);
 
     /// <summary>
     ///     Install the shortcut. Idempotent: running twice with the same

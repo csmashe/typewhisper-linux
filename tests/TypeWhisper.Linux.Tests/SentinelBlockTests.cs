@@ -172,6 +172,53 @@ public sealed class SentinelBlockTests
         Assert.Equal(trailingNewline, output.EndsWith("\n"));
     }
 
+    [Fact]
+    public void ExtractBlockLines_NoBlock_ReturnsNull()
+    {
+        Assert.Null(SentinelBlock.ExtractBlockLines("bind = SUPER, q, killactive\n"));
+    }
+
+    [Fact]
+    public void ExtractBlockLines_MismatchedBlock_ReturnsNull()
+    {
+        var input = SentinelBlock.OpenSentinel + "\nbind = ...\n";
+        Assert.Null(SentinelBlock.ExtractBlockLines(input));
+    }
+
+    [Fact]
+    public void ExtractBlockLines_WellFormedBlock_ReturnsInnerLines()
+    {
+        var managed = new[]
+        {
+            "bind  = CTRL SHIFT, SPACE, exec, typewhisper record start",
+            "bindr = CTRL SHIFT, SPACE, exec, typewhisper record stop"
+        };
+        var input =
+            "bind = SUPER, q, killactive\n"
+            + SentinelBlock.OpenSentinel
+            + "\n"
+            + string.Join("\n", managed)
+            + "\n"
+            + SentinelBlock.CloseSentinel
+            + "\n";
+
+        var inner = SentinelBlock.ExtractBlockLines(input);
+
+        Assert.NotNull(inner);
+        Assert.Equal(managed, inner);
+    }
+
+    [Fact]
+    public void ExtractBlockLines_RoundTripsWithReplaceOrAppend()
+    {
+        // The installed-check (Hyprland/Sway IsInstalledAsync) relies on this:
+        // what ReplaceOrAppend writes must be exactly what ExtractBlockLines
+        // reads back, or a freshly-written shortcut would read as not-installed.
+        var managed = new[] { "bindsym --no-repeat Ctrl+Shift+space exec typewhisper" };
+        var written = SentinelBlock.ReplaceOrAppend("bindsym $mod+q kill\n", managed);
+        Assert.Equal(managed, SentinelBlock.ExtractBlockLines(written));
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         var count = 0;

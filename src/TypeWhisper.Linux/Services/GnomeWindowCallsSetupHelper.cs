@@ -16,7 +16,14 @@ public sealed class GnomeWindowCallsSetupHelper
         "https://extensions.gnome.org/extension/4974/window-calls/";
 
     private const string DBusDest = "org.gnome.Shell";
-    private const string DBusPath = "/org/gnome/Shell/Extensions/Windows";
+
+    // Accept either the original "Window Calls" or the "Window Calls Extended"
+    // fork — they expose a compatible List method at different paths.
+    private static readonly (string Path, string Interface)[] Endpoints =
+    {
+        ("/org/gnome/Shell/Extensions/Windows", "org.gnome.Shell.Extensions.Windows"),
+        ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt")
+    };
 
     public bool IsApplicable()
     {
@@ -37,44 +44,57 @@ public sealed class GnomeWindowCallsSetupHelper
             return false;
         }
 
-        try
+        // Don't use `gdbus introspect`: org.gnome.Shell answers introspect on
+        // ANY object path (returning an empty node), so it succeeds even when no
+        // such extension is installed — a false positive. Actually CALL the
+        // List method; a missing object/method exits non-zero. Try each known
+        // extension's endpoint and accept the first that responds.
+        foreach (var (path, iface) in Endpoints)
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(
-                    "gdbus",
-                    $"introspect --session --dest {DBusDest} --object-path {DBusPath}"
-                )
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false
-                }
-            );
-            if (p is null)
+            try
             {
-                return false;
-            }
+                using var p = Process.Start(
+                    new ProcessStartInfo(
+                        "gdbus",
+                        $"call --session --dest {DBusDest} --object-path {path} --method {iface}.List"
+                    )
+                    {
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false
+                    }
+                );
+                if (p is null)
+                {
+                    continue;
+                }
 
-            if (!p.WaitForExit(500))
+                if (!p.WaitForExit(1000))
+                {
+                    try
+                    {
+                        p.Kill(true);
+                    }
+                    catch
+                    {
+                        /* best effort */
+                    }
+
+                    continue;
+                }
+
+                if (p.ExitCode == 0)
+                {
+                    return true;
+                }
+            }
+            catch
             {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return false;
+                // Try the next endpoint.
             }
+        }
 
-            return p.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
+        return false;
     }
 
     public bool TryOpenInstallPage()

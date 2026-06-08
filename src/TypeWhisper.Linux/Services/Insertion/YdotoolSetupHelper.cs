@@ -170,6 +170,16 @@ public sealed class YdotoolSetupHelper
             return unitOk;
         }
 
+        // Restart the daemon so it (re)opens /dev/uinput AFTER the udev rule's
+        // uaccess ACL has been applied. `systemctl --user enable --now` does NOT
+        // restart an already-running ydotoold, so on a first install — where the
+        // daemon may have started moments before the ACL landed — it would keep a
+        // stale EACCES handle and silently fail every keystroke while the socket
+        // looks healthy. A restart guarantees a fresh open with current perms.
+        await _runner
+            .RunAsync("systemctl", new[] { "--user", "restart", UserUnitName }, ct: ct)
+            .ConfigureAwait(false);
+
         var socket = await WaitForSocketAsync(ct).ConfigureAwait(false);
         if (socket is null)
         {

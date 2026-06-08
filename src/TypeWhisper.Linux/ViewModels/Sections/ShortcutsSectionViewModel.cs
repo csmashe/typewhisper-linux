@@ -11,8 +11,7 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class ShortcutsSectionViewModel : ObservableObject
 {
     private const string AddToInputGroupCommand = "sudo usermod -aG input $USER";
-    private const string DictationShortcutId = "typewhisper.dictation.toggle";
-    private const string DictationDisplayName = "TypeWhisper: Toggle Dictation";
+    private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
 
     private readonly HotkeyService _hotkey;
     private readonly ISettingsService _settings;
@@ -252,87 +251,13 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
     }
 
-    // For PTT-capable DEs emit the record start/stop/cancel triplet so the
-    // installed bind drives the Phase 5 CLI directly. Trigger defaults from
-    // the user's configured toggle hotkey so they don't re-enter it here.
+    // Delegates to the shared factory so this panel and the onboarding setup
+    // checklist register byte-for-byte identical shortcuts (same id/trigger/
+    // command) — otherwise one surface could "install" a bind the other
+    // wouldn't recognize as installed.
     private DeShortcutSpec BuildSpec(IDeShortcutWriter writer)
     {
-        var trigger = string.IsNullOrWhiteSpace(_settings.Current.ToggleHotkey)
-            ? "Ctrl+Shift+Space"
-            : _settings.Current.ToggleHotkey;
-        var gui = ResolveGuiCommand();
-        if (writer.SupportsPushToTalk)
-        {
-            return new DeShortcutSpec(
-                DictationShortcutId,
-                DictationDisplayName,
-                trigger,
-                $"{gui} record start",
-                $"{gui} record stop",
-                // Cancel mirrors the trigger but swaps Space → Escape.
-                // It only fires when the user has configured a cancel
-                // accelerator; we synthesize a reasonable default for
-                // them rather than asking up-front.
-                SwapKeyForCancel(trigger),
-                $"{gui} record cancel"
-            );
-        }
-
-        return new DeShortcutSpec(
-            DictationShortcutId,
-            DictationDisplayName,
-            trigger,
-            gui,
-            null,
-            null,
-            null
-        );
-    }
-
-    /// <summary>
-    ///     The command the auto-installed shortcut should invoke. We resolve
-    ///     to the GUI's own apphost path rather than bare <c>typewhisper</c>
-    ///     because <c>CliInstallService</c> installs the separate
-    ///     <c>TypeWhisper.Cli</c> executable under the same name; when that
-    ///     CLI shadows the GUI on PATH the bare command resolves to a binary
-    ///     that doesn't implement <c>record start/stop/cancel</c> and the
-    ///     shortcut fails with "unknown record verb" instead of toggling
-    ///     dictation. We only trust <see cref="Environment.ProcessPath" />
-    ///     when it actually points at the apphost — a <c>dotnet run</c> /
-    ///     IDE launch reports the dotnet host instead, and emitting
-    ///     <c>/usr/bin/dotnet record start</c> would also fail. In that
-    ///     source-run case we fall back to the bare <c>typewhisper</c> name,
-    ///     which is fine because dev runs don't usually install the CLI
-    ///     side-by-side with the GUI.
-    /// </summary>
-    private static string ResolveGuiCommand()
-    {
-        var path = Environment.ProcessPath;
-        if (!string.IsNullOrEmpty(path)
-            && string.Equals(Path.GetFileName(path), "typewhisper", StringComparison.Ordinal))
-        {
-            return path.Contains(' ', StringComparison.Ordinal) ? $"\"{path}\"" : path;
-        }
-
-        return "typewhisper";
-    }
-
-    private static string SwapKeyForCancel(string trigger)
-    {
-        // Replace just the terminal key — the modifier stack stays
-        // identical so the cancel binding can't accidentally collide
-        // with the start binding by virtue of being too similar.
-        var parts = trigger.Split(
-            '+',
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-        );
-        if (parts.Length == 0)
-        {
-            return "Ctrl+Shift+Escape";
-        }
-
-        parts[^1] = "Escape";
-        return string.Join('+', parts);
+        return DictationShortcutSpecFactory.Build(_settings, writer);
     }
 
     // VMs don't have direct clipboard access in Avalonia — the view

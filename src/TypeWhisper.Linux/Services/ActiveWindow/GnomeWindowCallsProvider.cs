@@ -21,8 +21,16 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
 {
     private const string DBusDest = "org.gnome.Shell";
-    private const string DBusPath = "/org/gnome/Shell/Extensions/Windows";
-    private const string DBusInterface = "org.gnome.Shell.Extensions.Windows";
+
+    // Both the original "Window Calls" (window-calls@domandoman.xyz) and its
+    // fork "Window Calls Extended" (window-calls-extended@hseliger.eu) export a
+    // compatible List method returning the same window JSON — just at different
+    // object paths/interfaces. Try each so whichever the user installed works.
+    private static readonly (string Path, string Interface)[] Endpoints =
+    {
+        ("/org/gnome/Shell/Extensions/Windows", "org.gnome.Shell.Extensions.Windows"),
+        ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt")
+    };
 
     public string Name => "gnome-window-calls";
 
@@ -47,15 +55,24 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
     {
         try
         {
-            var (listExit, listOutput) = await ProviderProcessRunner
-                .RunAsync(
-                    "gdbus",
-                    $"call --session --dest {DBusDest} --object-path {DBusPath} --method {DBusInterface}.List",
-                    ct
-                )
-                .ConfigureAwait(false);
+            string? listOutput = null;
+            foreach (var (path, iface) in Endpoints)
+            {
+                var (exit, output) = await ProviderProcessRunner
+                    .RunAsync(
+                        "gdbus",
+                        $"call --session --dest {DBusDest} --object-path {path} --method {iface}.List",
+                        ct
+                    )
+                    .ConfigureAwait(false);
+                if (exit == 0 && !string.IsNullOrWhiteSpace(output))
+                {
+                    listOutput = output;
+                    break;
+                }
+            }
 
-            if (listExit != 0 || string.IsNullOrWhiteSpace(listOutput))
+            if (string.IsNullOrWhiteSpace(listOutput))
             {
                 return null;
             }

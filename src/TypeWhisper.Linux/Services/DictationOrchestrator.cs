@@ -361,8 +361,26 @@ public sealed class DictationOrchestrator : IDisposable
         _initialized = true;
     }
 
+    private DateTime _lastToggleUtc = DateTime.MinValue;
+
+    // Below this gap, a second toggle is treated as a spurious repeat, not an
+    // intentional re-press. Covers two cases that otherwise flash the overlay
+    // and capture empty ~0.1s clips: (1) a held hotkey whose key autorepeats,
+    // and (2) two mechanisms bound to the same key both firing — e.g. the
+    // in-app hook AND a desktop gsettings shortcut, which land ~0.1s apart.
+    // 350ms is far above those intervals but below a deliberate tap-tap.
+    private static readonly TimeSpan ToggleDebounce = TimeSpan.FromMilliseconds(350);
+
     public async Task ToggleAsync(string? forcedProfileId = null)
     {
+        var now = DateTime.UtcNow;
+        if (now - _lastToggleUtc < ToggleDebounce)
+        {
+            return;
+        }
+
+        _lastToggleUtc = now;
+
         if (_audio.IsRecording)
         {
             await StopAsync();

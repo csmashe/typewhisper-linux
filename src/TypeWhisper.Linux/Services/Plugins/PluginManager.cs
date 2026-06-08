@@ -13,6 +13,16 @@ namespace TypeWhisper.Linux.Services.Plugins;
 /// </summary>
 public sealed class PluginManager : IDisposable
 {
+    // Plugins enabled on a fresh install (no saved choice): the offline,
+    // no-API-key transcription engines, so dictation works out of the box.
+    // Everything else — cloud providers, LLM/utility integrations — defaults
+    // off until the user opts in.
+    private static readonly HashSet<string> DefaultEnabledPluginIds = new(StringComparer.Ordinal)
+    {
+        "com.typewhisper.whisper-cpp", // offline transcription (recommended default)
+        "com.typewhisper.sherpa-onnx" // offline transcription
+    };
+
     private readonly HashSet<string> _activatedPlugins = [];
     private readonly ConcurrentDictionary<string, Task<bool>> _activationTasks = new();
     private readonly IActiveWindowService _activeWindow;
@@ -222,7 +232,17 @@ public sealed class PluginManager : IDisposable
 
         foreach (var plugin in discovered)
         {
-            var isEnabled = !enabledState.TryGetValue(plugin.Manifest.Id, out var state) || state;
+            // Honor an explicit saved choice; otherwise default ON only for the
+            // offline/local engines that work with no API key, so a fresh install
+            // has a working transcription model out of the box without cluttering
+            // the list with cloud providers that can't do anything until the user
+            // enters a key. Cloud plugins default OFF until opted in (onboarding
+            // or the Plugins tab). Manifest IsLocal is unreliable across plugins,
+            // so we anchor on an explicit allowlist and also respect IsLocal when
+            // a manifest does set it.
+            var isEnabled = enabledState.TryGetValue(plugin.Manifest.Id, out var state)
+                ? state
+                : DefaultEnabledPluginIds.Contains(plugin.Manifest.Id) || plugin.Manifest.IsLocal;
 
             if (isEnabled)
             {

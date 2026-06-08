@@ -16,6 +16,9 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     public string DisplayName => "Sway";
     public bool SupportsPushToTalk => true;
 
+    // swaymsg reload applies the bind live (a warning is surfaced if it couldn't).
+    public bool RequiresSessionRestartToApply => false;
+
     public bool IsCurrentDesktop()
     {
         if (DesktopDetector.DetectId() != "sway")
@@ -36,6 +39,35 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         }
 
         return sb.ToString();
+    }
+
+    public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
+    {
+        var path = ResolveConfigPath();
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+            var inner = SentinelBlock.ExtractBlockLines(existing);
+            if (inner is null)
+            {
+                return false;
+            }
+
+            // The block must contain exactly the lines we'd write for this
+            // spec — a stale trigger/command (or a manual edit) reads as
+            // not-installed so the checklist re-registers it.
+            var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
+            return inner.SequenceEqual(expected);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
