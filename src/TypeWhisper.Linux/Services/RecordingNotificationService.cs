@@ -44,15 +44,21 @@ public sealed partial class RecordingNotificationService : IDisposable
         _enabled = DesktopDetector.UsesNotificationRecordingIndicator();
     }
 
-    // The "how to stop" hint depends on the recording mode: push-to-talk ends on
-    // release, toggle ends on a second press, and hybrid allows either.
-    private string ResolveBody() =>
-        _settings.Current.Mode switch
+    /// <summary>
+    ///     The recording notification's body text. The "how to stop" hint depends
+    ///     on the recording mode: push-to-talk ends on release, toggle ends on a
+    ///     second press, and hybrid allows either. Shared so the Appearance
+    ///     settings preview can't drift from what's actually shown.
+    /// </summary>
+    public static string BodyFor(RecordingMode mode) =>
+        mode switch
         {
             RecordingMode.Toggle => "Speak now — press the shortcut again to stop",
             RecordingMode.PushToTalk => "Speak now — release to insert",
             _ => "Speak now — release, or press the shortcut again, to insert",
         };
+
+    private string ResolveBody() => BodyFor(_settings.Current.Mode);
 
     public void Initialize()
     {
