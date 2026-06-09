@@ -246,11 +246,11 @@ public partial class DictationSectionViewModel : ObservableObject
     public string MediaPauseUnavailableReason =>
         "Unavailable: playerctl is not installed on this system.";
 
-    public bool CanUseSoundFeedback => _commands.HasCanberraGtkPlay;
+    public bool CanUseSoundFeedback => _commands.HasAudioPlayer;
     public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
 
     public string SoundFeedbackUnavailableReason =>
-        "Unavailable: canberra-gtk-play is not installed on this system.";
+        "Unavailable: no audio player (pw-play, paplay, or aplay) is installed on this system.";
 
     public bool CanDeleteSelectedModel =>
         SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);

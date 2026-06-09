@@ -35,6 +35,10 @@ internal sealed record RecordingContext(
 
 public sealed class DictationOrchestrator : IDisposable
 {
+    // Terminal feedback text for a cancelled dictation. Surfaced with
+    // isError=false, so the success cue in ShowFeedback excludes it.
+    private const string CanceledFeedbackText = "Canceled";
+
     private readonly ActiveWindowService _activeWindow;
     private readonly AudioRecordingService _audio;
     private readonly IAudioDuckingService _audioDucking;
@@ -2353,6 +2357,22 @@ public sealed class DictationOrchestrator : IDisposable
                 SessionStartedAtUtc = null
             }
         );
+
+        // Terminal-outcome cue, matching the Windows build's success/error
+        // sounds. ShowFeedback is the single chokepoint every terminal toast
+        // flows through, so classify off isError. Cancellation surfaces with
+        // isError=false but is neither success nor failure — exclude it.
+        if (_settings.Current.SoundFeedbackEnabled)
+        {
+            if (isError)
+            {
+                _soundFeedback.PlayError();
+            }
+            else if (!string.Equals(text, CanceledFeedbackText, StringComparison.Ordinal))
+            {
+                _soundFeedback.PlaySuccess();
+            }
+        }
     }
 
     /// <summary>

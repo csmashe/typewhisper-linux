@@ -14,10 +14,16 @@
         Topmost="True"
         CanResize="False"
         SizeToContent="WidthAndHeight">
-    <Grid Margin="10" Cursor="SizeAll" IsVisible="{Binding HasVisibleContent}">
+    <!-- No Margin: a transparent band around the pill renders as a milky white
+         haze on NVIDIA + XWayland (the compositor mis-composites the window's
+         clear pixels), so the window hugs the pill exactly. The overlay is
+         already inset from the screen edge by PositionOverlay. -->
+    <Grid Cursor="SizeAll" IsVisible="{Binding HasVisibleContent}">
+        <!-- No BorderBrush: the translucent-white 1px stroke reads as jagged
+             white on the rounded caps under NVIDIA + XWayland, where the
+             anti-aliased curved edge is mis-composited. The dark fill alone
+             gives a clean pill. -->
         <Border Background="#F0181818"
-                BorderBrush="#25FFFFFF"
-                BorderThickness="1"
                 CornerRadius="22"
                 MinWidth="320"
                 Padding="14,10"
@@ -140,8 +146,6 @@
         </Border>
 
         <Border Background="#F0181818"
-                BorderBrush="#25FFFFFF"
-                BorderThickness="1"
                 CornerRadius="18"
                 Padding="14,7"
                 IsVisible="{Binding ShowFeedback}">

@@ -3,37 +3,59 @@ using System.Diagnostics;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Plays XDG sound theme events to give audible start/stop feedback.
-///     Uses <c>canberra-gtk-play</c> with the standard microphone sensitivity
-///     event IDs. Silently no-ops when the tool is absent; the async wait is
-///     fire-and-forget so recording start/stop is never delayed by audio.
+///     Plays the bundled dictation cue WAVs (start / stop / success / error)
+///     by shelling out to whatever PCM player is on PATH — <c>pw-play</c>,
+///     <c>paplay</c>, or <c>aplay</c>. This mirrors the Windows build (which
+///     ships its own sounds and plays them via NAudio) instead of relying on
+///     libcanberra/XDG theme events, so the cues play regardless of the desktop
+///     sound theme AND regardless of GNOME's "System Sounds" master toggle
+///     (libcanberra honored that toggle and refused to play anything when it
+///     was off). Fire-and-forget; silently no-ops when no player or sound file
+///     is available so recording start/stop is never delayed by audio.
 /// </summary>
 public sealed class SoundFeedbackService
 {
-    public void PlayRecordingStarted()
-    {
-        PlayCanberraEvent("microphone-sensitivity-high");
-    }
+    private static readonly string SoundsDir =
+        Path.Combine(AppContext.BaseDirectory, "Resources", "Sounds");
 
-    public void PlayRecordingStopped()
-    {
-        PlayCanberraEvent("microphone-sensitivity-low");
-    }
+    // First available PCM player on PATH, resolved once. pw-play and paplay
+    // route through PipeWire / PulseAudio; aplay is the ALSA fallback. All
+    // three play a plain 16-bit PCM WAV given as a positional argument.
+    private static readonly string? Player = ResolvePlayer();
 
-    private static void PlayCanberraEvent(string eventId)
+    public void PlayRecordingStarted() => Play("start.wav");
+
+    public void PlayRecordingStopped() => Play("stop.wav");
+
+    public void PlaySuccess() => Play("success.wav");
+
+    public void PlayError() => Play("error.wav");
+
+    private static void Play(string fileName)
     {
+        if (Player is null)
+        {
+            return;
+        }
+
+        var path = Path.Combine(SoundsDir, fileName);
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
         try
         {
-            var process = Process.Start(
-                new ProcessStartInfo("canberra-gtk-play", $"-i {eventId}")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            );
+            var startInfo = new ProcessStartInfo(Player)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add(path);
 
+            var process = Process.Start(startInfo);
             if (process is null)
             {
                 return;
@@ -43,7 +65,8 @@ public sealed class SoundFeedbackService
             {
                 try
                 {
-                    process.WaitForExit(1500);
+                    // Cues are short (≤0.4s); 2s is ample headroom.
+                    process.WaitForExit(2000);
                 }
                 catch
                 {
@@ -59,5 +82,49 @@ public sealed class SoundFeedbackService
         {
             // Optional platform feedback only.
         }
+    }
+
+    private static string? ResolvePlayer()
+    {
+        foreach (var candidate in new[] { "pw-play", "paplay", "aplay" })
+        {
+            if (OnPath(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool OnPath(string name)
+    {
+        var paths = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(paths))
+        {
+            return false;
+        }
+
+        foreach (var dir in paths.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrEmpty(dir))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (File.Exists(Path.Combine(dir, name)))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Ignore malformed PATH entries.
+            }
+        }
+
+        return false;
     }
 }

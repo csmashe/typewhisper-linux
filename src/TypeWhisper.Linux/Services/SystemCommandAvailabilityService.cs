@@ -117,12 +117,12 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
-    public bool HasCanberraGtkPlay
+    public bool HasAudioPlayer
     {
         get
         {
             var s = _snapshot;
-            return s.HasCanberraGtkPlay;
+            return s.HasAudioPlayer;
         }
     }
 
@@ -498,7 +498,12 @@ public sealed class SystemCommandAvailabilityService
 
         var hasPactl = IsCommandAvailable("pactl");
         var hasPlayerCtl = IsCommandAvailable("playerctl");
-        var hasCanberraGtkPlay = IsCommandAvailable("canberra-gtk-play");
+        // Sound feedback plays bundled WAVs directly through any PCM player,
+        // rather than libcanberra/XDG theme events — so it works regardless of
+        // the desktop sound theme and the "System Sounds" master toggle.
+        var hasAudioPlayer = IsCommandAvailable("pw-play")
+            || IsCommandAvailable("paplay")
+            || IsCommandAvailable("aplay");
         var hasYdotool = IsCommandAvailable("ydotool");
         var ydotoolSocket = ResolveYdotoolSocketPath();
 
@@ -515,7 +520,7 @@ public sealed class SystemCommandAvailabilityService
             speechCommand,
             hasPactl,
             hasPlayerCtl,
-            hasCanberraGtkPlay,
+            hasAudioPlayer,
             IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
             (
                 IsLibraryAvailable("libcudart.so.12") && IsLibraryAvailable("libcublas.so.12")
@@ -726,7 +731,7 @@ public sealed record LinuxCapabilitySnapshot(
     string? SpeechFeedbackCommand,
     bool HasPactl,
     bool HasPlayerCtl,
-    bool HasCanberraGtkPlay,
+    bool HasAudioPlayer,
     bool HasCudaGpu,
     bool HasCudaRuntimeLibraries,
     string Compositor = "unknown",
