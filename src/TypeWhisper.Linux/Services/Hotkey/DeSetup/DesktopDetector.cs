@@ -70,6 +70,33 @@ public static class DesktopDetector
     }
 
     /// <summary>
+    ///     True on tiling window managers (Hyprland, Sway, River, Niri), where
+    ///     the floating dictation overlay misbehaves — it reserves a tile,
+    ///     steals focus from the dictation target, and blurs into a box. On
+    ///     those we surface "recording" with a desktop notification instead of
+    ///     the overlay. Full desktop environments — GNOME, KDE, Cinnamon, XFCE,
+    ///     … — and anything unrecognized keep the overlay, which behaves well
+    ///     there. Conservative by design: only a known tiling WM opts into the
+    ///     notification path, so an untested environment never loses its overlay.
+    /// </summary>
+    public static bool UsesNotificationRecordingIndicator()
+    {
+        if (DetectId() is "hyprland" or "sway")
+        {
+            return true;
+        }
+
+        var raw = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var lower = raw.ToLowerInvariant();
+        return lower.Contains("river") || lower.Contains("niri");
+    }
+
+    /// <summary>
     ///     Display-name mapping for the detected ID. Falls back to the raw
     ///     XDG token if we don't recognize the desktop — keeps the status
     ///     panel readable on XFCE / Cinnamon / etc. without forcing them

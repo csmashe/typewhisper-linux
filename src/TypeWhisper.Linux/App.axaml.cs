@@ -162,12 +162,11 @@ public class App : Application
             overlay.Initialize();
             BootTrace.Stage("overlay.Initialize");
 
-            // Float + pin the overlay and park it off-screen on tiling
-            // compositors so it never reserves a tile. Runs AFTER the overlay
-            // maps because it locates the window by address (the map-time title
-            // rule is unreliable — Avalonia sets the title after map). Fire-and-
-            // forget: it polls briefly for the window; no-op on floating shells.
-            _ = services.GetRequiredService<LinuxOverlayCompositorRule>().ApplyAsync();
+            // On tiling window managers the overlay is suppressed (it's the wrong
+            // primitive there); recording is surfaced via a desktop notification
+            // instead. No-op on desktop environments, which keep the overlay.
+            services.GetRequiredService<RecordingNotificationService>().Initialize();
+            BootTrace.Stage("recordingNotification.Initialize");
 
             // Sync the hotkey service's mode + binding with AppSettings. The
             // handler re-runs on every settings change so flipping the mode
