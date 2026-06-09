@@ -5,6 +5,7 @@ using Avalonia.Threading;
 using System.ComponentModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.ViewModels;
 
 namespace TypeWhisper.Linux.Views;
@@ -33,6 +34,12 @@ public partial class DictationOverlayWindow : Window
         ShowActivated = false;
         CanResize = false;
         Topmost = true;
+
+        // Unique xdg-toplevel title so tiling compositors can match a float
+        // rule to *this* window only (see LinuxOverlayCompositorRule). Other
+        // Avalonia windows default to the title "Window", which would make a
+        // title-based rule ambiguous.
+        Title = LinuxOverlayCompositorRule.OverlayWindowTitle;
 
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(PositionOverlay);
@@ -131,6 +138,19 @@ public partial class DictationOverlayWindow : Window
         // overlay window per-dictation.
         var hasContent = _viewModel.HasVisibleContent;
 
+        // Map ONCE and never Hide(). Two reasons:
+        //   1. backlog #16: Show()-after-Hide() is unreliable on GNOME Mutter.
+        //   2. Focus: on a tiling compositor (Hyprland/Sway) a freshly-mapped
+        //      toplevel is given focus by the compositor. If we Hide()/Show()
+        //      per dictation, each Show() re-maps the surface and steals focus
+        //      from the window the user is dictating into — so the transcript
+        //      (and the wizard's paste test) lands in the overlay, not the
+        //      target. Mapping once at startup, with the nofocus window-rule
+        //      already registered (LinuxOverlayCompositorRule), means the
+        //      overlay never takes focus on any later show.
+        // Idle is driven by Opacity (invisible) + moving the window OFF-SCREEN
+        // so the always-mapped surface neither paints a blurred box nor
+        // swallows clicks meant for windows beneath it.
         if (!IsVisible)
         {
             Show();
@@ -143,7 +163,16 @@ public partial class DictationOverlayWindow : Window
         {
             Dispatcher.UIThread.Post(PositionOverlay, DispatcherPriority.Loaded);
         }
+        else
+        {
+            SetPositionProgrammatically(OffScreenIdlePosition);
+        }
     }
+
+    // Far enough off every monitor that the idle (transparent) surface is never
+    // visible and never under the cursor. The overlay floats (LinuxOverlayCompositorRule),
+    // so the compositor honors this position instead of tiling it.
+    private static readonly PixelPoint OffScreenIdlePosition = new(-32000, -32000);
 
     private void PositionOverlay()
     {

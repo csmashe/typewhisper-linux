@@ -167,6 +167,10 @@ internal static class ServiceRegistrations
         services.AddSingleton<AboutSectionViewModel>();
         services.AddTransient<WelcomeWizardViewModel>();
 
+        // Floats the always-present overlay on tiling compositors (Hyprland,
+        // Sway) so it never reserves a tile; no-op on floating shells.
+        services.AddSingleton<LinuxOverlayCompositorRule>();
+
         // Avalonia windows
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();

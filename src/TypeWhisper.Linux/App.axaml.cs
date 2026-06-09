@@ -162,6 +162,13 @@ public class App : Application
             overlay.Initialize();
             BootTrace.Stage("overlay.Initialize");
 
+            // Float + pin the overlay and park it off-screen on tiling
+            // compositors so it never reserves a tile. Runs AFTER the overlay
+            // maps because it locates the window by address (the map-time title
+            // rule is unreliable — Avalonia sets the title after map). Fire-and-
+            // forget: it polls briefly for the window; no-op on floating shells.
+            _ = services.GetRequiredService<LinuxOverlayCompositorRule>().ApplyAsync();
+
             // Sync the hotkey service's mode + binding with AppSettings. The
             // handler re-runs on every settings change so flipping the mode
             // in Settings → Shortcuts takes effect without a restart.
