@@ -4,15 +4,11 @@ using System.Text;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Linux at-rest protection for plugin secrets. v1 uses a per-user key
-///     derived from the user's UID and $XDG_DATA_HOME to provide obfuscation
-///     equivalent to DPAPI's CurrentUser scope (not strong cryptography — an
-///     attacker with file access can decrypt, same as DPAPI).
-///     File-at-rest is used unconditionally rather than a keyring because no
-///     Secret Service provider is guaranteed to exist on a Linux session
-///     (minimal/tiling-WM setups often have none). A keyring-backed mode via
-///     the Secret Service API (libsecret) could be layered on later as an
-///     optional store, with this implementation remaining the fallback.
+///     At-rest protection for plugin secrets (DPAPI-equivalent obfuscation, not strong
+///     crypto — an attacker with file access can decrypt, same as DPAPI). Uses
+///     AES-GCM v1 with a per-user key derived from UID + HOME. File-at-rest is
+///     unconditional because no Secret Service provider is guaranteed on all Linux
+///     setups (tiling WMs often have none); libsecret could be added later as an opt-in.
 /// </summary>
 public static class ApiKeyProtection
 {
@@ -59,9 +55,8 @@ public static class ApiKeyProtection
                 return decryptedText;
             }
 
-            // Fall back to legacy CBC layout: [16-byte IV][ciphertext].
-            // Blobs shorter than an IV are plaintext from builds that
-            // predated encryption entirely — return as-is.
+            // Fall back to legacy CBC layout [16-byte IV][ciphertext].
+            // Blobs shorter than an IV are pre-encryption plaintext — return as-is.
             if (combined.Length < LegacyIvSize)
             {
                 return encrypted;

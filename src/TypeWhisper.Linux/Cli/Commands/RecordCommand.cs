@@ -4,22 +4,11 @@ using TypeWhisper.Linux.Services.Ipc;
 namespace TypeWhisper.Linux.Cli.Commands;
 
 /// <summary>
-///     Thin client for <c>typewhisper record &lt;verb&gt;</c>. Sends one JSON
-///     request to the running instance, prints the JSON response to stdout, and
-///     returns an exit code that downstream scripts can branch on.
+///     Thin client for <c>typewhisper record &lt;verb&gt;</c>. Sends one JSON request to the
+///     running instance, prints the JSON response to stdout, and returns an exit code.
+///     Exit codes: 0 = ok:true, 1 = ok:false (unknown verb etc.), 2 = no instance / socket error.
+///     Closes the socket synchronously so compositor binds (Hyprland bind/bindr, Sway) don't block.
 /// </summary>
-/// <remarks>
-///     Exit codes:
-///     <list type="bullet">
-///         <item>0 — server responded <c>ok:true</c>.</item>
-///         <item>1 — server responded <c>ok:false</c> (e.g. unknown verb on an older instance).</item>
-///         <item>2 — no running instance, or the socket call failed (reported on stderr).</item>
-///     </list>
-///     Compositor binds (Hyprland <c>bind</c>/<c>bindr</c>, Sway press/release)
-///     expect a fire-and-forget exec that doesn't block; this command sends one
-///     short line and closes the socket synchronously to keep latency in the
-///     low-millisecond range.
-/// </remarks>
 internal static class RecordCommand
 {
     public static int Run(string verb)
@@ -43,9 +32,7 @@ internal static class RecordCommand
 
         if (!ControlSocketClient.TrySendJson(path, request, out var responseJson, out var error))
         {
-            // No socket file OR transport failure. Both look the same to a
-            // shell-script caller — "the app isn't accepting input" — so we
-            // collapse to a single message and exit 2.
+            // No socket file and transport failure look identical to a script caller, so collapse to exit 2.
             Console.Error.WriteLine(
                 error is null ? "typewhisper: not running" : $"typewhisper: {error}"
             );
@@ -61,8 +48,7 @@ internal static class RecordCommand
         try
         {
             using var doc = JsonDocument.Parse(json);
-            // The explicit kind check guards against GetBoolean() throwing if
-            // a misbehaving server sends a non-boolean "ok" value.
+            // Explicit kind check prevents GetBoolean() throwing on a non-boolean "ok" from a misbehaving server.
             return doc.RootElement.ValueKind == JsonValueKind.Object
                    && doc.RootElement.TryGetProperty("ok", out var ok)
                    && (ok.ValueKind == JsonValueKind.True || ok.ValueKind == JsonValueKind.False)

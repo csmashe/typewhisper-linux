@@ -4,22 +4,18 @@ using System.Diagnostics;
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 
 /// <summary>
-///     Reads keyboard input directly from <c>/dev/input/event*</c>, allowing
-///     global hotkey detection under Wayland sessions where the SharpHook /
-///     libuiohook backend only sees events while the application owns focus.
-///     Requires the running user to be in the <c>input</c> group (or an
-///     equivalent udev rule). <see cref="IsAvailable" /> returns false when no
-///     keyboard device can be opened — callers should fall through to the
-///     SharpHook backend in that case.
+///     Reads keyboard input directly from <c>/dev/input/event*</c> for global
+///     hotkey detection on Wayland (SharpHook only sees events while focused).
+///     Requires the user to be in the <c>input</c> group; <see cref="IsAvailable" />
+///     returns false when no device can be opened so callers fall through to SharpHook.
 /// </summary>
 public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 {
     public const string BackendId = "linux-evdev";
     private const string InputDir = "/dev/input";
 
-    // Belt-and-suspenders rescan: FileSystemWatcher can miss events under
-    // high I/O load. 30 s is short enough to catch a USB keyboard plugged in
-    // after a busy window without hammering the kernel with constant ioctls.
+    // Belt-and-suspenders rescan: FileSystemWatcher can miss events under high I/O load.
+    // 30 s catches a late-plugged USB keyboard without hammering the kernel.
     private static readonly TimeSpan s_rescanInterval = TimeSpan.FromSeconds(30);
 
     private readonly ShortcutDispatcher _dispatcher = new();
@@ -27,11 +23,9 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     private readonly Dictionary<string, EvdevDeviceReader> _readers = new();
     private int _disposed;
 
-    // Aggregated modifier state across every attached keyboard. evdev gives
-    // us individual key transitions; we must maintain the mask ourselves so
-    // ShortcutMatcher can compare against the configured chord. Stored as
-    // int and mutated through Interlocked.Or / Interlocked.And so two
-    // reader tasks can update bits without racing on a read-modify-write.
+    // Aggregated modifier state across all keyboards. evdev gives individual key
+    // transitions; we maintain the mask via Interlocked.Or/And so concurrent
+    // reader tasks can update bits without a read-modify-write race.
     private int _liveModifiersBits;
     private CancellationTokenSource? _rescanCts;
     private bool _started;
@@ -89,9 +83,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 
     public bool IsAvailable()
     {
-        // We treat the backend as available when at least one keyboard
-        // device exists and is readable by the current user. The cheapest
-        // truthful probe is to open one device read-only and close it.
+        // Available when at least one keyboard device is readable. Cheapest probe: open+close.
         var devices = KeyboardDeviceDiscovery.EnumerateKeyboards();
         if (devices.Count == 0)
         {
@@ -321,9 +313,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 
     private void OnDeviceCreated(object? sender, FileSystemEventArgs e)
     {
-        // Kernel creates /dev/input/eventN before its by-path symlink
-        // resolves. Retry the discovery a few times with backoff to ride
-        // through the race.
+        // Kernel creates /dev/input/eventN before its by-path symlink resolves — retry with backoff.
         _ = Task.Run(async () =>
         {
             for (var attempt = 0; attempt < 3; attempt++)
@@ -359,8 +349,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
                 return false;
             }
 
-            // Prune readers whose backing path is gone — protects against
-            // the FileSystemWatcher dropping a Delete event under load.
+            // Prune readers for paths that vanished — guards against FSW dropping Delete events under load.
             foreach (var existing in _readers.Keys.ToList())
             {
                 if (!File.Exists(existing))
@@ -398,8 +387,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 
     private void OnKeyEvent(string devicePath, int linuxKeyCode, bool pressed)
     {
-        // Modifier transition: update our aggregated mask atomically so two
-        // keyboards mashing modifiers at the same instant don't lose bits.
+        // Update the aggregated modifier mask atomically so concurrent keyboards don't lose bits.
         var modBit = LinuxKeyMap.ToModifier(linuxKeyCode);
         if (modBit != ModifierMask.None)
         {
@@ -412,10 +400,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             {
                 Interlocked.And(ref _liveModifiersBits, ~bitsInt);
             }
-            // Modifiers can still be bindable in their own right (the user
-            // might bind RightCtrl as the dictation key). Fall through to
-            // the dispatcher so press/release on a modifier reaches the
-            // shortcut matcher too.
+            // Modifiers can themselves be the trigger key (e.g. RightCtrl bound to dictation),
+            // so fall through to the dispatcher.
         }
 
         var sharpHookKey = LinuxKeyMap.ToSharpHook(linuxKeyCode);
@@ -425,9 +411,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         }
 
         var mods = (ModifierMask)Volatile.Read(ref _liveModifiersBits);
-        // When the *trigger* key is itself a modifier, the bit for that key
-        // will be set in `mods` on press. Mask it out so the chord matches
-        // a "no other modifiers" binding like `RightCtrl`.
+        // If the trigger key is itself a modifier, its bit will be set in mods on press.
+        // Mask it out so a "no other modifiers" binding like RightCtrl still matches.
         if (modBit != ModifierMask.None)
         {
             mods &= ~modBit;
@@ -447,10 +432,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             }
         }
 
-        // Clear the aggregated modifier mask: a held modifier on the lost
-        // device would otherwise stay "down" forever. We err toward
-        // releasing modifiers on disconnect — the next press from any
-        // remaining keyboard re-asserts what's actually held.
+        // Clear modifier mask on disconnect: a held modifier on the lost device would
+        // stay "down" forever otherwise. The next press from any remaining keyboard re-asserts.
         Volatile.Write(ref _liveModifiersBits, 0);
         Failed?.Invoke(this, $"Lost keyboard device {path}: {ex.Message}");
     }

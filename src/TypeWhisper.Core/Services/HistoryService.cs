@@ -17,10 +17,9 @@ public sealed class HistoryService : IHistoryService
 
     private bool _cacheLoaded;
 
-    // Set when the on-disk history file existed but couldn't be read.
-    // SaveToDisk refuses to write while this is set so a transient read error
-    // doesn't cause the next AddRecord call to replace the user's history
-    // with a one-entry file.
+    // Set when the on-disk file existed but couldn't be read; SaveToDisk
+    // refuses to write while set to prevent a transient IO error from
+    // replacing the user's history with a one-entry file.
     private bool _cacheLoadFailed;
     private List<string> _distinctApps = [];
     private double _totalDuration;
@@ -98,8 +97,8 @@ public sealed class HistoryService : IHistoryService
         EnsureCacheLoaded();
         lock (_gate)
         {
-            // Stage on a copy and persist before mutating _cache/stats so a save
-            // failure can't leave the in-memory state ahead of disk.
+            // Stage on a copy and persist before mutating _cache so a save failure
+            // can't leave in-memory state ahead of disk.
             var newCache = new List<TranscriptionRecord>(_cache.Count + 1) { record };
             newCache.AddRange(_cache);
             SaveToDisk(newCache);
@@ -160,10 +159,7 @@ public sealed class HistoryService : IHistoryService
             }
 
             var newCache = new List<TranscriptionRecord>(_cache);
-            newCache[idx] = newCache[idx] with
-            {
-                PendingCorrectionSuggestions = suggestions.ToList()
-            };
+            newCache[idx] = newCache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
             SaveToDisk(newCache);
 
             _cache = newCache;
@@ -208,10 +204,8 @@ public sealed class HistoryService : IHistoryService
         List<string?> audioFiles;
         lock (_gate)
         {
-            // Collect audio file names from current cache, then persist the
-            // empty list. Only commit the in-memory clear if save succeeds —
-            // otherwise the file deletes below would orphan records that are
-            // still in history.json.
+            // Persist the empty list before clearing in-memory state; otherwise
+            // a save failure would delete audio files for records still in history.json.
             audioFiles = _cache.Select(r => r.AudioFileName).ToList();
             SaveToDisk([]);
 
@@ -406,8 +400,7 @@ public sealed class HistoryService : IHistoryService
         return JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    // Synchronous fallback for callers that cannot await EnsureLoadedAsync.
-    // Do not call this from a thread that may already hold _loadLock — it will deadlock.
+    // Synchronous fallback. Do not call from a thread that already holds _loadLock — deadlock.
     private void EnsureCacheLoaded()
     {
         if (_cacheLoaded)
@@ -451,10 +444,8 @@ public sealed class HistoryService : IHistoryService
         }
         catch (Exception ex)
         {
-            // File exists but is unreadable (transient IO / permission). Set
-            // _cacheLoadFailed so SaveToDisk refuses to overwrite — otherwise
-            // the next AddRecord would replace the user's whole history with
-            // a single record.
+            // Unreadable (transient IO / permissions). Set _cacheLoadFailed so
+            // SaveToDisk won't overwrite existing data on the next AddRecord.
             Trace.WriteLine($"[HistoryService] Failed to read history from '{_filePath}': {ex}");
             _cacheLoadFailed = true;
             return [];
@@ -495,8 +486,7 @@ public sealed class HistoryService : IHistoryService
             new JsonSerializerOptions { WriteIndented = true }
         );
 
-        // Write to a sibling temp file and atomically replace, so a crash
-        // mid-write can't leave history truncated.
+        // Atomic write via temp file so a mid-write crash can't truncate history.
         var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
@@ -590,10 +580,8 @@ public sealed class HistoryService : IHistoryService
 
         try
         {
-            // Producers (DictationOrchestrator) write Path.GetFileName(...) so
-            // this is normally just a bare filename. But history.json can be
-            // hand-edited, so treat audioFileName as untrusted: strip any
-            // directory components and confirm the resolved path stays inside
+            // history.json can be hand-edited, so treat audioFileName as untrusted:
+            // strip directory components and confirm the resolved path stays inside
             // _audioDirectory before deleting.
             var safeName = Path.GetFileName(audioFileName);
             if (string.IsNullOrEmpty(safeName) || Path.IsPathRooted(audioFileName))

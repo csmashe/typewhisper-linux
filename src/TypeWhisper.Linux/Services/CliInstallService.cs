@@ -163,8 +163,7 @@ public sealed class CliInstallService
         var candidates = new[]
         {
             Path.Combine(baseDirectory, "Cli", CliFileName),
-            Path.Combine(baseDirectory, "..", "TypeWhisper.Cli", CliFileName),
-            Path.Combine(
+            Path.Combine(baseDirectory, "..", "TypeWhisper.Cli", CliFileName), Path.Combine(
                 baseDirectory,
                 "..",
                 "..",

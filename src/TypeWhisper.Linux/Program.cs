@@ -13,9 +13,8 @@ namespace TypeWhisper.Linux;
 
 public static class Program
 {
-    // Boot-time profiling stopwatch. Single instance, started at the top of
-    // Main; BootTrace.Stage(name) writes "+Xms: name" so we can see where
-    // startup time goes. Lightweight enough to leave on in release builds.
+    // Boot-time profiling stopwatch. BootTrace.Stage(name) writes "+Xms: name";
+    // lightweight enough to leave on in release builds.
     public static readonly Stopwatch BootStopwatch = Stopwatch.StartNew();
     public static ServiceProvider Services { get; private set; } = null!;
     public static bool StartMinimized { get; private set; }
@@ -31,9 +30,8 @@ public static class Program
         BootTrace.Initialize();
         BootTrace.Stage("EnsureDirectories");
 
-        // GNOME launches menu-clicked apps at nice 6 / ionice idle for shell
-        // responsiveness. That throttles cold start ~60× for a CPU+IO-heavy
-        // .NET app. Restore defaults so menu launch matches terminal launch.
+        // GNOME launches menu apps at nice 6 / ionice idle, which throttles cold start ~60×
+        // for a CPU+IO-heavy .NET app. Restore defaults so menu launch matches terminal launch.
         var priorityResult = ProcessPriority.ResetToDefaults();
         BootTrace.Stage($"ProcessPriority reset ({priorityResult})");
 
@@ -52,26 +50,20 @@ public static class Program
                 return 2;
 
             case CliActionKind.Record:
-                // RecordVerb is always non-null on this branch — see parser.
-                return RecordCommand.Run(action.RecordVerb!);
+                return RecordCommand.Run(action.RecordVerb!); // RecordVerb is always non-null here
 
             case CliActionKind.Status:
                 return StatusCommand.Run();
 
             case CliActionKind.BareToggle:
             case CliActionKind.LaunchGui:
-                // Fall through to single-instance handling + GUI startup.
-                break;
+                break; // fall through to single-instance handling + GUI startup
         }
 
-        // Single-instance + bare-CLI handling. Bare `typewhisper` is the only
-        // launch form that should drive dictation: if an instance is running
-        // we send `toggle` and exit. Argument-bearing GUI launches
-        // (`--minimized`, etc.) must NOT toggle the existing instance just
-        // to discover it exists, so they use a side-effect-free probe and
-        // bail with a friendly message. The bind that happens later in App
-        // startup remains the authoritative single-instance guard for the
-        // probe-then-bind race window.
+        // Single-instance handling. Bare `typewhisper` sends `toggle` to a running instance
+        // and exits. Argument-bearing GUI launches (--minimized etc.) use a side-effect-free
+        // probe and bail if an instance is found — they must NOT trigger a toggle just to check.
+        // The bind in App startup is the authoritative guard for the probe-then-bind race window.
         BootTrace.Stage($"CommandLineParser.Parse (kind={action.Kind})");
         try
         {
@@ -81,8 +73,7 @@ public static class Program
             {
                 if (ControlSocketClient.TrySendToggle(socketPath, out var probeError))
                 {
-                    // We mapped no window — the running instance handles the
-                    // toggle — so end the launcher's busy cursor explicitly.
+                    // No window will map; clear the launcher's busy cursor.
                     LinuxStartupNotification.NotifyComplete();
                     return 0;
                 }
@@ -97,9 +88,7 @@ public static class Program
             else if (ControlSocketClient.IsLivePeer(socketPath))
             {
                 Console.Error.WriteLine("TypeWhisper is already running.");
-                // Same as the toggle path: no window will map, so clear the
-                // launcher's busy cursor rather than let it time out.
-                LinuxStartupNotification.NotifyComplete();
+                LinuxStartupNotification.NotifyComplete(); // clear launcher's busy cursor
                 return 0;
             }
             else
@@ -124,16 +113,14 @@ public static class Program
         catch (Exception ex)
             when (ex is SocketException sx && sx.SocketErrorCode == SocketError.AddressAlreadyInUse)
         {
-            // App startup raced another instance to the bind; treat the same
-            // as the early probe finding a live peer.
+            // Startup raced another instance to the bind; same outcome as a probe finding a live peer.
             Console.Error.WriteLine("TypeWhisper is already running.");
             return 0;
         }
         finally
         {
-            // DisposeAsync because the DI container holds IAsyncDisposable-only
-            // services (e.g. XdgPortalGlobalShortcutsBackend); the sync
-            // Dispose() path throws InvalidOperationException for those.
+            // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
+            // sync Dispose() throws InvalidOperationException for those.
             Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
@@ -146,33 +133,15 @@ public static class Program
             .With(
                 new X11PlatformOptions
                 {
-                    // Avalonia's X11 IBus integration can log noisy DBus errors
-                    // when IBus destroys an input context before Avalonia releases it.
-                    // Set TYPEWHISPER_DISABLE_IME=1 to disable IME composition.
+                    // Set TYPEWHISPER_DISABLE_IME=1 to suppress noisy IBus DBus errors.
                     EnableIme = !IsImeDisabled(),
-                    // Prefer GLX on both native X11 and XWayland: it's the only
-                    // X11 backend that reliably picks an ARGB-capable framebuffer
-                    // config, which TransparencyLevelHint="Transparent" needs
-                    // (used by the dictation overlay window). EGL on X11/Mesa
-                    // typically returns an RGB-only visual, so the window paints
-                    // opaque black behind the rounded Border and you get a square
-                    // black box around the overlay.
-                    //
-                    // GLX on Mesa/XWayland (and NVIDIA hybrid on native X11)
-                    // throws a per-frame SynchronizationLockException from
-                    // GlxContext.RestoreContext.Dispose, but the throw happens
-                    // after the frame body has rendered — the render loop
-                    // continues and transparency works. The log noise is filtered
-                    // by SuppressGlxRenderExceptionLogSink.
-                    //
-                    // EGL is the next fallback if GLX initialization itself
-                    // fails; Software is the universal last resort.
-                    RenderingMode = new[]
-                    {
-                        X11RenderingMode.Glx,
-                        X11RenderingMode.Egl,
-                        X11RenderingMode.Software
-                    }
+                    // GLX first: it's the only X11 backend that reliably picks an ARGB framebuffer
+                    // for the transparent overlay window. EGL on X11/Mesa typically returns RGB-only
+                    // (giving a black box behind the overlay). GLX on Mesa/XWayland and NVIDIA hybrid
+                    // throws a per-frame SynchronizationLockException from GlxContext.RestoreContext.Dispose,
+                    // but only after rendering — transparency works and the log noise is filtered by
+                    // SuppressGlxRenderExceptionLogSink. EGL is the fallback if GLX init fails.
+                    RenderingMode = new[] { X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software }
                 }
             )
 #if DEBUG
@@ -181,14 +150,9 @@ public static class Program
             .WithInterFont()
             .LogToTrace();
 
-        // .LogToTrace() above assigned Logger.Sink synchronously. Wrap it so
-        // two harmless Avalonia log lines are dropped:
-        //   - the XSMP "SESSION_MANAGER ... not defined" startup warning —
-        //     see SuppressXsmpWarningLogSink.
-        //   - the per-frame SynchronizationLockException from
-        //     GlxContext.RestoreContext.Dispose on GLX/Mesa+NVIDIA-hybrid
-        //     and XWayland — the frame still renders, only the log spams.
-        //     See SuppressGlxRenderExceptionLogSink.
+        // Wrap the logger sink to suppress two harmless Avalonia log lines:
+        // the XSMP SESSION_MANAGER startup warning and the per-frame GLX
+        // SynchronizationLockException on Mesa+NVIDIA-hybrid/XWayland.
         if (Logger.Sink is { } sink)
         {
             Logger.Sink = new SuppressGlxRenderExceptionLogSink(
@@ -206,11 +170,7 @@ public static class Program
         ServiceRegistrations.Register(services);
         BootTrace.Stage("ServiceRegistrations.Register");
         var provider = services.BuildServiceProvider(
-            new ServiceProviderOptions
-            {
-                ValidateOnBuild = false,
-                ValidateScopes = false
-            }
+            new ServiceProviderOptions { ValidateOnBuild = false, ValidateScopes = false }
         );
         BootTrace.Stage("ServiceProvider built");
         return provider;

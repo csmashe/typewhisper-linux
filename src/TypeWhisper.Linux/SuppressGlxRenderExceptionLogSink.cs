@@ -3,29 +3,18 @@ using Avalonia.Logging;
 namespace TypeWhisper.Linux;
 
 /// <summary>
-///     <see cref="ILogSink" /> decorator that drops one specific, harmless
-///     render-loop exception logged by Avalonia's compositor on certain
-///     GLX configurations (notably NVIDIA hybrid graphics on native X11
-///     and Mesa under XWayland).
-///     Avalonia's GLX context-restore path occasionally calls
-///     <c>Monitor.Exit</c> on a lock it does not own, throwing
-///     <see cref="SynchronizationLockException" /> from
-///     <c>GlxContext.RestoreContext.Dispose</c>. The throw happens AFTER
-///     the frame body has rendered, the compositor catches it, and the
-///     render loop continues — transparency on the dictation overlay
-///     still works. The only damage is one log line per frame, which
-///     drowns out everything else useful in the trace.
-///     The filter is intentionally narrow: it requires the propertyValue
-///     to be a <see cref="SynchronizationLockException" /> whose stack
-///     trace contains the specific <c>GlxContext.RestoreContext.Dispose</c>
-///     frame. Any other render-loop exception — including a different
-///     SynchronizationLockException — flows through unchanged.
+///     <see cref="ILogSink" /> decorator that suppresses a harmless per-frame
+///     <see cref="SynchronizationLockException" /> thrown by Avalonia's GLX
+///     context-restore path on NVIDIA hybrid graphics (X11) and Mesa/XWayland.
+///     The exception occurs after the frame renders; the compositor catches it
+///     and continues — but without filtering it drowns the trace.
+///     The filter requires the specific <c>GlxContext.RestoreContext.Dispose</c>
+///     stack frame; any other <see cref="SynchronizationLockException" /> passes through.
 /// </summary>
 internal sealed class SuppressGlxRenderExceptionLogSink : ILogSink
 {
-    // The exact stack frame that marks the harmless Avalonia GLX dispose
-    // path. Matching the frame, not just the exception type, keeps any
-    // other SynchronizationLockException visible.
+    // Match on the specific stack frame, not just the exception type,
+    // so other SynchronizationLockExceptions remain visible.
     private const string GlxDisposeFrame =
         "Avalonia.X11.Glx.GlxContext.RestoreContext.Dispose";
 

@@ -15,9 +15,15 @@ public partial class PromptsSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
 
     [ObservableProperty]
+    private string? _editHotkeyKey;
+
+    [ObservableProperty]
     private string _editIcon = "\u2728";
 
     private string? _editingActionId;
+
+    [ObservableProperty]
+    private bool _editIsManualOnly;
 
     [ObservableProperty]
     private string _editName = "";
@@ -30,12 +36,6 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string? _editTargetActionPluginId;
-
-    [ObservableProperty]
-    private string? _editHotkeyKey;
-
-    [ObservableProperty]
-    private bool _editIsManualOnly;
 
     [ObservableProperty]
     private bool _isCreatingNew;
@@ -125,6 +125,17 @@ public partial class PromptsSectionViewModel : ObservableObject
 
             EditProviderOverride = value?.Value;
         }
+    }
+
+    /// <summary>
+    ///     Re-polls providers for their current model list so new server-side models
+    ///     appear without a manual "Validate". The dropdown rebuilds via
+    ///     <c>PluginStateChanged</c> once the fetch lands; debounce lives in
+    ///     <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync()
+    {
+        return _pluginManager.RefreshProviderModelsAsync();
     }
 
     partial void OnSelectedActionChanged(PromptAction? value)
@@ -353,9 +364,8 @@ public partial class PromptsSectionViewModel : ObservableObject
         _isRefreshingProviders = true;
         try
         {
-            // Build the resolved-model list first so we can use it to decide
-            // whether the "Use default provider" placeholder needs an "(auto)"
-            // suffix naming the host's fallback.
+            // Build the resolved list first to determine whether the "Use default
+            // provider" placeholder needs a fallback suffix.
             var resolvedOptions = new List<ProviderOption>();
             foreach (
                 var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
@@ -418,29 +428,19 @@ public partial class PromptsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 
-    /// <summary>
-    ///     Re-polls configured providers for their current model list so newly
-    ///     added server-side models show up without a manual "Validate". Invoked
-    ///     when the provider/model dropdown opens; the dropdown rebuild happens
-    ///     via the <c>PluginStateChanged</c> subscription once the fetch lands.
-    ///     The debounce/guard and network work live in <see cref="PluginManager" />.
-    /// </summary>
-    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
-
     private string DefaultProviderPlaceholderLabel(IReadOnlyList<ProviderOption> resolvedOptions)
     {
         const string baseLabel = "Use default provider";
         var configured = _settings.Current.DefaultLlmProvider;
         var configuredResolves = !string.IsNullOrWhiteSpace(configured)
-            && resolvedOptions.Any(option =>
-                string.Equals(option.Value, configured, StringComparison.Ordinal));
+                                 && resolvedOptions.Any(option =>
+                                     string.Equals(option.Value, configured, StringComparison.Ordinal));
         if (configuredResolves)
         {
             return baseLabel;
         }
 
-        // Mirrors PromptProcessingService.ResolveProvider's final fallback:
-        // first available LLM provider in registration order.
+        // Mirrors PromptProcessingService.ResolveProvider: first available LLM provider.
         var fallback = _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
         if (fallback is null)
         {

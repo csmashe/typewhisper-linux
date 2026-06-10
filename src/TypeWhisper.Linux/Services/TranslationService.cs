@@ -108,10 +108,8 @@ public sealed class TranslationService : ITranslationService, IDisposable
             return await Task.Run(() => RunInference(model, text), ct);
         }
 
-        // No direct model. Try a two-hop pivot through English when both the
-        // source→English and English→target models are available. This lets a
-        // single set of models cover many language pairs (e.g. FR→DE becomes
-        // FR→EN→DE) at the cost of one extra inference pass.
+        // No direct model — try a two-hop English pivot (e.g. FR→EN→DE)
+        // so a single model set covers many indirect language pairs.
         if (sourceLang != "en" && targetLang != "en")
         {
             var toEnglish = TranslationModelInfo.FindModel(sourceLang, "en");
@@ -264,13 +262,9 @@ public sealed class TranslationService : ITranslationService, IDisposable
     }
 
     /// <summary>
-    ///     Greedy decoder (no beam search) over the encoder/decoder pair.
-    ///     Each step passes the full decoder prefix back in — MarianMT ONNX
-    ///     exports do not include a KV cache, so each step re-encodes and
-    ///     re-attends over the entire history. This is O(n²) in output
-    ///     length but fast enough for the short sentences typical in speech
-    ///     transcription, and avoids the extra ONNX graph needed for cached
-    ///     decoding.
+    ///     Greedy decoder over the encoder/decoder pair. MarianMT ONNX exports
+    ///     have no KV cache, so each step re-attends the full history (O(n²)),
+    ///     which is acceptable for short speech sentences.
     /// </summary>
     private static string RunInference(LoadedTranslationModel model, string text)
     {
@@ -356,10 +350,8 @@ public sealed class TranslationService : ITranslationService, IDisposable
             return;
         }
 
-        // Microsoft.ML.OnnxRuntime's NuGet layout places the native library
-        // at runtimes/<rid>/native/libonnxruntime.so. The managed loader
-        // doesn't find it automatically on Linux when published as a
-        // single-file or self-contained app, so we resolve it ourselves.
+        // The managed loader doesn't find libonnxruntime.so automatically on
+        // Linux when published single-file/self-contained, so resolve manually.
         NativeLibrary.SetDllImportResolver(
             typeof(InferenceSession).Assembly,
             (libraryName, assembly, searchPath) =>

@@ -32,12 +32,9 @@ public sealed record ProcessRunResult(
 }
 
 /// <summary>
-///     Seam over <see cref="System.Diagnostics.Process" />. Process-orchestrating
-///     services — the ones whose real logic is ownership gating, command
-///     ordering, and branch-on-failure handling — depend on this interface so
-///     that logic can be unit-tested with a recording fake instead of spawning
-///     real subprocesses. The production implementation is <see cref="ProcessRunner" />;
-///     the only thing left "verified manually" is that thin wrapper itself.
+///     Seam over <see cref="System.Diagnostics.Process" /> so orchestrating services
+///     (ownership gating, command ordering, branch-on-failure) can be unit-tested
+///     with a recording fake. The production implementation is <see cref="ProcessRunner" />.
 /// </summary>
 public interface IProcessRunner
 {
@@ -62,10 +59,8 @@ public interface IProcessRunner
 }
 
 /// <summary>
-///     Production <see cref="IProcessRunner" /> — a deliberately logic-free
-///     wrapper over <see cref="Process" />. All conditional behavior lives in the
-///     callers (tested against a fake); this type only spawns, feeds, drains,
-///     times out, and reports.
+///     Production <see cref="IProcessRunner" /> — a deliberately logic-free wrapper
+///     over <see cref="Process" />. All conditional behavior lives in the callers.
 /// </summary>
 public sealed class ProcessRunner : IProcessRunner
 {
@@ -128,10 +123,8 @@ public sealed class ProcessRunner : IProcessRunner
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    // The inner timeout fired (not the caller's ct). Kill and
-                    // return a TimedOut result without propagating the exception
-                    // so the caller can handle a timeout differently from a
-                    // hard cancellation.
+                    // Inner timeout fired (not the caller's ct) — kill and return TimedOut
+                    // so the caller can distinguish a timeout from a hard cancellation.
                     try
                     {
                         process.Kill(true);

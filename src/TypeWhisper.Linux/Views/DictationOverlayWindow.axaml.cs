@@ -67,10 +67,7 @@ public partial class DictationOverlayWindow : Window
         }
         else if (e.PropertyName == nameof(DictationOverlayViewModel.PartialText))
         {
-            // Keep the newest recognized text in view as the live preview
-            // grows. Deferred to Background priority so the scroll runs
-            // after layout has measured the updated text, matching the
-            // after-layout pattern used for PositionOverlay above.
+            // Background priority so the scroll runs after layout measures the updated text.
             var partialText = _viewModel?.PartialText;
             Dispatcher.UIThread.Post(
                 () =>
@@ -88,8 +85,7 @@ public partial class DictationOverlayWindow : Window
         }
         else if (e.PropertyName == nameof(DictationOverlayViewModel.LlmResponseText))
         {
-            // Same after-layout auto-scroll as PartialText, for the streamed
-            // LLM response area.
+            // Same after-layout auto-scroll as PartialText, for the streamed LLM response area.
             var llmText = _viewModel?.LlmResponseText;
             Dispatcher.UIThread.Post(
                 () =>
@@ -114,11 +110,8 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
-        // On tiling window managers the overlay is suppressed entirely — a
-        // desktop notification (RecordingNotificationService) is the recording
-        // indicator there. An XWayland toplevel on a tiler reserves a tile,
-        // steals focus from the dictation target, and blurs into a box, none of
-        // which we can cleanly avoid — so keep it unmapped.
+        // On tiling WMs the overlay is suppressed: an XWayland toplevel on a tiler reserves
+        // a tile, steals focus, and blurs into a box — use the notification indicator instead.
         if (UsesNotificationIndicator)
         {
             if (IsVisible)
@@ -129,17 +122,11 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
-        // Desktop environments (GNOME / KDE / Cinnamon / …): the overlay works
-        // well and stays exactly as it was.
-        //
-        // WORKAROUND (docs/plans/2026-05-13-linux-backlog.md item 16):
-        // Show() once and never Hide() — Avalonia's Window.Show() after a prior
-        // Hide() is unreliable on GNOME Mutter for these utility-window flags
-        // (ShowActivated=False / Topmost / ShowInTaskbar=False): some shows
-        // leave the window invisible until restart. Driving visibility via
-        // Opacity keeps the window alive and avoids the race. The inner Border
-        // bindings still handle which content is drawn, and a fully transparent
-        // surface is essentially free.
+        // WORKAROUND (backlog item 16): Show() once and drive visibility via Opacity instead of
+        // Hide() — Avalonia's Show() after Hide() is unreliable on GNOME Mutter for utility windows
+        // (ShowActivated=False / Topmost / ShowInTaskbar=False): some shows leave the window
+        // invisible until restart. Fully transparent surface is free; inner Border bindings
+        // still control which content is drawn.
         var hasContent = _viewModel.HasVisibleContent;
 
         if (!IsVisible)
@@ -156,8 +143,7 @@ public partial class DictationOverlayWindow : Window
         }
     }
 
-    // Tiling WMs (Hyprland/Sway/…) use the notification indicator instead of
-    // this overlay. Cached — the desktop can't change within a session.
+    // Cached — the desktop environment can't change within a session.
     private static readonly bool UsesNotificationIndicator =
         DesktopDetector.UsesNotificationRecordingIndicator();
 
@@ -187,14 +173,10 @@ public partial class DictationOverlayWindow : Window
         if (_settings.Current.OverlayCustomLeft is { } customLeft &&
             _settings.Current.OverlayCustomTop is { } customTop)
         {
-            // Clamp against the screen the saved point lives on, not
-            // always primary — otherwise dragging the overlay to a
-            // secondary monitor would snap back onto primary the moment
-            // the debounced save fires (SettingsChanged → PositionOverlay).
-            // Fall back to primary only when the saved point is off every
-            // screen (e.g., a monitor was unplugged) — that rescues the
-            // overlay onto the visible screen without overwriting the
-            // saved coords, so re-plugging the monitor restores it.
+            // Clamp to the screen the saved point is on, not always primary — otherwise
+            // dragging to a secondary monitor would snap back on the debounced save.
+            // Fall back to primary only when the point is off every screen (e.g. unplugged
+            // monitor) so re-plugging restores the saved position.
             var customPoint = new PixelPoint(
                 (int)Math.Round(customLeft),
                 (int)Math.Round(customTop));

@@ -63,16 +63,15 @@ public sealed class PromptProcessingService
     }
 
     /// <summary>
-    ///     Streaming sibling of <see cref="ProcessAsync" />: resolves the same
-    ///     provider / model / memory-augmented system prompt and frames the input
-    ///     identically (A22), then streams the provider's response token-by-token.
-    ///     The caller (the orchestrator's <c>LlmStreamPump</c>) accumulates the
-    ///     full string and may fall back to <see cref="ProcessAsync" /> on a fault.
+    ///     Streaming sibling of <see cref="ProcessAsync" />: same provider/model/memory
+    ///     resolution, token-by-token output. The caller may fall back to
+    ///     <see cref="ProcessAsync" /> on fault.
     /// </summary>
     public async IAsyncEnumerable<string> ProcessStreamingAsync(
         PromptAction action,
         string inputText,
-        [EnumeratorCancellation] CancellationToken ct
+        [EnumeratorCancellation]
+        CancellationToken ct
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -129,11 +128,9 @@ public sealed class PromptProcessingService
         );
     }
 
-    // Frames user-dictated/selected text as inert data before it reaches the LLM.
-    // The text is JSON-serialized under a "dictated_text" key and prefixed with an
-    // instruction telling the model to treat that value as source data, not as
-    // commands — so an embedded "ignore previous instructions" phrase is processed,
-    // not obeyed. JSON escaping also neutralizes embedded quotes and newlines.
+    // JSON-encodes the input under "dictated_text" and instructs the model to treat it
+    // as source data only — neutralises prompt-injection ("ignore previous instructions")
+    // and embedded quotes/newlines.
     internal static string FormatPromptActionInput(string inputText)
     {
         var payload = JsonSerializer.Serialize(
@@ -193,8 +190,7 @@ public sealed class PromptProcessingService
         string pluginModelId
     )
     {
-        // Encoded as "plugin:<pluginId>:<modelId>" — same scheme used by
-        // ModelManagerService so override IDs survive round-trips through settings.
+        // Format: "plugin:<pluginId>:<modelId>" — same scheme as ModelManagerService.
         var parts = pluginModelId.Split(':', 3);
         if (parts.Length < 3 || !string.Equals(parts[0], "plugin", StringComparison.Ordinal))
         {

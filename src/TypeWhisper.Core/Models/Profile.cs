@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace TypeWhisper.Core.Models;
 
 public sealed record Profile
@@ -30,8 +32,8 @@ public sealed record Profile
 ///     <see cref="ProcessSelectedText" /> runs the profile's linked
 ///     <c>PromptAction</c> against the current selection without dictating.
 /// </summary>
-[System.Text.Json.Serialization.JsonConverter(
-    typeof(System.Text.Json.Serialization.JsonStringEnumConverter<ProfileHotkeyBehavior>))]
+[JsonConverter(
+    typeof(JsonStringEnumConverter<ProfileHotkeyBehavior>))]
 public enum ProfileHotkeyBehavior
 {
     StartDictation,

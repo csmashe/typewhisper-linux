@@ -3,52 +3,29 @@ using System.Reflection;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Resolves the running app version and compares SemVer-style version
-///     strings. Shared by the About section (display) and the update checker
-///     (comparison against the latest GitHub release tag) so both agree on what
-///     "the current version" is and how versions order.
+///     Resolves the running app version and compares SemVer-style version strings.
+///     Shared by the About section and the update checker so both agree on version ordering.
 /// </summary>
 public static class AppVersion
 {
     /// <summary>
-    ///     The display version, e.g. "0.5.0" or "0.5.0-rc.1". Prefers
-    ///     AssemblyInformationalVersion so a pre-release suffix survives
-    ///     (AssemblyVersion is numeric-only and silently drops it); the +hash
-    ///     SourceLink suffix isn't useful to users, so it's trimmed.
+    ///     Display version, e.g. "0.5.0" or "0.5.0-rc.1". Uses AssemblyInformationalVersion
+    ///     so pre-release suffixes survive (AssemblyVersion silently drops them); the +hash
+    ///     SourceLink suffix is trimmed.
     /// </summary>
     public static string Display { get; } = Resolve();
 
-    /// <summary>
-    ///     The assembly copyright string (from AssemblyCopyrightAttribute, set
-    ///     via &lt;Copyright&gt; in Directory.Build.props). Empty if unset.
-    /// </summary>
+    /// <summary>Assembly copyright string from <c>&lt;Copyright&gt;</c> in Directory.Build.props. Empty if unset.</summary>
     public static string Copyright { get; } =
         Assembly
             .GetExecutingAssembly()
             .GetCustomAttribute<AssemblyCopyrightAttribute>()
             ?.Copyright?.Trim() ?? string.Empty;
 
-    private static string Resolve()
-    {
-        var asm = Assembly.GetExecutingAssembly();
-        var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion;
-
-        if (string.IsNullOrWhiteSpace(info))
-        {
-            return asm.GetName().Version?.ToString(3) ?? "dev";
-        }
-
-        var plus = info.IndexOf('+');
-        return plus >= 0 ? info[..plus] : info;
-    }
-
     /// <summary>
-    ///     Compares two version strings (each optionally "v"-prefixed, with an
-    ///     optional "-prerelease" and "+build" suffix). Returns &lt;0 when
-    ///     <paramref name="a"/> is older, 0 when equal, &gt;0 when newer.
-    ///     Build metadata is ignored; a release ranks above a pre-release of the
-    ///     same numeric core (1.0.0 &gt; 1.0.0-rc.1), per SemVer 2.0.
+    ///     Compares two SemVer-style strings (optional "v" prefix, "-prerelease", "+build").
+    ///     Returns &lt;0/0/&gt;0 for older/equal/newer. Build metadata ignored; release outranks
+    ///     a pre-release of the same core (1.0.0 &gt; 1.0.0-rc.1), per SemVer 2.0.
     /// </summary>
     public static int Compare(string? a, string? b)
     {
@@ -61,8 +38,7 @@ public static class AppVersion
             return core;
         }
 
-        // Equal numeric core: a build with no pre-release is the final release
-        // and outranks any pre-release of the same core.
+        // No pre-release = final release = outranks any pre-release of the same core.
         if (string.IsNullOrEmpty(preA) && string.IsNullOrEmpty(preB))
         {
             return 0;
@@ -81,12 +57,25 @@ public static class AppVersion
         return ComparePreRelease(preA, preB);
     }
 
+    private static string Resolve()
+    {
+        var asm = Assembly.GetExecutingAssembly();
+        var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+
+        if (string.IsNullOrWhiteSpace(info))
+        {
+            return asm.GetName().Version?.ToString(3) ?? "dev";
+        }
+
+        var plus = info.IndexOf('+');
+        return plus >= 0 ? info[..plus] : info;
+    }
+
     /// <summary>
-    ///     Compares two non-empty pre-release strings per SemVer 2.0 §11:
-    ///     dot-separated identifiers compared left to right; all-numeric
-    ///     identifiers compared numerically and rank below alphanumeric ones;
-    ///     alphanumeric compared in ASCII order; and when one is a prefix of the
-    ///     other, the longer (more identifiers) ranks higher.
+    ///     SemVer 2.0 §11 pre-release comparison: dot-separated identifiers left-to-right;
+    ///     numeric identifiers compared numerically and rank below alphanumeric;
+    ///     more identifiers wins when one is a prefix of the other.
     /// </summary>
     private static int ComparePreRelease(string a, string b)
     {
@@ -116,7 +105,7 @@ public static class AppVersion
             return an.CompareTo(bn);
         }
 
-        // A numeric identifier always has lower precedence than alphanumeric.
+        // Numeric identifiers rank below alphanumeric (SemVer §11.4).
         if (aNumeric)
         {
             return -1;
@@ -157,8 +146,8 @@ public static class AppVersion
             s = s[..dash];
         }
 
-        // Normalize to exactly three numeric components so System.Version's
-        // "unspecified == -1" quirk can't make "0.5" sort below "0.5.0".
+        // Normalize to exactly three components: System.Version treats unspecified as -1,
+        // which would make "0.5" sort below "0.5.0" without this.
         var parts = s.Split('.');
         var nums = new int[3];
         for (var i = 0; i < 3; i++)

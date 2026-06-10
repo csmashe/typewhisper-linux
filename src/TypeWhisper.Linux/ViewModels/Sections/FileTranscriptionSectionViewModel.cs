@@ -342,10 +342,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         }
         finally
         {
-            // The queue loop has fully drained, so nothing is processing.
-            // Don't recompute from item.IsProcessing here: SetStatus posts the
-            // final Completed status to the dispatcher, and that post hasn't
-            // run yet, so the last item still reads as Transcribing.
+            // Set directly — SetStatus posts Completed asynchronously, so the
+            // last item still reads as Transcribing if we check item.IsProcessing.
             _isProcessingQueue = false;
             IsProcessing = false;
             RefreshStatusText();

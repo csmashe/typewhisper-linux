@@ -13,12 +13,12 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
+    private readonly SystemCommandAvailabilityService? _commands;
     private readonly SemaphoreSlim _modelLock = new(1, 1);
     private readonly Dictionary<string, ModelStatus> _modelStatuses = new();
     private readonly ISettingsService _settings;
-    private readonly SystemCommandAvailabilityService? _commands;
-    private string? _activeModelId;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
+    private string? _activeModelId;
     private Timer? _autoUnloadTimer;
     private bool _disposed;
 
@@ -34,24 +34,12 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    ///     Test seam for the CUDA-runtime preflight. The default delegate gates the
-    ///     preload behind <see cref="SystemCommandAvailabilityService.HasCudaGpu" />
-    ///     when a commands service was injected, so a system with CUDA runtime
-    ///     libraries but no NVIDIA GPU does not silently load whisper.cpp with
-    ///     <c>UseGpu = true</c>. Returns (success, message).
+    ///     Test seam for the CUDA-runtime preflight. When a commands service was injected the
+    ///     default delegate gates preload behind <see cref="SystemCommandAvailabilityService.HasCudaGpu" />
+    ///     so a CUDA-capable host without an NVIDIA GPU doesn't silently load with <c>UseGpu = true</c>.
+    ///     Returns (success, message).
     /// </summary>
     internal Func<(bool Success, string Message)> CudaRuntimePreflight { get; set; }
-
-    private (bool, string) DefaultCudaRuntimePreflight()
-    {
-        if (_commands is { HasCudaGpu: false })
-        {
-            return (false, "No NVIDIA GPU/driver detected.");
-        }
-
-        var ok = SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibraries(out var message);
-        return (ok, message);
-    }
 
     public string? ActiveModelId
     {
@@ -108,12 +96,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         _disposed = true;
         CancelAutoUnload();
-        // _modelLock is intentionally NOT disposed here. An outstanding
-        // TranscriptionLease or a fire-and-forget UnloadModelAsync call
-        // may call Release() after Dispose returns. SemaphoreSlim only
-        // requires disposal when its AvailableWaitHandle has been
-        // accessed (it has not), so leaving it live avoids a
-        // double-release crash at zero cost.
+        // _modelLock is intentionally NOT disposed: an outstanding TranscriptionLease or
+        // fire-and-forget UnloadModelAsync may Release() after Dispose returns. SemaphoreSlim
+        // only requires disposal when AvailableWaitHandle has been accessed (it has not).
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -143,41 +128,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     public static string GetPluginModelId(string pluginId, string modelId)
     {
         return $"plugin:{pluginId}:{modelId}";
-    }
-
-    internal static TranscriptionAccelerationPreference GetAccelerationPreference(string? value)
-    {
-        var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
-        return normalized switch
-        {
-            AppSettings.LocalModelAccelerationNvidiaCuda =>
-                TranscriptionAccelerationPreference.NvidiaCuda,
-            AppSettings.LocalModelAccelerationCpu => TranscriptionAccelerationPreference.Cpu,
-            _ => TranscriptionAccelerationPreference.Auto,
-        };
-    }
-
-    /// <summary>
-    ///     Linux Auto resolver: tries the CUDA 12 preflight and resolves Auto →
-    ///     NvidiaCuda on success, → Cpu on failure. Explicit preferences pass through
-    ///     unchanged. Test seam optionally overrides the preflight.
-    /// </summary>
-    internal static TranscriptionAccelerationPreference ResolveAutoPreference(
-        TranscriptionAccelerationPreference requested,
-        Func<bool>? cudaPreflight = null
-    )
-    {
-        if (requested != TranscriptionAccelerationPreference.Auto)
-        {
-            return requested;
-        }
-
-        var preflight = cudaPreflight
-            ?? (() => SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibraries(out _));
-
-        return preflight()
-            ? TranscriptionAccelerationPreference.NvidiaCuda
-            : TranscriptionAccelerationPreference.Cpu;
     }
 
     public ModelStatus GetStatus(string modelId)
@@ -366,11 +316,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    ///     Acquires exclusive use of the transcription engine: ensures the requested
-    ///     model is loaded under <c>_modelLock</c> and returns a lease pinning the
-    ///     active plugin. While the lease is held no other acquire — and no model
-    ///     load, download, unload, or delete — can run, so the plugin's native model
-    ///     cannot be swapped underneath the holder. The lease MUST be disposed.
+    ///     Ensures the requested model is loaded under <c>_modelLock</c> and returns a lease
+    ///     pinning the active plugin. While held, no other acquire or model load/unload/delete
+    ///     can run. The lease MUST be disposed to release the lock.
     /// </summary>
     public async Task<TranscriptionLease> AcquireTranscriptionAsync(
         string? modelId = null,
@@ -399,11 +347,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    ///     Like <see cref="AcquireTranscriptionAsync" />, but never loads a model and
-    ///     returns <c>null</c> immediately when the model lock is already held, no
-    ///     model resolves, or the requested model is not the one currently loaded.
-    ///     Used for best-effort callers (partial transcripts) which must never
-    ///     initiate a heavyweight load/download from the recording loop.
+    ///     Like <see cref="AcquireTranscriptionAsync" /> but never loads a model; returns
+    ///     <c>null</c> immediately if the lock is busy, nothing resolves, or the requested
+    ///     model isn't already loaded. Used by best-effort callers (partial transcripts)
+    ///     that must never trigger a heavyweight load from the recording loop.
     /// </summary>
     public async Task<TranscriptionLease?> TryAcquireTranscriptionAsync(
         string? modelId = null,
@@ -439,10 +386,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    ///     One-time migration from bare model IDs (stored by older builds before
-    ///     the plugin model ID scheme was introduced) to the "plugin:pluginId:modelId"
-    ///     format that all current code expects. Safe to call repeatedly — no-ops
-    ///     when the stored ID is already in the new format.
+    ///     Migrates bare model IDs (pre-plugin-scheme builds) to "plugin:pluginId:modelId" format.
+    ///     Idempotent — no-ops when the stored ID is already in the new format.
     /// </summary>
     public void MigrateSettings()
     {
@@ -476,6 +421,51 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             ),
             _ => modelId
         };
+    }
+
+    internal static TranscriptionAccelerationPreference GetAccelerationPreference(string? value)
+    {
+        var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
+        return normalized switch
+        {
+            AppSettings.LocalModelAccelerationNvidiaCuda =>
+                TranscriptionAccelerationPreference.NvidiaCuda,
+            AppSettings.LocalModelAccelerationCpu => TranscriptionAccelerationPreference.Cpu,
+            _ => TranscriptionAccelerationPreference.Auto
+        };
+    }
+
+    /// <summary>
+    ///     Resolves Auto → NvidiaCuda or Cpu via the CUDA 12 preflight; explicit preferences
+    ///     pass through unchanged. <paramref name="cudaPreflight" /> overrides the default for tests.
+    /// </summary>
+    internal static TranscriptionAccelerationPreference ResolveAutoPreference(
+        TranscriptionAccelerationPreference requested,
+        Func<bool>? cudaPreflight = null
+    )
+    {
+        if (requested != TranscriptionAccelerationPreference.Auto)
+        {
+            return requested;
+        }
+
+        var preflight = cudaPreflight
+                        ?? (() => SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibraries(out _));
+
+        return preflight()
+            ? TranscriptionAccelerationPreference.NvidiaCuda
+            : TranscriptionAccelerationPreference.Cpu;
+    }
+
+    private (bool, string) DefaultCudaRuntimePreflight()
+    {
+        if (_commands is { HasCudaGpu: false })
+        {
+            return (false, "No NVIDIA GPU/driver detected.");
+        }
+
+        var ok = SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibraries(out var message);
+        return (ok, message);
     }
 
     private async Task DownloadAndLoadModelCoreAsync(
@@ -544,12 +534,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 TranscriptionAccelerationBackend.NvidiaCuda
             );
 
-            // For CPU-only plugins (SherpaOnnx), skip the preflight + hard-error path
-            // entirely. Their SetAccelerationPreference already handles a CUDA
-            // preference by warning and falling back to CPU, so running the preflight
-            // here would just throw on a CUDA-less host and block a perfectly valid
-            // CPU-only model load. Still resolve Auto → Cpu locally so plugins never
-            // see the unresolved Auto sentinel (SDK contract).
+            // CPU-only plugins (e.g. SherpaOnnx) handle a CUDA preference internally by
+            // falling back to CPU, so the preflight hard-error path is irrelevant and would
+            // break valid CPU loads on CUDA-less hosts. Always resolve Auto → Cpu locally
+            // so plugins never receive the unresolved Auto sentinel (SDK contract).
             TranscriptionAccelerationPreference resolvedPreference;
             if (pluginSupportsCuda)
             {
@@ -574,12 +562,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 var (ok, message) = CudaRuntimePreflight();
                 if (!ok)
                 {
-                    // Explicit NvidiaCuda preserves the hard-error path so the user
-                    // knows when CUDA is broken; Auto already resolved to Cpu above
-                    // if CUDA wasn't visible, so this only fires for the explicit
-                    // case (and for Auto on systems where the preflight returns
-                    // success on the first call but fails on the second — pathological,
-                    // surfaces the error rather than silently misloading).
+                    // Explicit NvidiaCuda keeps the hard-error path so broken CUDA is visible.
+                    // Auto would have resolved to Cpu above; this branch is for explicit
+                    // requests (or the pathological double-preflight-inconsistency case).
                     throw new InvalidOperationException(message);
                 }
             }
@@ -611,9 +596,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        // Await the native teardown before releasing _modelLock so a queued
-        // load/acquire/delete cannot enter the exclusive section while the
-        // plugin's native model is still being disposed.
+        // Await native teardown before releasing _modelLock so no queued
+        // load/acquire/delete can enter while the plugin's model is still disposing.
         var plugin = ActiveTranscriptionPlugin;
         if (plugin is not null)
         {
@@ -632,10 +616,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
         }
 
-        // Unload succeeded. The model is no longer loaded but, for
-        // download-capable plugins, still on disk — so drop the tracked
-        // override and let GetStatus recompute real availability rather than
-        // pinning NotDownloaded on a model that is merely unloaded.
+        // Unload succeeded: model is gone from memory but still on disk for download-capable
+        // plugins, so drop the tracked status and let GetStatus recompute real availability.
         _modelStatuses.Remove(modelId);
         OnPropertyChanged(nameof(GetStatus));
         ActiveModelId = null;
@@ -727,10 +709,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    ///     Exclusive lease over the transcription engine. While a lease is held no
-    ///     other acquire — and no model load, download, unload, or delete — can run,
-    ///     so the plugin's native model cannot be swapped underneath the holder.
-    ///     Disposing releases the model lock; a double dispose releases it only once.
+    ///     Exclusive lease over the transcription engine. While held, no other acquire or
+    ///     model load/unload/delete can run. Dispose releases the lock (idempotent).
     /// </summary>
     public sealed class TranscriptionLease : IAsyncDisposable
     {

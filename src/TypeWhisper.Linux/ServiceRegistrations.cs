@@ -19,9 +19,8 @@ using TypeWhisper.Linux.Views;
 namespace TypeWhisper.Linux;
 
 /// <summary>
-///     DI wiring for the Linux host. Keeps registrations Linux-native and omits
-///     Windows-only services such as Win32 hotkeys, WPF UI, Velopack, SMTC media
-///     pause, Core Audio ducking, supporter Discord, and license server flows.
+///     DI wiring for the Linux host. Omits Windows-only services (Win32 hotkeys,
+///     WPF UI, Velopack, SMTC, Core Audio, Discord, license server).
 /// </summary>
 internal static class ServiceRegistrations
 {
@@ -100,10 +99,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<BackendSelector>();
         services.AddSingleton<HotkeyService>();
 
-        // Per-desktop "Set up automatically" writers. Order in the list
-        // is the order the Settings panel evaluates IsCurrentDesktop()
-        // — first hit wins, but on a sane system at most one will be
-        // applicable anyway.
+        // Per-desktop shortcut writers; Settings panel calls IsCurrentDesktop() in order — first hit wins.
         services.AddSingleton<IDeShortcutWriter, GnomeShortcutWriter>();
         services.AddSingleton<IDeShortcutWriter, KdeShortcutWriter>();
         services.AddSingleton<IDeShortcutWriter, HyprlandShortcutWriter>();
@@ -114,10 +110,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<BrowserAccessibilitySetupHelper>();
         services.AddSingleton<GnomeWindowCallsSetupHelper>();
 
-        // Machine-driven onboarding setup checklist. Each task self-gates on
-        // the detected environment via AppliesToThisMachine(); the wizard
-        // renders whichever apply. Adding a new desktop/session is a matter
-        // of registering more tasks here — the wizard never special-cases one.
+        // Onboarding checklist tasks. Each self-gates via AppliesToThisMachine();
+        // adding a new desktop/session means registering here — no wizard changes needed.
         services.AddSingleton<PackageInstaller>();
         services.AddSingleton<ISetupTask, ClipboardSetupTask>();
         services.AddSingleton<ISetupTask, AutoPasteSetupTask>();
@@ -145,8 +139,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<WatchFolderService>();
         services.AddSingleton<ControlSocketServer>();
 
-        // ViewModels — section VMs are singletons so state stays consistent
-        // across the sidebar nav and the onboarding wizard.
+        // Section VMs are singletons so state stays consistent across sidebar nav and wizard.
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<DictationOverlayViewModel>();
         services.AddSingleton<GeneralSectionViewModel>();
@@ -167,8 +160,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<AboutSectionViewModel>();
         services.AddTransient<WelcomeWizardViewModel>();
 
-        // Recording indicator for tiling window managers — a desktop
-        // notification in place of the overlay; no-op on desktop environments.
+        // Tiling WM recording indicator (desktop notification instead of overlay; no-op on DEs).
         services.AddSingleton<RecordingNotificationService>();
 
         // Avalonia windows

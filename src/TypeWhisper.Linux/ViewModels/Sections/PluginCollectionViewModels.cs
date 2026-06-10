@@ -24,10 +24,7 @@ public partial class PluginCollectionRow : ObservableObject
 
         foreach (var item in items)
         {
-            var row = new PluginCollectionItemRow(ItemFields, item, ItemLabelFieldKey)
-            {
-                OwnerCollection = this
-            };
+            var row = new PluginCollectionItemRow(ItemFields, item, ItemLabelFieldKey) { OwnerCollection = this };
             Items.Add(row);
         }
     }
@@ -81,10 +78,7 @@ public partial class PluginCollectionRow : ObservableObject
             ItemFields,
             new PluginCollectionItem(seed),
             ItemLabelFieldKey
-        )
-        {
-            OwnerCollection = this
-        };
+        ) { OwnerCollection = this };
         Items.Add(item);
     }
 

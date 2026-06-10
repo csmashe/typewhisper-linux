@@ -13,19 +13,14 @@ namespace TypeWhisper.Linux.Services.Plugins;
 /// </summary>
 public sealed class PluginRegistryService
 {
-    // The registry JSON is hosted under the Windows repo path but is shared
-    // with the Linux client. SupportedPluginIds below filters it down to the
-    // Linux-compatible subset.
+    // Registry JSON is hosted under the Windows repo but shared; filtered to Linux-compatible IDs below.
     private const string RegistryUrl = "https://typewhisper.github.io/typewhisper-win/plugins.json";
     private static readonly TimeSpan s_cacheDuration = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan s_updateCheckInterval = TimeSpan.FromHours(24);
 
-    private static readonly JsonSerializerOptions s_jsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    // Keep Linux on the set already proven by the old bundled-plugin path.
+    // Restrict to the set already proven by the old bundled-plugin path.
     private static readonly HashSet<string> s_supportedPluginIds = new(
         StringComparer.OrdinalIgnoreCase
     )
@@ -239,8 +234,8 @@ public sealed class PluginRegistryService
     }
 
     /// <summary>
-    ///     Throttled to one network probe per 24h — this runs at startup so a
-    ///     repeated launch loop won't hammer the registry endpoint.
+    ///     Checks for plugin updates, throttled to one network probe per 24 h to avoid hammering
+    ///     the registry endpoint on repeated launches.
     /// </summary>
     public async Task CheckForUpdatesAsync(CancellationToken ct = default)
     {
@@ -265,10 +260,8 @@ public sealed class PluginRegistryService
     }
 
     /// <summary>
-    ///     First-launch bootstrap: pulls every Linux-compatible plugin from the
-    ///     registry so the app is usable out of the box. Guarded by the
-    ///     PluginFirstRunCompleted flag so subsequent launches respect any
-    ///     uninstalls the user has performed.
+    ///     First-launch bootstrap: installs all compatible registry plugins so the app is usable
+    ///     out of the box. Guarded by PluginFirstRunCompleted so it won't re-run after user uninstalls.
     /// </summary>
     public async Task FirstRunAutoInstallAsync(CancellationToken ct = default)
     {

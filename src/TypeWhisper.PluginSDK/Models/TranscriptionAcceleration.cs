@@ -20,10 +20,9 @@ public enum TranscriptionAccelerationBackend
 }
 
 /// <summary>
-///     Reports what acceleration the engine actually loaded with, along with a
-///     human-readable display string and an optional restart-required signal that
-///     surfaces when the engine's pinned runtime no longer matches the user's
-///     saved preference.
+///     Reports the acceleration backend the engine actually loaded with, plus a
+///     restart-required flag for when the pinned runtime no longer matches the
+///     user's saved preference.
 /// </summary>
 public sealed record TranscriptionAccelerationStatus(
     TranscriptionAccelerationBackend ActiveBackend,

@@ -15,11 +15,9 @@ internal static class ControlSocketClient
     private const int TimeoutMillis = 2000;
 
     /// <summary>
-    ///     Side-effect-free liveness probe. Returns true if a server is
-    ///     currently bound to the socket at <paramref name="path" />. Used by
-    ///     argument-bearing launches (e.g. <c>typewhisper --minimized</c>) that
-    ///     must NOT trigger a toggle just to discover that another instance is
-    ///     running. Stale-socket cleanup mirrors <see cref="TrySendToggle" />.
+    ///     Side-effect-free liveness probe: returns true if a server is bound to
+    ///     <paramref name="path" />. Used by argument-bearing launches (e.g. <c>--minimized</c>)
+    ///     that must not trigger a toggle merely to check for a running instance.
     /// </summary>
     public static bool IsLivePeer(string path)
     {
@@ -34,11 +32,7 @@ internal static class ControlSocketClient
                 AddressFamily.Unix,
                 SocketType.Stream,
                 ProtocolType.Unspecified
-            )
-            {
-                SendTimeout = TimeoutMillis,
-                ReceiveTimeout = TimeoutMillis
-            };
+            ) { SendTimeout = TimeoutMillis, ReceiveTimeout = TimeoutMillis };
             sock.Connect(new UnixDomainSocketEndPoint(path));
             return true;
         }
@@ -62,11 +56,9 @@ internal static class ControlSocketClient
     }
 
     /// <summary>
-    ///     Attempts to send a <c>toggle</c> command to the running instance over
-    ///     the Unix domain socket at <paramref name="path" />. Returns true if the
-    ///     server acknowledged with <c>ok</c>. If the socket file exists but the
-    ///     peer is dead (ECONNREFUSED), the stale file is deleted before
-    ///     returning false so the caller can bind a fresh server.
+    ///     Sends a <c>toggle</c> command over the Unix socket at <paramref name="path" />.
+    ///     Returns true if the server acknowledged with <c>ok</c>. Deletes a stale socket
+    ///     file (ECONNREFUSED) so the caller can bind a fresh server.
     /// </summary>
     /// <param name="path">Absolute path to the control socket file.</param>
     /// <param name="error">Set to a diagnostic message on non-stale failures.</param>
@@ -85,11 +77,7 @@ internal static class ControlSocketClient
                 AddressFamily.Unix,
                 SocketType.Stream,
                 ProtocolType.Unspecified
-            )
-            {
-                SendTimeout = TimeoutMillis,
-                ReceiveTimeout = TimeoutMillis
-            };
+            ) { SendTimeout = TimeoutMillis, ReceiveTimeout = TimeoutMillis };
             sock.Connect(new UnixDomainSocketEndPoint(path));
 
             var msg = Encoding.UTF8.GetBytes("toggle\n");
@@ -106,8 +94,7 @@ internal static class ControlSocketClient
                 sent += w;
             }
 
-            // The server replies with a short line ("ok\n" or "err ..."). 64
-            // bytes is more than enough for any current or near-future reply.
+            // Server replies with a short line ("ok\n" or "err ..."); 64 bytes is ample.
             var buf = new byte[64];
             var total = 0;
             while (total < buf.Length)
@@ -144,8 +131,7 @@ internal static class ControlSocketClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            // Stale socket: file exists but nobody is listening. Remove so
-            // the new GUI instance can bind without hitting EADDRINUSE.
+            // Stale socket — remove so the new instance can bind without EADDRINUSE.
             try
             {
                 File.Delete(path);
@@ -165,17 +151,11 @@ internal static class ControlSocketClient
     }
 
     /// <summary>
-    ///     Sends one JSON request line to the running instance and reads back
-    ///     the JSON response line. Returns true if the wire exchange completed
-    ///     (the server replied with valid bytes); inspect <paramref name="responseJson" />
-    ///     for the <c>ok</c> field to determine logical success.
+    ///     Sends one JSON request line and reads back the JSON response line.
+    ///     Returns true if the wire exchange completed; inspect <paramref name="responseJson" />
+    ///     for the <c>ok</c> field for logical success. One request per connection;
+    ///     response is capped at 4 KB (matches the server's line cap).
     /// </summary>
-    /// <remarks>
-    ///     One request per connection — the server reads exactly one line and
-    ///     closes. We cap the response read at 4 KB to match the server's own
-    ///     line cap; any reasonable response (the longest is <c>status</c>) fits
-    ///     in well under that.
-    /// </remarks>
     /// <param name="path">Absolute path to the control socket file.</param>
     /// <param name="request">Object to serialize as the JSON request line.</param>
     /// <param name="responseJson">JSON response line, trimmed of trailing newline. Empty on error.</param>
@@ -192,9 +172,7 @@ internal static class ControlSocketClient
 
         if (!File.Exists(path))
         {
-            // No socket file means no running instance. Don't treat this as
-            // an exception path; callers (CLI subcommands) use this signal
-            // to print "not running" and exit non-zero.
+            // No socket file = no running instance; callers print "not running" and exit non-zero.
             return false;
         }
 
@@ -204,17 +182,11 @@ internal static class ControlSocketClient
                 AddressFamily.Unix,
                 SocketType.Stream,
                 ProtocolType.Unspecified
-            )
-            {
-                SendTimeout = TimeoutMillis,
-                ReceiveTimeout = TimeoutMillis
-            };
+            ) { SendTimeout = TimeoutMillis, ReceiveTimeout = TimeoutMillis };
             sock.Connect(new UnixDomainSocketEndPoint(path));
 
             var json = JsonSerializer.Serialize(request, JsonControlProtocol.JsonOptions);
-            // Enforce the protocol's 4 KB cap on the request side too — the
-            // server will reject anything larger, but failing fast here gives
-            // a clearer error than a remote line-too-long bounce.
+            // Enforce 4 KB cap client-side for a clearer error than a remote rejection.
             var payload = Encoding.UTF8.GetBytes(json + "\n");
             if (payload.Length > JsonControlProtocol.MaxLineBytes)
             {
@@ -235,10 +207,8 @@ internal static class ControlSocketClient
                 sent += w;
             }
 
-            // Read until newline or socket close, capped at MaxLineBytes.
-            // We can't use NetworkStream/StreamReader here because
-            // StreamReader buffers ahead and would swallow the EOF that the
-            // server emits right after the single response line.
+            // Read until newline or close, capped at MaxLineBytes. StreamReader can't be used
+            // here — it buffers ahead and would swallow the EOF the server emits after its reply.
             var buf = new byte[JsonControlProtocol.MaxLineBytes];
             var total = 0;
             while (total < buf.Length)
@@ -250,8 +220,6 @@ internal static class ControlSocketClient
                 }
 
                 total += n;
-                // Stop at the first newline so we don't block waiting for
-                // a follow-up that will never come.
                 var nl = Array.IndexOf(buf, (byte)'\n', 0, total);
                 if (nl >= 0)
                 {
@@ -271,9 +239,7 @@ internal static class ControlSocketClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            // Stale socket file with no listener. Clean it up so a follow-up
-            // GUI launch can bind cleanly; report as "not running" to the
-            // caller by returning false with no error.
+            // Stale socket — clean up so a follow-up GUI launch can bind cleanly.
             try
             {
                 File.Delete(path);

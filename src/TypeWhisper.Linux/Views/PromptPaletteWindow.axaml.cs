@@ -48,11 +48,8 @@ public partial class PromptPaletteWindow : Window
         SearchBox.IsEnabled = false;
     }
 
-    /// <summary>
-    ///     Transitions the palette into its running state after an action is picked:
-    ///     locks the UI, shows a status line, and reveals the (initially empty)
-    ///     result area that streamed tokens fill via <see cref="UpdateResult" />.
-    /// </summary>
+    /// <summary>Locks the UI, shows a status line, and reveals the result area
+    ///     for streamed tokens after an action is picked.</summary>
     public void BeginRunning(string actionName)
     {
         _running = true;
@@ -62,10 +59,9 @@ public partial class PromptPaletteWindow : Window
     }
 
     /// <summary>
-    ///     Registers the token source that drives the running action so closing the
-    ///     window (OS close button) or pressing Escape while it runs cancels the
-    ///     action and suppresses insertion. If the window was already closed before
-    ///     the service attached this, cancels immediately so the race is covered.
+    ///     Attaches the CTS for the running action so Escape/close cancels it.
+    ///     If the window was already closed before the service attached, cancels
+    ///     immediately to cover the race.
     /// </summary>
     public void AttachRunCancellation(CancellationTokenSource runCts)
     {
@@ -76,10 +72,8 @@ public partial class PromptPaletteWindow : Window
         }
     }
 
-    /// <summary>
-    ///     Renders the accumulated streamed result and keeps the newest text in
-    ///     view. Must be called on the UI thread (the service marshals each flush).
-    /// </summary>
+    /// <summary>Updates the streamed result text and auto-scrolls.
+    ///     Must be called on the UI thread.</summary>
     public void UpdateResult(string text)
     {
         if (_closed)
@@ -88,8 +82,7 @@ public partial class PromptPaletteWindow : Window
         }
 
         ResultText.Text = text;
-        // Auto-scroll after layout has measured the new text, matching the
-        // after-layout pattern used by the dictation overlay's streamed area.
+        // Post-layout scroll matches the pattern used by the dictation overlay.
         Dispatcher.UIThread.Post(
             () => ResultScrollViewer.ScrollToEnd(),
             DispatcherPriority.Background);
@@ -132,24 +125,18 @@ public partial class PromptPaletteWindow : Window
     {
         _closed = true;
 
-        // Closing while an action is running is a user abort: cancel it so the
-        // service stops processing and does NOT paste the result into the target
-        // window. Harmless on a normal completion close — by then the service has
-        // already passed its pre-insert cancellation check and the insert/execute
-        // paths use their own tokens, not this one.
+        // Cancel the running action so the service doesn't paste into the target
+        // window. Harmless on normal close — the insert paths use their own tokens.
         _runCts?.Cancel();
 
-        // Safety net: if the window is closed by the OS or shell before
-        // Complete() runs, unblock any awaiting caller with a null result.
+        // Safety net: unblock any awaiting caller if the OS closed the window first.
         _resultSource?.TrySetResult(null);
     }
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
-        // While the action runs the search box is disabled, so its Escape handler
-        // is inactive; handle Escape at the window level to abort a streaming
-        // action. (Before a pick, the focused search box handles Escape and marks
-        // it handled, so this never fires then.)
+        // The search box is disabled while running, so handle Escape at the window
+        // level. Before a pick, the search box handles Escape and marks it handled.
         if (_running && e.Key == Key.Escape)
         {
             e.Handled = true;
@@ -247,8 +234,7 @@ public partial class PromptPaletteWindow : Window
 
     private void Complete(PromptAction? action)
     {
-        // TrySetResult returns false if the result was already set (e.g. by
-        // OnClosed), so only react on the first successful call.
+        // TrySetResult is false if already set (e.g. by OnClosed); only act once.
         if (_resultSource?.TrySetResult(action) != true)
         {
             return;
@@ -261,9 +247,8 @@ public partial class PromptPaletteWindow : Window
             return;
         }
 
-        // An action was picked: keep the window open and locked so the host can
-        // stream the LLM result into it. The service closes it (ClosePalette)
-        // once the run finishes, before pasting into the target app.
+        // Keep the window open and locked so the host can stream the result;
+        // the service calls ClosePalette once the run finishes.
         BeginRunning(action.Name);
     }
 }

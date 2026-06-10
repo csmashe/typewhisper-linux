@@ -16,17 +16,30 @@ public sealed class DictationSessionResultStore : IDisposable
     private static readonly TimeSpan s_sweepInterval = TimeSpan.FromSeconds(60);
 
     private readonly ConcurrentDictionary<int, Entry> _entries = new();
-    private readonly TimeSpan _ttl;
     private readonly Timer _timer;
+    private readonly TimeSpan _ttl;
     private bool _disposed;
 
     public DictationSessionResultStore()
-        : this(s_defaultTtl) { }
+        : this(s_defaultTtl)
+    {
+    }
 
     internal DictationSessionResultStore(TimeSpan ttl)
     {
         _ttl = ttl;
         _timer = new Timer(_ => EvictExpired(DateTime.UtcNow), null, s_sweepInterval, s_sweepInterval);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _timer.Dispose();
     }
 
     public void Record(DictationSessionResult result)
@@ -54,17 +67,6 @@ public sealed class DictationSessionResultStore : IDisposable
     internal void EvictNow(DateTime asOfUtc)
     {
         EvictExpired(asOfUtc);
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _disposed = true;
-        _timer.Dispose();
     }
 
     private void EvictExpired(DateTime asOfUtc)

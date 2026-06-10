@@ -5,11 +5,11 @@ using System.Text.Json.Serialization;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Outcome of an update check. <see cref="Checked"/> distinguishes "never
-///     run" from "ran"; <see cref="Faulted"/> marks a check that ran but failed
+///     Outcome of an update check. <see cref="Checked" /> distinguishes "never
+///     run" from "ran"; <see cref="Faulted" /> marks a check that ran but failed
 ///     (offline, rate-limited, no releases yet). When a check succeeds and a
-///     newer release exists, <see cref="UpdateAvailable"/> is true and
-///     <see cref="LatestVersion"/>/<see cref="ReleaseUrl"/> are populated.
+///     newer release exists, <see cref="UpdateAvailable" /> is true and
+///     <see cref="LatestVersion" />/<see cref="ReleaseUrl" /> are populated.
 /// </summary>
 public sealed record UpdateCheckResult
 {
@@ -31,11 +31,8 @@ public sealed record UpdateCheckResult
 /// </summary>
 public sealed class UpdateCheckService
 {
-    // We list all releases and pick the highest SemVer ourselves rather than
-    // trusting GitHub's /releases/latest endpoint: that endpoint sorts by
-    // publish time, not version, so a re-published older tag can shadow a
-    // newer one. per_page=100 covers far more releases than this fork will
-    // ever have in flight.
+    // List all releases and pick the highest SemVer ourselves: /releases/latest
+    // sorts by publish time so a re-published older tag can shadow a newer one.
     private const string ReleasesApi =
         "https://api.github.com/repos/csmashe/typewhisper-linux/releases?per_page=100";
 
@@ -45,14 +42,12 @@ public sealed class UpdateCheckService
 
     private static readonly TimeSpan s_startupCheckInterval = TimeSpan.FromHours(24);
 
-    private static readonly JsonSerializerOptions s_jsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     private readonly HttpClient _httpClient;
     private readonly LinuxPreferencesService _prefs;
-    private readonly SemaphoreSlim _gate = new(1, 1);
 
     public UpdateCheckService(LinuxPreferencesService prefs, HttpClient? httpClient = null)
     {
@@ -66,17 +61,12 @@ public sealed class UpdateCheckService
         }
     }
 
-    /// <summary>The most recent check result, or <see cref="UpdateCheckResult.NotChecked"/>.</summary>
+    /// <summary>The most recent check result, or <see cref="UpdateCheckResult.NotChecked" />.</summary>
     public UpdateCheckResult LastResult { get; private set; } = UpdateCheckResult.NotChecked;
 
-    /// <summary>Raised (possibly off the UI thread) whenever <see cref="LastResult"/> changes.</summary>
-    public event Action<UpdateCheckResult>? ResultChanged;
-
     /// <summary>
-    ///     Called once at startup. Honors the user's opt-out, rate-limits the
-    ///     network call to once per day, and — when a check isn't due — still
-    ///     re-surfaces the last known result so the banner reappears without
-    ///     hitting the network.
+    ///     Called once at startup. Honors the opt-out, rate-limits to once per day,
+    ///     and re-surfaces the cached result when no check is due.
     /// </summary>
     public async Task CheckOnStartupAsync(CancellationToken cancellationToken = default)
     {
@@ -94,7 +84,6 @@ public sealed class UpdateCheckService
             return;
         }
 
-        // Not due — recompute from the cached latest version, no network.
         var known = _prefs.Current.LastKnownLatestVersion;
         if (string.IsNullOrWhiteSpace(known))
         {
@@ -109,8 +98,6 @@ public sealed class UpdateCheckService
                 UpdateAvailable = AppVersion.Compare(current, known) < 0,
                 CurrentVersion = current,
                 LatestVersion = known,
-                // Reuse the cached release URL; only fall back to the generic
-                // releases page if we somehow have a version but no URL.
                 ReleaseUrl = string.IsNullOrWhiteSpace(_prefs.Current.LastKnownLatestUrl)
                     ? ReleasesPage
                     : _prefs.Current.LastKnownLatestUrl
@@ -118,10 +105,7 @@ public sealed class UpdateCheckService
         );
     }
 
-    /// <summary>
-    ///     Performs a live check against GitHub. Used by the manual button and
-    ///     the due startup path. Serialized so overlapping calls can't race.
-    /// </summary>
+    /// <summary>Live GitHub check. Used by the manual button and the due startup path. Serialized against races.</summary>
     public async Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -172,9 +156,8 @@ public sealed class UpdateCheckService
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Caller-requested cancellation is not a fault; let it propagate.
-                // (HttpClient timeouts also throw here but with the token not
-                // requested, so they still fall through to the fault path below.)
+                // Caller cancellation is not a fault — propagate. HttpClient timeouts
+                // also throw OCE but with the token not requested, so they fall through.
                 throw;
             }
             catch (Exception ex)
@@ -182,14 +165,11 @@ public sealed class UpdateCheckService
                 Debug.WriteLine($"[UpdateCheckService] Check failed: {ex.Message}");
                 result = new UpdateCheckResult
                 {
-                    Checked = true,
-                    Faulted = true,
-                    CurrentVersion = current,
-                    Error = ex.Message
+                    Checked = true, Faulted = true, CurrentVersion = current, Error = ex.Message
                 };
             }
 
-            // Only persist on a clean check so a transient failure can't reset
+            // Only persist on a clean check — transient failures must not reset
             // the rate-limit clock or wipe the cached latest version.
             if (!result.Faulted)
             {
@@ -222,21 +202,23 @@ public sealed class UpdateCheckService
 
         _prefs.Save(_prefs.Current with { DismissedUpdateVersion = version });
 
-        // Re-raise so banner listeners recompute visibility against the new
-        // dismissed-version preference.
+        // Re-raise so banner listeners recompute visibility.
         ResultChanged?.Invoke(LastResult);
     }
 
-    /// <summary>True when <paramref name="version"/> was dismissed from the banner.</summary>
+    /// <summary>True when <paramref name="version" /> was dismissed from the banner.</summary>
     public bool IsDismissed(string? version)
     {
         return !string.IsNullOrWhiteSpace(version)
-            && string.Equals(
-                _prefs.Current.DismissedUpdateVersion,
-                version,
-                StringComparison.OrdinalIgnoreCase
-            );
+               && string.Equals(
+                   _prefs.Current.DismissedUpdateVersion,
+                   version,
+                   StringComparison.OrdinalIgnoreCase
+               );
     }
+
+    /// <summary>Raised (possibly off the UI thread) whenever <see cref="LastResult" /> changes.</summary>
+    public event Action<UpdateCheckResult>? ResultChanged;
 
     private void Publish(UpdateCheckResult result)
     {
@@ -244,11 +226,7 @@ public sealed class UpdateCheckService
         ResultChanged?.Invoke(result);
     }
 
-    /// <summary>
-    ///     Picks the highest-versioned published, non-prerelease, non-draft
-    ///     release from the list and returns its normalized version (and html
-    ///     URL). Null when the list has no qualifying release.
-    /// </summary>
+    /// <summary>Returns the highest-versioned published non-prerelease/non-draft release, or null.</summary>
     private static string? SelectHighestStable(
         IReadOnlyList<GitHubRelease>? releases,
         out string? htmlUrl

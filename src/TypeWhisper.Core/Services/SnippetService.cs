@@ -302,8 +302,7 @@ public sealed partial class SnippetService : ISnippetService
             {
                 _cache[idx] = _cache[idx] with
                 {
-                    UsageCount = _cache[idx].UsageCount + 1,
-                    LastUsedAt = DateTime.UtcNow
+                    UsageCount = _cache[idx].UsageCount + 1, LastUsedAt = DateTime.UtcNow
                 };
                 SaveToDisk();
             }
@@ -334,11 +333,7 @@ public sealed partial class SnippetService : ISnippetService
                     continue;
                 }
 
-                _cache[idx] = _cache[idx] with
-                {
-                    UsageCount = _cache[idx].UsageCount + delta,
-                    LastUsedAt = now
-                };
+                _cache[idx] = _cache[idx] with { UsageCount = _cache[idx].UsageCount + delta, LastUsedAt = now };
                 changed = true;
             }
 

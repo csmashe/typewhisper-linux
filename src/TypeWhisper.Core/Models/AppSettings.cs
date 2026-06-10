@@ -37,11 +37,9 @@ public record AppSettings
     }
 
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
-    // Hybrid ("auto") by default: a quick tap toggles recording on/off, while
-    // holding the key past the push-to-talk threshold records only while held
-    // and stops on release. This is the most forgiving default — a user who
-    // holds the key (expecting push-to-talk) gets sensible behavior instead of
-    // the rapid on/off thrash a pure Toggle mode produces on a held key.
+
+    // Hybrid: quick tap toggles, held key acts as push-to-talk. Most forgiving
+    // default — avoids the rapid on/off thrash Toggle produces on a held key.
     public RecordingMode Mode { get; init; } = RecordingMode.Hybrid;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
     public int HistoryRetentionMinutes { get; init; } = 90 * 24 * 60;
@@ -141,10 +139,8 @@ public record AppSettings
     // Dashboard
     public int DashboardSelectedPeriod { get; init; }
 
-    // Linux: when true (default), the Wayland session uses the evdev backend
-    // to detect global hotkeys regardless of focused window. Reads
-    // /dev/input/event* — user can disable from Settings → Shortcuts to fall
-    // back to focused-only SharpHook behavior.
+    // When true (default), uses the evdev backend for global hotkeys on Wayland
+    // (reads /dev/input/event*). Disable to fall back to focused-only SharpHook.
     public bool WaylandEvdevHotkeysEnabled { get; init; } = true;
 
     public static AppSettings Default => new();
@@ -179,11 +175,13 @@ public record AppSettings
         return LocalModelAccelerationAuto;
     }
 
-    public static int NormalizePreviewBubbleAutoHideMilliseconds(int milliseconds) =>
-        Math.Clamp(
+    public static int NormalizePreviewBubbleAutoHideMilliseconds(int milliseconds)
+    {
+        return Math.Clamp(
             milliseconds,
             MinPreviewBubbleAutoHideMilliseconds,
             MaxPreviewBubbleAutoHideMilliseconds);
+    }
 
     public static (double Left, double Top) ClampOverlayPositionToWorkArea(
         double left,

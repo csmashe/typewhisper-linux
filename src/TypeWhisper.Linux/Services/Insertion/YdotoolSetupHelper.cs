@@ -4,23 +4,13 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 namespace TypeWhisper.Linux.Services.Insertion;
 
 /// <summary>
-///     One-click installer for the ydotool stack on GNOME / KDE Wayland (and
-///     any other compositor that the user has chosen to drive through
-///     ydotool). The shape mirrors <see cref="IDeShortcutWriter" /> — the
-///     Settings panel calls <see cref="IsCurrentlyConfigured" /> to paint the
-///     status row, <see cref="PreviewLines" /> to show what would change, and
-///     <see cref="SetUpAsync" /> to actually install. We don't implement that
-///     interface because the surface differs (no per-DE plurality, no
-///     shortcut spec), but the contract is intentionally familiar.
-///     Install flow:
-///     1. Write <c>/etc/udev/rules.d/60-ydotool.rules</c> via <c>pkexec</c>.
+///     One-click installer for the ydotool stack. Install flow:
+///     1. Write <c>/etc/udev/rules.d/60-ydotool.rules</c> via <c>pkexec</c> (one-time admin prompt).
 ///     2. <c>systemctl --user enable --now ydotoold.service</c>.
-///     3. Poll for the socket up to ~3 s before declaring success.
-///     The udev rule grants the user's primary login session read/write
-///     access to <c>/dev/uinput</c>; without it ydotoold runs but every
-///     invocation fails with EACCES. <c>pkexec</c> is the consent surface —
-///     we never call <c>sudo</c> directly because the GUI can't capture
-///     terminal-style password prompts.
+///     3. Poll up to ~3 s for the socket before declaring success.
+///     The udev rule grants the active session read/write access to <c>/dev/uinput</c>;
+///     without it ydotoold starts but every keystroke fails with EACCES.
+///     <c>pkexec</c> is the consent surface — we never call <c>sudo</c> directly.
 /// </summary>
 public sealed class YdotoolSetupHelper
 {
@@ -133,15 +123,9 @@ public sealed class YdotoolSetupHelper
             );
         }
 
-        // Gate the privileged path on the ground truth — "can this process
-        // read+write /dev/uinput?" — NOT on "does the rule file exist?". A
-        // prior run (or a manual install) may have written the rule yet left
-        // the uinput module unloaded, so the device is still inaccessible and
-        // the rule has never applied. Keying off rule-existence would skip the
-        // fix (modprobe + modules-load.d) on exactly that retry and the task
-        // would stay stuck. When uinput is already accessible we skip entirely
-        // — the rule is genuinely unnecessary and prompting for an admin
-        // password would just be a needless nag.
+        // Gate on "can we actually read+write /dev/uinput?" not "does the rule file exist?".
+        // A prior run may have written the rule but left the module unloaded, so the device
+        // is still inaccessible. Only skip the privileged path when access is confirmed.
         if (!UinputIsAccessible())
         {
             var ruleInstalled = await InstallUdevRuleAsync(ct).ConfigureAwait(false);
@@ -235,23 +219,15 @@ public sealed class YdotoolSetupHelper
 
     public async Task<SetupResult> RemoveAsync(CancellationToken ct)
     {
-        // Ownership gate for *both* the disable and the file delete. We only
-        // touch a user unit we wrote: SetUpAsync respects a pre-existing
-        // foreign ydotoold user unit (distro/AUR/manual) and won't overwrite
-        // its file — but it does `enable --now` whatever unit resolves. If we
-        // then unconditionally `disable --now`d here, clicking Remove would
-        // disable a service the user relies on, leaving it dead after the
-        // next login while the foreign file stays in place. So: foreign unit
-        // → leave its enablement state entirely alone.
+        // Only touch units we wrote. SetUpAsync enables any resolving unit (including foreign
+        // distro/AUR units), so unconditionally disabling here would kill a service the user
+        // relies on. Foreign unit → leave its enablement state entirely alone.
         var unitPath = UserUnitFilePath();
         var weOwnUnit = File.Exists(unitPath) && IsFileOwnedByTypeWhisper(unitPath);
 
-        // Disable our user unit first so the socket goes away before we pull
-        // the udev rule out from under it. Fail closed: if `disable --now`
-        // fails, ydotoold may still be running and — worse — the enablement
-        // symlink may survive; deleting the unit file then would leave a
-        // dangling symlink that makes every later `systemctl --user` call
-        // warn. Abort before the delete and surface the error instead.
+        // Disable first so the socket goes away before the udev rule is removed.
+        // Fail closed: if disable fails, the enablement symlink may survive and a
+        // subsequent file delete would leave it dangling — abort and surface the error.
         if (weOwnUnit && DesktopDetector.BinaryExists("systemctl"))
         {
             var disable = await _runner
@@ -626,14 +602,10 @@ public sealed class YdotoolSetupHelper
             );
         }
 
-        // pkexec runs the helper as root with the user's authentication.
-        // We pipe file contents through here-docs rather than passing them
-        // on the command line so a content typo can't be persisted as
-        // shell metadata. Order matters: write both files, reload udev so the
-        // new rule is live, THEN load the module — the add-event creates the
-        // device node with the rule already in effect, applying the input
-        // group + uaccess ACL. The trailing trigger is belt-and-suspenders for
-        // the case where uinput was somehow already loaded.
+        // Pipe content via here-docs, not command-line args, to avoid shell metadata issues.
+        // Order: write files → reload udev → modprobe uinput. Loading the module AFTER
+        // the reload ensures the add-event fires with the rule already live, applying
+        // the input group + uaccess ACL to the newly created device node.
         var script =
             $"set -e\n"
             + $"cat > {ModulesLoadPath} <<'EOF'\n"

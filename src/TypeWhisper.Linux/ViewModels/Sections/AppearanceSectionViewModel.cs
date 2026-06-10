@@ -12,6 +12,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
 
     [ObservableProperty]
+    private double _previewBubbleAutoHideSeconds =
+        AppSettings.DefaultPreviewBubbleAutoHideMilliseconds / 1000d;
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PreviewLeftIsIndicator))]
     [NotifyPropertyChangedFor(nameof(PreviewLeftIsWaveform))]
     [NotifyPropertyChangedFor(nameof(PreviewLeftIsText))]
@@ -27,10 +31,6 @@ public partial class AppearanceSectionViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(PreviewRightIsText))]
     [NotifyPropertyChangedFor(nameof(PreviewRightText))]
     private OverlayWidgetOption? _selectedRightWidget;
-
-    [ObservableProperty]
-    private double _previewBubbleAutoHideSeconds =
-        AppSettings.DefaultPreviewBubbleAutoHideMilliseconds / 1000d;
 
     public AppearanceSectionViewModel(ISettingsService settings)
     {
@@ -98,11 +98,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with
-        {
-            OverlayCustomLeft = null,
-            OverlayCustomTop = null,
-        });
+        _settings.Save(_settings.Current with { OverlayCustomLeft = null, OverlayCustomTop = null });
     }
 
     private void Refresh(AppSettings settings)

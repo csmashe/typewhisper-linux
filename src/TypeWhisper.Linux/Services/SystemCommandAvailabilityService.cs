@@ -187,9 +187,7 @@ public sealed class SystemCommandAvailabilityService
         }
         catch
         {
-            // A misbehaving subscriber must not turn a successful refresh
-            // (e.g. ydotool just got set up) into a failure surfaced to
-            // the user. Swallow and continue.
+            // Swallow: a misbehaving subscriber must not surface as a refresh failure.
         }
 
         return snapshot;
@@ -233,9 +231,8 @@ public sealed class SystemCommandAvailabilityService
             return false;
         }
 
-        // dlopen with RTLD_GLOBAL pins the CUDA libs into the process's
-        // global symbol table so the native whisper/sherpa libraries can
-        // find them even when they weren't in LD_LIBRARY_PATH at startup.
+        // RTLD_GLOBAL pins the CUDA libs into the process's global symbol table
+        // so native whisper/sherpa libs find them even without LD_LIBRARY_PATH.
         lock (s_cudaPreloadLock)
         {
             if (s_cudaPreloadHandles.Count > 0)
@@ -413,10 +410,8 @@ public sealed class SystemCommandAvailabilityService
     }
 
     /// <summary>
-    ///     Test seam: replaces the cached snapshot with a supplied one and
-    ///     raises <see cref="SnapshotChanged" />. Lets the chain-rebuild
-    ///     integration be exercised without relying on whatever ydotool /
-    ///     wtype binaries happen to live on the test host.
+    ///     Test seam: replaces the cached snapshot and raises <see cref="SnapshotChanged" />
+    ///     without relying on ydotool/wtype binaries present on the test host.
     /// </summary>
     internal void RaiseSnapshotChangedForTests(LinuxCapabilitySnapshot snapshot)
     {
@@ -432,11 +427,9 @@ public sealed class SystemCommandAvailabilityService
     }
 
     /// <summary>
-    ///     Resolve the ydotoold socket using the same priority list voxtype
-    ///     settled on. Returns null if no candidate path exists or is
-    ///     readable. We do not stat-check permissions here — the daemon is
-    ///     the authoritative answer; we only need to know whether *some*
-    ///     candidate is reachable so the snapshot can advertise availability.
+    ///     Finds the ydotool socket path using the standard priority list.
+    ///     Returns null if no candidate exists. Permissions are not stat-checked —
+    ///     we only need to know whether a candidate is reachable.
     /// </summary>
     internal static string? ResolveYdotoolSocketPath()
     {
@@ -480,11 +473,9 @@ public sealed class SystemCommandAvailabilityService
     }
 
     /// <summary>
-    ///     Fired after <see cref="RefreshSnapshot" /> rebuilds the cached
-    ///     snapshot. Subscribers (notably the live insertion platform) re-read
-    ///     their derived state so a one-click ydotool setup takes effect
-    ///     without an app restart. Handlers must not throw — the refresh
-    ///     flow can't usefully report a subscriber failure to the user.
+    ///     Fired after <see cref="RefreshSnapshot" /> rebuilds the snapshot so
+    ///     subscribers (e.g. the insertion platform) can pick up new tools without
+    ///     an app restart. Handlers must not throw.
     /// </summary>
     public event EventHandler<LinuxCapabilitySnapshot>? SnapshotChanged;
 
@@ -498,12 +489,11 @@ public sealed class SystemCommandAvailabilityService
 
         var hasPactl = IsCommandAvailable("pactl");
         var hasPlayerCtl = IsCommandAvailable("playerctl");
-        // Sound feedback plays bundled WAVs directly through any PCM player,
-        // rather than libcanberra/XDG theme events — so it works regardless of
-        // the desktop sound theme and the "System Sounds" master toggle.
+        // Plays bundled WAVs via any PCM player rather than libcanberra/XDG events —
+        // works regardless of the desktop sound theme or "System Sounds" toggle.
         var hasAudioPlayer = IsCommandAvailable("pw-play")
-            || IsCommandAvailable("paplay")
-            || IsCommandAvailable("aplay");
+                             || IsCommandAvailable("paplay")
+                             || IsCommandAvailable("aplay");
         var hasYdotool = IsCommandAvailable("ydotool");
         var ydotoolSocket = ResolveYdotoolSocketPath();
 
@@ -606,13 +596,7 @@ public sealed class SystemCommandAvailabilityService
         }
 
         foreach (
-            var directory in new[]
-            {
-                "/usr/lib64",
-                "/lib64",
-                "/usr/lib/x86_64-linux-gnu",
-                "/lib/x86_64-linux-gnu"
-            }
+            var directory in new[] { "/usr/lib64", "/lib64", "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu" }
         )
         {
             try
@@ -681,9 +665,8 @@ public sealed class SystemCommandAvailabilityService
                 return false;
             }
 
-            // ldconfig -p prints the full linker cache — can be large.
-            // Drain stderr concurrently so its 4 kB kernel buffer can't
-            // fill and block ldconfig while we're still reading stdout.
+            // Drain stderr concurrently: 4 kB kernel buffer can block ldconfig
+            // if we read only stdout.
             var outputTask = process.StandardOutput.ReadToEndAsync();
             var errorTask = process.StandardError.ReadToEndAsync();
 
@@ -749,11 +732,9 @@ public sealed record LinuxCapabilitySnapshot(
     public bool CanUseCuda => HasCudaGpu && HasCudaRuntimeLibraries;
 
     /// <summary>
-    ///     True when wtype's virtual-keyboard protocol is unlikely to be
-    ///     implemented by the running compositor. GNOME Mutter and KDE
-    ///     Plasma's KWin both omit <c>zwp_virtual_keyboard_v1</c>, which
-    ///     makes wtype fail with "Compositor does not support…" — we want
-    ///     the chain to demote wtype below ydotool in that case.
+    ///     True when the compositor is unlikely to implement wtype's
+    ///     <c>zwp_virtual_keyboard_v1</c> (GNOME Mutter and KDE KWin both omit it),
+    ///     so the insertion chain demotes wtype below ydotool.
     /// </summary>
     public bool CompositorRejectsWtype =>
         SessionType == "Wayland" && Compositor is "gnome" or "kde";

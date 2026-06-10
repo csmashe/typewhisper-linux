@@ -9,9 +9,7 @@ public sealed class WatchFolderService : IDisposable
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true
+        WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true
     };
 
     private readonly ConcurrentDictionary<string, byte> _activeFiles = new(
@@ -124,8 +122,7 @@ public sealed class WatchFolderService : IDisposable
 
         ScanFolder(options.WatchPath);
         Task.Run(() => ProcessQueueAsync(_cts.Token));
-        // Periodic rescan catches files dropped while the watcher buffer was
-        // full (the OS drops events when the internal buffer overflows).
+        // Periodic rescan catches files missed when the OS event buffer overflows.
         Task.Run(() => RescanLoopAsync(options.WatchPath, _cts.Token));
         OnStateChanged();
     }
@@ -454,10 +451,9 @@ public sealed class WatchFolderService : IDisposable
 
     private static async Task WaitForFileReadyAsync(string path, CancellationToken ct)
     {
-        // Poll until the file size and last-write timestamp are stable across
-        // two consecutive 250 ms reads and we can open it exclusively. This
-        // catches files still being written by an external recorder or copy
-        // operation. Up to 40 × 250 ms = 10 s before we give up.
+        // Poll until size+mtime are stable across two 250 ms reads and exclusive
+        // open succeeds — guards against files still being written by a recorder
+        // or copy. Up to 40 × 250 ms = 10 s before giving up.
         long? previousLength = null;
         DateTime? previousWrite = null;
         var stableReads = 0;
@@ -512,10 +508,8 @@ public sealed class WatchFolderService : IDisposable
 
     private static string? CreateFingerprint(string path)
     {
-        // Fingerprint = full path + file size + last-write UTC ticks.
-        // A content hash would be more robust but is expensive for large
-        // audio files. The path+size+mtime tuple is stable once the file
-        // stops changing and is cheap to compute without reading the bytes.
+        // path+size+mtime is cheaper than a content hash for large audio files
+        // and is stable once the file stops changing.
         try
         {
             if (!File.Exists(path))

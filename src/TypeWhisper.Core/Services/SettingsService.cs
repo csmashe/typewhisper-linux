@@ -10,8 +10,7 @@ public sealed class SettingsService : ISettingsService
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
     private readonly string _filePath;
@@ -31,7 +30,6 @@ public sealed class SettingsService : ISettingsService
 
     public AppSettings Load()
     {
-        // Try primary settings file
         var result = TryLoadFrom(_filePath);
         if (result is not null)
         {
@@ -39,7 +37,7 @@ public sealed class SettingsService : ISettingsService
             return Current;
         }
 
-        // Primary failed — try backup
+        // Primary failed — try backup, then restore it as primary.
         if (File.Exists(BackupPath))
         {
             LogWarning("Primary settings corrupt or missing, trying backup.");
@@ -47,16 +45,7 @@ public sealed class SettingsService : ISettingsService
             if (result is not null)
             {
                 Current = result;
-                // Restore backup as primary
-                try
-                {
-                    File.Copy(BackupPath, _filePath, true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
+                try { File.Copy(BackupPath, _filePath, true); } catch { /* best effort */ }
                 return Current;
             }
         }
@@ -74,26 +63,17 @@ public sealed class SettingsService : ISettingsService
             Directory.CreateDirectory(directory);
         }
 
-        // Backup current settings before overwriting
         if (File.Exists(_filePath))
         {
-            try
-            {
-                File.Copy(_filePath, BackupPath, true);
-            }
-            catch
-            {
-                /* best effort */
-            }
+            try { File.Copy(_filePath, BackupPath, true); } catch { /* best effort */ }
         }
 
-        // Atomic write: serialize to .tmp, then move over primary
+        // Atomic write via .tmp so a crash mid-write can't corrupt the primary file.
         var json = JsonSerializer.Serialize(settings, JsonOptions);
         File.WriteAllText(TempPath, json);
         File.Move(TempPath, _filePath, true);
 
-        // Only advance in-memory state after disk persistence succeeds, so an
-        // I/O failure doesn't leave Current ahead of what reload sees.
+        // Advance in-memory state only after disk success so Current never leads what a reload sees.
         Current = settings;
         SettingsChanged?.Invoke(settings);
     }
@@ -126,10 +106,9 @@ public sealed class SettingsService : ISettingsService
     }
 
     /// <summary>
-    ///     Migrates settings written by older builds that stored retention as
-    ///     <c>historyRetentionDays</c> (int) rather than the current
+    ///     Migrates the legacy <c>historyRetentionDays</c> int field to the current
     ///     <c>historyRetentionMode</c> / <c>historyRetentionMinutes</c> pair.
-    ///     The magic value 9999 was the sentinel for "keep forever".
+    ///     9999 was the sentinel for "keep forever".
     /// </summary>
     private static AppSettings ApplyHistoryRetentionMigration(AppSettings settings, string json)
     {
@@ -160,9 +139,7 @@ public sealed class SettingsService : ISettingsService
                 > 0 => settings with
                 {
                     HistoryRetentionMode = HistoryRetentionMode.Duration,
-                    // Widen to long for the multiplication so a pathologically large
-                    // legacy value (anything past ~1.5M days) doesn't overflow int and
-                    // wrap to a negative retention.
+                    // Widen to long to avoid int overflow on pathological legacy values (>~1.5M days).
                     HistoryRetentionMinutes = (int)Math.Min(
                         (long)legacyDays.Value * 24 * 60,
                         int.MaxValue
@@ -181,21 +158,16 @@ public sealed class SettingsService : ISettingsService
             && settings.HistoryRetentionMinutes <= 0
         )
         {
-            return settings with
-            {
-                HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes
-            };
+            return settings with { HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes };
         }
 
         return settings;
     }
 
     /// <summary>
-    ///     Migrates settings written by older builds that stored compute selection as
-    ///     <c>computeBackend</c> (string "cpu"/"cuda") to the current
-    ///     <c>localModelAcceleration</c> field (Auto/Cpu/NvidiaCuda).
-    ///     Only runs when the legacy field exists AND the new field does not, so it's
-    ///     idempotent and safe to call on every load.
+    ///     Migrates the legacy <c>computeBackend</c> ("cpu"/"cuda") to
+    ///     <c>localModelAcceleration</c> (Auto/Cpu/NvidiaCuda). Only runs when the
+    ///     legacy field exists and the new field does not — idempotent on every load.
     /// </summary>
     private static AppSettings ApplyAccelerationMigration(AppSettings settings, string json)
     {

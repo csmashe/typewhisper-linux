@@ -4,11 +4,9 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Probes for the "Window Calls" GNOME Shell extension and opens its
-///     install page when the user clicks the remediation button in the
-///     Profiles section. We don't run any privileged installation step
-///     ourselves — extensions.gnome.org requires the user to click "Install"
-///     in their browser with the GNOME Browser Integration extension active.
+///     Probes for the "Window Calls" GNOME Shell extension and opens its install page.
+///     Installation is browser-only — extensions.gnome.org requires the GNOME Browser
+///     Integration extension and a user click; we can't install it ourselves.
 /// </summary>
 public sealed class GnomeWindowCallsSetupHelper
 {
@@ -44,11 +42,9 @@ public sealed class GnomeWindowCallsSetupHelper
             return false;
         }
 
-        // Don't use `gdbus introspect`: org.gnome.Shell answers introspect on
-        // ANY object path (returning an empty node), so it succeeds even when no
-        // such extension is installed — a false positive. Actually CALL the
-        // List method; a missing object/method exits non-zero. Try each known
-        // extension's endpoint and accept the first that responds.
+        // Don't use `gdbus introspect`: org.gnome.Shell answers it on any path
+        // (empty node), giving a false positive. Actually CALL List — a missing
+        // object/method exits non-zero. Try each known endpoint.
         foreach (var (path, iface) in Endpoints)
         {
             try
@@ -57,12 +53,7 @@ public sealed class GnomeWindowCallsSetupHelper
                     new ProcessStartInfo(
                         "gdbus",
                         $"call --session --dest {DBusDest} --object-path {path} --method {iface}.List"
-                    )
-                    {
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false
-                    }
+                    ) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false }
                 );
                 if (p is null)
                 {
@@ -104,9 +95,7 @@ public sealed class GnomeWindowCallsSetupHelper
             using var p = Process.Start(
                 new ProcessStartInfo("xdg-open", ExtensionInstallUrl)
                 {
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true
                 }
             );
             return p is not null;

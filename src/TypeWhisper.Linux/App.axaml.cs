@@ -49,13 +49,8 @@ public class App : Application
             settings.Load();
             BootTrace.Stage("settings.Load");
 
-            // Resolve + initialize the tray before MainWindow is built. The
-            // probe sets TrayIconService.IsTrayAvailable, which GeneralSection
-            // binds to (the close-to-tray toggle, backlog #18). Building the
-            // window first would let that binding latch the default `false`
-            // and — the one-shot probe raises no PropertyChanged — keep the
-            // toggle wrongly disabled all session on a machine with a tray.
-            // It also has to be ready before the close handler is wired.
+            // Tray must be initialized before MainWindow so IsTrayAvailable is set when
+            // GeneralSection's close-to-tray binding latches (the probe raises no PropertyChanged).
             var tray = services.GetRequiredService<TrayIconService>();
             tray.Initialize();
             BootTrace.Stage("tray.Initialize");
@@ -71,10 +66,8 @@ public class App : Application
 
             var prefs = services.GetRequiredService<LinuxPreferencesService>();
 
-            // Close-button behavior is user-configurable. Default
-            // (CloseToTray=false): X fully quits, same path as tray Exit.
-            // With CloseToTray=true the window hides and the tray stays the
-            // entry point. Tray Exit always quits (flips ShuttingDown first).
+            // Close-button: CloseToTray+tray-available → hide; otherwise quit.
+            // Hiding with no tray (stock GNOME) would strand the user with no UI.
             main.Closing += (_, e) =>
             {
                 if (ShuttingDown)
@@ -82,10 +75,6 @@ public class App : Application
                     return;
                 }
 
-                // Only hide to the tray when one actually exists to restore
-                // the window from. Hiding with no tray (stock GNOME has none)
-                // would strand the user with no UI — backlog #18 — so an X
-                // with no tray falls through to quitting.
                 if (prefs.Current.CloseToTray && tray.IsTrayAvailable)
                 {
                     e.Cancel = true;
@@ -95,12 +84,8 @@ public class App : Application
                 {
                     ShuttingDown = true;
                     TearDownAsync(services).GetAwaiter().GetResult();
-                    // Shut the lifetime down explicitly. The default
-                    // OnLastWindowClose mode would leave the process alive:
-                    // DictationOverlayWindow is a persistent always-shown
-                    // window (backlog #16's Opacity workaround), so closing
-                    // the main window is never the *last* window close.
-                    // Same path as the tray Exit handler.
+                    // Must call Shutdown explicitly: DictationOverlayWindow is always-shown
+                    // (backlog #16 Opacity workaround) so OnLastWindowClose never fires.
                     desktop.Shutdown();
                 }
             };
@@ -127,11 +112,8 @@ public class App : Application
             var sessionResults = services.GetRequiredService<DictationSessionResultStore>();
             dictation.SessionCompleted += sessionResults.Record;
 
-            // Bring up the IPC control socket so `typewhisper` (with no args)
-            // from a second terminal can toggle dictation in this instance.
-            // The bind itself is the single-instance guard; if another live
-            // peer beat us to it we shut this instance back down cleanly so
-            // the user doesn't end up with two trays/orchestrators.
+            // The bind doubles as the single-instance guard; AddressAlreadyInUse means
+            // a live peer got here first — shut this instance down cleanly.
             var controlSocket = services.GetRequiredService<ControlSocketServer>();
             try
             {
@@ -142,10 +124,8 @@ public class App : Application
                 Console.Error.WriteLine("TypeWhisper is already running.");
                 ShuttingDown = true;
                 TearDownAsync(services).GetAwaiter().GetResult();
-                // The window never opens on this early-exit path, so the
-                // main.Opened handler that normally ends the GNOME launch
-                // cursor won't fire — clear it here or the spinner spins
-                // until Mutter's timeout.
+                // Window never opens on this path, so notify startup complete to clear
+                // the GNOME launch cursor (main.Opened won't fire).
                 LinuxStartupNotification.NotifyComplete();
                 desktop.Shutdown();
                 return;
@@ -168,16 +148,9 @@ public class App : Application
             services.GetRequiredService<RecordingNotificationService>().Initialize();
             BootTrace.Stage("recordingNotification.Initialize");
 
-            // Sync the hotkey service's mode + binding with AppSettings. The
-            // handler re-runs on every settings change so flipping the mode
-            // in Settings → Shortcuts takes effect without a restart.
-            //
-            // On first apply we reconcile: if the persisted ToggleHotkey
-            // doesn't parse or differs from the service's default, write the
-            // service's current binding back to settings so subsequent
-            // SettingsChanged events (e.g. user toggling SaveToHistory) don't
-            // silently rebind the hotkey to an upstream default like
-            // "Ctrl+Shift+F9" that the user never chose.
+            // ReconcileHotkeyOnStartup migrates any upstream default and writes the service's
+            // current binding back to settings so subsequent SettingsChanged events don't
+            // silently rebind to a key the user never chose.
             var hotkey = services.GetRequiredService<HotkeyService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
             var promptActions = services.GetRequiredService<IPromptActionService>();
@@ -341,10 +314,8 @@ public class App : Application
         hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey);
         hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey);
 
-        // Treat the upstream default as "unset" on Linux and substitute the
-        // Linux default (HotkeyService's ctor-time binding — Ctrl+Shift+Space).
-        // This prevents ApplyHotkey-on-SettingsChanged from silently rebinding
-        // the hotkey to F9 when the user has never explicitly chosen a key.
+        // Treat the upstream Windows default ("Ctrl+Shift+F9") as unset on Linux and substitute
+        // the Linux default (Ctrl+Shift+Space) to prevent SettingsChanged from rebinding to it.
         var linuxDefault = hotkey.CurrentHotkeyString;
         var persisted = s.ToggleHotkey;
         var shouldMigrate =
@@ -363,11 +334,9 @@ public class App : Application
     }
 
     /// <summary>
-    ///     True on wlroots-based compositors (Hyprland, Sway), which have no
-    ///     "minimize" concept — an X11 iconify request is a no-op there, so the
-    ///     minimize-based hide-to-tray would leave the window on screen. wlroots
-    ///     does handle Window.Hide()/Show() cleanly; the unpainted-surface-on-
-    ///     Show() bug behind backlog #3/#16 is specific to GNOME Mutter.
+    ///     True on wlroots compositors (Hyprland, Sway) where there is no minimize concept —
+    ///     an iconify request is a no-op there, so Window.Hide()/Show() is used instead.
+    ///     The unpainted-surface-on-Show() bug (backlog #3/#16) is Mutter-specific.
     /// </summary>
     private static bool TrayHideUsesWindowHide()
     {
@@ -375,23 +344,11 @@ public class App : Application
     }
 
     /// <summary>
-    ///     Hide the window to the tray so the tray icon becomes the only entry
-    ///     point. Compositor-dependent — no single mechanism both removes the
-    ///     window from screen *and* from the dock everywhere:
-    ///     <list type="bullet">
-    ///         <item>
-    ///             GNOME Mutter (and other minimize-honoring desktops): minimize
-    ///             FIRST, then ShowInTaskbar=false. Mutter ignores an iconify request on
-    ///             a window that already has SKIP_TASKBAR set (minimize means "send it to
-    ///             the dash," and a skip-taskbar window has nowhere to go), so the order
-    ///             matters. Keeps the surface mapped, dodging the Hide()/Show() repaint
-    ///             bug — backlog #3/#16.
-    ///         </item>
-    ///         <item>
-    ///             wlroots (Hyprland/Sway): no minimize concept, so a real
-    ///             Window.Hide() — which repaints correctly on Show() there.
-    ///         </item>
-    ///     </list>
+    ///     Hide the window to the tray. Compositor-dependent:
+    ///     GNOME Mutter — minimize FIRST, then ShowInTaskbar=false (order matters: Mutter ignores
+    ///     iconify on a window that already has SKIP_TASKBAR set). Keeps the surface mapped,
+    ///     dodging the Hide()/Show() repaint bug (backlog #3/#16).
+    ///     wlroots (Hyprland/Sway) — no minimize concept; use Window.Hide(), which repaints correctly.
     /// </summary>
     private static void HideToTray(MainWindow window)
     {
@@ -407,11 +364,8 @@ public class App : Application
 
     private static void ShowMainWindow(MainWindow window)
     {
-        // Reverse HideToTray. The hide path is compositor-dependent, so
-        // restore covers both: re-add the dock entry, un-minimize if we
-        // minimized (GNOME — and re-add the dock entry FIRST, since Mutter
-        // won't un-iconify a skip-taskbar window), and Show() if we Hid()
-        // (wlroots).
+        // Reverse HideToTray: ShowInTaskbar=true first (Mutter won't un-iconify a skip-taskbar
+        // window), then un-minimize or Show() depending on which path was used to hide.
         window.ShowInTaskbar = true;
 
         if (window.WindowState == WindowState.Minimized)
@@ -567,11 +521,8 @@ public class App : Application
         await pluginManager.InitializeAsync();
         BootTrace.Stage("PluginManager.InitializeAsync");
 
-        // The remote plugin registry (PluginRegistryService) targets the
-        // upstream Windows registry, which serves Windows-built plugin
-        // artifacts. The Linux fork ships its own rewritten plugins via
-        // BundledPluginDeployer above, so the registry's first-run
-        // auto-install and update check are intentionally not run here.
+        // PluginRegistryService targets the upstream Windows registry (Windows-built artifacts);
+        // the Linux fork ships its own plugins via BundledPluginDeployer, so the registry is not used.
 
         var historyRetention = services.GetRequiredService<HistoryRetentionCoordinator>();
         historyRetention.Initialize();
@@ -594,13 +545,10 @@ public class App : Application
     }
 
     /// <summary>
-    ///     Fire-and-forget once-per-day GitHub release check. Kept off the
-    ///     bootstrap task on purpose: first-run onboarding awaits bootstrap, and
-    ///     update checking is unrelated to the model/plugin setup the wizard
-    ///     needs, so a slow or unreachable network must not delay the wizard by
-    ///     the HTTP timeout. Network failures are swallowed inside the service;
-    ///     a found update drives the main window's banner via
-    ///     UpdateCheckService.ResultChanged (already subscribed by the VMs).
+    ///     Once-per-day GitHub release check. Detached from the bootstrap task so a slow/
+    ///     unreachable network doesn't delay first-run onboarding (which awaits bootstrap).
+    ///     Failures are swallowed inside the service; a found update drives the banner via
+    ///     <c>UpdateCheckService.ResultChanged</c>.
     /// </summary>
     private static async Task RunStartupUpdateCheckAsync(IServiceProvider services)
     {

@@ -4,11 +4,9 @@ using System.Text;
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     Sway helper. Same shape as <see cref="HyprlandShortcutWriter" /> but
-///     the config syntax differs and the runtime-apply step uses
-///     <c>swaymsg reload</c> (Sway has no per-bind keyword-apply IPC the way
-///     Hyprland does, so reloading the whole config is the simplest robust
-///     path).
+///     Sway shortcut writer. Config syntax differs from Hyprland and live-apply
+///     uses <c>swaymsg reload</c> (Sway lacks per-bind IPC, so a full reload is
+///     the only reliable path).
 /// </summary>
 public sealed class SwayShortcutWriter : IDeShortcutWriter
 {
@@ -58,9 +56,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
                 return false;
             }
 
-            // The block must contain exactly the lines we'd write for this
-            // spec — a stale trigger/command (or a manual edit) reads as
-            // not-installed so the checklist re-registers it.
+            // Must match exactly — a stale trigger or manual edit reads as not-installed.
             var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
             return inner.SequenceEqual(expected);
         }
@@ -182,9 +178,8 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     }
 
     /// <summary>
-    ///     Convert "Ctrl+Shift+Space" into Sway's "Ctrl+Shift+space" form.
-    ///     Sway is case-sensitive for the named key tail (lower-case for
-    ///     "space", "escape", etc.) and uses "+" between tokens.
+    ///     Converts "Ctrl+Shift+Space" to Sway's "Ctrl+Shift+space" form.
+    ///     Sway key names are lower-case (xkbcommon convention); "+" separates tokens.
     /// </summary>
     public static string ToSwayBind(string trigger)
     {
@@ -228,10 +223,8 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             sb.Append('+');
         }
 
-        // Sway key names like "space", "Return", "Escape" come from
-        // xkbcommon — keys longer than a single character are lower-
-        // cased to match the xkbcommon convention. Function keys are
-        // the exception: xkbcommon's keysym is "F1".."F35" mixed-case.
+        // Multi-char keys are lower-cased (xkbcommon convention) except
+        // function keys, whose keysyms are mixed-case ("F1".."F35").
         sb.Append(NormalizeSwayKey(tail));
         return sb.ToString();
     }
@@ -239,9 +232,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     private static IEnumerable<string> BuildManagedLines(DeShortcutSpec spec)
     {
         var trigger = ToSwayBind(spec.Trigger);
-        // --no-repeat keeps a held key from spamming `record start`
-        // dozens of times a second when the user uses PTT. Sway will
-        // still deliver a single press + a single release.
+        // --no-repeat suppresses key-repeat spam during PTT; Sway still delivers press + release.
         yield return $"bindsym --no-repeat {trigger} exec {spec.OnPressCommand}";
         if (!string.IsNullOrWhiteSpace(spec.OnReleaseCommand))
         {

@@ -4,24 +4,15 @@ using System.Text.RegularExpressions;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     One-click installer for the browser accessibility surface that powers
-///     AT-SPI URL detection. Mirrors the shape of
-///     <see cref="Insertion.YdotoolSetupHelper" />: an <see cref="IsCurrentlyConfigured" />
-///     snapshot, a <see cref="SetUpAsync" /> action, and a matching
-///     <see cref="RemoveAsync" /> rollback.
-///     Two artifacts get installed:
-///     1. <c>~/.config/environment.d/typewhisper-accessibility.conf</c> —
-///     exports <c>MOZ_ENABLE_ACCESSIBILITY=1</c> so Firefox/Zen expose
-///     their address bar over AT-SPI, plus <c>GTK_MODULES=gail:atk-bridge</c>
-///     for GTK apps that rely on the legacy module path.
-///     2. User-local <c>.desktop</c> overrides in
-///     <c>~/.local/share/applications/</c> for each Chromium-family
-///     browser, adding <c>--force-renderer-accessibility</c> to the
-///     <c>Exec=</c> line. The user-local copy shadows the
-///     system-installed launcher without modifying it.
-///     Both artifacts carry the <see cref="OwnershipMarker" /> in their first
-///     line so <see cref="RemoveAsync" /> can confirm we own them before
-///     deletion — avoids nuking a config the user wrote themselves.
+///     One-click installer for the browser accessibility surface that powers AT-SPI URL detection.
+///     Mirrors <see cref="Insertion.YdotoolSetupHelper" /> in shape. Two artifacts are installed:
+///     1. <c>~/.config/environment.d/typewhisper-accessibility.conf</c> — exports
+///        <c>MOZ_ENABLE_ACCESSIBILITY=1</c> and <c>GTK_MODULES=gail:atk-bridge</c>.
+///     2. User-local <c>.desktop</c> overrides in <c>~/.local/share/applications/</c> — shadows
+///        the system launcher to add <c>--force-renderer-accessibility</c> (Chromium) or the env
+///        wrapper (Firefox) without modifying system files.
+///     Both artifacts carry <see cref="OwnershipMarker" /> so <see cref="RemoveAsync" /> can
+///     confirm ownership before deletion.
 /// </summary>
 public sealed class BrowserAccessibilitySetupHelper
 {
@@ -94,25 +85,18 @@ public sealed class BrowserAccessibilitySetupHelper
     public Status IsCurrentlyConfigured()
     {
         var envFilePresent = File.Exists(EnvFilePath());
-        // FirefoxLauncherPresent / ChromiumLauncherPresent here means
-        // "every installed launcher in this family is patched", not
-        // "at least one is" — otherwise installing a new browser
-        // (e.g. Brave after Chrome was already patched) would silently
-        // count as "configured" while Brave's launcher still misses
-        // --force-renderer-accessibility. This matches the Status
-        // record's contract that IsFullyConfigured implies the
-        // integration actually works for every supported browser.
+        // "LauncherPresent" means every installed launcher in this family is patched, not just
+        // one — a newly-installed browser (e.g. Brave after Chrome was already patched) must not
+        // silently count as configured while its own launcher still lacks the flag.
         var firefoxLauncherPresent = AllInstalledLaunchersOwned(s_firefoxLauncherNames);
         var chromiumLauncherPresent = AllInstalledLaunchersOwned(s_chromiumLauncherNames);
         var firefoxInstalled = HasInstalledLauncher(s_firefoxLauncherNames);
         var chromiumInstalled = HasInstalledLauncher(s_chromiumLauncherNames);
         var firefoxProfiles = EnumerateFirefoxProfileDirs().ToList();
         var firefoxProfileFound = firefoxProfiles.Count > 0;
-        // ALL profiles need the override — the setup path writes to every
-        // discovered profile, so detection must require every profile too.
-        // Reporting "configured" when only one of N profiles has the pref
-        // would hide the Enable button while dictation from any of the
-        // other profiles still silently fails URL detection.
+        // ALL profiles need the override — setup writes to every profile, so detection
+        // must require every profile to pass; partial coverage would silently hide the
+        // Enable button while other profiles still fail URL detection.
         var firefoxForceEnabled =
             firefoxProfileFound && firefoxProfiles.All(IsForceEnabledInProfile);
         return new Status(
@@ -579,26 +563,17 @@ public sealed class BrowserAccessibilitySetupHelper
     private static IEnumerable<string> EnumerateFirefoxProfileDirs()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        // Cover every place a Firefox-family browser stores its profile:
-        //   - ~/.mozilla/firefox    legacy default
-        //   - ~/.config/mozilla     Fedora's XDG-compliant layout
-        //   - ~/snap/...            Snap-wrapped Firefox
-        //   - ~/.var/app/<id>/...   Flatpak-wrapped Firefox / Zen / LibreWolf
-        //   - ~/.zen, ~/.librewolf  native Zen / LibreWolf installs
-        // Zen and LibreWolf are Firefox forks that follow the same
-        // profile-dir conventions but use their own sandbox IDs and
-        // top-level dot-dirs. Missing any of these means our setup
-        // claims success while the user.js override never reaches the
-        // browser's actual profile.
+        // Cover all Firefox-family profile locations: ~/.mozilla/firefox (legacy),
+        // ~/.config/mozilla (Fedora XDG), ~/snap/... (Snap), ~/.var/app/... (Flatpak),
+        // and ~/.zen / ~/.librewolf (native forks). Missing any means setup claims
+        // success while user.js never reaches the browser's actual profile.
         var roots = new[]
         {
-            Path.Combine(home, ".mozilla", "firefox"),
-            Path.Combine(home, ".config", "mozilla", "firefox"),
+            Path.Combine(home, ".mozilla", "firefox"), Path.Combine(home, ".config", "mozilla", "firefox"),
             Path.Combine(home, "snap", "firefox", "common", ".mozilla", "firefox"),
             Path.Combine(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
             Path.Combine(home, ".var", "app", "app.zen_browser.zen", ".zen"),
-            Path.Combine(home, ".var", "app", "io.github.zen_browser.zen", ".zen"),
-            Path.Combine(home, ".zen"),
+            Path.Combine(home, ".var", "app", "io.github.zen_browser.zen", ".zen"), Path.Combine(home, ".zen"),
             Path.Combine(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
             Path.Combine(home, ".librewolf")
         };
@@ -907,15 +882,10 @@ public sealed class BrowserAccessibilitySetupHelper
     }
 
     /// <summary>
-    ///     True when, for every launcher in <paramref name="launcherNames" />
-    ///     that's actually installed on this system, our patched shadow
-    ///     exists in the user applications directory. Used by
-    ///     <see cref="IsCurrentlyConfigured" /> to decide whether a browser
-    ///     family is fully covered — distinct from <see cref="HasOwnedLauncher" />,
-    ///     which only checks whether we've patched *any* launcher in the
-    ///     family and is used by <see cref="HasInstalledChanges" /> to decide
-    ///     whether a revert has anything to do. Returns true when nothing in
-    ///     the family is installed (vacuously satisfied).
+    ///     True when every installed launcher in <paramref name="launcherNames" /> has a
+    ///     patched shadow in the user applications directory (vacuously true if none are
+    ///     installed). Distinct from <see cref="HasOwnedLauncher" />, which only tests
+    ///     whether *any* launcher was patched (used by <see cref="HasInstalledChanges" />).
     /// </summary>
     private static bool AllInstalledLaunchersOwned(IReadOnlyList<string> launcherNames)
     {
@@ -951,9 +921,8 @@ public sealed class BrowserAccessibilitySetupHelper
         var userDir = UserApplicationsDir();
         foreach (var name in launcherNames)
         {
-            // User-local launcher counts as "installed" only if it's not
-            // one of our patched shadows (otherwise an env-file-only user
-            // looks "installed" purely because we patched their launcher).
+            // A patched shadow doesn't count as "installed" — only non-owned user launchers
+            // and system launchers do, so an env-file-only run isn't treated as installed.
             var userPath = Path.Combine(userDir, name);
             if (File.Exists(userPath) && !FileStartsWithOwnershipMarker(userPath))
             {
@@ -1105,14 +1074,10 @@ public sealed class BrowserAccessibilitySetupHelper
     )
     {
         /// <summary>
-        ///     True when every installed browser family has been patched
-        ///     AND Firefox's accessibility lazy-init gate is force-enabled
-        ///     (modern Firefox refuses to register on AT-SPI without
-        ///     <c>accessibility.force_disabled = -1</c>, regardless of env
-        ///     vars). We only require the Firefox pref check when we've
-        ///     actually found a Firefox profile to read — fresh Firefox
-        ///     installs that haven't created a profile yet shouldn't be
-        ///     flagged as misconfigured.
+        ///     True when every installed browser family is patched and Firefox's accessibility
+        ///     lazy-init gate is force-enabled (<c>accessibility.force_disabled = -1</c> —
+        ///     modern Firefox ignores env vars without it). The Firefox pref check is skipped
+        ///     when no profile has been created yet.
         /// </summary>
         public bool IsFullyConfigured =>
             FirefoxEnvFilePresent

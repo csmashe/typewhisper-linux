@@ -7,7 +7,6 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
-using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -20,10 +19,10 @@ namespace TypeWhisper.Linux.ViewModels;
 ///     2. Show available extension plugins and their enable state.
 ///     3. Confirm hotkey + microphone.
 ///     4. Setup checklist — a machine-driven list of <see cref="ISetupTask" />s
-///        (clipboard, automatic paste, global-hotkey registration, active-window
-///        detection, …). Each task self-gates on the detected desktop/session,
-///        so the same wizard fully configures GNOME/Wayland, KDE, Hyprland, etc.
-///        without hard-coding any one of them. Required tasks gate Finish.
+///     (clipboard, automatic paste, global-hotkey registration, active-window
+///     detection, …). Each task self-gates on the detected desktop/session,
+///     so the same wizard fully configures GNOME/Wayland, KDE, Hyprland, etc.
+///     without hard-coding any one of them. Required tasks gate Finish.
 ///     5. First-dictation check.
 ///     6. Done — sets HasCompletedOnboarding.
 /// </summary>
@@ -39,15 +38,12 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly EventHandler _pluginStateChangedHandler;
     private readonly ISettingsService _settings;
-    private readonly TextInsertionService _textInsertion;
     private readonly IReadOnlyList<ISetupTask> _setupTasks;
+    private readonly TextInsertionService _textInsertion;
     private bool _cleanedUp;
 
     [ObservableProperty]
     private string _cudaBenchmarkStatus = "Run CUDA check if you plan to use GPU acceleration.";
-
-    [ObservableProperty]
-    private string _setupSummary = "";
 
     [ObservableProperty]
     private string _firstDictationStatus =
@@ -72,22 +68,19 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private bool _isMicTestRunning;
 
     [ObservableProperty]
+    private bool _isModelDownloading;
+
+    [ObservableProperty]
     private double _micLevel;
 
     [ObservableProperty]
     private string _micTestStatus = "Start the microphone test and speak normally.";
 
     [ObservableProperty]
-    private string _modelStatus = "";
-
-    [ObservableProperty]
     private double _modelDownloadProgress;
 
     [ObservableProperty]
-    private bool _isModelDownloading;
-
-    [ObservableProperty]
-    private bool _showReloginNotice;
+    private string _modelStatus = "";
 
     [ObservableProperty]
     private string _pasteSmokeText = "";
@@ -106,6 +99,12 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     [ObservableProperty]
     private WizardModelRow? _selectedModel;
+
+    [ObservableProperty]
+    private string _setupSummary = "";
+
+    [ObservableProperty]
+    private bool _showReloginNotice;
 
     [ObservableProperty]
     private int _stepIndex;
@@ -160,27 +159,24 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public string NextLabel => IsLastStep ? "Finish" : "Next";
     public string StepText => $"Step {StepIndex + 1} of {StepCount}";
 
-    // Required, machine-applicable setup tasks must all be satisfied before the
-    // wizard can be finished — this is what makes "done" mean "fully ready".
+    // All required, machine-applicable tasks must be satisfied before Finish is allowed.
     public bool AllRequiredReady =>
         SetupItems.Where(r => r.IsRequired).All(r => r.IsSatisfied);
 
-    // Gates the Next/Finish button. Non-final steps always advance; the final
-    // step is blocked until everything required is ready. Skip bypasses this.
+    // Final step is blocked until all required tasks are ready; Skip bypasses this.
     public bool CanAdvance => !IsLastStep || AllRequiredReady;
     public string MicTestButtonText => IsMicTestRunning ? "Stop mic test" : "Start mic test";
 
     public string FirstDictationButtonText =>
         IsFirstDictationRecording ? "Stop and transcribe" : "Record phrase";
 
-    // Gate on the GPU being present, not on CUDA being fully usable: the
-    // check exists to diagnose GPU acceleration *before* it works. When an
-    // NVIDIA GPU is detected but the CUDA 12 runtime libraries are missing,
-    // the user needs to run the check to see that — RunCudaBenchmarkAsync
-    // returns an informative message for that case. Only a machine with no
-    // NVIDIA GPU at all has nothing to check.
+    // Gate on GPU presence, not on CUDA being fully usable — the check diagnoses GPU
+    // acceleration even when CUDA libs are missing (RunCudaBenchmarkAsync reports that case).
+    // Only machines with no NVIDIA GPU have nothing to check.
     public bool CanRunCudaBenchmark => _commands.GetSnapshot().HasCudaGpu;
     public bool CudaBenchmarkButtonEnabled => CanRunCudaBenchmark && !IsCudaBenchmarkRunning;
+
+    public string ModelDownloadPercentText => $"{ModelDownloadProgress * 100:0}%";
 
     public async Task<bool> RunPasteSmokeTestAsync()
     {
@@ -246,8 +242,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             : "Paste test did not find the expected text in the field.";
     }
 
-    // Called by the view on Close — guards are needed because Avalonia can
-    // fire Closed more than once for modal dialogs on certain backends.
+    // Guards against Avalonia firing Closed more than once on certain backends.
     public void Cleanup()
     {
         if (_cleanedUp)
@@ -275,7 +270,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
         MicLevel = 0;
     }
 
-    // Events consumed by the view to close itself.
     public event EventHandler? RequestClose;
 
     private void LoadIndustryPresets()
@@ -375,20 +369,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
         LoadModels();
     }
 
-    // Posted on every ModelManagerService status change (download progress
-    // ticks included). Update the progress bar FIRST and independently:
-    // RefreshModelState does heavier per-model file probing that can throw mid
-    // download (the file is being written), and a throw there must not swallow
-    // the progress update.
+    // Posted on every ModelManagerService status change (including download-progress ticks).
+    // Update the progress bar first: RefreshModelState does heavier per-model file probing
+    // that can throw mid-download, and a throw there must not swallow the progress update.
+    // While downloading, skip RefreshModelState — whisper.cpp ticks are unthrottled and
+    // running the heavy probe on each one would saturate the UI thread.
     private void OnModelStatusChanged()
     {
         UpdateDownloadProgress();
 
-        // While a download is streaming, only the (cheap) progress update runs:
-        // whisper.cpp reports progress on every buffer copy (unthrottled), and
-        // running the heavy per-model RefreshModelState on each tick would
-        // saturate the UI thread so the progress bar never repaints. The
-        // downloaded badges only need refreshing once the download settles.
         if (!IsModelDownloading)
         {
             RefreshModelState();
@@ -423,8 +412,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
     }
 
-    // Fires on every model status change (download progress ticks included)
-    // so the wizard can show a live progress bar instead of a static label.
     private void UpdateDownloadProgress()
     {
         if (SelectedModel is not { } model)
@@ -440,8 +427,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
             ModelDownloadProgress = Math.Clamp(status.Progress, 0, 1);
         }
     }
-
-    public string ModelDownloadPercentText => $"{ModelDownloadProgress * 100:0}%";
 
     partial void OnModelDownloadProgressChanged(double value)
     {
@@ -462,9 +447,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
         OnPropertyChanged(nameof(CanAdvance));
         RefreshStepDots();
 
-        // Re-evaluate the setup checklist when arriving on the setup step (3)
-        // and again on the final step (5) so the Finish gate reflects the
-        // machine's current state — the user may have fixed things elsewhere.
+        // Re-evaluate the checklist on steps 3 and 5 so the Finish gate stays current
+        // (the user may have fixed things between steps).
         if (value is 3 or 5)
         {
             _ = RefreshSetupAsync();
@@ -570,10 +554,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         if (IsLastStep)
         {
-            // Finish is gated on every required, applicable setup task being
-            // satisfied. The button is disabled in this state too, but guard
-            // here as well so a stray invocation can't bypass it. Skip remains
-            // the explicit escape hatch.
+            // Button is disabled in this state too, but guard here so a stray
+            // invocation can't bypass it. Skip is the explicit escape hatch.
             if (!AllRequiredReady)
             {
                 return;
@@ -624,10 +606,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
     }
 
     /// <summary>
-    ///     Re-evaluate every machine-applicable setup task and reflect the
-    ///     result in <see cref="SetupItems" />. Evaluation runs off the UI
-    ///     thread (some tasks spawn gdbus/gsettings) and is reconciled back on
-    ///     it. Rows mid-action are left alone so their progress isn't clobbered.
+    ///     Re-evaluates all applicable setup tasks and updates <see cref="SetupItems" />.
+    ///     Runs off the UI thread (tasks may spawn gdbus/gsettings); rows mid-action are skipped.
     /// </summary>
     private async Task RefreshSetupAsync()
     {
@@ -668,9 +648,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     private void RefreshSetupGating()
     {
-        // Surface a "log out to finish" notice when the global-hotkey task put
-        // the user in the input group — the membership (and thus the shortcut)
-        // only activates after a re-login.
+        // Show a re-login notice when the hotkey task added the user to the input group
+        // (group membership only activates after re-login).
         var hotkeyRow = SetupItems.FirstOrDefault(r => r.Id == "global-hotkey");
         ShowReloginNotice =
             hotkeyRow is not null
@@ -714,8 +693,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         row.EndAction(outcome);
 
-        // Re-evaluate everything: an install can satisfy more than one task
-        // (e.g. installing a package the snapshot keys several states off of).
+        // Re-evaluate all tasks: one install can satisfy several (e.g. a shared package).
         await RefreshSetupAsync().ConfigureAwait(true);
     }
 
@@ -888,8 +866,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         Dispatcher.UIThread.Post(() =>
         {
-            // The raw RMS level is typically well below 0.1 for normal speech;
-            // ×8 maps it to a 0–1 range that drives the meter visibly.
+            // Raw RMS is typically well below 0.1 for normal speech; ×8 maps it to 0–1 for the meter.
             MicLevel = Math.Clamp(level * 8, 0, 1);
             if (IsMicTestRunning && MicLevel > 0.05)
             {
@@ -958,14 +935,33 @@ public sealed record WizardModelRow(
 );
 
 /// <summary>
-///     View-model wrapper around one <see cref="ISetupTask" /> for the setup
-///     checklist. Holds the latest evaluated state plus a separate
-///     <see cref="ActionMessage" /> for the outcome of the last action (kept
-///     across re-evaluations so messages like "click Install, then Re-check"
-///     survive the refresh that follows the action).
+///     View-model wrapper around one <see cref="ISetupTask" /> for the setup checklist.
+///     <see cref="ActionMessage" /> is kept separately from the evaluated state so it survives
+///     the re-evaluation that runs after each action.
 /// </summary>
 public sealed partial class SetupTaskRow : ObservableObject
 {
+    [ObservableProperty]
+    private string? _actionLabel;
+
+    [ObservableProperty]
+    private string? _actionMessage;
+
+    [ObservableProperty]
+    private string? _copyCommand;
+
+    [ObservableProperty]
+    private string? _detail;
+
+    [ObservableProperty]
+    private bool _isBusy;
+
+    [ObservableProperty]
+    private SetupTaskStatusKind _kind = SetupTaskStatusKind.Working;
+
+    [ObservableProperty]
+    private string _summary = "Checking…";
+
     public SetupTaskRow(ISetupTask source)
     {
         Source = source;
@@ -978,27 +974,6 @@ public sealed partial class SetupTaskRow : ObservableObject
     public string Title { get; }
     public bool IsRequired { get; }
     public string RequirementLabel => IsRequired ? "Required" : "Recommended";
-
-    [ObservableProperty]
-    private SetupTaskStatusKind _kind = SetupTaskStatusKind.Working;
-
-    [ObservableProperty]
-    private string _summary = "Checking…";
-
-    [ObservableProperty]
-    private string? _detail;
-
-    [ObservableProperty]
-    private string? _actionLabel;
-
-    [ObservableProperty]
-    private string? _copyCommand;
-
-    [ObservableProperty]
-    private string? _actionMessage;
-
-    [ObservableProperty]
-    private bool _isBusy;
 
     public bool IsSatisfied => Kind == SetupTaskStatusKind.Satisfied;
     public bool HasDetail => !string.IsNullOrWhiteSpace(Detail);

@@ -56,6 +56,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private bool? _editDeveloperFormattingOverride;
 
     [ObservableProperty]
+    private ProfileHotkeyBehavior _editHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
+
+    [ObservableProperty]
+    private string? _editHotkeyData;
+
+    [ObservableProperty]
     private bool _editIsEnabled = true;
 
     [ObservableProperty]
@@ -74,12 +80,6 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private string? _editPromptActionId;
 
     [ObservableProperty]
-    private string? _editHotkeyData;
-
-    [ObservableProperty]
-    private ProfileHotkeyBehavior _editHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
-
-    [ObservableProperty]
     private ProfileStylePreset _editStylePreset = ProfileStylePreset.Raw;
 
     [ObservableProperty]
@@ -94,10 +94,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _hasMatchedProfile;
 
-    // Cache the last non-host window so UpdateCurrentWindow can return stable
-    // values when TypeWhisper itself is focused — querying the active-window
-    // service in that state would return our own process and the live-context
-    // display would flip to "typewhisper" on every timer tick.
+    // Cache the last non-host window so the live-context display stays stable
+    // when TypeWhisper itself is focused (querying the service then returns our own process).
     private string _lastExternalProcessName = "-";
     private string _lastExternalUrl = "-";
     private string _lastExternalWindowTitle = "-";
@@ -213,24 +211,18 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public ObservableCollection<string> ProcessNameChips { get; } = [];
     public ObservableCollection<string> UrlPatternChips { get; } = [];
 
-    // URL rules need extraction support: always available on X11; on Wayland
-    // they need browser accessibility configured. Hide the section when it
-    // can't work so the user doesn't build silently-broken rules — but keep
-    // it visible if the profile already has saved patterns.
+    // URL rules always work on X11; on Wayland they need browser accessibility configured.
+    // Keep the section visible when the profile already has saved patterns to avoid data loss.
     public bool IsUrlPatternsSectionVisible =>
         !_browserSetup.IsApplicable()
         || _browserSetup.IsCurrentlyConfigured().IsFullyConfigured
         || UrlPatternChips.Count > 0;
 
     /// <summary>
-    ///     True when the edited profile has no app matchers and no URL
-    ///     patterns. In that state <see cref="ProfileService.MatchProfile" />'s
-    ///     Global cascade tier picks this profile up for any window that no
-    ///     other Profile matches — making it the de-facto fallback profile.
-    ///     Surfaced as a contextual hint in the editor so users don't have to
-    ///     know the empty-matchers convention. A profile that also has a hotkey
-    ///     is hotkey-only (excluded from the Global tier), so it is NOT a
-    ///     fallback — keep the hint in sync with that matching rule.
+    ///     True when the edited profile has no app matchers and no URL patterns.
+    ///     <see cref="ProfileService.MatchProfile" />'s Global tier then picks it up for any window
+    ///     no other profile matches, making it the de-facto fallback. A profile with a hotkey is
+    ///     hotkey-only (excluded from the Global tier) and is NOT a fallback.
     /// </summary>
     public bool IsGlobalFallbackProfile =>
         ProcessNameChips.Count == 0
@@ -413,6 +405,15 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    ///     Re-polls providers when a model dropdown opens so newly added models appear
+    ///     without a manual "Validate". Debounce/guard live in <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync()
+    {
+        return _pluginManager.RefreshProviderModelsAsync();
+    }
+
     partial void OnSelectedProfileChanged(Profile? value)
     {
         ProcessNameChips.Clear();
@@ -589,10 +590,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         {
             Id = Guid.NewGuid().ToString(),
             Name = $"{SelectedProfile.Name} Copy",
-            // Drop the source profile's hotkey: two profiles can't share a
-            // chord (SetProfileHotkeys keeps only the first and rejects the
-            // collision), so a clone that copied it would have a dead hotkey.
-            // The user can assign a fresh chord to the copy.
+            // Drop the hotkey: two profiles can't share a chord (SetProfileHotkeys rejects collisions),
+            // so a copied hotkey would be silently dead.
             HotkeyData = null,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
@@ -681,12 +680,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [RelayCommand]
     private void CaptureCurrentProcessName()
     {
-        // Read from the live-context cache (CurrentProcessName) rather than
-        // re-querying the active-window service — when the user clicks this
-        // button, *TypeWhisper* is the focused window, so a fresh query
-        // would return our own process name and the self-host guard would
-        // bail. The live-context timer tracks the most-recent non-host
-        // process name and exposes it via CurrentProcessName.
+        // Use the live-context cache rather than re-querying: when this button is clicked,
+        // TypeWhisper is focused so a fresh query would return our own process name.
         if (
             string.IsNullOrWhiteSpace(CurrentProcessName)
             || CurrentProcessName == "-"
@@ -706,9 +701,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [RelayCommand]
     private void CaptureCurrentUrlPattern()
     {
-        // Same rationale as CaptureCurrentProcessName: use the live-context
-        // value, not a fresh GetBrowserUrl call (which would target the
-        // TypeWhisper window itself and return null).
+        // Same rationale as CaptureCurrentProcessName: TypeWhisper is focused so
+        // a fresh GetBrowserUrl call would return null.
         if (string.IsNullOrWhiteSpace(CurrentUrl) || CurrentUrl == "-")
         {
             return;
@@ -809,14 +803,6 @@ public partial class ProfilesSectionViewModel : ObservableObject
             NotifyStateChanged();
         }
     }
-
-    /// <summary>
-    ///     Re-polls providers for their current model list when the per-profile
-    ///     model dropdown opens, so newly added models appear without a manual
-    ///     "Validate". The dropdown rebuilds via the PluginStateChanged
-    ///     subscription; debounce/guard live in <see cref="PluginManager" />.
-    /// </summary>
-    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
 
     private void RefreshModelOptions()
     {
@@ -924,9 +910,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        // The provider picks the extension up automatically on the next
-        // snapshot tick — no app restart needed. Recheck so the button
-        // disappears as soon as the user finishes installing.
+        // The provider picks up the extension on the next snapshot tick; recheck
+        // so the button disappears as soon as the user finishes installing.
         Dispatcher.UIThread.Post(
             () =>
             {
@@ -939,11 +924,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [RelayCommand]
     private async Task EnableBrowserAccessibility()
     {
-        // Show the user every file path we're about to touch before doing
-        // anything — modifying browser launchers and Firefox profile
-        // overrides is the kind of "magic" that deserves explicit
-        // consent. Items already done in a prior run are omitted from
-        // the list so the dialog is honest about what's left.
+        // Show every path we'll touch before acting — modifying browser launchers
+        // and Firefox profile overrides deserves explicit consent. Already-done
+        // items from prior runs are omitted so the dialog only shows what's left.
         var actions = _browserSetup.DescribePendingActions();
         if (actions.Count == 0)
         {
@@ -970,9 +953,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
 
         var result = await _browserSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
-        // Re-evaluate the whole panel state — SetUpAsync just flipped both
-        // "is configured" and "has installed changes", so Enable should
-        // disappear and Revert should appear in the same beat.
+        // Re-evaluate panel state: Enable should disappear and Revert should appear together.
         RefreshBrowserAccessibilityStatus();
         BrowserAccessibilityStatusMessage = result.Success
             ? $"{result.Message} Restart your browsers (or log out + back in) for the change to take effect."
@@ -981,8 +962,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     private void RefreshBrowserAccessibilityStatus()
     {
-        // X11 has xdotool + xclip Ctrl+L for URL capture, so the AT-SPI
-        // setup is Wayland-only. Suppress the whole panel elsewhere.
+        // AT-SPI browser setup is Wayland-only (X11 uses xdotool + xclip Ctrl+L).
         if (!_browserSetup.IsApplicable())
         {
             BrowserAccessibilityStatusMessage = null;
@@ -1002,12 +982,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
         else if (hasAnyInstall)
         {
-            // Partial state — typically happens when a new browser is
-            // installed after the user ran Enable, or when one of the
-            // multi-profile / multi-launcher pieces wasn't covered the
-            // first time. The confirmation dialog lists only the
-            // missing pieces, so the user can finish the job without
-            // re-touching the parts already in place.
+            // Partial state: new browser installed after Enable, or a multi-profile/launcher
+            // piece was missed. The confirmation dialog lists only the missing pieces.
             BrowserAccessibilityStatusMessage =
                 "Browser accessibility is partially configured — at least one browser, profile, or launcher "
                 + "still needs setup. Click Enable to finish (the confirmation dialog will list only what's missing), "
@@ -1022,9 +998,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             CanEnableBrowserAccessibility = true;
         }
 
-        // Revert is offered whenever there's anything we installed — even
-        // in a partial state. That gives the user an escape hatch if they
-        // ran Enable and want to back out before completing.
+        // Offer Revert whenever anything was installed, including partial state.
         CanRevertBrowserAccessibility = hasAnyInstall;
 
         OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));

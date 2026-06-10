@@ -20,11 +20,9 @@ internal enum ShortcutMatchKind
 }
 
 /// <summary>
-///     Backend-neutral matching: given a (KeyCode, ModifierMask) and the current
-///     <see cref="GlobalShortcutSet" />, return which binding (if any) the chord
-///     resolves to. Pure, stateless — both the SharpHook backend and the
-///     upcoming evdev backend (Phase 2) call this once they have translated
-///     their native event into the backend-neutral tuple.
+///     Backend-neutral, pure/stateless chord matching. Given a (KeyCode, ModifierMask)
+///     and the current <see cref="GlobalShortcutSet" />, returns which binding fires.
+///     Both SharpHook and evdev backends call this after translating their native events.
 /// </summary>
 internal static class ShortcutMatcher
 {
@@ -38,11 +36,8 @@ internal static class ShortcutMatcher
     }
 
     /// <summary>
-    ///     Match overload that additionally returns the
-    ///     <c>PromptAction.Id</c> when the chord resolves to a configured
-    ///     direct-execution prompt-action hotkey (B12). The dispatcher uses
-    ///     this overload so it can route the press to the action lookup;
-    ///     legacy callers can keep using the simpler signature above.
+    ///     Overload that also returns <c>PromptAction.Id</c> / profile ID when matched.
+    ///     The dispatcher uses this; callers that only need the kind use the simpler overload.
     /// </summary>
     public static ShortcutMatchKind Match(
         KeyCode key,
@@ -57,9 +52,7 @@ internal static class ShortcutMatcher
         profileId = null;
         profileBehavior = default;
 
-        // Order matters: cancel takes priority so an active dictation can be
-        // discarded even if the cancel key collides with another binding —
-        // the caller still gets to decide whether to honor it.
+        // Cancel takes priority so an active dictation can be discarded even on a collision.
         if (key == set.CancelKey && ModifiersMatch(pressedMods, set.CancelModifiers))
         {
             return ShortcutMatchKind.Cancel;
@@ -99,11 +92,8 @@ internal static class ShortcutMatcher
             return ShortcutMatchKind.PromptPalette;
         }
 
-        // Direct-hotkey prompt-action lookup sits between PromptPalette and
-        // Dictation so a Profile-bound Dictation chord can't shadow a
-        // user-configured per-action hotkey. The HotkeyService de-duplicates
-        // entries before the snapshot is pushed, so a linear scan is fine
-        // here (typical N is < 10).
+        // Prompt-action hotkeys sit before Dictation so a profile chord can't shadow them.
+        // HotkeyService de-duplicates before pushing, so linear scan is fine (N < 10).
         foreach (var entry in set.PromptActionHotkeys)
         {
             if (key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
@@ -113,11 +103,8 @@ internal static class ShortcutMatcher
             }
         }
 
-        // Profile-bound hotkeys sit after the prompt-action loop so a profile
-        // chord can't shadow a per-action hotkey (honoring the comment above).
-        // Ordering is immaterial in practice because SetProfileHotkeys rejects
-        // any chord that collides with a prompt-action entry — but keep
-        // prompt-action first to preserve that intent.
+        // Profile hotkeys after prompt-actions; SetProfileHotkeys already rejects collisions,
+        // but the ordering preserves that intent.
         foreach (var entry in set.ProfileHotkeys)
         {
             if (key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
@@ -166,16 +153,13 @@ internal static class ShortcutMatcher
             return true;
         }
 
-        return set.PromptActionHotkeys.Any(
-                   entry => key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
-               || set.ProfileHotkeys.Any(
-                   entry => key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers));
+        return set.PromptActionHotkeys.Any(entry => key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
+               || set.ProfileHotkeys.Any(entry => key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers));
     }
 
     /// <summary>
-    ///     Exact match on the four modifier groups (Ctrl/Shift/Alt/Meta). Other
-    ///     bits like NumLock/CapsLock in <paramref name="pressed" /> must be
-    ///     ignored since the user might have them latched.
+    ///     Matches on Ctrl/Shift/Alt/Meta only; ignores NumLock/CapsLock bits
+    ///     that may be latched in <paramref name="pressed" />.
     /// </summary>
     public static bool ModifiersMatch(ModifierMask pressed, ModifierMask required)
     {

@@ -3,17 +3,12 @@ using TypeWhisper.Linux.Services.Insertion;
 namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
-///     Ensures automatic paste — typing the transcript straight into the
-///     focused window — works on this machine. On Wayland we install and
-///     configure <c>ydotool</c>: it injects through the kernel's uinput device,
-///     BELOW the display server, so it reaches both native-Wayland and XWayland
-///     windows. (wtype — which the insertion chain still prefers when present —
-///     only reaches native-Wayland windows via the virtual-keyboard protocol;
-///     it can't type into XWayland apps, and the app itself runs under
-///     XWayland, so ydotool is the universal path the setup guarantees.) On X11
-///     we install <c>xdotool</c>. The Wayland fix chains two steps in one click
-///     — install the package, then run the udev-rule + service setup (which
-///     prompts for admin rights).
+///     Ensures automatic paste (typing the transcript into the focused window) works.
+///     On Wayland installs and configures <c>ydotool</c>, which injects via the kernel's
+///     uinput device and reaches both native-Wayland and XWayland windows. (wtype only
+///     reaches native-Wayland windows; it can't type into XWayland apps.) On X11
+///     installs <c>xdotool</c>. The Wayland path chains install + udev/service setup
+///     (admin rights required) in one click.
 /// </summary>
 public sealed class AutoPasteSetupTask : ISetupTask
 {
@@ -32,25 +27,24 @@ public sealed class AutoPasteSetupTask : ISetupTask
         _ydotool = ydotool;
     }
 
+    private bool IsWayland => _commands.GetSnapshot().SessionType == "Wayland";
+
     public string Id => "auto-paste";
     public string Title => "Automatic paste";
     public SetupTaskSeverity Severity => SetupTaskSeverity.Required;
 
-    public bool AppliesToThisMachine() => true;
-
-    private bool IsWayland => _commands.GetSnapshot().SessionType == "Wayland";
+    public bool AppliesToThisMachine()
+    {
+        return true;
+    }
 
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
     {
         var snapshot = _commands.GetSnapshot();
 
-        // Don't trust the broad snapshot.HasAutomaticPasteTool flag: it counts
-        // wtype as available on Wayland even on GNOME/KDE, where wtype's
-        // virtual-keyboard protocol is rejected (snapshot.CompositorRejectsWtype)
-        // and the insertion chain demotes it — so that flag can read "ready"
-        // while native-window paste is actually broken. xdotool on Wayland only
-        // reaches XWayland apps, not native ones, so it doesn't count here
-        // either. Require a path that genuinely types into native windows.
+        // Don't use snapshot.HasAutomaticPasteTool: it counts wtype on Wayland even when
+        // the compositor rejects the virtual-keyboard protocol (GNOME/KDE), and xdotool
+        // only reaches XWayland apps. Require a path that works for native windows.
         var autoPasteUsable = IsWayland
             ? snapshot.HasYdotoolAvailable
               || (snapshot.HasWtype && !snapshot.CompositorRejectsWtype)
@@ -114,8 +108,7 @@ public sealed class AutoPasteSetupTask : ISetupTask
             return outcome;
         }
 
-        // Wayland: install ydotool first if the binary is missing, then run
-        // the (possibly admin-prompting) udev + service setup.
+        // Wayland: install ydotool if missing, then run udev + service setup.
         if (!_ydotool.IsCurrentlyConfigured().BinaryInstalled)
         {
             var install = await _installer

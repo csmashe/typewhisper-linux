@@ -1,13 +1,9 @@
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     Cheap, environment-variable based detection of the current desktop
-///     environment. Used both by the UI (to pick which writer's button to
-///     show) and by writers themselves (so each writer doesn't have to
-///     re-parse <c>XDG_CURRENT_DESKTOP</c>).
-///     Detection is intentionally shallow — we only care about the four
-///     desktops we actually have writers for. Anything else is "unknown",
-///     which the UI surfaces as the generic "copy this command" path.
+///     Env-var based detection of the current desktop. Detection is shallow
+///     by design — only the four desktops with writers are recognised;
+///     anything else is "unknown" and surfaces the generic "copy this command" path.
 /// </summary>
 public static class DesktopDetector
 {
@@ -16,10 +12,9 @@ public static class DesktopDetector
 
     /// <summary>
     ///     Returns one of "gnome", "kde", "hyprland", "sway", or "unknown".
-    ///     Order of checks: the session-signature env vars (Hyprland's
-    ///     <c>HYPRLAND_INSTANCE_SIGNATURE</c>, Sway's <c>SWAYSOCK</c>) win
-    ///     over <c>XDG_CURRENT_DESKTOP</c> because users sometimes start
-    ///     Hyprland inside a host session that already set the XDG var.
+    ///     Session-signature env vars (<c>HYPRLAND_INSTANCE_SIGNATURE</c>,
+    ///     <c>SWAYSOCK</c>) take priority over <c>XDG_CURRENT_DESKTOP</c>
+    ///     because Hyprland can be nested inside a host session that already set it.
     /// </summary>
     public static string DetectId()
     {
@@ -41,10 +36,8 @@ public static class DesktopDetector
             return Unknown;
         }
 
-        // XDG_CURRENT_DESKTOP can be colon-separated like "ubuntu:GNOME".
-        // We lower-case the whole thing and look for substrings — that
-        // handles "GNOME", "ubuntu:GNOME", "X-Cinnamon", "KDE" with
-        // identical code.
+        // XDG_CURRENT_DESKTOP can be colon-separated (e.g. "ubuntu:GNOME").
+        // Substring-matching on the lowercased value handles all known variants.
         var lower = raw.ToLowerInvariant();
         if (lower.Contains("hyprland"))
         {
@@ -70,14 +63,10 @@ public static class DesktopDetector
     }
 
     /// <summary>
-    ///     True on tiling window managers (Hyprland, Sway, River, Niri), where
-    ///     the floating dictation overlay misbehaves — it reserves a tile,
-    ///     steals focus from the dictation target, and blurs into a box. On
-    ///     those we surface "recording" with a desktop notification instead of
-    ///     the overlay. Full desktop environments — GNOME, KDE, Cinnamon, XFCE,
-    ///     … — and anything unrecognized keep the overlay, which behaves well
-    ///     there. Conservative by design: only a known tiling WM opts into the
-    ///     notification path, so an untested environment never loses its overlay.
+    ///     True on tiling WMs (Hyprland, Sway, River, Niri), where the floating
+    ///     overlay reserves a tile, steals focus, and blurs into a box — so those
+    ///     use a desktop notification instead. Conservative: only known tiling WMs
+    ///     opt in; unrecognised environments keep the overlay.
     /// </summary>
     public static bool UsesNotificationRecordingIndicator()
     {
@@ -97,10 +86,8 @@ public static class DesktopDetector
     }
 
     /// <summary>
-    ///     Display-name mapping for the detected ID. Falls back to the raw
-    ///     XDG token if we don't recognize the desktop — keeps the status
-    ///     panel readable on XFCE / Cinnamon / etc. without forcing them
-    ///     through "unknown".
+    ///     Display-name for the detected (or given) ID. Falls back to the raw
+    ///     XDG token so XFCE, Cinnamon, etc. remain readable instead of "unknown".
     /// </summary>
     public static string DisplayName(string? id = null)
     {
@@ -116,10 +103,9 @@ public static class DesktopDetector
     }
 
     /// <summary>
-    ///     True if a binary with the given name is reachable through
-    ///     <c>PATH</c>. Used by writers to verify their helper command
-    ///     (e.g. <c>gsettings</c>, <c>hyprctl</c>, <c>swaymsg</c>) is
-    ///     actually installed before claiming to support the desktop.
+    ///     True if the named binary is reachable via <c>PATH</c>. Used by
+    ///     writers to confirm their helper tool (gsettings, hyprctl, swaymsg…)
+    ///     is installed before claiming desktop support.
     /// </summary>
     public static bool BinaryExists(string name)
     {

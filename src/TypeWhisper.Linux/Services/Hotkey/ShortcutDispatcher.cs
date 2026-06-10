@@ -14,36 +14,31 @@ namespace TypeWhisper.Linux.Services.Hotkey;
 /// </summary>
 internal sealed class ShortcutDispatcher
 {
-    // Hybrid mode: holds shorter than this are treated as Toggle; longer holds
-    // behave like Push-to-Talk (key release stops recording). 600 ms was chosen
-    // as a deliberate tap vs. press boundary — long enough not to misfire on a
-    // quick toggle tap, short enough to feel responsive when held.
+    // Hybrid mode: holds shorter than this are Toggle; longer holds are Push-to-Talk.
+    // 600 ms is a deliberate tap-vs-hold boundary — avoids misfires on quick taps,
+    // still feels responsive when held.
     private const int PushToTalkThresholdMs = 600;
 
     private readonly object _lock = new();
+
+    // Profile dictation dedup, keyed by physical KeyCode at press time. Also records the
+    // recording mode and timestamp so the release path can compute hold duration for
+    // PushToTalk/Hybrid using the press-time mode (mirrors _dictationKeyDownTime).
+    private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, DateTime DownAt)>
+        _profileDictationKeyDown = new();
+
+    private readonly Dictionary<KeyCode, string> _profileTextKeyDown = new();
+
+    // Per-action key-down dedup, keyed by the physical KeyCode at press time.
+    // Using the press-time key means release-time cleanup works even if the user
+    // edits or removes the binding mid-hold — otherwise the stranded entry would
+    // silently suppress all future presses of that action.
+    private readonly Dictionary<KeyCode, string> _promptActionKeyDown = new();
     private bool _cancelKeyDown;
     private bool _copyLastKeyDown;
     private bool _dictationKeyDown;
     private DateTime _dictationKeyDownTime;
     private bool _promptKeyDown;
-    // Per-action key-down dedup, keyed by the physical KeyCode that matched
-    // at press time. Storing the press-time match means release-time cleanup
-    // is independent of the current shortcut set — if the user edits or
-    // removes the bound action between press and release, the release of
-    // the physical key still clears the entry. Without that, a hold + edit
-    // cycle would strand the action ID in the dedup set and silently
-    // suppress all future presses of that action.
-    private readonly Dictionary<KeyCode, string> _promptActionKeyDown = new();
-    // Profile-hotkey dedup, keyed by the physical KeyCode matched at press
-    // time — same reasoning as _promptActionKeyDown above (release-time
-    // cleanup is independent of the current shortcut set). The dictation
-    // variant also records the recording mode and when the key went down so
-    // the release-time hold duration can be computed for PushToTalk/Hybrid
-    // against the press-time mode, mirroring the main dictation key's
-    // _dictationKeyDownTime.
-    private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, DateTime DownAt)>
-        _profileDictationKeyDown = new();
-    private readonly Dictionary<KeyCode, string> _profileTextKeyDown = new();
     private bool _recentKeyDown;
 
     private GlobalShortcutSet? _shortcuts;
@@ -199,9 +194,8 @@ internal sealed class ShortcutDispatcher
                         return;
                     }
 
-                    // Capture the recording mode at press time so the release
-                    // path switches on the mode that was active when the key
-                    // went down — not a mode the user may have changed mid-hold.
+                    // Capture mode at press time so a mid-hold mode change can't
+                    // affect the release path.
                     _profileDictationKeyDown[key] = (profileId, set.Mode, DateTime.UtcNow);
                 }
 
@@ -222,9 +216,7 @@ internal sealed class ShortcutDispatcher
                         );
                         break;
                     case RecordingMode.Hybrid:
-                        // Always toggle on press; if held past the threshold,
-                        // HandleRelease additionally fires Stop — same as the
-                        // main dictation key.
+                        // Toggle on press; HandleRelease fires Stop if held past threshold.
                         RaiseProfile(
                             ProfileDictationToggleRequested,
                             profileId,
@@ -298,9 +290,7 @@ internal sealed class ShortcutDispatcher
                         Raise(DictationStartRequested, nameof(DictationStartRequested));
                         break;
                     case RecordingMode.Hybrid:
-                        // Always fire Toggle on press. If the key is held past the
-                        // threshold, HandleRelease will additionally fire Stop
-                        // to end a push-to-talk segment; short taps just toggle.
+                        // Toggle on press; HandleRelease fires Stop if held past threshold.
                         Raise(DictationToggleRequested, nameof(DictationToggleRequested));
                         break;
                 }
@@ -311,9 +301,7 @@ internal sealed class ShortcutDispatcher
 
     private void HandleRelease(KeyCode key, GlobalShortcutSet set)
     {
-        // Clear repeat-guards on the matching key release. Modifier-only
-        // releases are ignored — the user can let go of Ctrl/Shift first
-        // and only the main-key release closes the press.
+        // Clear repeat-guards on key release (modifier-only releases are ignored).
         lock (_lock)
         {
             if (set.PromptPaletteKey is not null && key == set.PromptPaletteKey.Value)
@@ -344,21 +332,13 @@ internal sealed class ShortcutDispatcher
                 _cancelKeyDown = false;
             }
 
-            // Clear the press-time entry without consulting the current
-            // shortcut set — if the action was edited/removed mid-hold,
-            // set.PromptActionHotkeys may no longer reference this key,
-            // but our own dictionary still remembers the press and must
-            // release it to keep dedup honest for the next press.
+            // Clear press-time entries regardless of the current shortcut set —
+            // an edit/remove mid-hold must not strand the entry and suppress future presses.
             _promptActionKeyDown.Remove(key);
-
-            // ProcessSelectedText profile hotkeys fire on key-down only; just
-            // clear the dedup entry so the next press is honored.
             _profileTextKeyDown.Remove(key);
         }
 
-        // StartDictation profile hotkeys mirror the main dictation key's
-        // release semantics, but keyed off the physical key so an edit/remove
-        // mid-hold still releases cleanly.
+        // Profile dictation release mirrors main dictation key semantics.
         (string ProfileId, RecordingMode Mode, DateTime DownAt) profileHeld;
         bool hadProfileDictation;
         lock (_lock)
@@ -369,9 +349,7 @@ internal sealed class ShortcutDispatcher
         if (hadProfileDictation)
         {
             var profileHeldMs = (DateTime.UtcNow - profileHeld.DownAt).TotalMilliseconds;
-            // Use the mode captured at press time, not the possibly-changed
-            // current set.Mode, so a mid-hold mode switch can't make the
-            // release fire a Stop the press never set up.
+            // Use press-time mode; a mid-hold mode switch must not fire a Stop the press never set up.
             switch (profileHeld.Mode)
             {
                 case RecordingMode.PushToTalk:

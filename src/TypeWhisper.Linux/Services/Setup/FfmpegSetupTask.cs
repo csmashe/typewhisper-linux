@@ -20,7 +20,10 @@ public sealed class FfmpegSetupTask : ISetupTask
     public string Title => "Audio conversion (ffmpeg)";
     public SetupTaskSeverity Severity => SetupTaskSeverity.Recommended;
 
-    public bool AppliesToThisMachine() => true;
+    public bool AppliesToThisMachine()
+    {
+        return true;
+    }
 
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
     {

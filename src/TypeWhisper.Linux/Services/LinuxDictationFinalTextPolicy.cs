@@ -19,16 +19,22 @@ internal static class LinuxDictationFinalTextPolicy
     private static readonly Regex AutomaticEllipsisRegex =
         new(@"\s*(?:\.{3,}|…)\s*", RegexOptions.CultureInvariant);
 
-    public static string SelectRawText(string? finalText) =>
-        NormalizeDictationArtifacts(finalText?.Trim() ?? "");
+    public static string SelectRawText(string? finalText)
+    {
+        return NormalizeDictationArtifacts(finalText?.Trim() ?? "");
+    }
 
-    private static string NormalizeDictationArtifacts(string text) =>
-        RemoveAutomaticEllipses(ReduceAdjacentRepeatedPhrases(text));
+    private static string NormalizeDictationArtifacts(string text)
+    {
+        return RemoveAutomaticEllipses(ReduceAdjacentRepeatedPhrases(text));
+    }
 
-    private static string RemoveAutomaticEllipses(string text) =>
-        string.IsNullOrWhiteSpace(text)
+    private static string RemoveAutomaticEllipses(string text)
+    {
+        return string.IsNullOrWhiteSpace(text)
             ? ""
             : AutomaticEllipsisRegex.Replace(text, " ").Trim();
+    }
 
     private static string ReduceAdjacentRepeatedPhrases(string text)
     {
@@ -66,7 +72,9 @@ internal static class LinuxDictationFinalTextPolicy
         removalStart = 0;
         removalEnd = 0;
 
-        for (var boundary = MinimumRepeatedPhraseWords; boundary <= tokens.Count - MinimumRepeatedPhraseWords; boundary++)
+        for (var boundary = MinimumRepeatedPhraseWords;
+             boundary <= tokens.Count - MinimumRepeatedPhraseWords;
+             boundary++)
         {
             var maxLength = Math.Min(boundary, tokens.Count - boundary);
             for (var length = maxLength; length >= MinimumRepeatedPhraseWords; length--)
@@ -124,7 +132,8 @@ internal static class LinuxDictationFinalTextPolicy
         return true;
     }
 
-    private static bool RightMatchContinuesPhrase(string text, IReadOnlyList<WordToken> tokens, int boundary, int length)
+    private static bool RightMatchContinuesPhrase(string text, IReadOnlyList<WordToken> tokens, int boundary,
+        int length)
     {
         var rightLastIndex = boundary + length - 1;
         if (rightLastIndex >= tokens.Count - 1)
@@ -132,7 +141,8 @@ internal static class LinuxDictationFinalTextPolicy
             return false;
         }
 
-        var separator = text.AsSpan(tokens[rightLastIndex].End, tokens[rightLastIndex + 1].Start - tokens[rightLastIndex].End);
+        var separator = text.AsSpan(tokens[rightLastIndex].End,
+            tokens[rightLastIndex + 1].Start - tokens[rightLastIndex].End);
         foreach (var ch in separator)
         {
             if (ch is '.' or '!' or '?' or '\r' or '\n')

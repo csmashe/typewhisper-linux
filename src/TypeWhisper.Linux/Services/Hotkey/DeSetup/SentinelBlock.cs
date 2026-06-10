@@ -1,21 +1,16 @@
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     Tiny utility shared by the Hyprland and Sway writers for managing
-///     the sentinel-comment block we write into the user's compositor
-///     config. The block lets us update-in-place and cleanly remove on a
-///     subsequent run without risk of duplicating lines.
-///     The format is identical across compositors:
+///     Manages the sentinel-comment block written into Hyprland/Sway compositor configs,
+///     enabling in-place updates and clean removal without duplicating lines.
+///     Format (identical across compositors):
 ///     <code>
 /// # >>> typewhisper:dictation (managed; do not edit between sentinels)
 /// ...managed lines...
 /// # &lt;&lt;&lt; typewhisper:dictation
 /// </code>
-///     Either zero occurrences (fresh install) or exactly one matched
-///     pair is acceptable. Anything else — a stray open without close,
-///     two opens, etc. — is treated as "mismatched" and we refuse to
-///     touch the file, surfacing the situation to the user with an
-///     actionable error message.
+///     Either zero or exactly one matched pair is acceptable. Any other state
+///     (stray open, two opens, etc.) is treated as mismatched and we refuse to touch the file.
 /// </summary>
 public static class SentinelBlock
 {
@@ -39,9 +34,7 @@ public static class SentinelBlock
         for (var i = 0; i < lines.Count; i++)
         {
             var t = lines[i].TrimEnd();
-            // Tolerate users renaming our annotation suffix (e.g.
-            // stripping the "(managed; ...)" comment) — what we
-            // actually anchor on is the prefix "# >>> typewhisper:dictation".
+            // Anchor on the prefix so users can strip the "(managed; ...)" annotation.
             if (t.StartsWith(OpenPrefix, StringComparison.Ordinal))
             {
                 opens.Add(i);
@@ -72,11 +65,8 @@ public static class SentinelBlock
     }
 
     /// <summary>
-    ///     Replace the managed block (or append a new one at end-of-file
-    ///     when none exists) with the supplied lines. The caller is
-    ///     responsible for refusing to call this when <see cref="Scan" />
-    ///     reports mismatched sentinels; this helper assumes either zero
-    ///     or one well-formed block.
+    ///     Replaces the managed block, or appends a new one if none exists.
+    ///     Assumes either zero or one well-formed block; throws if sentinels are mismatched.
     /// </summary>
     public static string ReplaceOrAppend(string contents, IEnumerable<string> managedLines)
     {
@@ -95,9 +85,7 @@ public static class SentinelBlock
 
         if (scan.OpenLine is int open && scan.CloseLine is int close)
         {
-            // Remove [open..close] inclusive and insert the new block
-            // in the same position so the rest of the file keeps its
-            // line ordering.
+            // Replace [open..close] inclusive, preserving the rest of the file's ordering.
             var prefix = lines.Take(open).ToList();
             var suffix = lines.Skip(close + 1).ToList();
             prefix.AddRange(block);
@@ -105,8 +93,7 @@ public static class SentinelBlock
             return JoinLines(prefix, contents);
         }
 
-        // No block present — append. Make sure we don't double-up the
-        // trailing newline before the sentinel.
+        // No block present — append. Avoid doubling the trailing newline before the sentinel.
         var appended = new List<string>(lines);
         if (appended.Count > 0 && !string.IsNullOrEmpty(appended[^1]))
         {
@@ -118,9 +105,8 @@ public static class SentinelBlock
     }
 
     /// <summary>
-    ///     Strip the managed block entirely, returning the remaining
-    ///     contents. Throws when sentinels are mismatched, by the same
-    ///     rule as <see cref="ReplaceOrAppend" />.
+    ///     Removes the managed block entirely. Throws on mismatched sentinels,
+    ///     same rule as <see cref="ReplaceOrAppend" />.
     /// </summary>
     public static string Remove(string contents)
     {
@@ -141,8 +127,7 @@ public static class SentinelBlock
         var open = scan.OpenLine.Value;
         var close = scan.CloseLine!.Value;
         var prefix = lines.Take(open).ToList();
-        // Trim a single trailing blank line before the block — keeps
-        // round-trip removal from leaving spurious empty lines behind.
+        // Trim one trailing blank line so removal doesn't leave spurious empty lines.
         if (prefix.Count > 0 && string.IsNullOrWhiteSpace(prefix[^1]))
         {
             prefix.RemoveAt(prefix.Count - 1);
@@ -153,11 +138,9 @@ public static class SentinelBlock
     }
 
     /// <summary>
-    ///     Return the managed lines between the sentinels (exclusive), trimmed
-    ///     of trailing whitespace, or null when there is no well-formed block.
-    ///     Used to verify an installed block actually matches the lines we'd
-    ///     write for the current spec — presence of the sentinels alone doesn't
-    ///     prove the trigger/command inside are current.
+    ///     Returns the managed lines between the sentinels (exclusive, trailing-whitespace trimmed),
+    ///     or null if there is no well-formed block. Used to verify an installed block matches the
+    ///     current spec — sentinel presence alone doesn't prove the trigger/command is current.
     /// </summary>
     public static List<string>? ExtractBlockLines(string contents)
     {
@@ -184,9 +167,7 @@ public static class SentinelBlock
             return new List<string>();
         }
 
-        // Preserve any choice between "\n" and "\r\n" — we don't get
-        // many CRLF compositor configs in the wild but it's a cheap
-        // safety net.
+        // Normalise CRLF to LF for splitting; JoinLines restores the original line ending.
         return contents.Replace("\r\n", "\n").Split('\n').ToList();
     }
 
@@ -195,11 +176,8 @@ public static class SentinelBlock
         var sep = original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
         var joined = string.Join(sep, lines);
 
-        // Make JoinLines the single authority for trailing-newline
-        // state: a clean round-trip must preserve whether the original
-        // file ended with a newline. The append path in particular
-        // consumes the trailing empty element as its "blank separator"
-        // signal and would otherwise drop the final newline.
+        // Preserve the original trailing-newline state. The append path consumes the
+        // trailing empty element as a separator signal and would otherwise drop it.
         var originalEndsWithNewline = original.EndsWith('\n');
         var joinedEndsWithNewline = joined.EndsWith(sep, StringComparison.Ordinal);
         if (originalEndsWithNewline && !joinedEndsWithNewline)
@@ -208,8 +186,7 @@ public static class SentinelBlock
         }
         else if (!originalEndsWithNewline && joinedEndsWithNewline)
         {
-            // Slice exactly one separator — TrimEnd would over-trim a
-            // file that legitimately ends in multiple blank lines.
+            // Slice exactly one separator — TrimEnd would over-trim files with multiple trailing blanks.
             joined = joined[..^sep.Length];
         }
 

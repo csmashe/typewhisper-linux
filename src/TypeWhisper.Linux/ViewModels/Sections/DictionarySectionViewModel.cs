@@ -130,6 +130,39 @@ public partial class DictionarySectionViewModel : ObservableObject
         return _dict.ImportFromCsv(csv);
     }
 
+    internal void ReconcileEnabledPacksFromSettings()
+    {
+        var enabledIds = _settings.Current.EnabledPackIds.ToHashSet(
+            StringComparer.OrdinalIgnoreCase
+        );
+        var changed = false;
+        foreach (var pack in Packs)
+        {
+            var shouldBeEnabled = enabledIds.Contains(pack.Pack.Id);
+            if (pack.IsEnabled == shouldBeEnabled)
+            {
+                continue;
+            }
+
+            pack.IsEnabled = shouldBeEnabled;
+            if (shouldBeEnabled)
+            {
+                _dict.ActivatePack(pack.Pack);
+            }
+            else
+            {
+                _dict.DeactivatePack(pack.Pack.Id);
+            }
+
+            changed = true;
+        }
+
+        if (changed)
+        {
+            Refresh();
+        }
+    }
+
     partial void OnSelectedTabChanged(int value)
     {
         OnPropertyChanged(nameof(IsAllTabSelected));
@@ -274,39 +307,6 @@ public partial class DictionarySectionViewModel : ObservableObject
     {
         var enabledIds = Packs.Where(pack => pack.IsEnabled).Select(pack => pack.Pack.Id).ToArray();
         _settings.Save(_settings.Current with { EnabledPackIds = enabledIds });
-    }
-
-    internal void ReconcileEnabledPacksFromSettings()
-    {
-        var enabledIds = _settings.Current.EnabledPackIds.ToHashSet(
-            StringComparer.OrdinalIgnoreCase
-        );
-        var changed = false;
-        foreach (var pack in Packs)
-        {
-            var shouldBeEnabled = enabledIds.Contains(pack.Pack.Id);
-            if (pack.IsEnabled == shouldBeEnabled)
-            {
-                continue;
-            }
-
-            pack.IsEnabled = shouldBeEnabled;
-            if (shouldBeEnabled)
-            {
-                _dict.ActivatePack(pack.Pack);
-            }
-            else
-            {
-                _dict.DeactivatePack(pack.Pack.Id);
-            }
-
-            changed = true;
-        }
-
-        if (changed)
-        {
-            Refresh();
-        }
     }
 
     private void Refresh()

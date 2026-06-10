@@ -14,9 +14,12 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class HistorySectionViewModel : ObservableObject
 {
+    // Thousands of entries: rows are materialized in pages and appended on scroll.
+    private const int PageSize = 40;
     private readonly AudioPlaybackService _audioPlayback;
     private readonly CorrectionSuggestionService _correctionSuggestions;
     private readonly IDictionaryService _dictionary;
+    private readonly List<TranscriptionRecord> _filtered = [];
     private readonly IHistoryService _history;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
@@ -30,19 +33,14 @@ public partial class HistorySectionViewModel : ObservableObject
     [ObservableProperty]
     private string _selectedAppFilter = "All apps";
 
+    private int _shownCount;
+
     [ObservableProperty]
     private string _summary = "0 entries · 0 words";
 
-    // Prevents a full UI rebuild while SaveEdit is mid-flight: the
-    // history service fires RecordsChanged synchronously, but we need to
-    // finish updating correction suggestions before the rows are torn down.
+    // Suppresses RecordsChanged-triggered refresh while SaveEdit is mid-flight:
+    // correction suggestions must be updated before rows are rebuilt.
     private bool _suppressRefresh;
-
-    // History can hold thousands of entries; materializing every row up front
-    // is slow, so rows are built in pages and appended as the user scrolls.
-    private const int PageSize = 40;
-    private readonly List<TranscriptionRecord> _filtered = [];
-    private int _shownCount;
 
     public HistorySectionViewModel(
         IHistoryService history,
@@ -94,6 +92,21 @@ public partial class HistorySectionViewModel : ObservableObject
             ".json" => _history.ExportToJson(visibleRecords),
             _ => _history.ExportToText(visibleRecords)
         };
+    }
+
+    /// <summary>
+    ///     Materializes the next page of rows. Called on initial load and as the
+    ///     user scrolls toward the bottom of the timeline.
+    /// </summary>
+    public void LoadMore()
+    {
+        if (!HasMore)
+        {
+            return;
+        }
+
+        AppendNextPage();
+        OnPropertyChanged(nameof(HasMore));
     }
 
     internal void SaveEdit(HistoryRecordRow record, string newText)
@@ -331,21 +344,6 @@ public partial class HistorySectionViewModel : ObservableObject
         OnPropertyChanged(nameof(HasMore));
     }
 
-    /// <summary>
-    /// Materializes the next page of rows. Called on initial load and as the
-    /// user scrolls toward the bottom of the timeline.
-    /// </summary>
-    public void LoadMore()
-    {
-        if (!HasMore)
-        {
-            return;
-        }
-
-        AppendNextPage();
-        OnPropertyChanged(nameof(HasMore));
-    }
-
     private void AppendNextPage()
     {
         var end = Math.Min(_shownCount + PageSize, _filtered.Count);
@@ -354,9 +352,7 @@ public partial class HistorySectionViewModel : ObservableObject
             var record = _filtered[i];
             var groupName = ComputeDateGroup(record.Timestamp);
 
-            // Records are sorted newest-first and date buckets are contiguous
-            // along that order, so a record either continues the last group or
-            // begins a new one.
+            // Records are newest-first; each record either extends the last group or starts a new one.
             var group =
                 Groups.Count > 0 && Groups[^1].Name == groupName ? Groups[^1] : null;
             if (group is null)

@@ -114,10 +114,18 @@ public partial class PluginsSectionViewModel : ObservableObject
     public ObservableCollection<PluginFailureRow> LoadFailures { get; } = [];
     public bool HasLoadFailures => LoadFailures.Count > 0;
 
+    /// <summary>
+    ///     Re-polls providers so newly pulled models appear when a model dropdown opens, without
+    ///     requiring "Validate". Debounce/guard live in <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync()
+    {
+        return _pluginManager.RefreshProviderModelsAsync();
+    }
+
     private void Refresh()
     {
-        // Preserve expanded state across rebuilds (e.g. when a plugin is
-        // enabled/disabled) so the user doesn't lose their open settings panel.
+        // Preserve expanded state across rebuilds so the user doesn't lose their open settings panel.
         var expandedPluginId = PluginGroups
             .SelectMany(group => group.Plugins)
             .FirstOrDefault(plugin => plugin.IsExpanded)
@@ -286,15 +294,6 @@ public partial class PluginsSectionViewModel : ObservableObject
         await LoadPluginSettingsAsync(row, true);
     }
 
-    /// <summary>
-    ///     Re-polls providers for their current model list when a model setting
-    ///     dropdown opens, so newly added models appear without clicking
-    ///     "Validate". The expanded plugin's fields rebuild via the
-    ///     PluginStateChanged subscription; debounce/guard live in
-    ///     <see cref="PluginManager" />.
-    /// </summary>
-    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
-
     private async Task LoadPluginSettingsAsync(PluginRow row, bool preserveStatus = false)
     {
         row.SettingFields.Clear();
@@ -360,8 +359,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
     }
 
-    // Third-party plugins don't set IsLocal; fall back to the known-ID lists
-    // then to keyword heuristics so the Local/Cloud badge is still meaningful.
+    // Third-party plugins may not set IsLocal; fall back to known-ID lists then keyword heuristics.
     private static bool InferIsLocal(PluginManifest manifest)
     {
         if (manifest.IsLocal)
@@ -399,8 +397,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         return false;
     }
 
-    // Category from the manifest takes precedence; fall back to known-ID lists
-    // then keyword heuristics for plugins that predate the Category field.
+    // Manifest Category takes precedence; fall back to known-ID lists then keyword heuristics.
     private static string? InferCategory(PluginManifest manifest)
     {
         if (!string.IsNullOrWhiteSpace(manifest.Category))
@@ -587,9 +584,7 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
     [ObservableProperty]
     private PluginSettingOption? _selectedOption;
 
-    // Prevents the Value↔BoolValue two-way sync from cycling infinitely:
-    // changing Value sets BoolValue which would otherwise trigger another
-    // OnValueChanged, and vice versa.
+    // Prevents infinite cycling: Value↔BoolValue two-way sync would otherwise loop.
     private bool _syncingBoolValue;
 
     [ObservableProperty]

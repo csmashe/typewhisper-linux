@@ -23,18 +23,17 @@ public partial class AboutSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _isBackupBusy;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanCheckForUpdates))]
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(CanCheckForUpdates))]
     private bool _isCheckingForUpdates;
 
     [ObservableProperty]
-    private string _updateStatusText = "Check for the latest TypeWhisper for Linux release.";
+    private string? _latestReleaseUrl;
 
     [ObservableProperty]
     private bool _updateAvailable;
 
     [ObservableProperty]
-    private string? _latestReleaseUrl;
+    private string _updateStatusText = "Check for the latest TypeWhisper for Linux release.";
 
     public AboutSectionViewModel(
         IErrorLogService errorLog,
@@ -53,19 +52,15 @@ public partial class AboutSectionViewModel : ObservableObject
         _errorLog.EntriesChanged += RefreshErrors;
 
         _updateCheck.ResultChanged += OnUpdateResultChanged;
-        // Reflect any check that already ran (e.g. the startup check) when the
-        // user first navigates to this section.
+        // Reflect any check that already ran (e.g. the startup check).
         ApplyUpdateResult(_updateCheck.LastResult);
     }
 
-    // Resolved once in AppVersion: prefers AssemblyInformationalVersion so a
-    // pre-release suffix ("-rc.1") survives and the +hash SourceLink suffix is
-    // trimmed. Shared with the update checker so both agree on "current".
+    // Prefers AssemblyInformationalVersion (keeps pre-release suffix, strips +hash).
+    // Shared with the update checker so both sides agree on "current".
     public string Version { get; } = AppVersion.Display;
 
-    // Copyright string embedded at build time (Directory.Build.props). Shown
-    // on the About screen so the upstream/Excel-on-the-Web split is visible
-    // in-app, not just in the NOTICE/LICENSE files.
+    // Embedded at build time (Directory.Build.props); shows the upstream/Excel-on-the-Web split in-app.
     public string Copyright { get; } = AppVersion.Copyright;
 
     public string RuntimeVersion { get; } = Environment.Version.ToString();
@@ -206,9 +201,8 @@ public partial class AboutSectionViewModel : ObservableObject
         UpdateAvailable = false;
         LatestReleaseUrl = result.ReleaseUrl;
 
-        // Distinguish "exactly on the latest release" from "ahead of it" — a
-        // dev/unreleased build (e.g. running v0.5.0 when v0.4.0 is the newest
-        // published release) shouldn't claim it *is* the latest release.
+        // Distinguish "on latest" from "ahead of latest" — a dev build shouldn't
+        // claim it is the latest published release.
         UpdateStatusText = AppVersion.Compare(result.CurrentVersion, result.LatestVersion) > 0
             ? $"You're running v{result.CurrentVersion}, which is newer than the latest published release (v{result.LatestVersion})."
             : $"You're on the latest version (v{result.CurrentVersion}).";

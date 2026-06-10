@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Threading.Channels;
 using TypeWhisper.PluginSDK;
 
@@ -21,37 +22,42 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private const int MaxPendingBytes = 1024 * 1024;
     private const int FinalizeSenderTimeoutMs = 2000;
     private const int FinalizeSessionTimeoutMs = 2000;
+
     private const int FinalizeGraceWindowMs = 500;
+
     // Debounce: after a late final arrives in the grace window, wait this long
     // for additional finals before returning. Providers can flush multiple final
     // segments at EOF; the first one shouldn't short-circuit the rest.
     private const int FinalizeGraceQuietMs = 150;
+
     // Poll cadence for the grace-window debounce loop.
     private const int FinalizeGracePollMs = 25;
 
-    private readonly ITranscriptionEnginePlugin _plugin;
+    private readonly StringBuilder _finalSegments = new();
     private readonly string? _language;
-    private readonly int _sessionVersion;
-    private readonly Action<int, string> _onPartial;
-    private readonly Action<Exception> _onFault;
 
     private readonly object _lock = new();
+    private readonly Action<Exception> _onFault;
+    private readonly Action<int, string> _onPartial;
     private readonly Queue<byte[]> _pending = new();
-    private int _pendingBytes;
-    private bool _open;
+
+    private readonly ITranscriptionEnginePlugin _plugin;
+    private readonly int _sessionVersion;
+    private Channel<byte[]>? _channel;
+    private CancellationTokenSource? _cts;
     private bool _disposed;
+
     private bool _finalizing;
 
-    private IStreamingSession? _session;
-    private Channel<byte[]>? _channel;
-    private Task? _senderTask;
-    private Action<StreamingTranscriptEvent>? _transcriptHandler;
-    private CancellationTokenSource? _cts;
-
-    private readonly System.Text.StringBuilder _finalSegments = new();
     // TickCount64 of the last late final received; 0 if none yet. Used by the
     // FinalizeAsync grace-window debounce so multi-final EOF flushes are caught.
     private long _lastFinalTickMs;
+    private bool _open;
+    private int _pendingBytes;
+    private Task? _senderTask;
+
+    private IStreamingSession? _session;
+    private Action<StreamingTranscriptEvent>? _transcriptHandler;
 
     public StreamingTranscriptionCoordinator(
         ITranscriptionEnginePlugin plugin,
@@ -73,7 +79,73 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     {
         get
         {
-            lock (_lock) return _finalSegments.Length > 0;
+            lock (_lock)
+            {
+                return _finalSegments.Length > 0;
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
+        try { _cts?.Cancel(); }
+        catch
+        {
+            /* ignore */
+        }
+
+        IStreamingSession? session;
+        Channel<byte[]>? channel;
+        Action<StreamingTranscriptEvent>? handler;
+        Task? senderTask;
+        lock (_lock)
+        {
+            session = _session;
+            channel = _channel;
+            handler = _transcriptHandler;
+            senderTask = _senderTask;
+            _session = null;
+            _channel = null;
+            _transcriptHandler = null;
+            _senderTask = null;
+            _open = false;
+            _pending.Clear();
+            _pendingBytes = 0;
+        }
+
+        channel?.Writer.TryComplete();
+        if (session is not null && handler is not null)
+        {
+            session.TranscriptReceived -= handler;
+        }
+
+        // Drain the sender before tearing down the session — CleanupSessionAsync must not
+        // call FinalizeAsync/DisposeAsync while a plugin SendAudioAsync is still in flight.
+        if (senderTask is not null)
+        {
+            try { await senderTask.WaitAsync(TimeSpan.FromMilliseconds(FinalizeSenderTimeoutMs)); }
+            catch
+            {
+                /* best effort — proceed with cleanup either way */
+            }
+        }
+
+        if (session is not null)
+        {
+            await CleanupSessionAsync(session);
+        }
+
+        try { _cts?.Dispose(); }
+        catch
+        {
+            /* ignore */
         }
     }
 
@@ -87,27 +159,17 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
             var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(ChannelCapacity)
             {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = false
             });
 
-            Action<StreamingTranscriptEvent> handler = OnTranscriptReceived;
+            var handler = OnTranscriptReceived;
 
-            // Publish atomically: the sender task, channel, session, and the
-            // pending-queue flush all become visible together. Without this,
-            // FinalizeAsync could observe _open=true with _senderTask still null
-            // (or with the pending queue undrained), complete the channel writer,
-            // and call session.FinalizeAsync before any audio reached the wire.
-            // FlushPendingIntoChannel re-enters _lock, which is reentrant.
-            //
-            // Also re-check _disposed and _finalizing under this lock: if
-            // DisposeAsync or FinalizeAsync ran while we were awaiting the
-            // connect and the plugin returned a session anyway (it ignored
-            // cancellation, or resolved just before it), we must NOT publish —
-            // those callers already snapshotted nulls and won't come back to
-            // clean this session up. Tear it down locally instead.
-            bool published = false;
+            // Publish everything atomically (sender task, channel, session, pending flush)
+            // so FinalizeAsync never sees _open=true with _senderTask still null or the
+            // pending queue undrained. Re-check _disposed/_finalizing: if those ran during
+            // the connect await, we must not publish — those callers won't come back to
+            // clean up the session. Tear it down locally instead.
+            var published = false;
             lock (_lock)
             {
                 if (!_disposed && !_finalizing)
@@ -126,15 +188,11 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             if (!published)
             {
                 await CleanupSessionAsync(session);
-                return;
             }
         }
         catch (OperationCanceledException) when (_disposed || _finalizing || ct.IsCancellationRequested)
         {
-            // Normal teardown: DisposeAsync or FinalizeAsync cancelled _cts, or the
-            // caller cancelled their own token during the connect handshake. Don't
-            // surface as a fault — doing so would trigger spurious batch fallback
-            // in Phase 4.
+            // Normal teardown (Dispose, Finalize, or caller cancel) — not a fault.
         }
         catch (Exception ex)
         {
@@ -144,7 +202,10 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
     public void AcceptAudioFrame(float[] samples, int sampleRate)
     {
-        if (_disposed || Faulted || samples is null || samples.Length == 0) return;
+        if (_disposed || Faulted || samples is null || samples.Length == 0)
+        {
+            return;
+        }
 
         var sixteen = sampleRate != 16000
             ? AudioRecordingService.ResampleToSampleRate(samples, sampleRate, 16000)
@@ -170,6 +231,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                 {
                     _pendingBytes -= dropped.Length;
                 }
+
                 return;
             }
         }
@@ -179,50 +241,52 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
     public async Task<string> FinalizeAsync(CancellationToken ct)
     {
-        if (Faulted) return SnapshotFinalSegments();
+        if (Faulted)
+        {
+            return SnapshotFinalSegments();
+        }
 
         Channel<byte[]>? channel;
         IStreamingSession? session;
         Task? senderTask;
         lock (_lock)
         {
-            // Set _finalizing under the lock so StartAsync's publish guard sees
-            // it with proper memory ordering. After this point, any late-arriving
-            // session from a pending connect will be torn down by StartAsync
-            // instead of published — otherwise FinalizeAsync would return with
-            // an empty transcript while a freshly-connected session kept running.
+            // Set _finalizing under lock so StartAsync's publish guard sees it atomically.
+            // Any session that connects after this will be torn down by StartAsync, not published.
             _finalizing = true;
             channel = _channel;
             session = _session;
             senderTask = _senderTask;
         }
 
-        // Pre-publish path: no sender to drain, no session to finalize. Cancel
-        // _cts so a well-behaved plugin exits its connect; the publish guard
-        // handles the misbehaving-plugin case.
+        // Pre-publish path: cancel _cts so a well-behaved plugin exits its connect.
         if (session is null)
         {
-            try { _cts?.Cancel(); } catch { /* ignore */ }
+            try { _cts?.Cancel(); }
+            catch
+            {
+                /* ignore */
+            }
         }
 
         channel?.Writer.TryComplete();
 
-        // Each phase honors the caller's ct so an aborted shutdown collapses the
-        // up-to-4.5s worst-case wait. Timeouts stay as hard upper bounds for
-        // misbehaving plugins; ct is the soft "give up sooner" signal.
+        // ct is the soft "give up sooner" signal; timeouts are hard upper bounds for misbehaving plugins.
         if (senderTask is not null)
         {
             try { await senderTask.WaitAsync(TimeSpan.FromMilliseconds(FinalizeSenderTimeoutMs), ct); }
-            catch { /* best effort */ }
+            catch
+            {
+                /* best effort */
+            }
         }
 
-        // If the sender faulted during the drain above, HandleFault has already
-        // taken ownership of tearing this session down (fire-and-forget
-        // CleanupSessionAsync, which calls FinalizeAsync + DisposeAsync). Bail out
-        // before our own session.FinalizeAsync so we don't finalize/dispose the
-        // same instance concurrently. The caller reads Faulted (not this return
-        // value) to trigger batch fallback, matching the entry guard above.
-        if (Faulted) return SnapshotFinalSegments();
+        // If the sender faulted, HandleFault already owns session teardown — bail before
+        // our own FinalizeAsync to avoid concurrent finalize/dispose on the same instance.
+        if (Faulted)
+        {
+            return SnapshotFinalSegments();
+        }
 
         Exception? sessionFinalizeFault = null;
         if (session is not null)
@@ -237,24 +301,17 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                // Real session fault during finalize (provider error event,
-                // transport error, etc). Capture and rethrow after the grace
-                // window so any late finals still land in _finalSegments — but
-                // surface the throw to the caller so
-                // DictationOrchestrator.TeardownStreamingSessionAsync's
-                // finalizeThrew flips and triggers batch fallback. Without
-                // this, the orchestrator would treat a partial streaming
-                // transcript as success when the session actually faulted.
+                // Capture and rethrow after the grace window so late finals still land, but
+                // surface to the caller so DictationOrchestrator's finalizeThrew triggers
+                // batch fallback. Without this, a partial transcript is silently treated as success.
                 Trace.WriteLine($"[StreamingCoordinator] FinalizeAsync session fault: {ex.Message}");
                 sessionFinalizeFault = ex;
             }
         }
 
-        // Grace window — debounce: stay open for a brief quiet period after the
-        // latest late final so providers flushing multiple final segments at EOF
-        // all land in _finalSegments before we return. Hard-capped at
-        // FinalizeGraceWindowMs total. Returns instantly via ct if the caller
-        // cancels.
+        // Grace window: wait for FinalizeGraceQuietMs of silence after the latest final so
+        // providers that flush multiple segments at EOF all land before we return. Hard cap at
+        // FinalizeGraceWindowMs; exits immediately on caller cancel.
         var graceDeadline = Environment.TickCount64 + FinalizeGraceWindowMs;
         while (Environment.TickCount64 < graceDeadline)
         {
@@ -263,6 +320,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             {
                 break;
             }
+
             try { await Task.Delay(FinalizeGracePollMs, ct); }
             catch (OperationCanceledException) { break; }
         }
@@ -282,52 +340,10 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     // during the grace window can produce a torn or partial transcript.
     private string SnapshotFinalSegments()
     {
-        lock (_lock) return _finalSegments.ToString().Trim();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed) return;
-        _disposed = true;
-
-        try { _cts?.Cancel(); } catch { /* ignore */ }
-
-        IStreamingSession? session;
-        Channel<byte[]>? channel;
-        Action<StreamingTranscriptEvent>? handler;
-        Task? senderTask;
         lock (_lock)
         {
-            session = _session;
-            channel = _channel;
-            handler = _transcriptHandler;
-            senderTask = _senderTask;
-            _session = null;
-            _channel = null;
-            _transcriptHandler = null;
-            _senderTask = null;
-            _open = false;
-            _pending.Clear();
-            _pendingBytes = 0;
+            return _finalSegments.ToString().Trim();
         }
-
-        channel?.Writer.TryComplete();
-        if (session is not null && handler is not null)
-            session.TranscriptReceived -= handler;
-
-        // Wait for the sender to exit before tearing down the session. Otherwise
-        // CleanupSessionAsync would call FinalizeAsync/DisposeAsync on the
-        // session while a plugin SendAudioAsync is still in flight — a violation
-        // of the single-session-user contract that can race-close a websocket.
-        if (senderTask is not null)
-        {
-            try { await senderTask.WaitAsync(TimeSpan.FromMilliseconds(FinalizeSenderTimeoutMs)); }
-            catch { /* best effort — proceed with cleanup either way */ }
-        }
-
-        if (session is not null) await CleanupSessionAsync(session);
-
-        try { _cts?.Dispose(); } catch { /* ignore */ }
     }
 
     private async Task RunSenderAsync(
@@ -348,17 +364,18 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            // Plugin SendAudioAsync implementations are external code and can
-            // throw arbitrary types (HttpRequestException from a REST-style
-            // streamer, plugin-internal exceptions, etc). Route ALL non-cancel
-            // failures through HandleFault so Phase 4's batch fallback fires.
+            // Plugin SendAudioAsync is external and can throw arbitrary types;
+            // route all non-cancel failures through HandleFault so batch fallback fires.
             HandleFault(ex);
         }
     }
 
     private void OnTranscriptReceived(StreamingTranscriptEvent evt)
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
 
         try
         {
@@ -373,34 +390,37 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         {
             lock (_lock)
             {
-                if (_finalSegments.Length > 0) _finalSegments.Append('\n');
+                if (_finalSegments.Length > 0)
+                {
+                    _finalSegments.Append('\n');
+                }
+
                 _finalSegments.Append(evt.Text.Trim());
             }
+
             Volatile.Write(ref _lastFinalTickMs, Environment.TickCount64);
         }
     }
 
     private void HandleFault(Exception ex)
     {
-        // DELIBERATE FORK DIVERGENCE from upstream's
-        // CleanupStreamingSessionAfterFailure (StreamingHandler.cs:290): upstream
-        // tears down and leaves the user with whatever transcript was accumulated
-        // before the fault. The Linux fork's caller (DictationOrchestrator,
-        // Phase 4) reads `Faulted` and falls back to batch TranscribeAsync(wav)
-        // on the captured WAV from AudioRecordingService — lossless because the
-        // audio tap is non-destructive, _sampleChunks keeps accumulating in
-        // parallel with streaming. Do NOT add batch-fallback logic HERE — the
-        // coordinator must not know about the WAV. Keep the divergence local
-        // to the caller so a future upstream sync of StreamingHandler can be
-        // pulled in without re-arguing this decision. See:
-        //   - master plan: ~/.claude/plans/virtual-noodling-plum.md (Approach)
-        //   - C5 Phase 3 doc: docs/plans/2026-05-25-c5-phase-3-coordinator.md
+        // DELIBERATE FORK DIVERGENCE from upstream CleanupStreamingSessionAfterFailure
+        // (StreamingHandler.cs:290): upstream leaves the user with the partial transcript.
+        // The Linux fork's DictationOrchestrator reads `Faulted` and falls back to batch
+        // TranscribeAsync(wav) — lossless because the audio tap is non-destructive.
+        // Do NOT add batch-fallback logic here; the coordinator must not know about the WAV.
+        // Keep the divergence in the caller so a future upstream StreamingHandler sync
+        // doesn't need to re-argue this decision.
         IStreamingSession? session;
         Channel<byte[]>? channel;
         Action<StreamingTranscriptEvent>? handler;
         lock (_lock)
         {
-            if (Faulted) return;
+            if (Faulted)
+            {
+                return;
+            }
+
             Faulted = true;
             session = _session;
             channel = _channel;
@@ -417,7 +437,9 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
         channel?.Writer.TryComplete();
         if (session is not null && handler is not null)
+        {
             session.TranscriptReceived -= handler;
+        }
 
         try { _onFault(ex); }
         catch (Exception cbEx)
@@ -425,14 +447,26 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             Trace.WriteLine($"[StreamingCoordinator] onFault callback threw: {cbEx.Message}");
         }
 
-        if (session is not null) _ = CleanupSessionAsync(session);
+        if (session is not null)
+        {
+            _ = CleanupSessionAsync(session);
+        }
     }
 
     private static async Task CleanupSessionAsync(IStreamingSession session)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(FinalizeSessionTimeoutMs));
-        try { await session.FinalizeAsync(cts.Token); } catch { /* best effort */ }
-        try { await session.DisposeAsync(); }           catch { /* best effort */ }
+        try { await session.FinalizeAsync(cts.Token); }
+        catch
+        {
+            /* best effort */
+        }
+
+        try { await session.DisposeAsync(); }
+        catch
+        {
+            /* best effort */
+        }
     }
 
     private void FlushPendingIntoChannel(ChannelWriter<byte[]> writer)
@@ -447,8 +481,10 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                     _pendingBytes = 0;
                     return;
                 }
+
                 _pendingBytes -= next.Length;
             }
+
             if (!writer.TryWrite(next))
             {
                 Trace.WriteLine("[StreamingCoordinator] FlushPending TryWrite returned false");

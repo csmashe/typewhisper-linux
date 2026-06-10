@@ -6,21 +6,12 @@ namespace TypeWhisper.Linux.Services;
 ///     Resets CPU + I/O scheduling priority on the calling process.
 /// </summary>
 /// <remarks>
-///     GNOME (and other systemd-based DEs) launches menu-clicked apps under a
-///     transient scope with <c>nice=6</c> and <c>ionice idle</c> to keep the
-///     shell responsive while a heavy app starts. For a .NET app that needs
-///     CPU + disk during startup (JIT, R2R image faulting, DI container build)
-///     this throttles cold start by ~60×. The same binary launched from a
-///     terminal inherits the terminal's nice 0 / best-effort I/O and starts in
-///     well under 2s.
-///     We shell out to <c>renice</c> and <c>ionice</c> against our own PID
-///     instead of P/Invoking <c>setpriority</c>/<c>ioprio_set</c>. The C
-///     wrappers have signed-int return-vs-error ambiguity (getpriority can
-///     legally return -1) and the raw <c>syscall(2)</c> takes <c>long</c>
-///     arguments which P/Invoke marshals incorrectly with <c>int</c>.
-///     The external tools are a few milliseconds each and not worth getting
-///     wrong.
-///     Failures are non-fatal — the app keeps starting; we just log so we know.
+///     GNOME (and other systemd-based DEs) launches menu-clicked apps under a transient scope with
+///     nice=6 and ionice idle, which throttles cold start of a .NET app by ~60× (JIT, R2R faulting,
+///     DI build). Terminal launches inherit nice 0 / best-effort and start normally.
+///     Shells out to renice/ionice rather than P/Invoking setpriority/ioprio_set because getpriority
+///     legally returns -1 (ambiguous error vs value) and the raw syscall takes long args that
+///     P/Invoke marshals incorrectly. Failures are non-fatal; the app keeps starting.
 /// </remarks>
 internal static class ProcessPriority
 {

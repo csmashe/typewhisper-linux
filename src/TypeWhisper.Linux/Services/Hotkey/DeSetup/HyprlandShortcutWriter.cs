@@ -4,22 +4,11 @@ using System.Text;
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     Hyprland helper. Two things happen on Write:
-///     <list type="number">
-///         <item>
-///             The user's <c>~/.config/hypr/hyprland.conf</c> gets a managed
-///             sentinel block appended (or updated in place) with <c>bind</c> +
-///             <c>bindr</c> + a cancel bind. This is what survives a session
-///             restart.
-///         </item>
-///         <item>
-///             We then call <c>hyprctl keyword bind ...</c> for each line so
-///             the binding takes effect immediately, without the user needing to
-///             reload Hyprland. If hyprctl fails (binary missing, socket gone,
-///             non-running session) the config write is still considered a
-///             success — we surface a warning, not an error.
-///         </item>
-///     </list>
+///     Hyprland shortcut writer. On Write, a managed sentinel block with the
+///     <c>bind</c>/<c>bindr</c>/cancel lines is upserted into
+///     <c>~/.config/hypr/hyprland.conf</c>, then each line is applied live via
+///     <c>hyprctl keyword</c>. If hyprctl fails the config write still succeeds
+///     — a warning is surfaced instead of an error.
 /// </summary>
 public sealed class HyprlandShortcutWriter : IDeShortcutWriter
 {
@@ -32,10 +21,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
 
     public bool IsCurrentDesktop()
     {
-        // The presence of HYPRLAND_INSTANCE_SIGNATURE is a stronger
-        // signal than XDG_CURRENT_DESKTOP because it's only set inside
-        // a live Hyprland session. We additionally require hyprctl to
-        // be available so the runtime-bind step has a chance.
+        // HYPRLAND_INSTANCE_SIGNATURE is only set inside a live session;
+        // hyprctl must also be present for the runtime-bind step.
         if (DesktopDetector.DetectId() != "hyprland")
         {
             return false;
@@ -73,9 +60,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
                 return false;
             }
 
-            // The block must contain exactly the lines we'd write for this
-            // spec — a stale trigger/command (or a manual edit) reads as
-            // not-installed so the checklist re-registers it.
+            // Stale or manually edited blocks read as not-installed so the
+            // checklist re-registers them.
             var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
             return inner.SequenceEqual(expected);
         }
@@ -130,10 +116,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             );
         }
 
-        // Runtime apply via hyprctl. We feed the bind / bindr / bind
-        // payload one at a time so we can isolate failures and emit a
-        // precise warning if only one of them fails. Failures here are
-        // non-fatal — the persistent config has already been written.
+        // Apply live via hyprctl one line at a time to isolate failures.
+        // Non-fatal — the persistent config is already written.
         var liveOk = await ApplyLiveAsync(spec, ct).ConfigureAwait(false);
 
         var message = "Hyprland shortcut installed in ~/.config/hypr/hyprland.conf";
@@ -189,10 +173,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             );
         }
 
-        // The runtime side of removal is to unbind, but Hyprland's
-        // unbind syntax is finicky and varies across versions. Asking
-        // the user to reload is robust and matches what they already
-        // expect from compositor config edits.
+        // Hyprland's unbind syntax varies across versions; asking the user
+        // to reload is more robust than attempting a live removal.
         return new DeShortcutWriteResult(
             true,
             "Hyprland managed block removed. Run `hyprctl reload` (or restart Hyprland) to drop the live binding.",
@@ -201,10 +183,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     }
 
     /// <summary>
-    ///     Convert "Ctrl+Shift+Space" into Hyprland's "CTRL SHIFT", "SPACE"
-    ///     form. Modifiers are space-separated; the key is uppercased
-    ///     (Hyprland accepts either case but uppercase reads better in
-    ///     hand-written configs).
+    ///     Converts "Ctrl+Shift+Space" into Hyprland's ("CTRL SHIFT", "SPACE")
+    ///     form. Modifiers are space-separated; key is uppercased for readability.
     /// </summary>
     public static (string mods, string key) ToHyprlandBind(string trigger)
     {
@@ -271,8 +251,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         var anyFailed = false;
         foreach (var line in BuildManagedLines(spec))
         {
-            // Strip the leading "bind  = " / "bindr = " — hyprctl
-            // keyword wants the keyword and value as separate args.
+            // hyprctl keyword wants keyword and value as separate args.
             var trimmed = line.TrimStart();
             var eq = trimmed.IndexOf('=');
             if (eq < 0)

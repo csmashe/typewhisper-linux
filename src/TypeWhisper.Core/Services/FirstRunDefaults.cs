@@ -3,13 +3,9 @@ using TypeWhisper.Core.Models;
 namespace TypeWhisper.Core.Services;
 
 /// <summary>
-///     Canonical definitions for the items seeded into a brand-new install
-///     (see <c>ProfileService.SeedFirstRunDefaultsIfMissing</c> and
-///     <c>PromptActionService.SeedFirstRunDefaultsIfMissing</c>). Both ship
-///     <b>disabled</b> so a fresh install carries the ready-to-use auto-cleanup
-///     setup without it firing until the user opts in. The fixed IDs keep the
-///     seeded profile's <see cref="Profile.PromptActionId" /> pointing at the
-///     seeded prompt action across machines.
+///     Canonical definitions for items seeded into a brand-new install. Both ship disabled so the
+///     auto-cleanup setup is present but inactive until the user opts in. Fixed IDs keep the
+///     seeded profile's <see cref="Profile.PromptActionId" /> pointing at the seeded action across machines.
 /// </summary>
 public static class FirstRunDefaults
 {
@@ -56,9 +52,8 @@ public static class FirstRunDefaults
         """;
 
     /// <summary>
-    ///     The "Auto Clean Up Text" prompt action, seeded disabled. The provider
-    ///     is left unset so it resolves to whatever LLM the install has configured
-    ///     rather than baking in a machine-specific endpoint.
+    ///     The "Auto Clean Up Text" prompt action, seeded disabled. Provider left unset so it
+    ///     resolves to whatever LLM the install has configured.
     /// </summary>
     public static PromptAction CreateAutoCleanupAction()
     {
@@ -76,9 +71,8 @@ public static class FirstRunDefaults
     }
 
     /// <summary>
-    ///     The "Auto Format" profile, seeded disabled, wired to the seeded
-    ///     auto-cleanup prompt action and pre-bound to Ctrl+Alt+E (the hotkey
-    ///     stays inert until the profile is enabled).
+    ///     The "Auto Format" profile, seeded disabled, wired to the auto-cleanup action and
+    ///     pre-bound to Ctrl+Alt+E (inert until the profile is enabled).
     /// </summary>
     public static Profile CreateAutoFormatProfile()
     {

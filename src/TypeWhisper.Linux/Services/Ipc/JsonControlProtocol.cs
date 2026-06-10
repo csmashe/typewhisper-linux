@@ -46,11 +46,8 @@ internal static class JsonControlProtocol
 
     public static readonly JsonSerializerOptions JsonOptions = new()
     {
-        // The spec uses snake_case in some places (e.g. supports_press_release)
-        // but the request fields (v, cmd) are flat lowercase. Use a custom
-        // naming policy: properties tagged with [JsonPropertyName] win; the
-        // rest are converted to snake_case to match the documented response
-        // shape. Default camelCase doesn't match the spec.
+        // [JsonPropertyName] overrides win; remaining properties use snake_case to match
+        // the documented response shape (camelCase would not match the spec).
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = false
@@ -59,12 +56,7 @@ internal static class JsonControlProtocol
     public static string SerializeError(string code)
     {
         return JsonSerializer.Serialize(
-            new ActionResponse
-            {
-                Version = CurrentVersion,
-                Ok = false,
-                Error = code
-            },
+            new ActionResponse { Version = CurrentVersion, Ok = false, Error = code },
             JsonOptions
         );
     }
@@ -72,13 +64,7 @@ internal static class JsonControlProtocol
     public static string SerializeAction(string prev, string state)
     {
         return JsonSerializer.Serialize(
-            new ActionResponse
-            {
-                Version = CurrentVersion,
-                Ok = true,
-                Prev = prev,
-                State = state
-            },
+            new ActionResponse { Version = CurrentVersion, Ok = true, Prev = prev, State = state },
             JsonOptions
         );
     }
@@ -124,10 +110,9 @@ internal static class JsonControlProtocol
     }
 
     /// <summary>
-    ///     Outbound <c>status</c> response. Field names follow the spec
-    ///     (<c>supports_press_release</c>, <c>active_binding</c>) via
-    ///     <see cref="JsonPropertyNameAttribute" />; the snake_case naming policy
-    ///     in <see cref="JsonOptions" /> handles the rest.
+    ///     Outbound <c>status</c> response. Fields that deviate from snake_case
+    ///     (e.g. <c>supports_press_release</c>) use <see cref="JsonPropertyNameAttribute" />;
+    ///     <see cref="JsonOptions" /> handles the rest.
     /// </summary>
     public sealed class StatusResponse
     {

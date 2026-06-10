@@ -34,15 +34,6 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     /// <summary>ISO language codes supported by this engine, or empty for all.</summary>
     IReadOnlyList<string> SupportedLanguages => [];
 
-    /// <summary>Selects a transcription model by ID.</summary>
-    void SelectModel(string modelId);
-
-    /// <summary>Configures the preferred compute backend. Common values: "cpu", "cuda".</summary>
-    Task ConfigureComputeBackendAsync(string backend)
-    {
-        return Task.CompletedTask;
-    }
-
     /// <summary>Acceleration backends this engine can run on. Default: CPU only.</summary>
     IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
         [TranscriptionAccelerationBackend.Cpu];
@@ -55,10 +46,18 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     TranscriptionAccelerationStatus AccelerationStatus =>
         new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
+    /// <summary>Selects a transcription model by ID.</summary>
+    void SelectModel(string modelId);
+
+    /// <summary>Configures the preferred compute backend. Common values: "cpu", "cuda".</summary>
+    Task ConfigureComputeBackendAsync(string backend)
+    {
+        return Task.CompletedTask;
+    }
+
     /// <summary>
-    ///     Sets the host's resolved acceleration preference. The host resolves <c>Auto</c> to a
-    ///     concrete backend before calling, so plugins only see <c>Cpu</c> or <c>NvidiaCuda</c>
-    ///     in practice.
+    ///     Sets the resolved acceleration preference. The host resolves <c>Auto</c>
+    ///     before calling, so plugins only ever see <c>Cpu</c> or <c>NvidiaCuda</c>.
     /// </summary>
     void SetAccelerationPreference(TranscriptionAccelerationPreference preference) { }
 
@@ -95,10 +94,8 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    ///     Opens a real-time streaming session (e.g. WebSocket). The host feeds PCM16 audio via the session.
-    ///     Only called when <see cref="SupportsStreaming" /> is true.
-    /// </summary>
+    /// <summary>Opens a real-time streaming session; the host feeds PCM16 audio into it.
+    ///     Only called when <see cref="SupportsStreaming" /> is true.</summary>
     Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         throw new NotSupportedException();
@@ -111,14 +108,10 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     }
 
     /// <summary>
-    ///     Transcribes audio with streaming progress updates. Default delegates to <see cref="TranscribeAsync" />.
+    ///     Transcribes audio with streaming progress updates via <paramref name="onProgress" />.
+    ///     Default delegates to <see cref="TranscribeAsync" />.
     /// </summary>
-    /// <param name="wavAudio">WAV audio data to transcribe.</param>
-    /// <param name="language">Target language code, or null for auto-detect.</param>
-    /// <param name="translate">Whether to translate the result to English.</param>
-    /// <param name="prompt">Optional prompt/context hint for the engine.</param>
-    /// <param name="onProgress">Callback invoked with partial transcription text. Return false to cancel.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="onProgress">Receives partial transcription text; return false to cancel.</param>
     Task<PluginTranscriptionResult> TranscribeStreamingAsync(
         byte[] wavAudio,
         string? language,

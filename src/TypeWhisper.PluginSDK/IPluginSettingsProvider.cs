@@ -18,9 +18,8 @@ public interface IPluginSettingsProvider
     Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default);
 
     /// <summary>
-    ///     Validates the current settings (e.g. connectivity check, key format check).
-    ///     Returns a result with <see cref="PluginSettingsValidationResult.IsSuccess" /> false
-    ///     on failure, or null to skip validation entirely.
+    ///     Validates the current settings (e.g. connectivity or key-format check).
+    ///     Returns null to skip validation entirely.
     /// </summary>
     Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {

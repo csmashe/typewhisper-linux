@@ -49,17 +49,11 @@ public sealed record TranslationModelInfo
         new("id", "Bahasa Indonesia", "ID")
     ];
 
-    /// <summary>
-    ///     Options list for Settings (global) ComboBox.
-    ///     First item is "no translation".
-    /// </summary>
+    /// <summary>Options list for the Settings (global) ComboBox; first item is "no translation".</summary>
     public static IReadOnlyList<TranslationTargetOption> GlobalTargetOptions { get; } =
         BuildOptions(false);
 
-    /// <summary>
-    ///     Options list for Profile ComboBox.
-    ///     First item is "use global setting".
-    /// </summary>
+    /// <summary>Options list for the Profile ComboBox; first item is "use global setting".</summary>
     public static IReadOnlyList<TranslationTargetOption> ProfileTargetOptions { get; } =
         BuildOptions(true);
 
@@ -138,7 +132,6 @@ public sealed record TranslationModelInfo
         return list;
     }
 
-    // --- Model definitions ---
     // All entries are confirmed ONNX quantized exports from the Xenova organisation on HuggingFace.
 
     private static TranslationModelInfo Pair(string src, string tgt, string? repoOverride = null)

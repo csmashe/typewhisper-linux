@@ -17,7 +17,7 @@ public static class AppFormatterService
         ["Typora"] = "markdown",
         ["Bear"] = "markdown",
 
-        // Email clients paste plain text through the current clipboard insertion path.
+        // Email clients: force plaintext (clipboard insertion path).
         ["OUTLOOK"] = "plaintext",
         ["Thunderbird"] = "plaintext",
 

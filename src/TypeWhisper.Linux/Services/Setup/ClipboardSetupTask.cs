@@ -22,7 +22,10 @@ public sealed class ClipboardSetupTask : ISetupTask
     public string Title => "Clipboard helper";
     public SetupTaskSeverity Severity => SetupTaskSeverity.Required;
 
-    public bool AppliesToThisMachine() => true;
+    public bool AppliesToThisMachine()
+    {
+        return true;
+    }
 
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
     {

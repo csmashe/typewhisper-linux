@@ -6,14 +6,11 @@ using TypeWhisper.Linux.Services.Hotkey.Portal;
 namespace TypeWhisper.Linux.Services.Hotkey;
 
 /// <summary>
-///     Picks which <see cref="IGlobalShortcutBackend" /> to use for the current
-///     session.
-///     Selection order on Wayland: evdev → XDG portal → SharpHook (focused-only).
-///     Selection order on X11 or unknown sessions: SharpHook.
-///     The evdev backend reads <c>/dev/input/event*</c>, so we respect a user
-///     opt-out via <c>AppSettings.WaylandEvdevHotkeysEnabled</c> — when set
-///     false the selector skips evdev and falls through to the portal (or
-///     SharpHook if the portal is unavailable).
+///     Picks the <see cref="IGlobalShortcutBackend" /> for the current session.
+///     Wayland order: evdev → XDG portal → SharpHook (focused-only).
+///     X11/unknown: SharpHook. Evdev reads <c>/dev/input/event*</c>, so users can
+///     opt out via <c>AppSettings.WaylandEvdevHotkeysEnabled</c>, which causes the
+///     selector to skip evdev and fall through to portal or SharpHook.
 /// </summary>
 public sealed class BackendSelector
 {

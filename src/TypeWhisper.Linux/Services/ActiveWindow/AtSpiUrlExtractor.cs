@@ -6,22 +6,12 @@ using TypeWhisper.Core.Interfaces;
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
-///     Focused AT-SPI walker that pulls the active URL out of a browser's
-///     address bar. Mirrors the Windows <c>FindEditWithUrl</c> shape:
-///     1. Gate on the focused process name — AT-SPI walks against
-///     Firefox/Zen are 50–200 ms, so we never start the walk unless the
-///     foreground process is one of our known browsers.
-///     2. Cache by <c>(processName, title)</c> — the address bar value
-///     only changes when the title does. Title-key hits skip the walk
-///     entirely.
-///     3. Narrow to the matching AT-SPI app — we don't iterate every
-///     registered application on the bus, we pick the one whose Name
-///     matches the focused process and walk only its tree.
-///     4. Find the first showing/visible entry whose text value passes
-///     <see cref="ActiveWindowService.IsLikelyUrl" />, then normalize.
-///     500 ms total walk budget. The companion title-inference and xclip
-///     paths still live on <see cref="ActiveWindowService" /> — this class
-///     is the AT-SPI layer only.
+///     Focused AT-SPI walker that pulls the active URL from a browser's address bar.
+///     1. Gate on focused process name (AT-SPI walks cost 50–200 ms each).
+///     2. Cache by <c>(processName, title)</c> — the URL changes when the title does; cache hits skip the walk.
+///     3. Narrow to the matching AT-SPI app and walk only its tree.
+///     4. Score showing/visible entries for likely URL candidates; return the best match.
+///     Total walk budget: 2.5 s (the orchestrator's deferred-URL timeout is 4 s).
 /// </summary>
 public sealed class AtSpiUrlExtractor
 {
@@ -34,15 +24,10 @@ public sealed class AtSpiUrlExtractor
 
     private const int AtSpiRoleWindow = 69;
 
-    // AT-SPI is slow on Wayland — each busctl invocation is its own
-    // process plus a D-Bus round-trip, and under load process spawning
-    // alone can be 50-200ms each. The walker also descends into invisible
-    // containers (Firefox keeps the URL bar under structural parents
-    // that aren't themselves SHOWING/VISIBLE), so the total node count
-    // is larger than just the visible subtree. 2.5s gives plenty of
-    // headroom even on a busy system. The orchestrator's deferred-URL
-    // timeout (4s) is strictly larger so the await never beats the
-    // walker to the punch.
+    // Each busctl invocation is a separate process + D-Bus round-trip (50–200 ms each on
+    // a busy system). Firefox's URL bar also sits under invisible structural containers, so
+    // the walker descends into unseen subtrees — 2.5 s gives headroom while remaining
+    // strictly inside the orchestrator's 4 s deferred-URL timeout.
     private static readonly TimeSpan s_walkBudget = TimeSpan.FromMilliseconds(2500);
     private static readonly bool s_isBusctlAvailable = CheckCommandAvailable("busctl", "--version");
 
@@ -71,14 +56,9 @@ public sealed class AtSpiUrlExtractor
 
     private static readonly TimeSpan s_cacheTtl = TimeSpan.FromSeconds(10);
 
-    // Diagnostic logging is normally off so the Error Log isn't polluted
-    // by per-window walk summaries. Flip to true when debugging URL
-    // detection: every unique walk outcome (changed apps-seen count,
-    // changed candidate score, URL becoming available, walker giving up)
-    // emits one line to the General error category. The walk-stats
-    // plumbing stays compiled in either way so re-enabling is one edit.
-    // Kept as static readonly (not const) so the C# compiler doesn't
-    // flag the rest of LogOnce as unreachable code.
+    // Diagnostic logging is off by default — flip to true to emit one line per unique
+    // walk outcome to the Error Log. Kept as `static readonly` (not `const`) so the
+    // compiler doesn't eliminate the LogOnce body as dead code.
     private static readonly bool s_diagnosticLoggingEnabled = false;
 
     private readonly object _cacheLock = new();
@@ -115,16 +95,9 @@ public sealed class AtSpiUrlExtractor
 
         lock (_cacheLock)
         {
-            // Key by (process, title). Title is the only signal we have
-            // for "different tab / different page" — keying on process
-            // alone would happily return the previous tab's URL after a
-            // Firefox tab switch (same process, fresh window). Gmail and
-            // similar apps that bump the title with a notification count
-            // do force a re-walk, but the walker is fast enough on a
-            // configured AT-SPI tree that the extra walks are not
-            // user-perceptible. The TTL caps how long we trust a stale
-            // value for the rare case where the user navigates within
-            // the same tab without the title changing (single-page apps).
+            // Cache key is (process, title): title is the only signal for tab/page change.
+            // Keying on process alone would return the previous tab's URL after a tab switch.
+            // TTL caps stale trust for SPAs where navigation doesn't change the title.
             if (
                 _cachedUrl is not null
                 && string.Equals(
@@ -167,12 +140,8 @@ public sealed class AtSpiUrlExtractor
 
         lock (_cacheLock)
         {
-            // Only write the cache on success — caching a null would
-            // suppress retries for 10s, which is the wrong tradeoff
-            // when the walker is just racing against its own budget.
-            // Updating the (process, title) keys on miss would re-key
-            // the still-valid previous _cachedUrl, so leave the cache
-            // untouched on failure.
+            // Only cache successes — caching null would suppress retries for 10 s,
+            // and updating keys on miss would re-key a still-valid previous URL.
             if (!string.IsNullOrWhiteSpace(url))
             {
                 _cachedProcessName = processHint;
@@ -335,28 +304,20 @@ public sealed class AtSpiUrlExtractor
             return true;
         }
 
-        // AT-SPI app Name often differs from the process name by
-        // capitalization or branding ("Firefox" vs "firefox", "Google
-        // Chrome" vs "chrome"). Match by browser family so the walker
-        // can bridge that gap — but only within the same family.
-        // Without the family gate, when both Firefox and Chrome are on
-        // the AT-SPI bus, the walker would happily accept whichever
-        // app appeared first in the registry and could return Chrome's
-        // address bar URL even though Firefox is the focused window.
+        // AT-SPI app Name often differs from the process name ("Firefox" vs "firefox",
+        // "Google Chrome" vs "chrome"). Match within the same browser family so the walker
+        // can bridge that gap without accepting a different browser's URL. Without the
+        // family gate, when Firefox and Chrome are both on the bus the walker could return
+        // Chrome's URL when Firefox is the focused window.
         var identityFamily = ClassifyBrowserFamily(identity);
         var hintFamily = ClassifyBrowserFamily(processHint);
         return identityFamily is not null && hintFamily is not null && identityFamily == hintFamily;
     }
 
     /// <summary>
-    ///     Buckets a browser identity (AT-SPI app name) or process name
-    ///     into a coarse "family" used to gate fuzzy AT-SPI matching.
-    ///     Forks that share an engine share a family — Firefox + Zen +
-    ///     LibreWolf + Waterfox all bucket to "firefox" because they
-    ///     expose the same Gecko-shaped accessibility tree; Chrome +
-    ///     Chromium + Brave + Edge + Vivaldi + Opera bucket to "chromium"
-    ///     for the same reason. Returns null for anything that isn't a
-    ///     supported browser identity.
+    ///     Maps a browser identity or process name to its engine family ("firefox" or "chromium").
+    ///     Forks sharing an engine share a family (Firefox/Zen/LibreWolf/Waterfox → "firefox";
+    ///     Chrome/Chromium/Brave/Edge/Vivaldi/Opera → "chromium"). Returns null for unknown identities.
     /// </summary>
     private static string? ClassifyBrowserFamily(string? value)
     {
@@ -462,14 +423,9 @@ public sealed class AtSpiUrlExtractor
                 continue;
             }
 
-            // Firefox's accessibility tree has invisible structural
-            // containers between the active window and the URL bar
-            // (toolbar frames whose own SHOWING/VISIBLE flags aren't
-            // set even though their children are visible). Previously
-            // we skipped these AND their children — which meant the
-            // walker pruned away the entire subtree containing the
-            // URL element. Now we score only visible nodes but ALWAYS
-            // descend so the URL bar is reachable from above.
+            // Firefox has invisible structural containers above the URL bar (toolbar frames
+            // whose own SHOWING/VISIBLE flags aren't set). Score only visible nodes but
+            // ALWAYS descend so the URL bar is reachable through those invisible parents.
             var states = GetAccessibleState(address, node);
             var isShowingVisible =
                 ActiveWindowService.HasState(states, AtSpiStateShowing)
@@ -736,9 +692,7 @@ public sealed class AtSpiUrlExtractor
             using var p = Process.Start(
                 new ProcessStartInfo(command, args)
                 {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
                 }
             );
             p?.WaitForExit(1000);
@@ -759,9 +713,7 @@ public sealed class AtSpiUrlExtractor
             using var p = Process.Start(
                 new ProcessStartInfo(fileName, args)
                 {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
                 }
             );
             if (p is null)
@@ -803,9 +755,7 @@ public sealed class AtSpiUrlExtractor
         {
             var startInfo = new ProcessStartInfo(fileName)
             {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
             };
             foreach (var arg in args)
             {

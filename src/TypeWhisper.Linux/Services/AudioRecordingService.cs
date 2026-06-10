@@ -7,11 +7,9 @@ using PaStream = PortAudioSharp.Stream;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Minimal Linux audio capture via PortAudioSharp2. Records 16kHz mono PCM16
-///     suitable for whisper.cpp / SherpaOnnx input. The richer feature set of
-///     the Windows AudioRecordingService (AGC, VAD, preview streams, live level
-///     meter, device polling) is deferred — this is only enough to drive the
-///     voice→text→paste pipeline on Linux.
+///     Linux audio capture via PortAudioSharp2: 16kHz mono PCM16 for
+///     whisper.cpp / SherpaOnnx. Richer Windows features (VAD, device polling)
+///     are deferred — this covers the voice→text→paste pipeline.
 /// </summary>
 public sealed class AudioRecordingService : IDisposable
 {
@@ -29,23 +27,23 @@ public sealed class AudioRecordingService : IDisposable
 
     private readonly List<float[]> _sampleChunks = [];
     private readonly object _sampleLock = new();
-    private int _captureSampleRate = SampleRate;
-    internal int CaptureSampleRate => _captureSampleRate;
     private float _currentRmsLevel;
     private int _disposed;
     private int _isPreviewing;
     private int _isRecording;
     private long _lastLevelPostedTicksUtc;
+
+    // Per-frame tap fired from the PortAudio realtime thread when copySamples is true.
+    // Must be allocation-free and non-blocking; sink borrows processedBuffer (no copy).
+    // A throw detaches the sink via CAS so the same exception can't kill every frame.
+    private Action<float[]>? _liveFrameSink;
     private int _sampleCount;
     private PaStream? _stream;
+    internal int CaptureSampleRate { get; private set; } = SampleRate;
 
-    // PortAudio is initialized lazily on first stream use (EnsureInputStreamStarted)
-    // and by GetInputDevices, both via the idempotent EnsurePortAudioInitialized.
-    // Constructing the service no longer loads the native library, so the
-    // buffer-processing path can be unit-tested on hosts without portaudio.
-    public AudioRecordingService()
-    {
-    }
+    // PortAudio is initialized lazily via EnsurePortAudioInitialized, so
+    // constructing this service doesn't load the native library and the
+    // buffer-processing path can be unit-tested without portaudio.
 
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
     public bool IsPreviewing => Volatile.Read(ref _isPreviewing) == 1;
@@ -55,6 +53,12 @@ public sealed class AudioRecordingService : IDisposable
     public int? SelectedDeviceIndex { get; set; }
 
     public bool WhisperModeEnabled { get; set; }
+
+    internal Action<float[]>? LiveFrameSink
+    {
+        get => _liveFrameSink;
+        set => _liveFrameSink = value;
+    }
 
     public void Dispose()
     {
@@ -124,11 +128,9 @@ public sealed class AudioRecordingService : IDisposable
         {
             _sampleChunks.Clear();
             _sampleCount = 0;
-            // Do NOT reset _captureSampleRate here: EnsureInputStreamStarted may
-            // reuse a stream opened by an in-flight preview, and the actual
-            // negotiated rate is only assigned inside CreateInputStream. Resetting
-            // to SampleRate would make the resampler a no-op and persist samples
-            // captured at the real rate but tagged as 16 kHz — slow/garbled audio.
+            // Do NOT reset _captureSampleRate: EnsureInputStreamStarted may reuse a
+            // preview stream, and the negotiated rate is only assigned inside
+            // CreateInputStream. Resetting early would tag samples at the wrong rate.
         }
 
         if (!EnsureInputStreamStarted())
@@ -137,7 +139,7 @@ public sealed class AudioRecordingService : IDisposable
         }
 
         Trace.WriteLine(
-            $"[AudioRecordingService] Recording started: captureSampleRate={_captureSampleRate} Hz, target={SampleRate} Hz."
+            $"[AudioRecordingService] Recording started: captureSampleRate={CaptureSampleRate} Hz, target={SampleRate} Hz."
         );
 
         Volatile.Write(ref _isRecording, 1);
@@ -268,10 +270,9 @@ public sealed class AudioRecordingService : IDisposable
         return devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
     }
 
-    // Simple per-chunk AGC for "whisper mode": boosts quiet speech so it
-    // registers reliably with noise-gated transcription models. The gain
-    // is capped at AgcMaxGain (20×) to avoid amplifying silence into noise,
-    // and clamped to [-1, 1] to prevent clipping artefacts.
+    // Per-chunk AGC for "whisper mode": boosts quiet speech for noise-gated
+    // models. Gain capped at 20× to avoid amplifying silence; samples clamped
+    // to [-1, 1] to prevent clipping.
     internal static float[] ApplyWhisperModeGain(float[] samples, bool whisperModeEnabled)
     {
         if (!whisperModeEnabled || samples.Length == 0)
@@ -316,9 +317,8 @@ public sealed class AudioRecordingService : IDisposable
         return (float)Math.Sqrt(sumSquares / samples.Length);
     }
 
-    // Linear interpolation resampler. Quality is adequate for speech (the
-    // band of interest is well below Nyquist for any of our capture rates)
-    // and avoids the dependency on a native resampling library.
+    // Linear-interpolation resampler: adequate quality for speech (well below
+    // Nyquist for any capture rate) without a native resampling library.
     internal static float[] ResampleToSampleRate(
         float[] samples,
         int sourceSampleRate,
@@ -350,20 +350,30 @@ public sealed class AudioRecordingService : IDisposable
         return output;
     }
 
-    public event EventHandler<float>? LevelChanged;
-
-    // Per-frame tap fired from the PortAudio realtime thread when copySamples
-    // is true. Realtime-thread contract: invocation must be allocation-free
-    // and non-blocking; the sink borrows processedBuffer (freshly allocated
-    // per callback — no defensive copy). A throw is caught and the sink is
-    // detached so the same exception can't fire every frame and kill capture.
-    // Stays null in production until the Phase-4 coordinator wires it.
-    private Action<float[]>? _liveFrameSink;
-    internal Action<float[]>? LiveFrameSink
+    internal StreamCallbackResult ProcessAudioBufferForTest(float[] frame, bool copySamples)
     {
-        get => _liveFrameSink;
-        set => _liveFrameSink = value;
+        var handle = GCHandle.Alloc(frame, GCHandleType.Pinned);
+        try
+        {
+            return ProcessAudioBuffer(
+                handle.AddrOfPinnedObject(),
+                (uint)frame.Length,
+                copySamples
+            );
+        }
+        finally
+        {
+            handle.Free();
+        }
     }
+
+    internal static short ToPcm16(float sample)
+    {
+        var clamped = Math.Clamp(sample, -1f, 1f);
+        return (short)(clamped * short.MaxValue);
+    }
+
+    public event EventHandler<float>? LevelChanged;
 
     private StreamCallbackResult InputAudioCallback(
         IntPtr input,
@@ -407,10 +417,9 @@ public sealed class AudioRecordingService : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    // Catch-Exception is deliberate: the only worse outcome is
-                    // crashing the PortAudio realtime thread. Detach via CAS so
-                    // a newer sink installed by a concurrent stop/start (Phase 4
-                    // session rewiring) isn't clobbered by an older throw.
+                    // Deliberate catch-all: crashing the PortAudio realtime thread
+                    // is worse. CAS detach avoids clobbering a newer sink installed
+                    // by a concurrent stop/start.
                     Trace.WriteLine(
                         $"[AudioRecordingService] LiveFrameSink threw, detaching: {ex.Message}"
                     );
@@ -420,23 +429,6 @@ public sealed class AudioRecordingService : IDisposable
         }
 
         return StreamCallbackResult.Continue;
-    }
-
-    internal StreamCallbackResult ProcessAudioBufferForTest(float[] frame, bool copySamples)
-    {
-        var handle = GCHandle.Alloc(frame, GCHandleType.Pinned);
-        try
-        {
-            return ProcessAudioBuffer(
-                handle.AddrOfPinnedObject(),
-                (uint)frame.Length,
-                copySamples
-            );
-        }
-        finally
-        {
-            handle.Free();
-        }
     }
 
     private void UpdateLevel(float level)
@@ -464,11 +456,9 @@ public sealed class AudioRecordingService : IDisposable
 
     private bool ShouldPostLevelUpdate(long nowTicks)
     {
-        // Rate-limit UI-thread posts to ~15 Hz (66 ms). The callback fires
-        // from the PortAudio realtime thread; flooding the UI dispatcher
-        // at callback rate (~30 Hz for 512-frame buffers at 16 kHz) causes
-        // visible input lag. CAS loop ensures only one caller wins even when
-        // multiple callbacks race.
+        // Rate-limit UI posts to ~15 Hz (66 ms): the PortAudio callback fires
+        // at ~30 Hz and flooding the dispatcher causes visible input lag.
+        // CAS loop ensures only one concurrent caller wins.
         var minIntervalTicks = TimeSpan.FromMilliseconds(66).Ticks;
 
         while (true)
@@ -516,10 +506,8 @@ public sealed class AudioRecordingService : IDisposable
             return false;
         }
 
-        // CreateInputStream returns an already-started stream so we commit
-        // _captureSampleRate only after the negotiated rate has been validated
-        // by an actual Start() call (the PaStream constructor alone accepts
-        // rates that the underlying device later rejects at start time).
+        // _captureSampleRate is committed only after Start() succeeds — the
+        // PaStream constructor accepts rates that the device rejects at start time.
         _stream = CreateInputStream(deviceIndex.Value, InputAudioCallback);
         return true;
     }
@@ -557,7 +545,7 @@ public sealed class AudioRecordingService : IDisposable
             {
                 stream = CreateInputStream(deviceIndex, inputInfo, sampleRate, callback);
                 stream.Start();
-                _captureSampleRate = sampleRate;
+                CaptureSampleRate = sampleRate;
                 Trace.WriteLine(
                     $"[AudioRecordingService] Opened input stream: device={deviceIndex} ('{inputInfo.name}'), "
                     + $"negotiatedRate={sampleRate} Hz, deviceDefaultRate={inputInfo.defaultSampleRate} Hz, "
@@ -615,11 +603,9 @@ public sealed class AudioRecordingService : IDisposable
 
     private static IReadOnlyList<int> CandidateSampleRates(double defaultSampleRate)
     {
-        // Try the device's native rate first so PortAudio doesn't have to
-        // resample internally. Fall through to common rates in descending
-        // order, ending with the transcription target (16 kHz); the
-        // captured audio is always resampled to 16 kHz in software before
-        // being handed to the transcription engine.
+        // Try the device's native rate first to avoid PortAudio internal resampling;
+        // fall through common rates in descending order. Captured audio is always
+        // resampled to 16 kHz in software before transcription.
         var rates = new List<int>();
         AddRate((int)Math.Round(defaultSampleRate));
         AddRate(48000);
@@ -665,10 +651,10 @@ public sealed class AudioRecordingService : IDisposable
                 offset += chunk.Length;
             }
 
-            var outputSamples = ResampleToSampleRate(samples, _captureSampleRate, SampleRate);
+            var outputSamples = ResampleToSampleRate(samples, CaptureSampleRate, SampleRate);
             Trace.WriteLine(
-                $"[AudioRecordingService] Finalized WAV: capturedSamples={samples.Length} @ {_captureSampleRate} Hz "
-                + $"({samples.Length / (double)_captureSampleRate:F2}s real-time), "
+                $"[AudioRecordingService] Finalized WAV: capturedSamples={samples.Length} @ {CaptureSampleRate} Hz "
+                + $"({samples.Length / (double)CaptureSampleRate:F2}s real-time), "
                 + $"outputSamples={outputSamples.Length} @ {SampleRate} Hz "
                 + $"({outputSamples.Length / (double)SampleRate:F2}s tagged)."
             );
@@ -709,15 +695,9 @@ public sealed class AudioRecordingService : IDisposable
         return ms.ToArray();
     }
 
-    internal static short ToPcm16(float sample)
-    {
-        var clamped = Math.Clamp(sample, -1f, 1f);
-        return (short)(clamped * short.MaxValue);
-    }
-
-    // Idempotent: only initializes (and bumps the count to 1) on first call.
-    // GetInputDevices calls this too; without idempotence we'd leak the count
-    // every enumeration and Dispose would never terminate PortAudio.
+    // Idempotent: initializes on first call only. GetInputDevices also calls
+    // this; without idempotence the count would leak and Dispose would never
+    // terminate PortAudio.
     private static void EnsurePortAudioInitialized()
     {
         lock (s_paInitLock)

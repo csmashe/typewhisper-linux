@@ -1,23 +1,16 @@
 namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
-///     Ensures TypeWhisper can read the focused window's app/title (and browser
-///     URL) so per-app profiles can match. On GNOME this needs the "Window
-///     Calls" shell extension, which can only be installed from the browser.
-///     The task is a verified two-step: first "Open install page", then — after
-///     the user installs it — "Check installation", which only marks the task
-///     done once the extension's D-Bus object actually responds. It never marks
-///     off on trust. Recommended rather than required: dictation works without
-///     it, only window-aware profile switching is affected. The task simply
-///     doesn't apply off GNOME (other desktops expose window info natively).
+///     Ensures TypeWhisper can read the focused window's app/title/URL for per-app profile
+///     matching. On GNOME this requires the "Window Calls" shell extension (browser install).
+///     Two-step: open install page, then verify via D-Bus probe — never marks done on trust.
+///     Recommended (not required); other desktops expose window info natively.
 /// </summary>
 public sealed class ActiveWindowSetupTask : ISetupTask
 {
     private readonly GnomeWindowCallsSetupHelper _helper;
 
-    // Set once we've opened the install page, so the action flips from
-    // "Open install page" to "Check installation" — the user does the manual
-    // browser install in between, then clicks to verify.
+    // Flips the action label from "Open install page" to "Check installation" after the page opens.
     private bool _installPageOpened;
 
     public ActiveWindowSetupTask(GnomeWindowCallsSetupHelper helper)
@@ -29,7 +22,10 @@ public sealed class ActiveWindowSetupTask : ISetupTask
     public string Title => "Active-window detection";
     public SetupTaskSeverity Severity => SetupTaskSeverity.Recommended;
 
-    public bool AppliesToThisMachine() => _helper.IsApplicable();
+    public bool AppliesToThisMachine()
+    {
+        return _helper.IsApplicable();
+    }
 
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
     {
@@ -43,9 +39,7 @@ public sealed class ActiveWindowSetupTask : ISetupTask
             );
         }
 
-        // After opening the page, the action becomes an explicit verification
-        // step — clicking it re-probes and only the real check (in
-        // EvaluateAsync, run right after) can flip this to Satisfied.
+        // Only the real D-Bus probe (re-evaluation after the action) can flip this to Satisfied.
         return Task.FromResult(
             _installPageOpened
                 ? new SetupTaskState(
@@ -66,15 +60,13 @@ public sealed class ActiveWindowSetupTask : ISetupTask
 
     public Task<SetupActionOutcome> RunActionAsync(CancellationToken ct)
     {
-        // If it's already there (e.g. the user installed it), the follow-up
-        // re-evaluation will mark the task done — don't reopen the page.
+        // Re-evaluation after this action will mark done if it's now installed.
         if (_helper.IsCurrentlyInstalled())
         {
             return Task.FromResult(new SetupActionOutcome(true, "Window Calls extension detected."));
         }
 
-        // Verification step: they said they installed it but the D-Bus probe
-        // still doesn't see it. Report that honestly; the task stays NeedsAction.
+        // D-Bus probe still not responding after install — report honestly, task stays NeedsAction.
         if (_installPageOpened)
         {
             return Task.FromResult(

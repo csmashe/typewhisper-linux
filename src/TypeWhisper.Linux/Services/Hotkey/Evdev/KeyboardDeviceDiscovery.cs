@@ -6,17 +6,12 @@ using System.Text;
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 
 /// <summary>
-///     Enumerates keyboard-capable <c>/dev/input/eventN</c> nodes by probing each
-///     with <c>ioctl(EVIOCGBIT)</c>. We can't rely on udev's
-///     <c>by-path/*-event-kbd</c> symlinks: virtual keyboards created via uinput
-///     (input remappers like kanata / keyd / xremap) never get those symlinks,
-///     and when such a remapper grabs the physical keyboard and re-emits
-///     keystrokes through its own virtual device, the global hotkey arrives on a
-///     device a symlink-only scan would miss entirely.
-///     TypeWhisper's own ydotool injection device is excluded by name —
-///     <see cref="EvdevGlobalShortcutBackend" /> aggregates modifier state
-///     globally across every watched device, so watching our own synthetic
-///     output (e.g. Ctrl+V paste chords) could form phantom hotkey chords.
+///     Enumerates keyboard-capable <c>/dev/input/eventN</c> nodes via
+///     <c>ioctl(EVIOCGBIT)</c>. Udev <c>by-path/*-event-kbd</c> symlinks are
+///     not used because virtual keyboards created by input remappers (kanata,
+///     keyd, xremap) never get them — hotkeys would be missed. TypeWhisper's own
+///     ydotool device is excluded by name to prevent synthetic Ctrl+V chords from
+///     forming phantom hotkeys against real keypresses.
 /// </summary>
 internal static class KeyboardDeviceDiscovery
 {
@@ -72,9 +67,8 @@ internal static class KeyboardDeviceDiscovery
     }
 
     /// <summary>
-    ///     True when the EV_KEY capability bitmap declares the representative
-    ///     typing keys — the signal that the device is a keyboard (physical or
-    ///     virtual) rather than a button, switch, lid sensor or mouse.
+    ///     True when the EV_KEY capability bitmap includes representative typing
+    ///     keys, distinguishing keyboards from buttons, switches, and mice.
     /// </summary>
     internal static bool LooksLikeKeyboard(ReadOnlySpan<byte> evKeyBits)
     {
@@ -85,11 +79,9 @@ internal static class KeyboardDeviceDiscovery
     }
 
     /// <summary>
-    ///     True for TypeWhisper's own ydotool injection device. Its synthetic
-    ///     keystrokes (including Ctrl+V paste chords) must not be watched:
-    ///     <see cref="EvdevGlobalShortcutBackend" /> aggregates modifier state
-    ///     globally, so our own output could otherwise form phantom hotkey
-    ///     chords with a real keypress on the physical keyboard.
+    ///     True for TypeWhisper's own ydotool injection device, which must not be
+    ///     watched — its synthetic Ctrl+V chords could form phantom hotkey matches
+    ///     against real keypresses via the global modifier-state aggregation.
     /// </summary>
     internal static bool IsExcludedByName(string deviceName)
     {
@@ -97,10 +89,8 @@ internal static class KeyboardDeviceDiscovery
     }
 
     /// <summary>
-    ///     Opens <paramref name="node" /> and probes it: keep it when it is
-    ///     keyboard-capable and not TypeWhisper's own ydotool output device. A
-    ///     node we can't open (permissions, already removed) is treated as
-    ///     not-a-keyboard — we could not watch it anyway.
+    ///     Opens the node, checks capability bits and device name. Nodes that
+    ///     can't be opened (permissions, removed) are treated as non-keyboards.
     /// </summary>
     private static bool IsKeyboardNode(string node)
     {

@@ -5,12 +5,10 @@ using System.Diagnostics;
 namespace TypeWhisper.Linux.Services.Hotkey;
 
 /// <summary>
-///     SharpHook-backed implementation. Works reliably on X11; on Wayland the
-///     hook only receives events while the application owns focus — that's the
-///     gap Phase 2's evdev backend closes.
-///     Hands off the configured-chord state machine to a shared
-///     <see cref="ShortcutDispatcher" /> so user-visible press/release/mode
-///     behavior stays identical across SharpHook and evdev.
+///     SharpHook-backed implementation. Works globally on X11; on Wayland only
+///     receives events while the app owns focus (the evdev backend fills that gap).
+///     Delegates chord state to <see cref="ShortcutDispatcher" /> so behaviour
+///     is identical across SharpHook and evdev.
 /// </summary>
 public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
 {
@@ -58,10 +56,8 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
     public bool SupportsPressRelease => true;
 
     /// <summary>
-    ///     SharpHook hooks the X11 server (global) on X11 sessions but only
-    ///     receives events while TypeWhisper owns the keyboard focus under
-    ///     Wayland. Report scope honestly so the status panel doesn't mislead
-    ///     Wayland users into thinking their hotkey works in any window.
+    ///     Global on X11; focus-only on Wayland. Reported honestly so the status
+    ///     panel doesn't mislead Wayland users.
     /// </summary>
     public bool IsGlobalScope =>
         !string.Equals(
@@ -160,10 +156,8 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
             _running = false;
         }
 
-        // libuiohook's Dispose blocks on the hook thread stopping; run it off
-        // the caller's thread so DisposeAsync doesn't deadlock on shutdown.
-        // The 1-second timeout is a safety net — we don't block the application
-        // exit indefinitely if the hook thread hangs.
+        // libuiohook's Dispose blocks until the hook thread stops; run it off
+        // the caller's thread. 1-second timeout prevents hanging on exit.
         var disposeTask = Task.Run(() =>
         {
             try
@@ -189,11 +183,9 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
         _dispatcher.Handle(e.Data.KeyCode, NormalizeMask(e.Data.KeyCode, e.RawEvent.Mask), false);
     }
 
-    // When the trigger key is itself a side-specific modifier, libuiohook's
-    // mask may include the bit for that key on press (and lose it on release).
-    // Mask it out so a bare "Right Ctrl" press matches a `(VcRightControl,
-    // None)` binding regardless of platform — mirrors the equivalent strip
-    // in EvdevGlobalShortcutBackend.OnKeyEvent.
+    // libuiohook may include a modifier key's own bit in the mask on press.
+    // Strip it so a bare "Right Ctrl" matches a (VcRightControl, None) binding —
+    // mirrors the same strip in EvdevGlobalShortcutBackend.OnKeyEvent.
     private static ModifierMask NormalizeMask(KeyCode key, ModifierMask mask)
     {
         var modBit = key switch

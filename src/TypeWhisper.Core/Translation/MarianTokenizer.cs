@@ -36,7 +36,6 @@ public sealed class MarianTokenizer
         var vocab = new Dictionary<string, (int Id, float Score)>();
         var idToToken = new Dictionary<int, string>();
 
-        // Parse model.vocab from tokenizer.json
         var model = root.GetProperty("model");
         var vocabArray = model.GetProperty("vocab");
 
@@ -49,14 +48,13 @@ public sealed class MarianTokenizer
             idToToken[id] = token;
         }
 
-        // Find unk token id
         var unkId = 0;
         if (model.TryGetProperty("unk_id", out var unkProp))
         {
             unkId = unkProp.GetInt32();
         }
 
-        // Override with added_tokens if present (some tokenizer.json files define token→id mapping there)
+        // Some tokenizer.json files override token→id mapping in added_tokens.
         if (root.TryGetProperty("added_tokens", out var addedTokens))
         {
             foreach (var at in addedTokens.EnumerateArray())
@@ -87,7 +85,6 @@ public sealed class MarianTokenizer
 
         var tokens = new List<int>();
 
-        // Whitespace-split, then each word gets metaspace prefix
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         for (var w = 0; w < words.Length; w++)
         {
@@ -124,14 +121,10 @@ public sealed class MarianTokenizer
         return text.Trim();
     }
 
-    /// <summary>
-    ///     Viterbi algorithm for optimal Unigram segmentation.
-    /// </summary>
+    // Viterbi optimal Unigram segmentation. bestScore[i]/bestLen[i] = best ending at position i.
     private List<int> ViterbiSegment(string word)
     {
         var n = word.Length;
-
-        // best[i] = (score, tokenLength) for best segmentation ending at position i
         var bestScore = new float[n + 1];
         var bestLen = new int[n + 1];
         Array.Fill(bestScore, float.NegativeInfinity);
@@ -139,10 +132,8 @@ public sealed class MarianTokenizer
 
         for (var end = 1; end <= n; end++)
         {
-            // Try all substrings ending at 'end'
-            var maxStart =
-                Math.Max(0,
-                    end - 64); // real SentencePiece tokens are rarely longer than ~20 chars; 64 is a safe upper bound
+            // 64-char window: SentencePiece tokens are rarely >20 chars; 64 is a safe bound.
+            var maxStart = Math.Max(0, end - 64);
             for (var start = maxStart; start < end; start++)
             {
                 var substr = word[start..end];
@@ -159,8 +150,7 @@ public sealed class MarianTokenizer
                 }
             }
 
-            // No vocab entry covers this position — fall back to the single character as UNK
-            // with a large negative score so the Viterbi path avoids it unless there is no alternative
+            // No vocab entry covers this position — emit single-char UNK with penalty.
             if (bestScore[end] == float.NegativeInfinity)
             {
                 bestScore[end] = bestScore[end - 1] + -100f;
@@ -168,7 +158,6 @@ public sealed class MarianTokenizer
             }
         }
 
-        // Backtrack to find the tokens
         var result = new List<int>();
         var pos = n;
         while (pos > 0)

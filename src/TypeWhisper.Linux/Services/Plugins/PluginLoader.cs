@@ -62,17 +62,13 @@ public sealed class PluginAssemblyLoadContext : AssemblyLoadContext
 }
 
 /// <summary>
-///     Discovers and loads plugins from one or more search directories.
-///     Each plugin resides in a subdirectory containing a manifest.json file.
-///     Linux port: the Windows "Mark of the Web" unblocking step is a no-op
-///     here — Linux doesn't have NTFS alternate data streams or SmartScreen.
+///     Discovers and loads plugins from subdirectories containing a manifest.json.
+///     The Windows "Mark of the Web" unblocking step is a no-op on Linux
+///     (no NTFS alternate data streams or SmartScreen).
 /// </summary>
 public sealed class PluginLoader
 {
-    private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
+    private static readonly JsonSerializerOptions s_manifestJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private readonly List<PluginLoadFailure> _lastLoadFailures = [];
 
@@ -214,9 +210,8 @@ public sealed class PluginLoader
             return null;
         }
 
-        // Optional interface: plugins that need a stable writable directory
-        // (for model files, caches, etc.) declare IPluginDataLocationAware and
-        // receive the path before ActivateAsync is called by PluginManager.
+        // Plugins that need a stable writable directory (models, caches) declare
+        // IPluginDataLocationAware and receive the path before ActivateAsync.
         if (instance is IPluginDataLocationAware dataLocationAware)
         {
             dataLocationAware.SetDataDirectory(

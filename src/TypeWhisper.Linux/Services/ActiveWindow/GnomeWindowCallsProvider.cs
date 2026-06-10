@@ -7,16 +7,12 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
-///     GNOME Wayland active-window provider backed by the user-installed
-///     "Window Calls" GNOME Shell extension
-///     (<c>window-calls@domandoman.xyz</c>). The extension exports
-///     <c>org.gnome.Shell.Extensions.Windows</c> on the session bus, which
-///     sidesteps the modern <c>org.gnome.Shell.Introspect.GetWindows</c>
-///     AccessDenied policy.
-///     This provider sits *before* <see cref="GnomeShellActiveWindowProvider" />
-///     in the chain: when the extension is installed it's the fast, reliable
-///     path; when it isn't, the call fails fast (UnknownMethod / ServiceUnknown
-///     in &lt; 30 ms) and the chain falls through.
+///     GNOME Wayland active-window provider backed by the "Window Calls"
+///     extension (<c>window-calls@domandoman.xyz</c>), which exports
+///     <c>org.gnome.Shell.Extensions.Windows</c> to sidestep the modern
+///     <c>GetWindows</c> AccessDenied policy. Sits before
+///     <see cref="GnomeShellActiveWindowProvider" /> in the chain; fails fast
+///     (&lt;30 ms) when the extension is absent.
 /// </summary>
 public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
 {
@@ -83,15 +79,10 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
                 return null;
             }
 
-            // Prefer /proc/PID/comm so the ProcessName matches the X11
-            // path (xdotool → getwindowpid → Process.GetProcessById). User
-            // profiles built up against X11 list comm-style names like
-            // "soffice.bin", "firefox", "ghostty" — using the wm_class
-            // identity here would silently break those profiles on
-            // Wayland. wm_class is kept as a fallback for the rare case
-            // where /proc/PID/comm isn't readable, and continues to live
-            // on Snapshot.AppId for any caller that wants the Wayland
-            // identity directly.
+            // Prefer /proc/PID/comm so ProcessName matches the X11 path
+            // (xdotool → comm-style names like "firefox", "soffice.bin").
+            // Using wm_class here would silently break profiles built on X11.
+            // wm_class is kept as a fallback and is also exposed as Snapshot.AppId.
             var rawIdentity = focused.Value.Pid is > 0
                 ? TryReadProcComm(focused.Value.Pid.Value)
                 : null;
@@ -117,19 +108,16 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
         }
         catch
         {
-            // Includes OperationCanceledException: the extension call is
-            // expected to fail fast (UnknownMethod / ServiceUnknown < 30 ms)
-            // so treating cancellation as a miss lets the chain fall through
-            // to GnomeShellActiveWindowProvider without surfacing the token.
+            // Includes OperationCanceledException — treat as a miss so the
+            // chain falls through to GnomeShellActiveWindowProvider.
             return null;
         }
     }
 
     /// <summary>
-    ///     Parses the focused window out of the gvariant-wrapped JSON returned
-    ///     by <c>Windows.List()</c>. Returns null when no window has
-    ///     <c>focus: true</c> (transient state during workspace switches) or
-    ///     when the payload is malformed.
+    ///     Parses the focused window from the gvariant-wrapped JSON returned by
+    ///     <c>Windows.List()</c>. Returns null when no window has focus (e.g.
+    ///     during workspace switches) or when the payload is malformed.
     /// </summary>
     internal static FocusedWindow? ParseFocusedWindow(string gvariantOutput)
     {
@@ -189,11 +177,9 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
     }
 
     /// <summary>
-    ///     Strips the gvariant tuple wrapper (<c>('...',)</c>) and unescapes
-    ///     the inner single-quoted string. gdbus output escapes embedded
-    ///     single quotes as <c>\'</c> and literal backslashes as <c>\\</c>
-    ///     inside that string. We pass everything else through so the embedded
-    ///     JSON keeps its own backslash escapes (<c>\n</c>, <c>\"</c>, ...).
+    ///     Strips the gvariant tuple wrapper (<c>('...',)</c>) and unescapes the
+    ///     inner single-quoted string. gdbus escapes <c>\'</c> and <c>\\</c>;
+    ///     everything else passes through so embedded JSON escapes are preserved.
     /// </summary>
     internal static string? UnwrapGvariantString(string gvariantOutput)
     {

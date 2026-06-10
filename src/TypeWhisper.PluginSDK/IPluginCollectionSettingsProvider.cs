@@ -17,10 +17,9 @@ public interface IPluginCollectionSettingsProvider
     );
 
     /// <summary>
-    ///     Replaces the items for the given collection key. Always returns a
-    ///     <see cref="PluginSettingsValidationResult" />: on success <c>IsSuccess</c>
-    ///     is true; on failure <c>IsSuccess</c> is false and <c>Message</c>
-    ///     explains why the new items were rejected.
+    ///     Replaces the items for the given collection key. Returns a
+    ///     <see cref="PluginSettingsValidationResult" /> — check <c>IsSuccess</c>;
+    ///     on failure <c>Message</c> explains why the items were rejected.
     /// </summary>
     Task<PluginSettingsValidationResult> SetItemsAsync(
         string collectionKey,
