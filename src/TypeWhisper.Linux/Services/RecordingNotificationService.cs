@@ -32,6 +32,17 @@ public sealed partial class RecordingNotificationService : IDisposable
     private bool _wasRecording;
     private uint _activeId;
 
+    // Monotonic state-change counter. Every Start/Stop edge bumps it under
+    // _gate and hands the new value to the show/close it schedules. Because
+    // ShowAsync/CloseAsync are fire-and-forget and await a multi-second gdbus
+    // call, a rapid Start→Stop can finish out of order: a Stop's CloseAsync
+    // can read _activeId == 0 (the in-flight Show hasn't stored its id yet)
+    // and no-op, then the Show lands its id and the "🔴 Recording" popup
+    // sticks forever. Each handler re-checks this generation after its await
+    // and bails (closing its own just-created id) if a newer edge superseded
+    // it — so the last edge always wins.
+    private uint _generation;
+
     public RecordingNotificationService(
         DictationOrchestrator dictation,
         ISettingsService settings,
@@ -80,17 +91,23 @@ public sealed partial class RecordingNotificationService : IDisposable
         }
 
         _wasRecording = state.IsRecording;
+        uint generation;
+        lock (_gate)
+        {
+            generation = ++_generation;
+        }
+
         if (state.IsRecording)
         {
-            _ = ShowAsync();
+            _ = ShowAsync(generation);
         }
         else
         {
-            _ = CloseAsync();
+            _ = CloseAsync(generation);
         }
     }
 
-    private async Task ShowAsync()
+    private async Task ShowAsync(uint generation)
     {
         // Reuse the previous id as replaces_id so a notification that lingered
         // (e.g. a rapid stop that raced an in-flight show) is replaced in place
@@ -137,12 +154,27 @@ public sealed partial class RecordingNotificationService : IDisposable
             // gdbus prints "(uint32 N,)" — anchor on "uint32 " so we don't grab
             // the "32" out of the type name itself.
             var match = NotificationIdRegex().Match(result.StandardOutput);
-            if (match.Success && uint.TryParse(match.Groups[1].Value, out var id))
+            if (!match.Success || !uint.TryParse(match.Groups[1].Value, out var id))
             {
-                lock (_gate)
+                return;
+            }
+
+            bool superseded;
+            lock (_gate)
+            {
+                // A newer Start/Stop edge fired while this Notify was in flight.
+                // Recording has since stopped (or restarted with its own show),
+                // so don't adopt this id — dismiss it ourselves below.
+                superseded = generation != _generation;
+                if (!superseded)
                 {
                     _activeId = id;
                 }
+            }
+
+            if (superseded)
+            {
+                await CloseByIdAsync(id).ConfigureAwait(false);
             }
         }
         catch
@@ -151,11 +183,19 @@ public sealed partial class RecordingNotificationService : IDisposable
         }
     }
 
-    private async Task CloseAsync()
+    private async Task CloseAsync(uint generation)
     {
         uint id;
         lock (_gate)
         {
+            // Ignore a late Stop that a newer Start has already superseded —
+            // closing here would dismiss the notification the new recording
+            // just put up and leave it with none.
+            if (generation != _generation)
+            {
+                return;
+            }
+
             id = _activeId;
             _activeId = 0;
         }
@@ -165,6 +205,11 @@ public sealed partial class RecordingNotificationService : IDisposable
             return;
         }
 
+        await CloseByIdAsync(id).ConfigureAwait(false);
+    }
+
+    private async Task CloseByIdAsync(uint id)
+    {
         try
         {
             await _runner
@@ -197,7 +242,7 @@ public sealed partial class RecordingNotificationService : IDisposable
         // Prefer the icon the installer drops under the icon theme; fall back to
         // the bundled resource shipped next to the binary; last resort a themed
         // name (notification daemons resolve it from the icon theme).
-        var installed = Path.Combine(
+        var installed = Path.Join(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "icons",
             "hicolor",
@@ -210,7 +255,7 @@ public sealed partial class RecordingNotificationService : IDisposable
             return installed;
         }
 
-        var bundled = Path.Combine(AppContext.BaseDirectory, "Resources", "typewhisper-128.png");
+        var bundled = Path.Join(AppContext.BaseDirectory, "Resources", "typewhisper-128.png");
         return File.Exists(bundled) ? bundled : "typewhisper";
     }
 
@@ -221,7 +266,14 @@ public sealed partial class RecordingNotificationService : IDisposable
             _dictation.OverlayStateChanged -= OnOverlayStateChanged;
         }
 
-        _ = CloseAsync();
+        // Teardown — supersede any in-flight show and dismiss whatever is up.
+        uint generation;
+        lock (_gate)
+        {
+            generation = ++_generation;
+        }
+
+        _ = CloseAsync(generation);
     }
 
     [GeneratedRegex(@"uint32 (\d+)")]

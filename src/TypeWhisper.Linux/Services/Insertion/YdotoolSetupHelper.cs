@@ -615,12 +615,14 @@ public sealed class YdotoolSetupHelper
                 // is created — that's what applies the input group + uaccess ACL.
                 + "  sudo modprobe uinput\n"
                 + "  sudo udevadm trigger --subsystem-match=misc --action=change\n"
-                + "  systemctl --user enable --now ydotoold.service\n"
-                // enable --now won't restart an already-running ydotoold, so a
-                // daemon that started before the rule's uaccess ACL landed keeps
-                // a stale EACCES /dev/uinput handle. Restart forces a fresh open
-                // with current perms — mirrors the automated path's restart.
-                + "  systemctl --user restart ydotoold.service"
+                // Don't hand the user `systemctl --user enable --now ydotoold.service`
+                // here: on a clean install no user unit exists yet (we return before
+                // EnsureUserUnitExistsAsync runs), so that command would just fail
+                // with "Unit ydotoold.service not found". Once the steps above make
+                // /dev/uinput accessible, rerunning setup skips the pkexec path
+                // entirely and creates + enables + restarts the unit for you.
+                + "Then reopen Settings → Text insertion and run setup again — "
+                + "TypeWhisper will create and start the ydotoold user service."
             );
         }
 

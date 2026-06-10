@@ -16,7 +16,7 @@ namespace TypeWhisper.Linux.Services;
 public sealed class SoundFeedbackService
 {
     private static readonly string SoundsDir =
-        Path.Combine(AppContext.BaseDirectory, "Resources", "Sounds");
+        Path.Join(AppContext.BaseDirectory, "Resources", "Sounds");
 
     // First available PCM player on PATH, resolved once. pw-play and paplay
     // route through PipeWire / PulseAudio; aplay is the ALSA fallback. All
@@ -38,7 +38,7 @@ public sealed class SoundFeedbackService
             return;
         }
 
-        var path = Path.Combine(SoundsDir, fileName);
+        var path = Path.Join(SoundsDir, fileName);
         if (!File.Exists(path))
         {
             return;
@@ -86,45 +86,14 @@ public sealed class SoundFeedbackService
 
     private static string? ResolvePlayer()
     {
-        foreach (var candidate in new[] { "pw-play", "paplay", "aplay" })
-        {
-            if (OnPath(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
-    }
-
-    private static bool OnPath(string name)
-    {
-        var paths = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(paths))
-        {
-            return false;
-        }
-
-        foreach (var dir in paths.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrEmpty(dir))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (File.Exists(Path.Combine(dir, name)))
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                // Ignore malformed PATH entries.
-            }
-        }
-
-        return false;
+        // Probe PATH through the same helper SystemCommandAvailabilityService
+        // uses for HasAudioPlayer (same candidate order), so Player is non-null
+        // exactly when HasAudioPlayer is true. A divergent probe here (e.g. not
+        // trimming PATH entries) could leave Player null while HasAudioPlayer
+        // reports true, silently no-oping every cue.
+        return Array.Find(
+            new[] { "pw-play", "paplay", "aplay" },
+            SystemCommandAvailabilityService.IsCommandAvailable
+        );
     }
 }

@@ -35,9 +35,6 @@ internal sealed record RecordingContext(
 
 public sealed class DictationOrchestrator : IDisposable
 {
-    // Terminal feedback text for a cancelled dictation. Surfaced with
-    // isError=false, so the success cue in ShowFeedback excludes it.
-    private const string CanceledFeedbackText = "Canceled";
 
     private readonly ActiveWindowService _activeWindow;
     private readonly AudioRecordingService _audio;
@@ -1271,7 +1268,7 @@ public sealed class DictationOrchestrator : IDisposable
         {
             Trace.WriteLine($"[Dictation] Model load canceled by user ('{effectiveModelId}').");
             ReportStatus(context, "Canceled");
-            ShowFeedback(context, "Canceled", false);
+            ShowFeedback(context, "Canceled", false, isCanceled: true);
             PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
             return;
         }
@@ -1389,7 +1386,7 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 Trace.WriteLine("[Dictation] Transcription canceled by user.");
                 ReportStatus(context, "Canceled");
-                ShowFeedback(context, "Canceled", false);
+                ShowFeedback(context, "Canceled", false, isCanceled: true);
                 PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
                 return;
             }
@@ -1671,7 +1668,7 @@ public sealed class DictationOrchestrator : IDisposable
                     + $"(action='{actionPlugin?.ActionId ?? "<none>"}')."
                 );
                 ReportStatus(context, "Canceled");
-                ShowFeedback(context, "Canceled", false);
+                ShowFeedback(context, "Canceled", false, isCanceled: true);
                 return;
             }
             catch (Exception ex)
@@ -1711,8 +1708,10 @@ public sealed class DictationOrchestrator : IDisposable
                     or InsertionResult.ActionFailed
                     or InsertionResult.MissingClipboardTool
                     or InsertionResult.MissingPasteTool;
+            var isCanceled =
+                insertion is InsertionResult.NoText && commandResult.CancelInsertion;
             ReportStatus(context, completionMessage);
-            ShowFeedback(context, completionMessage, isError);
+            ShowFeedback(context, completionMessage, isError, isCanceled);
 
             if (
                 insertion
@@ -1770,7 +1769,7 @@ public sealed class DictationOrchestrator : IDisposable
             // whether TranscriptionCompletedEvent had fired.
             Trace.WriteLine("[Dictation] Pipeline canceled by user.");
             ReportStatus(context, "Canceled");
-            ShowFeedback(context, "Canceled", false);
+            ShowFeedback(context, "Canceled", false, isCanceled: true);
             if (!transcriptionCompletedPublished)
             {
                 PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
@@ -2340,7 +2339,7 @@ public sealed class DictationOrchestrator : IDisposable
         );
     }
 
-    private void ShowFeedback(string text, bool isError)
+    private void ShowFeedback(string text, bool isError, bool isCanceled = false)
     {
         SetOverlayState(state =>
             state with
@@ -2360,15 +2359,17 @@ public sealed class DictationOrchestrator : IDisposable
 
         // Terminal-outcome cue, matching the Windows build's success/error
         // sounds. ShowFeedback is the single chokepoint every terminal toast
-        // flows through, so classify off isError. Cancellation surfaces with
-        // isError=false but is neither success nor failure — exclude it.
+        // flows through, so classify off the caller's intent. Cancellation
+        // surfaces with isError=false but is neither success nor failure —
+        // callers flag it via isCanceled rather than us sniffing the text
+        // (which varies: "Canceled", "Dictation canceled.", …).
         if (_settings.Current.SoundFeedbackEnabled)
         {
             if (isError)
             {
                 _soundFeedback.PlayError();
             }
-            else if (!string.Equals(text, CanceledFeedbackText, StringComparison.Ordinal))
+            else if (!isCanceled)
             {
                 _soundFeedback.PlaySuccess();
             }
@@ -2381,14 +2382,19 @@ public sealed class DictationOrchestrator : IDisposable
     ///     feedback ("Typed N char(s)", "Transcription failed", "Canceled") from
     ///     hiding the new recording's overlay.
     /// </summary>
-    private void ShowFeedback(RecordingContext context, string text, bool isError)
+    private void ShowFeedback(
+        RecordingContext context,
+        string text,
+        bool isError,
+        bool isCanceled = false
+    )
     {
         if (!IsContextStillOwningOverlay(context))
         {
             return;
         }
 
-        ShowFeedback(text, isError);
+        ShowFeedback(text, isError, isCanceled);
     }
 
     /// <summary>
