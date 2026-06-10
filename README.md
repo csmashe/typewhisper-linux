@@ -234,6 +234,9 @@ the walker reached the address bar but didn't recognise it.
 This Linux branch has been tested on the maintainer's current setups:
 
 - Pop!_OS 22.04 LTS / GNOME 42.9 / X11 session
+- Linux Mint 22.3 / Cinnamon 6.6.7 / X11 session (global hotkey via the
+  in-process X11 hook; `xdotool` for keyboard input and active-window
+  detection, with dictation typed directly into `gnome-terminal`)
 - Fedora 44 / GNOME 46+ / Wayland session (with the Window Calls
   extension installed for active-window detection)
 - Fedora 44 / KDE Plasma 6.6 / Wayland session (global hotkey via the

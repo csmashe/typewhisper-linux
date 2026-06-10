@@ -425,9 +425,17 @@ public sealed class TextInsertionService
         // readline binds it to quoted-insert, so the paste produces nothing
         // visible. Direct typing avoids the modifier entirely. The list
         // covers known terminals by exact name; the trailing pattern check
-        // catches the long tail (anything that ends with "term" or
-        // "-terminal", e.g. xfce4-terminal, deepin-terminal, lxterm) so a
+        // catches the long tail (anything containing "terminal" or ending
+        // with "term", e.g. xfce4-terminal, deepin-terminal, lxterm) so a
         // new terminal doesn't require a code change to be supported.
+        //
+        // The substring (not suffix) "terminal" match is deliberate:
+        // gnome-terminal and mate-terminal use a client-server model, so the
+        // window-owning process is "gnome-terminal-server", not
+        // "gnome-terminal". Worse, Linux truncates /proc/<pid>/comm (what
+        // .NET's Process.ProcessName reads) to 15 bytes, so we actually see
+        // "gnome-terminal-" / "mate-terminal-s". None of those end with
+        // "-terminal", but all contain "terminal".
         static bool IsTerminalProcess(string? value)
         {
             if (string.IsNullOrWhiteSpace(value))
@@ -458,7 +466,7 @@ public sealed class TextInsertionService
                 return true;
             }
 
-            return process.EndsWith("-terminal", StringComparison.OrdinalIgnoreCase)
+            return process.Contains("terminal", StringComparison.OrdinalIgnoreCase)
                    || process.EndsWith("term", StringComparison.OrdinalIgnoreCase);
         }
     }
