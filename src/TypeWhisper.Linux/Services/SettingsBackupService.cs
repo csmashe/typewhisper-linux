@@ -105,10 +105,8 @@ public sealed class SettingsBackupService
             }
         }
 
-        // Atomic-replace: write the whole archive to <dest>.tmp first and rename
-        // over the destination only after every entry has been zipped. If the
-        // process is killed mid-backup the user's previous good archive is
-        // untouched and the .tmp orphan gets cleaned up on the next run.
+        // Atomic rename: write to .tmp so a crash mid-backup leaves the previous
+        // archive intact; the orphan .tmp is cleaned up on the next run.
         File.Move(tempPath, destinationZipPath, true);
         return new SettingsBackupResult(fileCount, bytes);
     }
@@ -120,9 +118,8 @@ public sealed class SettingsBackupService
             throw new FileNotFoundException("Backup file was not found.", sourceZipPath);
         }
 
-        // Stage extraction into a temp dir first so a half-decoded archive
-        // can't leave _basePath in a mixed state. Only after every entry is
-        // validated and extracted do we copy files into place.
+        // Extract into a temp dir first; only copy into _basePath after all
+        // entries are validated, so a corrupt archive can't leave a mixed state.
         var tempDir = Path.Combine(Path.GetTempPath(), $"typewhisper-restore-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
 
@@ -294,8 +291,9 @@ public sealed class SettingsBackupService
     private static string GetSafeDestinationPath(string rootPath, string entryName)
     {
         var normalized = NormalizeEntryName(entryName);
-        // Reject absolute paths and traversal components before GetFullPath
-        // so that a crafted zip entry like "../../.bashrc" can never escape.
+        // Reject traversal components before GetFullPath to block crafted paths
+        // like "../../.bashrc". The subsequent StartsWith check is defense-in-depth
+        // for platform-specific tricks GetFullPath may canonicalize differently.
         if (
             Path.IsPathRooted(normalized)
             || normalized.Split('/').Any(part => part is "" or "." or "..")
@@ -307,9 +305,6 @@ public sealed class SettingsBackupService
         var fullRoot = Path.GetFullPath(rootPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var destination = Path.GetFullPath(Path.Combine(fullRoot, normalized));
-        // Defense-in-depth: GetFullPath may canonicalize platform-specific
-        // tricks (null bytes, long-path prefixes, etc.) that the split-
-        // and-check above misses.
         if (
             !destination.StartsWith(
                 fullRoot + Path.DirectorySeparatorChar,

@@ -88,9 +88,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     public bool SupportsPressRelease => _hotkey.ActiveBackendSupportsPressRelease ?? false;
 
-    // Distinct from SupportsPressRelease: SharpHook on Wayland delivers
-    // press+release but only while TypeWhisper has focus. Labelling that
-    // "Global" would mislead users diagnosing a broken hotkey.
+    // SharpHook on Wayland delivers press+release but only while TypeWhisper has focus,
+    // so SupportsPressRelease ≠ global scope — labelling it "Global" would mislead users.
     public string ScopeText
     {
         get
@@ -163,9 +162,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _ => ""
         };
 
-    // Route through DesktopDetector so this VM and the writer-selection
-    // logic agree on edge cases like "ubuntu:GNOME". "KDE Plasma" → "KDE"
-    // keeps the legacy snippet-display keys intact.
+    // DesktopDetector normalizes edge cases like "ubuntu:GNOME".
+    // "KDE Plasma" → "KDE" keeps legacy snippet-display keys intact.
     public string DesktopName
     {
         get
@@ -251,10 +249,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
     }
 
-    // Delegates to the shared factory so this panel and the onboarding setup
-    // checklist register byte-for-byte identical shortcuts (same id/trigger/
-    // command) — otherwise one surface could "install" a bind the other
-    // wouldn't recognize as installed.
+    // Uses the shared factory so this panel and the onboarding checklist register
+    // identical shortcuts — otherwise one could install a bind the other wouldn't recognize.
     private DeShortcutSpec BuildSpec(IDeShortcutWriter writer)
     {
         return DictationShortcutSpecFactory.Build(_settings, writer);
@@ -279,10 +275,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         if (_hotkey.TrySetRecentTranscriptionsHotkeyFromString(RecentTranscriptionsHotkeyText))
         {
             _settings.Save(
-                _settings.Current with
-                {
-                    RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString
-                }
+                _settings.Current with { RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(
                 _hotkey.CurrentRecentTranscriptionsHotkeyString
@@ -329,10 +322,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         if (_hotkey.TrySetTransformSelectionHotkeyFromString(TransformSelectionHotkeyText))
         {
             _settings.Save(
-                _settings.Current with
-                {
-                    TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString
-                }
+                _settings.Current with { TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentTransformSelectionHotkeyString)
                 ? "Transform selection hotkey cleared."
@@ -471,10 +461,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         if (_hotkey.TrySetPromptPaletteHotkeyFromString(PromptPaletteHotkeyText))
         {
             _settings.Save(
-                _settings.Current with
-                {
-                    PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString
-                }
+                _settings.Current with { PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentPromptPaletteHotkeyString)
                 ? "Prompt palette hotkey cleared."
@@ -520,8 +507,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             ? "Global keyboard reads enabled."
             : "Falling back to focused-only hotkeys.";
 
-        // Hot-swap immediately so disabling actually stops the evdev
-        // reader — a delayed (restart-only) opt-out is a real consent gap
+        // Hot-swap immediately: a restart-only opt-out would be a consent gap
         // for a setting that controls global keyboard event access.
         var task = SwitchBackendAndNotifyAsync();
         task.ContinueWith(
@@ -537,9 +523,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         try
         {
-            // Keep the captured UI sync context — the OnPropertyChanged calls
-            // below fire PropertyChanged on whatever thread we resume on, and
-            // Avalonia bindings require those events on the UI thread.
+            // No ConfigureAwait(false): OnPropertyChanged must fire on the UI thread.
             await _hotkey.SwitchBackendAsync();
         }
         catch (Exception ex)

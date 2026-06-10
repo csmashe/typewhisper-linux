@@ -2,9 +2,6 @@ namespace TypeWhisper.Core.Models;
 
 public sealed record TermPack(string Id, string Name, string Icon, string[] Terms)
 {
-    public static TermPack? FindById(string id) =>
-        AllPacks.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
-
     public static readonly TermPack[] AllPacks =
     [
         new(
@@ -424,29 +421,15 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
             ]
         )
     ];
+
+    public static TermPack? FindById(string id)
+    {
+        return AllPacks.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
 }
 
 public sealed record IndustryPreset(string Id, string Name, string Description, string? TermPackId)
 {
-    public static string[] MergeIntoEnabledPackIds(string[] enabledPackIds, string presetId)
-    {
-        var preset = All.FirstOrDefault(p =>
-            string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (preset?.TermPackId is not { } packId)
-        {
-            return enabledPackIds;
-        }
-
-        if (enabledPackIds.Any(id =>
-            string.Equals(id, packId, StringComparison.OrdinalIgnoreCase)))
-        {
-            return enabledPackIds;
-        }
-
-        return [.. enabledPackIds, packId];
-    }
-
     public static readonly IndustryPreset[] All =
     [
         new(
@@ -474,4 +457,23 @@ public sealed record IndustryPreset(string Id, string Name, string Description, 
             "legal"
         )
     ];
+
+    public static string[] MergeIntoEnabledPackIds(string[] enabledPackIds, string presetId)
+    {
+        var preset = All.FirstOrDefault(p =>
+            string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)
+        );
+        if (preset?.TermPackId is not { } packId)
+        {
+            return enabledPackIds;
+        }
+
+        if (enabledPackIds.Any(id =>
+                string.Equals(id, packId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return enabledPackIds;
+        }
+
+        return [.. enabledPackIds, packId];
+    }
 }

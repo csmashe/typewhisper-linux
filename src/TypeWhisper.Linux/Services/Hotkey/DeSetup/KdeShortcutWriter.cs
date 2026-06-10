@@ -4,17 +4,12 @@ using System.Text;
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     KDE helper that drops a <c>.desktop</c> entry into
-///     <c>~/.local/share/kglobalaccel/</c>. KGlobalAccel scans that
-///     directory on session start and picks the file up — the user can
-///     then edit the trigger from System Settings → Shortcuts if they want
-///     to override what we wrote.
-///     We deliberately avoid the live D-Bus path
-///     (<c>org.kde.kglobalaccel.registerShortcut</c>) because it's more
-///     fragile across Plasma versions and a single static toggle doesn't
-///     benefit from the immediate-effect property. The cost is a single
-///     "log out and back in for KDE to register the shortcut" message in
-///     the result.
+///     Writes a <c>.desktop</c> entry into <c>~/.local/share/kglobalaccel/</c>.
+///     KGlobalAccel scans that directory on session start; the user can override the
+///     trigger from System Settings → Shortcuts.
+///     The live D-Bus path (<c>org.kde.kglobalaccel.registerShortcut</c>) is avoided
+///     because it's fragile across Plasma versions and a static toggle doesn't need
+///     the immediate-effect property. Cost: user must log out once to activate.
 /// </summary>
 public sealed class KdeShortcutWriter : IDeShortcutWriter
 {
@@ -44,10 +39,8 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             return Task.FromResult(false);
         }
 
-        // BuildDesktopFile is deterministic (no timestamp), so an exact match
-        // confirms the on-disk entry encodes this spec's trigger + command.
-        // A changed hotkey or a partial write produces different bytes and
-        // correctly reads as not-installed.
+        // BuildDesktopFile is deterministic (no timestamp), so an exact byte match confirms
+        // this spec is installed; a changed hotkey or partial write reads as not-installed.
         try
         {
             return Task.FromResult(File.ReadAllText(target) == BuildDesktopFile(spec));
@@ -143,9 +136,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
 
     private static string FileName(string shortcutId)
     {
-        // KGlobalAccel reads the file's basename as the identifying
-        // component. Stripping non-filename characters guards against
-        // a hypothetical shortcut id like "foo/bar".
+        // KGlobalAccel uses the basename as the identifier; sanitize to guard against ids like "foo/bar".
         var safe = new StringBuilder();
         foreach (var c in shortcutId)
         {
@@ -164,16 +155,8 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
 
     private static string BuildDesktopFile(DeShortcutSpec spec)
     {
-        // KGlobalAccel cares about a small set of keys:
-        //   Type=Service — required so it's treated as a service.
-        //   Name         — shown in System Settings → Shortcuts.
-        //   Exec         — what to run.
-        //   X-KDE-Shortcuts — the trigger; comma-separated for alternates.
-        //
-        // No timestamp here on purpose — two runs with the same spec
-        // must produce identical bytes so the atomic-write step is a
-        // true no-op on a repeat click. Diagnostic info goes through
-        // the result message instead.
+        // No timestamp — two runs with the same spec must produce identical bytes so the
+        // atomic-write is a no-op on repeat. Diagnostics go through the result message.
         return string.Format(
             CultureInfo.InvariantCulture,
             "[Desktop Entry]\n"
@@ -193,10 +176,8 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
 
     private static string EscapeDesktopValue(string value)
     {
-        // Desktop Entry Specification escape rules for string values:
-        // \\ for backslash, \n / \r / \t for newline/carriage-return/tab,
-        // and other ASCII control bytes as \uXXXX-style \xNN to avoid
-        // breaking parsers that read line-by-line.
+        // Desktop Entry Specification escaping: \\ for backslash, \n/\r/\t for control chars,
+        // other ASCII controls as \xNN to avoid breaking line-by-line parsers.
         if (string.IsNullOrEmpty(value))
         {
             return value;

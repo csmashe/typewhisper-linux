@@ -6,7 +6,6 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
-using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -38,13 +37,13 @@ public partial class DictationSectionViewModel : ObservableObject
     private CleanupLevel _cleanupLevel = CleanupLevel.None;
 
     [ObservableProperty]
-    private string _localModelAcceleration = AppSettings.LocalModelAccelerationAuto;
-
-    [ObservableProperty]
     private string _cudaSetupStatus = "";
 
     [ObservableProperty]
     private string _engineName = "No engine selected";
+
+    [ObservableProperty]
+    private bool _isModelDownloading;
 
     [ObservableProperty]
     private bool _isRecording;
@@ -65,7 +64,13 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _liveTranscriptionStreamingEnabled;
 
     [ObservableProperty]
+    private string _localModelAcceleration = AppSettings.LocalModelAccelerationAuto;
+
+    [ObservableProperty]
     private string _microphoneStatus = "";
+
+    [ObservableProperty]
+    private double _modelDownloadProgress;
 
     [ObservableProperty]
     private bool _modelReady;
@@ -74,12 +79,6 @@ public partial class DictationSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string _modelStatusText = "Not ready";
-
-    [ObservableProperty]
-    private double _modelDownloadProgress;
-
-    [ObservableProperty]
-    private bool _isModelDownloading;
 
     [ObservableProperty]
     private string _newInsertionAppProcess = "";
@@ -93,9 +92,8 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _pauseMediaDuringRecording;
 
-    // Tracks whether the Dictation page is visible so we restart the mic
-    // preview after recording ends — without this, the meter goes dark
-    // when recording completes even if the page is still open.
+    // True when the Dictation page is visible; restarts mic preview after recording
+    // ends so the level meter doesn't go dark while the page is still open.
     private bool _previewAttached;
 
     [ObservableProperty]
@@ -191,11 +189,11 @@ public partial class DictationSectionViewModel : ObservableObject
     public ObservableCollection<AudioInputDevice> Devices { get; } = [];
 
     public ObservableCollection<AccelerationOption> AccelerationOptions { get; } =
-        [
-            new(AppSettings.LocalModelAccelerationAuto, "Auto"),
-            new(AppSettings.LocalModelAccelerationCpu, "CPU"),
-            new(AppSettings.LocalModelAccelerationNvidiaCuda, "NVIDIA CUDA")
-        ];
+    [
+        new(AppSettings.LocalModelAccelerationAuto, "Auto"),
+        new(AppSettings.LocalModelAccelerationCpu, "CPU"),
+        new(AppSettings.LocalModelAccelerationNvidiaCuda, "NVIDIA CUDA")
+    ];
 
     public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
     [
@@ -277,7 +275,7 @@ public partial class DictationSectionViewModel : ObservableObject
                             : "CUDA 12 is installed, but TypeWhisper cannot see it yet.",
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         "CUDA is ready for whisper.cpp models. Other local plugins use CPU.",
-                    _ => "Auto: CUDA will be used when available, otherwise CPU.",
+                    _ => "Auto: CUDA will be used when available, otherwise CPU."
                 };
             }
 
@@ -385,6 +383,8 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
+    public string ModelDownloadPercentText => $"{ModelDownloadProgress * 100:0}%";
+
     public void ActivatePreview()
     {
         _previewAttached = true;
@@ -433,6 +433,15 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    ///     Re-polls providers when the model dropdown opens so newly added models appear
+    ///     without a manual "Validate". Debounce/guard live in <see cref="PluginManager" />.
+    /// </summary>
+    public Task RefreshProviderModelsAsync()
+    {
+        return _pluginManager.RefreshProviderModelsAsync();
+    }
+
     [RelayCommand]
     private async Task Toggle()
     {
@@ -458,14 +467,6 @@ public partial class DictationSectionViewModel : ObservableObject
                 ? "No input devices detected."
                 : $"{Devices.Count} input device(s) available.";
     }
-
-    /// <summary>
-    ///     Re-polls providers for their current model list when the model
-    ///     dropdown opens, so newly added models appear without a manual
-    ///     "Validate". The dropdown rebuilds via the PluginStateChanged
-    ///     subscription; debounce/guard live in <see cref="PluginManager" />.
-    /// </summary>
-    public Task RefreshProviderModelsAsync() => _pluginManager.RefreshProviderModelsAsync();
 
     private void RefreshModels()
     {
@@ -555,11 +556,8 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
-    // Download progress ticks arrive unthrottled; running the heavy per-model
-    // RefreshModelState on each would saturate the UI thread and the bar would
-    // never repaint. So drive the cheap progress update every tick and only
-    // refresh the status badge once the download settles. Mirrors
-    // WelcomeWizardViewModel.OnModelStatusChanged.
+    // Progress ticks are unthrottled; RefreshModelState on every tick would saturate the UI.
+    // Drive the cheap progress update each tick and refresh the status badge only when settled.
     private void OnModelStatusChanged()
     {
         UpdateDownloadProgress();
@@ -585,8 +583,6 @@ public partial class DictationSectionViewModel : ObservableObject
             ModelDownloadProgress = Math.Clamp(status.Progress, 0, 1);
         }
     }
-
-    public string ModelDownloadPercentText => $"{ModelDownloadProgress * 100:0}%";
 
     partial void OnModelDownloadProgressChanged(double value)
     {
@@ -641,27 +637,22 @@ public partial class DictationSectionViewModel : ObservableObject
     {
         var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
 
-        // Preserve today's "can't pick explicit CUDA on a system without it" guard.
-        // Auto is always selectable and resolves to CPU at load time when CUDA is absent.
+        // Guard: CUDA can't be selected when unavailable; Auto always works and resolves to CPU.
         if (normalized == AppSettings.LocalModelAccelerationNvidiaCuda && !CanUseCuda)
         {
-            // Spell out *why* CUDA can't be selected so the revert isn't silent.
-            // Three distinct cases: no GPU at all, GPU + libs present on disk but
-            // not yet on the loader path, or GPU with the runtime not installed.
+            // Three distinct cases: no GPU; GPU + libs found but not on loader path; libs not installed.
             var message =
                 !_commands.HasCudaGpu
                     ? "No NVIDIA GPU/driver detected — CUDA is unavailable on this system. Staying on CPU."
                     : FindCuda12LibraryPath() is not null
                         ? "CUDA 12 runtime libraries are installed but not on TypeWhisper's library path. "
-                            + "Click \"Fix CUDA path\", then restart TypeWhisper."
+                          + "Click \"Fix CUDA path\", then restart TypeWhisper."
                         : "NVIDIA GPU detected, but the CUDA 12 runtime libraries are not installed "
-                            + "(libcudart.so.12 / libcublas.so.12). Install the CUDA 12 runtime, then "
-                            + "restart TypeWhisper. Staying on CPU until then.";
-            // Revert on the next UI frame, not synchronously: a ComboBox ignores a
-            // SelectedItem reverted inside its own selection-change cycle, which left
-            // the dropdown visually stuck on "NVIDIA CUDA" while settings held CPU.
-            // Set the message *after* the revert — the CPU re-entry clears
-            // CudaSetupStatus, so writing it here keeps the explanation visible.
+                          + "(libcudart.so.12 / libcublas.so.12). Install the CUDA 12 runtime, then "
+                          + "restart TypeWhisper. Staying on CPU until then.";
+            // Revert on the next UI frame: a ComboBox ignores SelectedItem changes inside its
+            // own selection-change cycle, leaving the dropdown stuck on "NVIDIA CUDA".
+            // Write the message after the revert — the CPU re-entry clears CudaSetupStatus.
             Dispatcher.UIThread.Post(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
@@ -675,7 +666,7 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        // A successful (re)selection clears any stale CUDA-unavailable warning.
+        // Clear any stale CUDA-unavailable warning on a successful selection.
         CudaSetupStatus = "";
 
         if (
@@ -693,9 +684,8 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(AccelerationStatusText));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
 
-        // Trigger a reload so EnsureModelLoadedAsync re-evaluates against the new
-        // preference; the plugin's AccelerationStatus surfaces RequiresRestart when
-        // the process-pinned runtime can no longer match.
+        // Reload so EnsureModelLoadedAsync re-evaluates; AccelerationStatus surfaces
+        // RequiresRestart when the process-pinned runtime no longer matches.
         if (
             _models.ActiveTranscriptionPlugin is not null
             && SelectedModel is { } selected
@@ -844,10 +834,8 @@ public partial class DictationSectionViewModel : ObservableObject
             : $"export LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}";
     }
 
-    // ~/.config/environment.d/ is read by systemd-environment-d-generator and
-    // picked up by GUI sessions on Wayland — covers the case where the user
-    // launches TypeWhisper from an app menu rather than a terminal that
-    // already has the shell profile sourced.
+    // ~/.config/environment.d/ is picked up by systemd-environment-d-generator for GUI sessions
+    // on Wayland, covering app-menu launches where the shell profile isn't sourced.
     private static string WriteDesktopEnvironmentFile(string home, string cudaLibraryPath)
     {
         var environmentDir = Path.Combine(home, ".config", "environment.d");
@@ -905,8 +893,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings.Save(
             _settings.Current with
             {
-                SelectedMicrophoneDevice = value.Index,
-                SelectedMicrophoneDeviceId = value.PersistentId
+                SelectedMicrophoneDevice = value.Index, SelectedMicrophoneDeviceId = value.PersistentId
             }
         );
     }
@@ -1072,10 +1059,7 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnAudioDuckingLevelChanged(double value)
     {
         _settings.Save(
-            _settings.Current with
-            {
-                AudioDuckingLevel = (float)Math.Clamp(value, 0d, 0.5d)
-            }
+            _settings.Current with { AudioDuckingLevel = (float)Math.Clamp(value, 0d, 0.5d) }
         );
     }
 

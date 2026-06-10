@@ -12,11 +12,7 @@ public interface IDetectionFailureTracker
     /// <summary>Number of consecutive failures since the last <see cref="RecordSuccess" />.</summary>
     int ConsecutiveFailures { get; }
 
-    /// <summary>
-    ///     True once <see cref="ConsecutiveFailures" /> has crossed the
-    ///     tracker's banner threshold. Resets to false on the next successful
-    ///     detection.
-    /// </summary>
+    /// <summary>True once failures cross the banner threshold; resets on the next success.</summary>
     bool ShouldShowPersistentBanner { get; }
 
     /// <summary>Reason string from the most recent failure, or <c>null</c> if no failures have been recorded.</summary>
@@ -25,11 +21,7 @@ public interface IDetectionFailureTracker
     /// <summary>Resets the consecutive-failure counter and clears the banner state.</summary>
     void RecordSuccess();
 
-    /// <summary>
-    ///     Increments <see cref="ConsecutiveFailures" />, updates
-    ///     <see cref="LastFailureReason" />, recomputes
-    ///     <see cref="ShouldShowPersistentBanner" />, and fires <see cref="OnFailure" />.
-    /// </summary>
+    /// <summary>Increments the failure counter, updates reason and banner state, and fires <see cref="OnFailure" />.</summary>
     void RecordFailure(string compositor, string reason);
 
     /// <summary>Raised on every <see cref="RecordFailure" /> call, including the one that flips the banner state.</summary>
@@ -37,11 +29,9 @@ public interface IDetectionFailureTracker
 }
 
 /// <summary>
-///     Payload for <see cref="IDetectionFailureTracker.OnFailure" />. Carries the
-///     failure count after the increment, the compositor identifier and reason
-///     supplied to <see cref="IDetectionFailureTracker.RecordFailure" />, and the
-///     post-update banner state so subscribers can branch on toast-vs-banner
-///     without re-querying the tracker.
+///     Payload for <see cref="IDetectionFailureTracker.OnFailure" />. Includes the
+///     post-increment failure count, compositor, reason, and banner state so subscribers
+///     can branch on toast-vs-banner without re-querying the tracker.
 /// </summary>
 public sealed record DetectionFailureEvent(
     int ConsecutiveFailures,

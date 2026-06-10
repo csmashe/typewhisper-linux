@@ -54,18 +54,15 @@ public sealed class HyprlandActiveWindowProvider : IActiveWindowProvider
                     ? pidProp.GetInt32()
                     : 0;
 
-            // Never report one of our OWN windows (e.g. the dictation overlay,
-            // which is topmost and can momentarily hold focus) as the active
-            // target — otherwise the transcript gets aimed at TypeWhisper
-            // itself instead of the window the user was dictating into.
+            // Skip our own windows (overlay can momentarily hold focus) so the
+            // transcript is aimed at the user's target app, not TypeWhisper itself.
             if (pidValue > 0 && pidValue == Environment.ProcessId)
             {
                 return null;
             }
 
-            // Match the X11/xdotool path: /proc/PID/comm gives the
-            // process-binary identity that user profiles built up against.
-            // See GnomeWindowCallsProvider for the full rationale.
+            // /proc/PID/comm gives the binary identity that user profiles match against
+            // (consistent with the X11/xdotool path); see GnomeWindowCallsProvider for rationale.
             var rawIdentity = pidValue > 0 ? TryReadProcComm(pidValue) : null;
             if (string.IsNullOrWhiteSpace(rawIdentity))
             {

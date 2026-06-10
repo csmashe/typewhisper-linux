@@ -1,10 +1,9 @@
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-///     Optional interface for plugins that need to know their on-disk data directory
-///     before <see cref="ITypeWhisperPlugin.ActivateAsync" /> is called. The host sets
-///     the path immediately after loading the plugin, giving it a chance to initialize
-///     storage before activation.
+///     Optional interface for plugins that need their on-disk data directory set
+///     before <see cref="ITypeWhisperPlugin.ActivateAsync" /> is called. The host
+///     calls <see cref="SetDataDirectory" /> immediately after loading the plugin.
 /// </summary>
 public interface IPluginDataLocationAware
 {

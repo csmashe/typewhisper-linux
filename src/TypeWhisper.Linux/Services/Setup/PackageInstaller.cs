@@ -15,25 +15,17 @@ namespace TypeWhisper.Linux.Services.Setup;
 public sealed record PackageManager(string Id, string Binary, IReadOnlyList<string> InstallArgs);
 
 /// <summary>
-///     Detects the host's package manager and installs packages on the user's
-///     behalf via <c>pkexec</c> (the single graphical admin-consent prompt).
-///     Detection prefers the manager named by <c>/etc/os-release</c> but falls
-///     back to whichever known manager binary is on PATH, so an exotic
-///     <c>ID_LIKE</c> still resolves. When no manager can be found — or
-///     <c>pkexec</c> is missing — callers fall back to showing the copyable
-///     command from <see cref="BuildSudoCommand" />.
-///
-///     This is the cross-distro half of the "one-click install" path: every
-///     setup task that needs a package routes through here rather than
-///     hard-coding a distro, keeping the tasks themselves machine-agnostic.
+///     Detects the host's package manager and installs packages via
+///     <c>pkexec</c>. Prefers the manager named by <c>/etc/os-release</c>,
+///     falls back to probing PATH. When no manager or pkexec is found, callers
+///     fall back to showing the copyable <see cref="BuildSudoCommand" /> output.
 /// </summary>
 public sealed class PackageInstaller
 {
     // Ordered by how we'd prefer to resolve ties when probing PATH.
     private static readonly PackageManager[] Known =
     {
-        new("dnf", "dnf", new[] { "install", "-y" }),
-        new("apt", "apt-get", new[] { "install", "-y" }),
+        new("dnf", "dnf", new[] { "install", "-y" }), new("apt", "apt-get", new[] { "install", "-y" }),
         new("pacman", "pacman", new[] { "-S", "--noconfirm" }),
         new("zypper", "zypper", new[] { "--non-interactive", "install" })
     };
@@ -72,17 +64,6 @@ public sealed class PackageInstaller
     public string BuildSudoCommand(IReadOnlyList<string> packages)
     {
         return BuildSudoCommand(packages, Detect());
-    }
-
-    private static string BuildSudoCommand(IReadOnlyList<string> packages, PackageManager? pm)
-    {
-        var joined = string.Join(' ', packages);
-        if (pm is null)
-        {
-            return $"sudo <your package manager> install {joined}";
-        }
-
-        return $"sudo {pm.Binary} {string.Join(' ', pm.InstallArgs)} {joined}";
     }
 
     /// <summary>
@@ -132,9 +113,7 @@ public sealed class PackageInstaller
             );
         }
 
-        // pkexec uses 126 for "authorization could not be obtained" and 127
-        // when the requested program can't be run — both usually mean the
-        // user dismissed the prompt or it timed out.
+        // 126 = authorization denied/dismissed; 127 = program not runnable.
         if (result.ExitCode is 126 or 127)
         {
             return new SetupActionOutcome(
@@ -154,11 +133,18 @@ public sealed class PackageInstaller
         );
     }
 
-    /// <summary>
-    ///     Yield package-manager ids hinted by <c>/etc/os-release</c>, in
-    ///     priority order: the distro's own <c>ID</c> first, then each
-    ///     <c>ID_LIKE</c> token. Maps distro ids onto our manager ids.
-    /// </summary>
+    private static string BuildSudoCommand(IReadOnlyList<string> packages, PackageManager? pm)
+    {
+        var joined = string.Join(' ', packages);
+        if (pm is null)
+        {
+            return $"sudo <your package manager> install {joined}";
+        }
+
+        return $"sudo {pm.Binary} {string.Join(' ', pm.InstallArgs)} {joined}";
+    }
+
+    /// <summary>Yields package-manager ids from /etc/os-release: ID first, then ID_LIKE tokens.</summary>
     private static IEnumerable<string> ReadOsReleaseManagerHints()
     {
         string[] lines;

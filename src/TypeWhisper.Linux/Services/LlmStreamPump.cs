@@ -4,28 +4,19 @@ using System.Text;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Consumes an LLM response stream (<see cref="IAsyncEnumerable{T}" /> of token
-///     deltas), accumulates the full text, and pushes the accumulated string to
-///     <c>onAccumulated</c> at most once per <c>flushInterval</c> (~30 Hz by
-///     default) plus one guaranteed final flush. The coalescer is genuinely new
-///     work versus C5's STT partial path: LLM tokens from fast providers arrive at
-///     &gt;500 tok/s and would flood the UI thread / compositor without rate
-///     limiting (see the C7 master plan, Approach). UI-agnostic — the caller's
-///     <c>onAccumulated</c> does the overlay update + event publish, so both sinks
-///     are protected at the source.
-///     <para>
-///     Fault policy mirrors <see cref="StreamingTranscriptionCoordinator" />:
-///     cancellation rethrows (the user stopped) while any other fault sets
-///     <see cref="Faulted" /> and returns the partial without throwing, so the
-///     caller can fall back to a batch request.
-///     </para>
+///     Consumes an LLM token-delta stream, accumulates the full text, and calls
+///     <c>onAccumulated</c> at most once per <c>flushInterval</c> (~30 Hz) plus a
+///     guaranteed final flush. Rate-limiting is necessary because fast providers
+///     emit &gt;500 tok/s and would flood the UI dispatcher without it.
+///     Cancellation rethrows; any other fault sets <see cref="Faulted" /> and
+///     returns the partial so the caller can fall back to a batch request.
 /// </summary>
 internal sealed class LlmStreamPump
 {
     private static readonly TimeSpan DefaultFlushInterval = TimeSpan.FromMilliseconds(33);
+    private readonly TimeSpan _flushInterval;
 
     private readonly Action<string> _onAccumulated;
-    private readonly TimeSpan _flushInterval;
     private readonly StringBuilder _sb = new();
 
     private string? _lastEmitted;
@@ -39,14 +30,10 @@ internal sealed class LlmStreamPump
     public bool Faulted { get; private set; }
 
     /// <summary>
-    ///     True once the source enumerable yielded at least one item, even an empty
-    ///     string. This distinguishes a stream that produced <em>nothing</em> (proxy
-    ///     EOF, empty 200, silent parser regression — zero items) from one that
-    ///     delivered a legitimately empty result in a single chunk (the toggle-off /
-    ///     default bulk-yield path, where the lone chunk is already a completed
-    ///     <c>ProcessAsync</c> call). The caller falls back to batch only on the
-    ///     former: re-running <c>ProcessAsync</c> for the latter would duplicate the
-    ///     request and could replace a valid empty answer with a different one.
+    ///     True once the source yielded at least one item (even ""). Distinguishes
+    ///     a zero-item stream (proxy EOF, empty 200 — fall back to batch) from a
+    ///     legitimately empty result delivered as a single chunk (bulk-yield path —
+    ///     do NOT re-run, as that would duplicate the request).
     /// </summary>
     public bool ReceivedAnyChunk { get; private set; }
 
@@ -66,11 +53,14 @@ internal sealed class LlmStreamPump
         {
             await foreach (var delta in source.WithCancellation(ct))
             {
-                // Mark receipt before the empty-skip: a lone "" chunk (bulk-yield /
-                // toggle-off path) still counts as "the source produced output",
-                // which is what separates a real empty stream from an empty result.
+                // Mark receipt before the empty-skip: a lone "" chunk still signals
+                // the source produced output, distinguishing it from a zero-item stream.
                 ReceivedAnyChunk = true;
-                if (string.IsNullOrEmpty(delta)) continue;
+                if (string.IsNullOrEmpty(delta))
+                {
+                    continue;
+                }
+
                 _sb.Append(delta);
 
                 if (stopwatch.Elapsed.TotalMilliseconds - lastFlushMs >= _flushInterval.TotalMilliseconds)
@@ -82,17 +72,14 @@ internal sealed class LlmStreamPump
         }
         catch (OperationCanceledException)
         {
-            // The user stopped (Escape / token). Keep the partial and rethrow so
-            // the caller skips the batch retry — cancellation is not a fault.
+            // User stopped — rethrow so the caller skips the batch retry.
             EmitFinal();
             throw;
         }
         catch (Exception ex)
         {
-            // External plugin enumerators can throw arbitrary types
-            // (HttpRequestException, IOException, WebSocketException, JsonException,
-            // plugin-internal). Treat all non-cancel faults as recoverable: keep
-            // the partial, flag Faulted, and let the caller fall back to batch.
+            // Plugin enumerators can throw arbitrary types. Treat all non-cancel
+            // faults as recoverable: keep the partial and let the caller fall back.
             Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}: {ex.Message}");
             Faulted = true;
             EmitFinal();
@@ -106,17 +93,23 @@ internal sealed class LlmStreamPump
     private void Emit()
     {
         var text = _sb.ToString();
-        if (text == _lastEmitted) return;
+        if (text == _lastEmitted)
+        {
+            return;
+        }
+
         _lastEmitted = text;
         _onAccumulated(text);
     }
 
-    // Force a flush of the terminal text, but only if there is text to show and it
-    // differs from the last coalesced emission — avoids a redundant identical
-    // callback and avoids emitting at all for an empty stream.
+    // Force a terminal flush only when there is new text to emit.
     private void EmitFinal()
     {
-        if (_sb.Length == 0) return;
+        if (_sb.Length == 0)
+        {
+            return;
+        }
+
         Emit();
     }
 }

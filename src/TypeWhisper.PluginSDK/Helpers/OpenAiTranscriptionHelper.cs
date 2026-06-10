@@ -47,8 +47,7 @@ public static class OpenAiTranscriptionHelper
         content.Add(new StringContent(model), "model");
         content.Add(new StringContent(responseFormat), "response_format");
 
-        // "auto" is a TypeWhisper-internal sentinel meaning "let the API detect the language".
-        // Omitting the language field entirely is the correct way to request auto-detection.
+        // "auto" is a TypeWhisper sentinel; omit the field to let the API detect language.
         if (!string.IsNullOrEmpty(language) && language != "auto")
         {
             content.Add(new StringContent(language), "language");
@@ -81,8 +80,7 @@ public static class OpenAiTranscriptionHelper
         var duration = root.TryGetProperty("duration", out var durEl) ? durEl.GetDouble() : 0;
         var segments = new List<PluginTranscriptionSegment>();
 
-        // Extract min no_speech_prob from segments (verbose_json format).
-        // Using min so that the filter only triggers when ALL segments are silence.
+        // Use min no_speech_prob so the silence filter only triggers when ALL segments are silence.
         float? minNoSpeechProb = null;
         if (
             root.TryGetProperty("segments", out var segmentsEl)
@@ -108,9 +106,6 @@ public static class OpenAiTranscriptionHelper
             }
         }
 
-        return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb)
-        {
-            Segments = segments
-        };
+        return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb) { Segments = segments };
     }
 }

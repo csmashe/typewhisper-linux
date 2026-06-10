@@ -1,11 +1,9 @@
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Immutable snapshot of the dictation overlay's visual state. Published
-///     by <c>DictationOrchestrator</c> and <c>TransformSelectionService</c>
-///     via <c>OverlayStateChanged</c>; consumed by the overlay window and
-///     the tray tooltip. Only carry UI-relevant fields here — business logic
-///     lives in the orchestrator.
+///     Immutable snapshot of the dictation overlay's visual state. Published via
+///     <c>OverlayStateChanged</c> and consumed by the overlay window and tray tooltip.
+///     Business logic stays in the orchestrator; only UI-relevant fields belong here.
 /// </summary>
 public sealed record DictationOverlayState
 {
@@ -18,9 +16,12 @@ public sealed record DictationOverlayState
     public string StatusText { get; init; } = "Ready";
     public string? PartialText { get; init; }
 
-    /// <summary>Accumulated LLM response text, streamed token-by-token during a
-    /// prompt-action step. Null when no LLM step is running.</summary>
+    /// <summary>
+    ///     Accumulated LLM response text, streamed token-by-token during a
+    ///     prompt-action step. Null when no LLM step is running.
+    /// </summary>
     public string? LlmResponseText { get; init; }
+
     public string? FeedbackText { get; init; }
     public string? ActiveProfileName { get; init; }
     public string? ActiveAppName { get; init; }

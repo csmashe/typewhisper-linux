@@ -24,9 +24,8 @@ public sealed class TrayIconService : IDisposable
     }
 
     /// <summary>
-    ///     Whether a usable system tray was detected at <see cref="Initialize" />
-    ///     time. Consulted before the close button hides the window — see
-    ///     backlog #18: hiding with no tray strands the user with no UI.
+    ///     Whether a usable system tray was confirmed at <see cref="Initialize" />
+    ///     time. Hiding the window without a tray strands the user (#18).
     /// </summary>
     public bool IsTrayAvailable { get; private set; }
 
@@ -49,22 +48,16 @@ public sealed class TrayIconService : IDisposable
 
     public void Initialize()
     {
-        // A StatusNotifier host existing (the D-Bus probe) is necessary but
-        // not sufficient — IsTrayAvailable must also mean our icon actually
-        // registered. Set it true only after SetIcons succeeds; any failure
-        // (no host, TrayIcon/SetIcons throwing, no Application.Current) leaves
-        // it false so close-to-tray won't hide the window into a tray entry
-        // that isn't there (backlog #18).
+        // IsTrayAvailable is set true only after SetIcons succeeds and the host
+        // probe passes — a probe alone isn't sufficient, since TrayIcon.SetIcons
+        // can silently fail. Any failure leaves it false (#18).
         var hostPresent = ProbeTrayAvailable();
 
         try
         {
             _trayIcon = new TrayIcon
             {
-                ToolTipText = "TypeWhisper",
-                IsVisible = true,
-                Menu = BuildMenu(),
-                Icon = LoadIcon()
+                ToolTipText = "TypeWhisper", IsVisible = true, Menu = BuildMenu(), Icon = LoadIcon()
             };
             _trayIcon.Clicked += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
 
@@ -91,25 +84,18 @@ public sealed class TrayIconService : IDisposable
     }
 
     /// <summary>
-    ///     True when a StatusNotifierItem host (system tray) is present on the
-    ///     session bus. Avalonia's <see cref="TrayIcon" /> silently no-ops when
-    ///     there is no host — it never throws or otherwise reports failure — so
-    ///     a successful <see cref="Initialize" /> proves nothing. We read the
-    ///     StatusNotifierWatcher's <c>IsStatusNotifierHostRegistered</c> property
-    ///     over D-Bus: it is true only when a watcher exists <em>and</em> a host
-    ///     has registered with it (KDE's panel, GNOME's AppIndicator extension,
-    ///     waybar's tray module — all qualify). Checking the watcher's mere name
-    ///     ownership instead would mis-report a stale watcher left behind with no
-    ///     host. Fails safe: any probe error (gdbus missing, bus unreachable, no
-    ///     watcher at all) counts as "no tray" so close-to-tray falls back to
-    ///     quitting rather than stranding the user — backlog #18.
+    ///     True when a StatusNotifier host is present on the session bus.
+    ///     Avalonia's TrayIcon silently no-ops when no host exists, so a
+    ///     successful Initialize proves nothing. We read
+    ///     <c>IsStatusNotifierHostRegistered</c> from the watcher — true only
+    ///     when a host (KDE panel, GNOME AppIndicator, waybar…) has registered.
+    ///     Checking mere name ownership would mis-report a stale watcher with no
+    ///     host. Any probe error counts as "no tray" (fails safe, #18).
     /// </summary>
     internal bool ProbeTrayAvailable()
     {
-        // gdbus ships with glib2 — present on every Linux desktop. One
-        // property read covers every case: no watcher → gdbus errors →
-        // false; a watcher with no host → "(<false>,)" → false; a watcher
-        // with a registered host → "(<true>,)" → true.
+        // gdbus (glib2, always present) prints "(<true>,)" / "(<false>,)";
+        // non-zero exit (no watcher, gdbus missing) is treated as no tray.
         var result = _runner
             .RunAsync(
                 "gdbus",
@@ -130,8 +116,6 @@ public sealed class TrayIconService : IDisposable
             .GetAwaiter()
             .GetResult();
 
-        // gdbus prints the bool variant as "(<true>,)" / "(<false>,)";
-        // a non-zero exit (no watcher, gdbus missing) is treated as no tray.
         return result.Succeeded && result.StandardOutput.Contains("true", StringComparison.Ordinal);
     }
 
@@ -141,9 +125,8 @@ public sealed class TrayIconService : IDisposable
 
     private static WindowIcon? LoadIcon()
     {
-        // Prefer 32x32 for tray — most SNI implementations downscale from
-        // there cleanly. Fall back to the .ico (Avalonia decodes multi-size
-        // .ico files natively) if the PNG isn't where we expect it.
+        // 32x32 PNG is preferred; most SNI hosts downscale cleanly from there.
+        // Fall back to the .ico if the PNG is missing.
         var baseDir = AppContext.BaseDirectory;
         var png = Path.Combine(baseDir, "Resources", "typewhisper-32.png");
         var ico = Path.Combine(baseDir, "Resources", "typewhisper.ico");
@@ -160,8 +143,7 @@ public sealed class TrayIconService : IDisposable
                 return new WindowIcon(ico);
             }
 
-            // Last-resort: try the Avalonia resource URI embedded in the
-            // assembly itself, useful when running from a single-file publish.
+            // Last resort: embedded Avalonia asset (single-file publish path).
             return new WindowIcon(
                 AssetLoader.Open(new Uri("avares://typewhisper/Resources/typewhisper-32.png"))
             );

@@ -34,10 +34,8 @@ internal static class TranscribeCommand
 
         if (file == "-")
         {
-            // Buffer stdin so we can magic-sniff the first bytes and still
-            // forward the whole stream to the API. Audio uploads from
-            // dictation pipelines fit easily in memory at MaxTranscribeRequestBytes;
-            // cap the read at that limit so an unbounded pipe can't OOM the CLI.
+            // Buffer stdin to enable magic-byte sniffing before forwarding to
+            // the API; cap at MaxTranscribeRequestBytes so an unbounded pipe can't OOM.
             var buffer = new MemoryStream();
             var stdin = Console.OpenStandardInput();
             var chunk = new byte[81920];

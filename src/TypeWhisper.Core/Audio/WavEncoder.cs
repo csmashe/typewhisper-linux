@@ -16,8 +16,7 @@ public static class WavEncoder
         int bitsPerSample = 16
     )
     {
-        // The data-write loop below hardcodes Int16 PCM conversion, so accepting
-        // other bit depths here would silently produce a malformed WAV.
+        // Inner loop hardcodes Int16 PCM; other depths would silently produce a malformed WAV.
         if (bitsPerSample != 16)
         {
             throw new ArgumentException(
@@ -26,9 +25,7 @@ public static class WavEncoder
             );
         }
 
-        // Validate before any header writes so an invalid sampleRate doesn't
-        // land in the WAV as a wrap-around value, and an out-of-range
-        // channels can't silently truncate when cast to (short).
+        // Validate before any header writes: wrap-around sampleRate or truncated channels would corrupt the WAV silently.
         if (sampleRate <= 0 || sampleRate > 192000)
         {
             throw new ArgumentOutOfRangeException(
@@ -49,11 +46,7 @@ public static class WavEncoder
 
         var bytesPerSample = bitsPerSample / 8;
 
-        // Compute sizes in long to avoid silent Int32 wrap on extreme inputs
-        // (e.g. ~1B+ samples, or sampleRate*channels*bytesPerSample which can
-        // exceed Int32 at max channels). The RIFF header stores chunk sizes as
-        // little-endian Int32, so anything past Int32.MaxValue is unrepresentable
-        // — fail fast with a clear message instead of writing a corrupt header.
+        // Compute in long to avoid Int32 wrap (RIFF chunk sizes are Int32; anything larger is unrepresentable).
         var dataLengthLong = (long)samples.Length * bytesPerSample;
         var totalSizeLong = 44L + dataLengthLong;
         var riffSizeLong = 36L + dataLengthLong;

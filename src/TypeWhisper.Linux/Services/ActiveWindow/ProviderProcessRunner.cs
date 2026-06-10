@@ -3,12 +3,10 @@ using System.Diagnostics;
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
-///     Shared subprocess runner for active-window providers. Crucially, this is
-///     truly cancellation-aware: <see cref="Process.WaitForExitAsync" /> observes
-///     the caller's <see cref="CancellationToken" />, so the orchestrator's
-///     per-provider budget actually bounds wall-clock time. When cancellation
-///     fires, the process tree is killed so a hung compositor helper cannot
-///     block the UI thread that owns the timer-driven detection loop.
+///     Shared subprocess runner for active-window providers. Uses
+///     <see cref="Process.WaitForExitAsync" /> for true cancellation: when the
+///     per-provider budget fires, the process tree is killed so a hung compositor
+///     helper can't block the UI thread's detection loop.
 /// </summary>
 internal static class ProviderProcessRunner
 {
@@ -20,18 +18,15 @@ internal static class ProviderProcessRunner
     {
         var psi = new ProcessStartInfo(fileName, args)
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
         };
         return RunAsync(psi, ct);
     }
 
     /// <summary>
-    ///     Argv-style overload — each argument is passed as a separate argv entry
-    ///     so values that might contain spaces, quotes, or shell metacharacters
-    ///     (e.g. window IDs returned by an external helper) cannot be reinterpreted
-    ///     as additional arguments.
+    ///     Argv-style overload — passes each argument as a discrete argv entry so
+    ///     spaces, quotes, or shell metacharacters in values (e.g. window IDs) are
+    ///     not reinterpreted as additional arguments.
     /// </summary>
     public static Task<(int ExitCode, string? StdOut)> RunAsync(
         string fileName,
@@ -41,9 +36,7 @@ internal static class ProviderProcessRunner
     {
         var psi = new ProcessStartInfo(fileName)
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
         };
         foreach (var a in args)
         {

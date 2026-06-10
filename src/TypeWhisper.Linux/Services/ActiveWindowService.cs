@@ -6,14 +6,11 @@ using TypeWhisper.Linux.Services.ActiveWindow;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Linux active-window orchestrator. The compositor-specific work lives in
-///     the <see cref="IActiveWindowProvider" /> chain (xdotool, Hyprland, Sway,
-///     KWin, GNOME Shell) — this class iterates the chain and returns the
-///     first non-null snapshot. The synchronous <see cref="GetActiveWindowProcessName" />
-///     and <see cref="GetActiveWindowTitle" /> getters walk the same chain with
-///     a tight per-provider budget so legacy callers keep working unchanged.
-///     AT-SPI URL extraction is delegated to <see cref="AtSpiUrlExtractor" />;
-///     xclip clipboard capture remains here as the last-resort X11 fallback.
+///     Iterates the <see cref="IActiveWindowProvider" /> chain (xdotool,
+///     Hyprland, Sway, KWin, GNOME Shell) and returns the first non-null
+///     snapshot. AT-SPI URL extraction is delegated to
+///     <see cref="AtSpiUrlExtractor" />; xclip clipboard capture is the
+///     last-resort X11 fallback for browser URLs.
 /// </summary>
 public sealed class ActiveWindowService : IActiveWindowService
 {
@@ -118,9 +115,8 @@ public sealed class ActiveWindowService : IActiveWindowService
             return null;
         }
 
-        // Only reuse the snapshot's WindowId when it came from the X11/xdotool
-        // provider — Wayland providers (sway, kwin, gnome-shell, hyprland)
-        // expose compositor-specific ids that xdotool can't address.
+        // Only use the snapshot's WindowId when it came from xdotool —
+        // Wayland provider ids are compositor-specific and xdotool can't address them.
         var windowId = snapshot?.Source == "xdotool" ? snapshot.WindowId : null;
         if (string.IsNullOrWhiteSpace(windowId))
         {
@@ -180,13 +176,9 @@ public sealed class ActiveWindowService : IActiveWindowService
 
             try
             {
-                // Give each provider its own slice of the caller's budget
-                // so a slow earlier provider can't starve later fallbacks.
-                // Without this, a single 50 ms caller CTS that's mostly
-                // consumed by the first applicable provider leaves every
-                // remaining provider with a near-cancelled token and they
-                // all early-return null. We still link the caller token
-                // so external cancellation (e.g. shutdown) propagates.
+                // Each provider gets its own per-provider budget so a slow
+                // earlier provider can't starve later fallbacks. The caller
+                // token is linked so external cancellation (e.g. shutdown) propagates.
                 using var perProviderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 perProviderCts.CancelAfter(s_providerSyncBudget);
                 var snapshot = await provider
@@ -261,11 +253,9 @@ public sealed class ActiveWindowService : IActiveWindowService
             return null;
         }
 
-        // Zen / Firefox Flatpak builds frequently report no process name via
-        // xdotool (the XWayland surface is sandboxed under a different PID).
-        // Matching the Gmail title suffix is reliable enough to activate
-        // email-scoped profiles without having to focus the address bar, which
-        // would be visible to the user and potentially disruptive.
+        // Zen/Firefox Flatpak builds often report no process name (XWayland surface
+        // runs under a sandboxed PID). Title-matching avoids needing to focus the
+        // address bar, which would be visible and disruptive.
         if (
             title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
             && title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase)
@@ -352,12 +342,10 @@ public sealed class ActiveWindowService : IActiveWindowService
     }
 
     /// <summary>
-    ///     Scores an AT-SPI accessible node as a candidate for the browser's
-    ///     current URL. Higher is better; <see cref="int.MinValue" /> means the
-    ///     node's text is not a URL and should be ignored entirely.
-    ///     The heuristic weights: role (EditBar > Entry), focused state,
-    ///     editable state, AT-SPI Text interface, HTTP scheme, path depth,
-    ///     and "address" in the accessible name.
+    ///     Scores an AT-SPI node as a browser URL candidate. Returns
+    ///     <see cref="int.MinValue" /> when the text is not a URL. Weights:
+    ///     role (EditBar &gt; Entry), focused, editable, Text interface, HTTP
+    ///     scheme, path depth, "address" in accessible name.
     /// </summary>
     internal static int ScoreBrowserUrlCandidate(
         int role,
@@ -479,10 +467,8 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     private static bool SendBrowserAddressBarCaptureKeys(string windowId)
     {
-        // X11 fallback path: AT-SPI walk and title inference already
-        // failed, so synthesize Ctrl+L (focus address bar) + Ctrl+C
-        // (copy) and read the clipboard. Escape afterwards drops focus
-        // back out of the address bar so the user's caret isn't moved.
+        // X11 last-resort: synthesize Ctrl+L (focus address bar) + Ctrl+C,
+        // read the clipboard, then Escape to restore caret position.
         if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+l"))
         {
             return false;
@@ -531,9 +517,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             using var p = Process.Start(
                 new ProcessStartInfo(command, args)
                 {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
                 }
             );
             p?.WaitForExit(1000);
@@ -560,9 +544,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             using var p = Process.Start(
                 new ProcessStartInfo(fileName, args)
                 {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
                 }
             );
             if (p is null)
@@ -570,10 +552,8 @@ public sealed class ActiveWindowService : IActiveWindowService
                 return -1;
             }
 
-            // Drain stdout and stderr concurrently. Reading only stdout would
-            // deadlock if stderr's 4 kB kernel pipe buffer fills while the
-            // child is still running (the child blocks on write; we block on
-            // WaitForExit — classic deadlock).
+            // Drain stdout and stderr concurrently to avoid the classic deadlock
+            // where a full stderr pipe blocks the child while we wait for exit.
             var stdoutTask = p.StandardOutput.ReadToEndAsync();
             var stderrTask = p.StandardError.ReadToEndAsync();
             if (!p.WaitForExit(1000))

@@ -4,10 +4,8 @@ using TypeWhisper.Core.Models;
 namespace TypeWhisper.Linux.Services.Hotkey;
 
 /// <summary>
-///     Backend-neutral snapshot of every configured global shortcut. The
-///     coordinator (<see cref="HotkeyService" />) owns the source-of-truth state
-///     and pushes a new <see cref="GlobalShortcutSet" /> to the active backend
-///     whenever any binding changes.
+///     Backend-neutral snapshot of every configured global shortcut. <see cref="HotkeyService" />
+///     owns the source-of-truth state and pushes a new instance to the active backend on any change.
 /// </summary>
 public sealed record GlobalShortcutSet(
     KeyCode DictationKey,
@@ -67,21 +65,15 @@ public sealed record GlobalShortcutSet(
 }
 
 /// <summary>
-///     A prompt action bound to a direct-execution hotkey (B12). Pressing the
-///     chord captures the current selection and runs the action against it,
-///     bypassing the palette UI. <see cref="ActionId" /> is the
-///     <c>PromptAction.Id</c> the matched chord should execute.
+///     A prompt action bound to a direct-execution hotkey. Pressing the chord captures the current
+///     selection and runs the action against it, bypassing the palette UI.
 /// </summary>
 public sealed record PromptActionHotkey(string ActionId, KeyCode Key, ModifierMask Modifiers);
 
 /// <summary>
-///     A Profile bound to a global hotkey. <see cref="Behavior" /> decides
-///     whether pressing the chord starts dictation forced to this profile
-///     (<see cref="ProfileHotkeyBehavior.StartDictation" />) or runs the
-///     profile's linked prompt action against the current selection
-///     (<see cref="ProfileHotkeyBehavior.ProcessSelectedText" />). The
-///     dispatcher needs the behavior to know which path to take, so it travels
-///     with the chord rather than being looked up later.
+///     A Profile bound to a global hotkey. <see cref="Behavior" /> controls whether the chord starts
+///     dictation for this profile or runs its linked prompt action on the current selection.
+///     Travels with the chord so the dispatcher doesn't need to look it up at fire time.
 /// </summary>
 public sealed record ProfileHotkey(
     string ProfileId,

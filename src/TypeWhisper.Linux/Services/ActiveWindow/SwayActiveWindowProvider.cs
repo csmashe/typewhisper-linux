@@ -58,9 +58,8 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
                 xClass = TryGetString(wp, "class");
             }
 
-            // Match the X11/xdotool path: /proc/PID/comm gives the
-            // process-binary identity that user profiles built up against.
-            // See GnomeWindowCallsProvider for the full rationale.
+            // /proc/PID/comm gives the binary identity user profiles match against
+            // (consistent with the X11/xdotool path; see GnomeWindowCallsProvider).
             int? pidValue = null;
             if (
                 node.TryGetProperty("pid", out var pidProp)
@@ -111,8 +110,7 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
         }
         catch (Win32Exception)
         {
-            // Thrown by Process.Start on .NET when the executable isn't found,
-            // even on Linux — the name is a historical artifact of the BCL.
+            // Process.Start throws Win32Exception on missing executables even on Linux.
             return null;
         }
         catch (JsonException ex)
@@ -154,9 +152,8 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
             }
         }
 
-        // Sway separates tiled and floating windows into two child arrays at each
-        // container level. A focused floating window only appears in floating_nodes,
-        // never in nodes, so both branches must be searched.
+        // Focused floating windows appear only in floating_nodes, not nodes —
+        // both arrays must be searched at every container level.
         if (
             node.TryGetProperty("floating_nodes", out var floating)
             && floating.ValueKind == JsonValueKind.Array

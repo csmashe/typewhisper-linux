@@ -24,10 +24,10 @@ public partial class MainWindowViewModel : ObservableObject
     private NavItem? _selectedItem;
 
     [ObservableProperty]
-    private bool _updateBannerVisible;
+    private string _updateBannerText = string.Empty;
 
     [ObservableProperty]
-    private string _updateBannerText = string.Empty;
+    private bool _updateBannerVisible;
 
     public MainWindowViewModel(
         IServiceProvider services,

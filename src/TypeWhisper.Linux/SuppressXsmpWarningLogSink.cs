@@ -3,30 +3,16 @@ using Avalonia.Logging;
 namespace TypeWhisper.Linux;
 
 /// <summary>
-///     <see cref="ILogSink" /> decorator that drops one specific, harmless
-///     Avalonia warning and passes everything else through unchanged.
-///     On startup Avalonia's X11 backend (<c>X11PlatformLifetimeEvents</c>)
-///     calls <c>SmcOpenConnection</c> to register with an X11 session
-///     manager. We run on the X11 backend under Wayland, where there is no
-///     X11 session manager, so libSM fails immediately and Avalonia logs
-///     <c>
-///         "SMLib/ICELib reported a new error: SESSION_MANAGER environment
-///         variable not defined"
-///     </c>
-///     at <see cref="LogEventLevel.Warning" />.
-///     The failure is expected and carries no actionable information — do
-///     NOT try to "fix" the XSMP connection. Setting <c>SESSION_MANAGER</c>
-///     in the environment does not help: an empty value just makes libSM
-///     fail with a different message. Filtering the log line is the only
-///     reliable suppression.
+///     <see cref="ILogSink" /> decorator that drops one known-harmless Avalonia warning.
+///     When running the X11 backend under Wayland there is no X11 session manager, so
+///     libSM fails and logs "SMLib/ICELib reported a new error: SESSION_MANAGER environment
+///     variable not defined". This is expected and not fixable by setting SESSION_MANAGER —
+///     filtering the specific log line is the only reliable suppression.
 /// </summary>
 internal sealed class SuppressXsmpWarningLogSink : ILogSink
 {
-    // The exact, fully-interpolated message Avalonia's X11 backend emits
-    // when there is no X11 session manager. Matching the whole string —
-    // not just the "SMLib/ICELib reported a new error" prefix — keeps any
-    // other SMLib/ICELib failure (a different, genuinely actionable error)
-    // flowing through to the trace.
+    // Match the full string, not just the prefix, so any other SMLib/ICELib
+    // error (which may be actionable) still flows through to the trace.
     private const string XsmpWarningMessage =
         "SMLib/ICELib reported a new error: SESSION_MANAGER environment variable not defined";
 
@@ -68,10 +54,8 @@ internal sealed class SuppressXsmpWarningLogSink : ILogSink
         _inner.Log(level, area, source, messageTemplate, propertyValues);
     }
 
-    // Suppress only the known harmless warning: it is logged at Warning
-    // level as a fully-interpolated string with no {n} placeholders, so an
-    // exact, level-gated match is stable. Anything logged at a higher
-    // severity, or with different text, is left alone.
+    // The warning is fully interpolated (no {n} placeholders), so an exact
+    // level-gated string match is stable and won't catch unrelated errors.
     private static bool IsXsmpWarning(LogEventLevel level, string messageTemplate)
     {
         return level == LogEventLevel.Warning

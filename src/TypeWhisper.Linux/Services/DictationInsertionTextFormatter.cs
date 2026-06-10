@@ -13,7 +13,9 @@ internal static class DictationInsertionTextFormatter
     public static string TextForInsertion(string text)
     {
         if (string.IsNullOrEmpty(text) || char.IsWhiteSpace(text[^1]))
+        {
             return text;
+        }
 
         return text + " ";
     }

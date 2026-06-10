@@ -19,17 +19,16 @@ public interface IPostProcessorPlugin : ITypeWhisperPlugin
     Task<string> ProcessAsync(string text, PostProcessingContext context, CancellationToken ct);
 
     /// <summary>
-    ///     Streams the post-processed text token-by-token. The default
-    ///     implementation wraps <see cref="ProcessAsync" /> and yields the entire
-    ///     result as a single chunk, so processors that do not override it remain
-    ///     correct (one bulk yield, byte-identical to the batch path). Real
-    ///     per-token piping between pipeline steps is a deferred follow-up (C7
-    ///     master plan, resolved Q3).
+    ///     Streams post-processed text token-by-token. The default implementation
+    ///     wraps <see cref="ProcessAsync" /> and yields the full result as one chunk,
+    ///     keeping non-overriding processors correct. True per-token pipeline piping
+    ///     is a deferred follow-up.
     /// </summary>
     async IAsyncEnumerable<string> ProcessStreamingAsync(
         string text,
         PostProcessingContext context,
-        [EnumeratorCancellation] CancellationToken ct
+        [EnumeratorCancellation]
+        CancellationToken ct
     )
     {
         yield return await ProcessAsync(text, context, ct);

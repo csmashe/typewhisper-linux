@@ -1,14 +1,10 @@
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     Per-desktop helper that installs (or removes) TypeWhisper's global
-///     dictation shortcut without dragging the user through the DE's GUI.
-///     Each implementation owns one desktop and is independent of the others
-///     — the orchestration UI picks whichever one's <see cref="IsCurrentDesktop" />
-///     returns true. The interface is deliberately small: the UI button
-///     pushes a <see cref="DeShortcutSpec" />, the writer reports back what it
-///     changed and whether the user needs to do anything else (reload, log
-///     out, etc.).
+///     Per-desktop helper that installs or removes TypeWhisper's global dictation shortcut.
+///     The setup UI picks the implementation whose <see cref="IsCurrentDesktop" /> returns true,
+///     pushes a <see cref="DeShortcutSpec" />, and receives back what was changed and any
+///     follow-up action the user needs to take (reload, re-login, etc.).
 /// </summary>
 public interface IDeShortcutWriter
 {
@@ -26,13 +22,10 @@ public interface IDeShortcutWriter
     bool SupportsPushToTalk { get; }
 
     /// <summary>
-    ///     True when a written shortcut only becomes active after the user
-    ///     restarts their session (or the relevant daemon) — KDE's KGlobalAccel
-    ///     doesn't pick up a freshly-dropped <c>.desktop</c> until re-login.
-    ///     GNOME (gsettings-daemon), Hyprland (<c>hyprctl</c>), and Sway
-    ///     (<c>swaymsg reload</c>) all apply live, so they report false. The
-    ///     setup checklist uses this to caveat its "registered" message rather
-    ///     than implying the hotkey is already firing.
+    ///     True when a written shortcut only activates after a session restart or daemon reload.
+    ///     KDE's KGlobalAccel requires re-login to pick up a new <c>.desktop</c>. GNOME
+    ///     (gsettings-daemon), Hyprland (<c>hyprctl</c>), and Sway (<c>swaymsg reload</c>)
+    ///     apply live and report false. The checklist uses this to caveat "registered."
     /// </summary>
     bool RequiresSessionRestartToApply { get; }
 
@@ -53,17 +46,9 @@ public interface IDeShortcutWriter
     string PreviewLines(DeShortcutSpec spec);
 
     /// <summary>
-    ///     Best-effort check for whether the managed shortcut currently
-    ///     registered with this desktop matches <paramref name="spec" /> — not
-    ///     merely that *some* entry with that id exists. The setup checklist
-    ///     uses this to decide whether the global-hotkey task is satisfied, so
-    ///     a stale binding (old trigger after the user changed it) or a partial
-    ///     write (entry present but command/binding fields missing) must read as
-    ///     NOT installed. Implementations compare the stored trigger and command
-    ///     against the spec by regenerating what <see cref="WriteAsync" /> would
-    ///     have produced. Reads the desktop's own store only — never mutates —
-    ///     and returns false on any error, since a probe failure is
-    ///     indistinguishable from "not installed" for the checklist's purpose.
+    ///     True only when the registered shortcut matches <paramref name="spec" /> fully — a stale
+    ///     trigger or partial write reads as NOT installed. Compares stored trigger and command against
+    ///     what <see cref="WriteAsync" /> would produce. Never mutates; returns false on any error.
     /// </summary>
     Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct);
 

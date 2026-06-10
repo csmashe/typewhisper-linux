@@ -45,30 +45,26 @@ public sealed class HotkeyService : IDisposable
     private EventHandler? _onDictationStartRequested;
     private EventHandler? _onDictationStopRequested;
     private EventHandler? _onDictationToggleRequested;
-    private EventHandler? _onPromptPaletteRequested;
-    private EventHandler<string>? _onPromptActionRequested;
-    private EventHandler<string>? _onProfileDictationToggleRequested;
     private EventHandler<string>? _onProfileDictationStartRequested;
     private EventHandler? _onProfileDictationStopRequested;
+    private EventHandler<string>? _onProfileDictationToggleRequested;
     private EventHandler<string>? _onProfileTextProcessingRequested;
+    private EventHandler<string>? _onPromptActionRequested;
+    private EventHandler? _onPromptPaletteRequested;
     private EventHandler? _onRecentTranscriptionsRequested;
     private EventHandler? _onTransformSelectionRequested;
 
-    // Direct-execution prompt action hotkeys (B12). The list is rebuilt
-    // wholesale by SetPromptActionHotkeys; the snapshot pushed to the
-    // backend captures it by reference, so mutations after push are not
-    // observed by the running matcher.
+    // Serializes backend updates so a burst of TrySet*/Mode= calls applies in order.
+    private Task _pendingBackendUpdate = Task.CompletedTask;
+
+    // Per-profile hotkeys. Rebuilt wholesale by SetProfileHotkeys; snapshot captures by reference.
+    private IReadOnlyList<ProfileHotkey> _profileHotkeys = Array.Empty<ProfileHotkey>();
+
+    // Direct-execution prompt action hotkeys (B12). Rebuilt wholesale by SetPromptActionHotkeys;
+    // snapshot captures by reference so post-push mutations are invisible to the running matcher.
     private IReadOnlyList<PromptActionHotkey> _promptActionHotkeys =
         Array.Empty<PromptActionHotkey>();
 
-    // Per-profile hotkeys (one chord per profile). Rebuilt wholesale by
-    // SetProfileHotkeys; captured by reference in the snapshot exactly like
-    // _promptActionHotkeys above.
-    private IReadOnlyList<ProfileHotkey> _profileHotkeys = Array.Empty<ProfileHotkey>();
-
-    // Serializes backend updates so a burst of TrySet*/Mode= calls can't apply
-    // out of order and leave the backend listening for stale bindings.
-    private Task _pendingBackendUpdate = Task.CompletedTask;
     private KeyCode? _promptPaletteKey;
     private ModifierMask _promptPaletteModifiers = ModifierMask.None;
     private KeyCode? _recentTranscriptionsKey;
@@ -477,6 +473,185 @@ public sealed class HotkeyService : IDisposable
     }
 
     /// <summary>
+    ///     Replaces the dynamic per-action hotkey list atomically. Entries colliding with a
+    ///     fixed binding or an earlier accepted entry in this batch are dropped (matching
+    ///     the silent-rejection style of <c>TrySet*HotkeyFromString</c>). Pushes a fresh
+    ///     snapshot so the matcher sees the new list immediately.
+    /// </summary>
+    public void SetPromptActionHotkeys(IReadOnlyList<PromptActionHotkey> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        // Clear first so GetBoundHotkeys() doesn't flag re-submitted unchanged entries as
+        // already-bound (ActionsChanged fires on every add/update/delete and reuses most
+        // existing entries). Intra-batch dedup is handled by the accepted.Any(...) check.
+        _promptActionHotkeys = Array.Empty<PromptActionHotkey>();
+
+        var accepted = new List<PromptActionHotkey>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.ActionId))
+            {
+                Trace.WriteLine(
+                    "[HotkeyService] Refusing prompt-action hotkey with empty action id."
+                );
+                continue;
+            }
+
+            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with another shortcut."
+                );
+                continue;
+            }
+
+            // Intra-batch collision check using full HotkeyMatches so prefix-collision
+            // rules apply between prompt-action entries too.
+            if (
+                accepted.Any(prior =>
+                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
+                )
+            )
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with an earlier entry."
+                );
+                continue;
+            }
+
+            accepted.Add(entry);
+        }
+
+        _promptActionHotkeys = accepted;
+        PushShortcutsIfRunning();
+    }
+
+    /// <summary>
+    ///     Translates the JSON-stored <see cref="PromptAction.HotkeyKey" />
+    ///     strings into parsed <see cref="PromptActionHotkey" /> entries.
+    ///     Actions with a missing or unparseable hotkey are silently skipped
+    ///     (matches the <c>TrySet*HotkeyFromString</c> rejection pattern); the
+    ///     caller decides what to do with the resulting list (typically pass
+    ///     it to <see cref="SetPromptActionHotkeys" />).
+    /// </summary>
+    public static IReadOnlyList<PromptActionHotkey> ParsePromptActionHotkeys(
+        IEnumerable<PromptAction> actions
+    )
+    {
+        ArgumentNullException.ThrowIfNull(actions);
+
+        var result = new List<PromptActionHotkey>();
+        foreach (var action in actions)
+        {
+            if (!action.IsEnabled || string.IsNullOrWhiteSpace(action.HotkeyKey))
+            {
+                continue;
+            }
+
+            if (!TryParseHotkey(action.HotkeyKey, out var key, out var modifiers) || key is null)
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Unparseable prompt-action hotkey for '{action.Id}': '{action.HotkeyKey}'."
+                );
+                continue;
+            }
+
+            result.Add(new PromptActionHotkey(action.Id, key.Value, modifiers));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    ///     Replaces the per-profile hotkey list atomically. Same collision rules as
+    ///     <see cref="SetPromptActionHotkeys" /> — entries colliding with any fixed binding
+    ///     (including prompt-action and other profile chords) or an earlier batch entry are
+    ///     dropped with a <see cref="Trace.WriteLine" />. Pushes a fresh snapshot immediately.
+    /// </summary>
+    public void SetProfileHotkeys(IReadOnlyList<ProfileHotkey> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        // Clear first — same reason as SetPromptActionHotkeys: reuse of existing entries
+        // across ProfilesChanged events must not register as collisions.
+        _profileHotkeys = Array.Empty<ProfileHotkey>();
+
+        var accepted = new List<ProfileHotkey>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.ProfileId))
+            {
+                Trace.WriteLine(
+                    "[HotkeyService] Refusing profile hotkey with empty profile id."
+                );
+                continue;
+            }
+
+            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with another shortcut."
+                );
+                continue;
+            }
+
+            if (
+                accepted.Any(prior =>
+                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
+                )
+            )
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with an earlier entry."
+                );
+                continue;
+            }
+
+            accepted.Add(entry);
+        }
+
+        _profileHotkeys = accepted;
+        PushShortcutsIfRunning();
+    }
+
+    /// <summary>
+    ///     Translates the JSON-stored <see cref="Profile.HotkeyData" /> chords
+    ///     into parsed <see cref="ProfileHotkey" /> entries, carrying each
+    ///     profile's <see cref="Profile.HotkeyBehavior" />. Disabled profiles,
+    ///     blank chords, and unparseable chords are skipped (matching
+    ///     <see cref="ParsePromptActionHotkeys" />). The caller typically passes
+    ///     the result to <see cref="SetProfileHotkeys" />.
+    /// </summary>
+    public static IReadOnlyList<ProfileHotkey> ParseProfileHotkeys(
+        IEnumerable<Profile> profiles
+    )
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        var result = new List<ProfileHotkey>();
+        foreach (var profile in profiles)
+        {
+            if (!profile.IsEnabled || string.IsNullOrWhiteSpace(profile.HotkeyData))
+            {
+                continue;
+            }
+
+            if (!TryParseHotkey(profile.HotkeyData, out var key, out var modifiers) || key is null)
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Unparseable profile hotkey for '{profile.Id}': '{profile.HotkeyData}'."
+                );
+                continue;
+            }
+
+            result.Add(new ProfileHotkey(profile.Id, key.Value, modifiers, profile.HotkeyBehavior));
+        }
+
+        return result;
+    }
+
+    /// <summary>
     ///     Compatibility shim for callers (notably tests) — forwards to
     ///     <see cref="ShortcutMatcher.ModifiersMatch" />.
     /// </summary>
@@ -619,198 +794,6 @@ public sealed class HotkeyService : IDisposable
         );
     }
 
-    /// <summary>
-    ///     Replaces the dynamic per-action hotkey list atomically. Entries that
-    ///     collide with an existing fixed binding (Dictation, PromptPalette,
-    ///     RecentTranscriptions, CopyLastTranscription, TransformSelection) or
-    ///     with an earlier accepted prompt-action entry are dropped with a
-    ///     <see cref="Trace.WriteLine" />, matching the silent-rejection style
-    ///     of <c>TrySet*HotkeyFromString</c>. Pushes a fresh snapshot to the
-    ///     backend so the matcher sees the new list immediately.
-    /// </summary>
-    public void SetPromptActionHotkeys(IReadOnlyList<PromptActionHotkey> entries)
-    {
-        ArgumentNullException.ThrowIfNull(entries);
-
-        // Clear the previous list before reconciling so GetBoundHotkeys()
-        // doesn't report the same chord as already-bound when an unchanged
-        // entry is re-submitted (the common case — ActionsChanged fires on
-        // every add/update/delete and reuses most existing entries). Intra-
-        // batch deduplication is handled by the `accepted.Any(...)` check
-        // below.
-        _promptActionHotkeys = Array.Empty<PromptActionHotkey>();
-
-        var accepted = new List<PromptActionHotkey>(entries.Count);
-        foreach (var entry in entries)
-        {
-            if (string.IsNullOrWhiteSpace(entry.ActionId))
-            {
-                Trace.WriteLine(
-                    "[HotkeyService] Refusing prompt-action hotkey with empty action id."
-                );
-                continue;
-            }
-
-            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with another shortcut."
-                );
-                continue;
-            }
-
-            // Intra-batch collision: reuse the full HotkeyMatches so the
-            // prefix-collision rule applies between prompt-action entries
-            // too (e.g. a batch containing both `Left Ctrl` and `Ctrl+F9`
-            // would otherwise accept both and shadow the chord at runtime).
-            if (
-                accepted.Any(prior =>
-                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
-                )
-            )
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with an earlier entry."
-                );
-                continue;
-            }
-
-            accepted.Add(entry);
-        }
-
-        _promptActionHotkeys = accepted;
-        PushShortcutsIfRunning();
-    }
-
-    /// <summary>
-    ///     Translates the JSON-stored <see cref="PromptAction.HotkeyKey" />
-    ///     strings into parsed <see cref="PromptActionHotkey" /> entries.
-    ///     Actions with a missing or unparseable hotkey are silently skipped
-    ///     (matches the <c>TrySet*HotkeyFromString</c> rejection pattern); the
-    ///     caller decides what to do with the resulting list (typically pass
-    ///     it to <see cref="SetPromptActionHotkeys" />).
-    /// </summary>
-    public static IReadOnlyList<PromptActionHotkey> ParsePromptActionHotkeys(
-        IEnumerable<PromptAction> actions
-    )
-    {
-        ArgumentNullException.ThrowIfNull(actions);
-
-        var result = new List<PromptActionHotkey>();
-        foreach (var action in actions)
-        {
-            if (!action.IsEnabled || string.IsNullOrWhiteSpace(action.HotkeyKey))
-            {
-                continue;
-            }
-
-            if (!TryParseHotkey(action.HotkeyKey, out var key, out var modifiers) || key is null)
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Unparseable prompt-action hotkey for '{action.Id}': '{action.HotkeyKey}'."
-                );
-                continue;
-            }
-
-            result.Add(new PromptActionHotkey(action.Id, key.Value, modifiers));
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    ///     Replaces the per-profile hotkey list atomically. Clone of
-    ///     <see cref="SetPromptActionHotkeys" />: entries with an empty profile
-    ///     id, or that collide with a fixed binding (<see cref="GetBoundHotkeys" />
-    ///     — which now also covers prompt-action and other profile chords), or
-    ///     with an earlier accepted entry in this batch, are dropped with a
-    ///     <see cref="Trace.WriteLine" />. Pushes a fresh snapshot so the matcher
-    ///     sees the new list immediately.
-    /// </summary>
-    public void SetProfileHotkeys(IReadOnlyList<ProfileHotkey> entries)
-    {
-        ArgumentNullException.ThrowIfNull(entries);
-
-        // Clear first so GetBoundHotkeys() doesn't report a re-submitted
-        // unchanged entry as already-bound (ProfilesChanged fires on every
-        // add/update/delete and reuses most existing entries). Intra-batch
-        // dedup is handled by the accepted.Any(...) check below.
-        _profileHotkeys = Array.Empty<ProfileHotkey>();
-
-        var accepted = new List<ProfileHotkey>(entries.Count);
-        foreach (var entry in entries)
-        {
-            if (string.IsNullOrWhiteSpace(entry.ProfileId))
-            {
-                Trace.WriteLine(
-                    "[HotkeyService] Refusing profile hotkey with empty profile id."
-                );
-                continue;
-            }
-
-            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with another shortcut."
-                );
-                continue;
-            }
-
-            if (
-                accepted.Any(prior =>
-                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
-                )
-            )
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with an earlier entry."
-                );
-                continue;
-            }
-
-            accepted.Add(entry);
-        }
-
-        _profileHotkeys = accepted;
-        PushShortcutsIfRunning();
-    }
-
-    /// <summary>
-    ///     Translates the JSON-stored <see cref="Profile.HotkeyData" /> chords
-    ///     into parsed <see cref="ProfileHotkey" /> entries, carrying each
-    ///     profile's <see cref="Profile.HotkeyBehavior" />. Disabled profiles,
-    ///     blank chords, and unparseable chords are skipped (matching
-    ///     <see cref="ParsePromptActionHotkeys" />). The caller typically passes
-    ///     the result to <see cref="SetProfileHotkeys" />.
-    /// </summary>
-    public static IReadOnlyList<ProfileHotkey> ParseProfileHotkeys(
-        IEnumerable<Profile> profiles
-    )
-    {
-        ArgumentNullException.ThrowIfNull(profiles);
-
-        var result = new List<ProfileHotkey>();
-        foreach (var profile in profiles)
-        {
-            if (!profile.IsEnabled || string.IsNullOrWhiteSpace(profile.HotkeyData))
-            {
-                continue;
-            }
-
-            if (!TryParseHotkey(profile.HotkeyData, out var key, out var modifiers) || key is null)
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Unparseable profile hotkey for '{profile.Id}': '{profile.HotkeyData}'."
-                );
-                continue;
-            }
-
-            result.Add(new ProfileHotkey(profile.Id, key.Value, modifiers, profile.HotkeyBehavior));
-        }
-
-        return result;
-    }
-
     private void PushShortcutsIfRunning()
     {
         IGlobalShortcutBackend? backend;
@@ -874,25 +857,17 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        // Use ShortcutMatcher.ModifiersMatch so collision detection treats
-        // LeftCtrl/RightCtrl (and Shift/Alt/Meta variants) as equivalent —
-        // otherwise a chord like RightCtrl+Space could slip past the check
-        // and collide with a LeftCtrl+Space binding at runtime, since the
-        // dispatcher uses ModifiersMatch when resolving presses.
+        // Use ShortcutMatcher.ModifiersMatch so LeftCtrl/RightCtrl (and Shift/Alt/Meta
+        // variants) are treated as equivalent — same logic the dispatcher uses at runtime.
         if (key == otherKey.Value
             && ShortcutMatcher.ModifiersMatch(modifiers, otherModifiers))
         {
             return true;
         }
 
-        // B8 prefix collision: a side-specific single-modifier binding (e.g.
-        // `Left Ctrl` → `(VcLeftControl, None)`) fires on the bare modifier
-        // press, which is also the first keystroke of every chord that uses
-        // the same physical modifier. Reject either direction at config
-        // time so users can't shadow their own chord bindings. The chord
-        // side is checked against BOTH left and right flags because the
-        // matcher collapses them — pressing the modifier-only's bound side
-        // also satisfies any chord storing the opposite-side flag.
+        // Prefix collision: a bare-modifier binding (e.g. `Left Ctrl`) fires on the same
+        // keypress that opens any chord using that physical modifier. Reject either direction
+        // at config time. Check against both Left/Right flags because the matcher collapses them.
         if (CollidesAsModifierPrefix(key, modifiers, otherKey.Value, otherModifiers)
             || CollidesAsModifierPrefix(otherKey.Value, otherModifiers, key, modifiers))
         {
@@ -920,10 +895,7 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        // The chord must use the same physical modifier (in either side
-        // flag — the matcher collapses them) AND must have a different
-        // terminal key, otherwise the existing exact-match branch already
-        // caught the collision and we'd double-count.
+        // Different terminal key required; same key+mods is already caught by the exact-match branch.
         if (chordKey == modifierOnlyKey && chordMods == modifierOnlyMods)
         {
             return false;
@@ -977,23 +949,15 @@ public sealed class HotkeyService : IDisposable
             yield return (_transformSelectionKey, _transformSelectionModifiers);
         }
 
-        // Dynamic per-action prompt-action bindings (B12). Including them
-        // here makes the collision check symmetric: TrySet*HotkeyFromString
-        // rejects a fixed-binding change that would shadow an existing
-        // prompt-action chord, mirroring SetPromptActionHotkeys' rejection
-        // of a new entry that collides with a fixed binding. The
-        // PromptAction enum value is intentionally absent — SetPromptActionHotkeys
-        // clears _promptActionHotkeys before its reconcile loop, so this
-        // method never has to exclude a "current prompt action" entry.
+        // Dynamic prompt-action bindings: makes collision detection symmetric — fixed-binding
+        // changes that would shadow a prompt-action chord are also rejected. No exclude needed
+        // because SetPromptActionHotkeys clears the list before its reconcile loop.
         foreach (var entry in _promptActionHotkeys)
         {
             yield return (entry.Key, entry.Modifiers);
         }
 
-        // Per-profile bindings, for the same symmetry reason as the
-        // prompt-action loop above. SetProfileHotkeys clears _profileHotkeys
-        // before its reconcile loop, so this never reports a "current profile"
-        // entry against itself.
+        // Per-profile bindings — same symmetry reason as prompt-action loop above.
         foreach (var entry in _profileHotkeys)
         {
             yield return (entry.Key, entry.Modifiers);
@@ -1011,9 +975,8 @@ public sealed class HotkeyService : IDisposable
 
     private static string FormatHotkey(KeyCode key, ModifierMask mods)
     {
-        // Tier-A side-specific single modifier round-trip: the binding's "key"
-        // is itself a side-specific modifier with no extra mods. Emit the
-        // parser-symmetric spelling so format → parse → format is stable.
+        // Side-specific single-modifier round-trip: emit parser-symmetric spelling
+        // (e.g. "Left Ctrl") so format → parse → format is stable.
         if (mods == ModifierMask.None)
         {
             var sideSpecific = key switch
@@ -1074,10 +1037,8 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        // Tier-A side-specific single modifier: "Right Alt", "Left Ctrl", etc.
-        // Checked before the '+' split so a stray chord like "Right Alt+R"
-        // falls through to the normal loop instead of silently absorbing the
-        // side prefix here.
+        // Check side-specific single-modifier spelling before the '+' split so "Right Alt+R"
+        // falls through to the normal loop rather than being absorbed as a side prefix.
         var trimmed = text.Trim();
         if (!trimmed.Contains('+')
             && TryParseSideSpecificSingleModifier(trimmed, out var sideModifierKey))

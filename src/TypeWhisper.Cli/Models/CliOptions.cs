@@ -4,10 +4,9 @@
 namespace TypeWhisper.Cli.Models;
 
 /// <summary>
-///     Parsed command-line options for the TypeWhisper CLI. Parsing is pure
-///     and side-effect free: <see cref="Parse" /> never touches the network or
-///     console, it only validates argument shape and records the first error in
-///     <see cref="ErrorMessage" /> so the caller can decide how to report it.
+///     Parsed command-line options. <see cref="Parse" /> is pure and side-effect free;
+///     it records the first parse error in <see cref="ErrorMessage" /> for the caller
+///     to handle rather than writing to the console itself.
 /// </summary>
 internal sealed record CliOptions
 {
@@ -196,10 +195,8 @@ internal sealed record CliOptions
             return false;
         }
 
-        // Reject candidates that look like option flags (e.g. "--json" after
-        // "--port") so a missing value fails fast instead of silently
-        // consuming the next switch. A bare "-" is allowed for stdin-style
-        // positionals.
+        // Reject flag-looking tokens (e.g. "--json" after "--port") so a missing
+        // value fails fast. A bare "-" is allowed for stdin-style positionals.
         var candidate = args[index + 1];
         if (candidate.Length > 1 && candidate.StartsWith('-'))
         {

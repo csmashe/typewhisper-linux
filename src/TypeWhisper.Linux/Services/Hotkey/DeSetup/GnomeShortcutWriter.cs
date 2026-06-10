@@ -33,9 +33,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
 
     public bool IsCurrentDesktop()
     {
-        // We accept anything XDG calls GNOME (Ubuntu's "ubuntu:GNOME"
-        // included) but bail if gsettings itself is missing, because
-        // every actual write goes through it.
+        // Accept ubuntu:GNOME and variants; bail if gsettings is absent.
         if (DesktopDetector.DetectId() != "gnome")
         {
             return false;
@@ -85,52 +83,19 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return false;
         }
 
-        // Presence of the path isn't enough: a stale entry (old trigger) or a
-        // partial write leaves the path listed while command/binding are wrong
-        // or missing. Compare the stored command + binding against what we'd
-        // write for this spec.
+        // Path presence isn't enough — a stale or partial write can list the path
+        // while command/binding are wrong. Verify both against what we'd write.
         var schemaWithPath = $"{CustomKeybindingSchema}:{path}";
         var command = await GetStringValueAsync(schemaWithPath, "command", ct).ConfigureAwait(false);
         var binding = await GetStringValueAsync(schemaWithPath, "binding", ct).ConfigureAwait(false);
         return command == spec.OnPressCommand && binding == FormatGnomeAccel(spec.Trigger);
     }
 
-    /// <summary>
-    ///     Read a single string-valued gsettings key and strip the surrounding
-    ///     single quotes gsettings prints (unescaping <c>\'</c> and <c>\\</c>).
-    ///     Returns null when the key can't be read.
-    /// </summary>
-    private static async Task<string?> GetStringValueAsync(
-        string schemaWithPath,
-        string key,
-        CancellationToken ct
-    )
-    {
-        var (ok, raw, _) = await RunAsync("gsettings", new[] { "get", schemaWithPath, key }, ct)
-            .ConfigureAwait(false);
-        if (!ok)
-        {
-            return null;
-        }
-
-        var s = raw.Trim();
-        if (s.Length < 2 || s[0] != '\'' || s[^1] != '\'')
-        {
-            return s;
-        }
-
-        var inner = s.Substring(1, s.Length - 2);
-        return inner.Replace("\\'", "'").Replace("\\\\", "\\");
-    }
-
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
     {
         var path = BuildCustomPath(spec.ShortcutId);
 
-        // 1. Snapshot the current list before touching anything. If the
-        //    backup fails (disk full, perms) we refuse to proceed — the
-        //    whole point of the backup is to be able to recover from a
-        //    bad write.
+        // 1. Snapshot before touching anything — refuse if backup fails.
         var (listOk, listOut, listErr) = await RunAsync(
                 "gsettings",
                 new[] { "get", MediaKeysSchema, ListKey },
@@ -179,9 +144,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             added = true;
         }
 
-        // 2. Write merged list back only if we actually added a path.
-        //    A repeat invocation is a no-op except for the three
-        //    field-level sets below (which themselves may be no-ops).
+        // 2. Write merged list only when a path was actually added (repeat invocations are no-ops).
         var changed = new List<string> { backupPath };
         if (added)
         {
@@ -203,15 +166,12 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             changed.Add($"{MediaKeysSchema}.{ListKey}");
         }
 
-        // 3. Set name / command / binding on the relative path. The
-        //    schema-with-path form is "schema:path" — gsettings then
-        //    treats the trailing path as the dconf prefix.
+        // 3. Set name/command/binding via "schema:path" form (gsettings treats the path as dconf prefix).
         var schemaWithPath = $"{CustomKeybindingSchema}:{path}";
         foreach (
             var (key, value) in new[]
             {
-                ("name", spec.DisplayName),
-                ("command", spec.OnPressCommand),
+                ("name", spec.DisplayName), ("command", spec.OnPressCommand),
                 ("binding", FormatGnomeAccel(spec.Trigger))
             }
         )
@@ -310,9 +270,8 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             );
         }
 
-        // gsettings has no "reset path" verb for the path schema form;
-        // resetting the individual keys is the closest thing and will
-        // make dconf-editor stop showing stale name/command/binding.
+        // gsettings has no "reset path" verb; reset individual keys so dconf-editor
+        // stops showing stale values. Reset failures are non-fatal (entry no longer listed).
         var schemaWithPath = $"{CustomKeybindingSchema}:{path}";
         foreach (var key in new[] { "name", "command", "binding" })
         {
@@ -330,42 +289,17 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     }
 
     /// <summary>
-    ///     Parse a <c>gsettings get</c> result for a list-of-strings key.
-    ///     gsettings prints either <c>@as []</c> for empty or a Python-style
-    ///     list <c>['path1', 'path2']</c> for populated values. Single and
-    ///     double quotes are both possible; gsettings emits singles but a
-    ///     user editing dconf-editor by hand can produce doubles.
-    ///     Implementation notes — and this is the parser the phase spec
-    ///     flagged as the highest-risk surface in the whole phase:
-    ///     <list type="bullet">
-    ///         <item>
-    ///             We do not <c>Split(',')</c>. A quoted string is the only
-    ///             place commas can appear; we walk character-by-character.
-    ///         </item>
-    ///         <item>
-    ///             Backslash escapes (<c>\'</c>, <c>\"</c>, <c>\\</c>) are
-    ///             honored — gsettings escapes single quotes inside
-    ///             single-quoted strings.
-    ///         </item>
-    ///         <item>
-    ///             Empty (<c>@as []</c>, <c>[]</c>) returns an empty list,
-    ///             never null.
-    ///         </item>
-    ///         <item>
-    ///             Mismatched quotes throw — better to refuse the write
-    ///             than to silently wipe entries.
-    ///         </item>
-    ///     </list>
+    ///     Parse a <c>gsettings get</c> list-of-strings result. gsettings emits <c>@as []</c> for
+    ///     empty or a Python-style <c>['path1', 'path2']</c>; dconf-editor hand-edits may use double
+    ///     quotes. Does NOT Split on commas (walks char-by-char). Honors <c>\'</c>, <c>\"</c>,
+    ///     <c>\\</c> escapes; throws <see cref="FormatException" /> on anything it can't safely
+    ///     round-trip — better to refuse a write than silently wipe the user's other shortcuts.
     /// </summary>
     public static List<string> ParseGSettingsList(string raw)
     {
         var result = new List<string>();
-        // Fail closed on blank input: a successful gsettings call that
-        // somehow yields an empty stdout is anomalous, not "the list is
-        // empty". Treating it as empty would let us overwrite the
-        // user's other custom shortcuts on the very next set — exactly
-        // the data-loss path the phase spec called out. Only literal
-        // "@as []" / "[]" mean empty.
+        // Fail closed: blank stdout from gsettings is anomalous, not "empty list".
+        // Only literal "@as []" / "[]" mean empty; anything else must throw.
         if (raw is null)
         {
             throw new FormatException("gsettings returned a null list");
@@ -379,7 +313,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         }
 
         var s = raw.Trim();
-        // Strip the gsettings "@as " type-annotation prefix when present.
+        // Strip "@as " type-annotation prefix if present.
         if (s.StartsWith("@as ", StringComparison.Ordinal))
         {
             s = s.Substring(4).TrimStart();
@@ -429,11 +363,9 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
                 var c = body[i];
                 if (c == '\\' && i + 1 < body.Length)
                 {
-                    // Honor only the escapes gsettings actually emits:
-                    // \\, \', \". Anything else means a hand-edit we
-                    // can't safely round-trip — silently dropping the
-                    // backslash would let us write back a different
-                    // string and effectively rewrite the user's entry.
+                    // Only honor \\, \', \" — the escapes gsettings emits. Any other
+                    // escape is a hand-edit we can't safely round-trip; throw rather
+                    // than silently drop the backslash and rewrite the user's entry.
                     var next = body[i + 1];
                     if (next != '\\' && next != '\'' && next != '"')
                     {
@@ -470,12 +402,9 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     }
 
     /// <summary>
-    ///     Render a list-of-strings in the exact form gsettings expects on
-    ///     the <c>set</c> side. Single-quoted entries with backslash-escaped
-    ///     single quotes inside — matching the gsettings reader's
-    ///     expectations. Empty list serializes as <c>[]</c>, not
-    ///     <c>@as []</c>: the <c>set</c> verb does not want the type
-    ///     annotation.
+    ///     Serialize a list-of-strings for <c>gsettings set</c>: single-quoted entries with
+    ///     backslash-escaped single quotes. Empty list is <c>[]</c>, not <c>@as []</c> —
+    ///     the <c>set</c> verb doesn't accept the type annotation.
     /// </summary>
     public static string FormatGSettingsList(IEnumerable<string> items)
     {
@@ -509,12 +438,9 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     }
 
     /// <summary>
-    ///     Convert TypeWhisper's display accelerator format
-    ///     ("Ctrl+Shift+Space") into the GNOME / GTK accelerator format
-    ///     (<c>&lt;Control&gt;&lt;Shift&gt;space</c>). Modifiers go first
-    ///     as angle-bracketed tokens; the final key is lower-cased except
-    ///     for printable single characters which gsettings is happy with
-    ///     either way. Unknown tokens pass through as-is.
+    ///     Converts "Ctrl+Shift+Space" to <c>&lt;Control&gt;&lt;Shift&gt;space</c>.
+    ///     Modifiers become angle-bracketed tokens; the terminal key is lower-cased
+    ///     (except function keys, which require a capital F for GTK's keysym parser).
     /// </summary>
     public static string FormatGnomeAccel(string trigger)
     {
@@ -558,12 +484,8 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         }
 
         var key = parts[^1];
-        // GTK accelerators expect "space", "comma", etc. for named
-        // keys, and lowercase printable letters (uppercase "K" is the
-        // keysym for shifted-K, which would force Shift implicitly).
-        // Function keys (F1..F35) are special — they're a fixed
-        // mixed-case sigil that GTK's keysym parser only matches
-        // case-sensitively, so we preserve the leading capital.
+        // GTK expects lowercase ("space", "k"), but function keys (F1..F35) must
+        // preserve the leading capital — GTK's keysym parser is case-sensitive there.
         if (IsFunctionKey(key))
         {
             key = "F" + key.Substring(1);
@@ -577,21 +499,46 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         return sb.ToString();
     }
 
+    /// <summary>
+    ///     Read a single string-valued gsettings key and strip the surrounding
+    ///     single quotes gsettings prints (unescaping <c>\'</c> and <c>\\</c>).
+    ///     Returns null when the key can't be read.
+    /// </summary>
+    private static async Task<string?> GetStringValueAsync(
+        string schemaWithPath,
+        string key,
+        CancellationToken ct
+    )
+    {
+        var (ok, raw, _) = await RunAsync("gsettings", new[] { "get", schemaWithPath, key }, ct)
+            .ConfigureAwait(false);
+        if (!ok)
+        {
+            return null;
+        }
+
+        var s = raw.Trim();
+        if (s.Length < 2 || s[0] != '\'' || s[^1] != '\'')
+        {
+            return s;
+        }
+
+        var inner = s.Substring(1, s.Length - 2);
+        return inner.Replace("\\'", "'").Replace("\\\\", "\\");
+    }
+
     private static string BuildCustomPath(string shortcutId)
     {
-        // Bake a short suffix derived from the shortcut id so removal
-        // can target exactly the entry we created and so two
-        // TypeWhisper-managed shortcuts don't collide. We use the
-        // SHA-derived hex to stay deterministic across runs (string
-        // GetHashCode is randomized per-process in .NET).
+        // Stable hex suffix (FNV-1a) so removal targets our entry precisely
+        // and two TypeWhisper shortcuts can't collide. String.GetHashCode is
+        // randomized per-process in .NET, so we can't use it for durable paths.
         return
             $"/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/typewhisper-{StableHashHex(shortcutId)}/";
     }
 
     private static string StableHashHex(string s)
     {
-        // FNV-1a 32-bit — tiny, deterministic, plenty of entropy for a
-        // disambiguation suffix. Anything cryptographic is overkill.
+        // FNV-1a 32-bit: deterministic, tiny, sufficient for a path suffix.
         const uint offset = 2166136261;
         const uint prime = 16777619;
         var h = offset;

@@ -1,11 +1,8 @@
 namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
-///     Importance of a setup task. <see cref="Required" /> tasks gate the
-///     wizard's Finish button — the user cannot complete onboarding (without
-///     explicitly skipping) until every applicable required task is satisfied.
-///     <see cref="Recommended" /> tasks surface in the same checklist but never
-///     block completion.
+///     Importance of a setup task. <see cref="Required" /> tasks gate the wizard's Finish button;
+///     <see cref="Recommended" /> tasks appear in the checklist but never block completion.
 /// </summary>
 public enum SetupTaskSeverity
 {
@@ -58,23 +55,17 @@ public sealed record SetupTaskState(
 );
 
 /// <summary>
-///     Outcome of running a task's action. <see cref="Success" /> reports
-///     whether the action itself completed without error — it does not imply
-///     the task is now satisfied (e.g. opening a browser install page succeeds
-///     but the capability only appears after the user clicks Install). The
-///     caller re-evaluates the task to learn the new state.
+///     Outcome of running a task's action. <see cref="Success" /> means the action completed
+///     without error, not that the task is now satisfied — e.g. opening a browser install page
+///     succeeds before the user clicks Install. The caller re-evaluates to learn the new state.
 /// </summary>
 public sealed record SetupActionOutcome(bool Success, string Message, string? Detail = null);
 
 /// <summary>
-///     One unit of machine setup the onboarding wizard drives to completion.
-///     Each task owns one capability (clipboard, automatic paste, the global
-///     hotkey registration, active-window detection, …) and is fully
-///     self-describing: it decides whether it applies to the current machine,
-///     reports its own status, and performs its own fix. The wizard renders
-///     whatever tasks apply and never hard-codes any one desktop or session —
-///     adding support for a new environment is a matter of registering more
-///     tasks (or teaching an existing task about it), not editing the wizard.
+///     One unit of machine setup driven by the onboarding wizard. Each task owns one capability
+///     (clipboard, paste, hotkey, active-window detection, …), decides whether it applies to the
+///     current machine, reports its own status, and performs its own fix. Adding support for a new
+///     desktop environment means registering tasks, not editing the wizard.
 /// </summary>
 public interface ISetupTask
 {
@@ -88,26 +79,21 @@ public interface ISetupTask
     SetupTaskSeverity Severity { get; }
 
     /// <summary>
-    ///     Cheap, synchronous gate: does this task have anything to do on the
-    ///     current machine? Tasks that don't apply (e.g. an X11-only paste
-    ///     task on a Wayland session, or the GNOME extension task off GNOME)
-    ///     are omitted from the checklist entirely. Must only read environment
-    ///     variables and do binary lookups — no spawning helper commands.
+    ///     Cheap, synchronous gate: does this task apply to the current machine?
+    ///     Non-applicable tasks are omitted from the checklist (e.g. X11-only paste on Wayland).
+    ///     Must only read environment variables and do binary lookups — no spawning commands.
     /// </summary>
     bool AppliesToThisMachine();
 
     /// <summary>
-    ///     Evaluate the task's current state. May read the desktop's own
-    ///     stores (gsettings, dbus, config files) so it is async, but should
-    ///     stay quick — the checklist evaluates all tasks together.
+    ///     Evaluates the task's current state. May read gsettings/dbus/config files
+    ///     so it is async, but should stay quick — all tasks are evaluated together.
     /// </summary>
     Task<SetupTaskState> EvaluateAsync(CancellationToken ct);
 
     /// <summary>
-    ///     Perform the task's action (the thing behind the action button):
-    ///     install a package via pkexec, write a gsettings shortcut, open an
-    ///     install page, etc. Returns the immediate outcome; the caller
-    ///     re-evaluates afterward to get the new state.
+    ///     Performs the task's action (install via pkexec, write a gsettings key, open an install page, etc.).
+    ///     Returns the immediate outcome; the caller re-evaluates afterward to get the new state.
     /// </summary>
     Task<SetupActionOutcome> RunActionAsync(CancellationToken ct);
 }

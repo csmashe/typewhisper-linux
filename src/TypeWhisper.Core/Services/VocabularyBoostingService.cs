@@ -386,10 +386,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
             ? entry.Original.Trim()
             : entry.Replacement.Trim();
 
-        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            entry.Original.Trim()
-        };
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Original.Trim() };
 
         if (!string.IsNullOrWhiteSpace(entry.Replacement))
         {

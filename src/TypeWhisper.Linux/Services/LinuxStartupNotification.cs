@@ -5,30 +5,13 @@ using System.Text;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Completes the freedesktop startup-notification sequence that the desktop
-///     environment opens when it launches us from a <c>.desktop</c> entry with
-///     <c>StartupNotify=true</c>.
-///     <para>
-///         GNOME/Mutter shows the "launching" busy cursor (and a bouncing dash
-///         icon) from the moment of the click until the sequence is completed.
-///         A sequence is completed automatically only when the app maps a window
-///         carrying a matching <c>_NET_STARTUP_ID</c> property, or when the app
-///         broadcasts the SN "remove" message itself. Avalonia (running under
-///         XWayland here) does neither, so without this the cursor spins until
-///         Mutter's ~15–20s timeout — looking like a hang even though the app is
-///         up in ~2s. Our single-instance launches are worse: a second
-///         <c>typewhisper</c> click toggles the running instance and exits
-///         without mapping any window at all, so there is nothing for Mutter to
-///         match — only the broadcast can end it.
-///     </para>
-///     <para>
-///         So we send the spec's "remove: ID=&lt;id&gt;" message ourselves the
-///         moment we're ready (window shown) or just before a no-window exit.
-///         This keeps real launch feedback on slow cold starts while ending it
-///         immediately once we're up. Best-effort: any failure is swallowed so
-///         startup is never blocked, and it no-ops when there is no pending
-///         sequence (no <c>DESKTOP_STARTUP_ID</c>) or no X display.
-///     </para>
+///     Completes the freedesktop startup-notification sequence so GNOME/Mutter
+///     stops showing the "launching" busy cursor. Avalonia (running under
+///     XWayland) never maps a window with <c>_NET_STARTUP_ID</c>, so without
+///     this the cursor spins until Mutter's ~15–20 s timeout. Single-instance
+///     toggle-exits have no window at all — only the broadcast can end it.
+///     Best-effort: failures are swallowed; no-ops when there is no
+///     <c>DESKTOP_STARTUP_ID</c> or no X display.
 /// </summary>
 internal static class LinuxStartupNotification
 {
@@ -40,9 +23,8 @@ internal static class LinuxStartupNotification
     private const long PropertyChangeMask = 1L << 22;
     private const long StructureNotifyMask = 1L << 17;
 
-    // XEvent is a union padded to its largest member; 192 bytes covers it on
-    // LP64. XSendEvent only reads the XClientMessageEvent fields, but we hand it
-    // a full-size, zeroed buffer so it can never read past our allocation.
+    // XEvent is a union; 192 bytes covers its largest member on LP64.
+    // Full-size zeroed buffer ensures XSendEvent can't read past our allocation.
     private const int XEventSize = 192;
 
     // XClientMessageEvent field offsets on LP64 (see <X11/Xlib.h>).
@@ -57,9 +39,8 @@ internal static class LinuxStartupNotification
     private static int s_done;
 
     /// <summary>
-    ///     Broadcast the startup-notification completion for this process's
-    ///     pending launch, then clear the env vars so child processes (spawned
-    ///     plugins, helpers) don't inherit a stale token. Safe to call from any
+    ///     Broadcasts startup-notification completion and clears the env vars so
+    ///     child processes don't inherit a stale token. Safe to call from any
     ///     thread; runs at most once per process.
     /// </summary>
     public static void NotifyComplete()
@@ -107,8 +88,7 @@ internal static class LinuxStartupNotification
             var screen = XDefaultScreen(display);
             var root = XRootWindow(display, screen);
 
-            // A throwaway, never-mapped window owns the broadcast, per the spec
-            // and libstartup-notification's sn_internal_broadcast_xmessage.
+            // A throwaway never-mapped window owns the broadcast, per the spec.
             window = XCreateSimpleWindow(display, root, -100, -100, 1, 1, 0, 0, 0);
             XSelectInput(display, window, (nint)(PropertyChangeMask | StructureNotifyMask));
 
@@ -120,9 +100,8 @@ internal static class LinuxStartupNotification
             ev = Marshal.AllocHGlobal(XEventSize);
             var offset = 0;
             var first = true;
-            // Messages are split into 20-byte (format-8) ClientMessage chunks;
-            // the first carries _NET_STARTUP_INFO_BEGIN, the rest
-            // _NET_STARTUP_INFO. The trailing NUL is part of the stream.
+            // Messages are 20-byte (format-8) ClientMessage chunks; first carries
+            // _NET_STARTUP_INFO_BEGIN, the rest _NET_STARTUP_INFO.
             while (offset < payload.Length)
             {
                 ZeroEvent(ev);
@@ -161,10 +140,7 @@ internal static class LinuxStartupNotification
         }
     }
 
-    /// <summary>
-    ///     "remove: ID=&lt;id&gt;\0" with spaces, quotes and backslashes in the
-    ///     id escaped, per the startup-notification message spec.
-    /// </summary>
+    /// <summary>"remove: ID=&lt;id&gt;\0" with spaces, quotes, and backslashes escaped per the spec.</summary>
     private static byte[] BuildRemoveMessage(string startupId)
     {
         var sb = new StringBuilder("remove: ID=");
@@ -222,7 +198,8 @@ internal static class LinuxStartupNotification
     private static extern nuint XInternAtom(
         IntPtr display,
         string name,
-        [MarshalAs(UnmanagedType.Bool)] bool onlyIfExists
+        [MarshalAs(UnmanagedType.Bool)]
+        bool onlyIfExists
     );
 
     [DllImport(Lib)]
@@ -232,7 +209,8 @@ internal static class LinuxStartupNotification
     private static extern int XSendEvent(
         IntPtr display,
         nuint window,
-        [MarshalAs(UnmanagedType.Bool)] bool propagate,
+        [MarshalAs(UnmanagedType.Bool)]
+        bool propagate,
         nint eventMask,
         IntPtr eventSend
     );

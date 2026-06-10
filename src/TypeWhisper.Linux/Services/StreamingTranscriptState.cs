@@ -15,8 +15,7 @@ internal sealed class StreamingTranscriptState
 
     public int StartSession()
     {
-        // Bump the version before clearing so any in-flight writer with the
-        // old version fails its re-check and can't clobber the fresh buffers.
+        // Bump version first so any in-flight writer with the old version fails its re-check.
         var newVersion = Interlocked.Increment(ref _sessionVersion);
         _confirmedText = "";
         _lastDisplayedText = "";
@@ -71,8 +70,8 @@ internal sealed class StreamingTranscriptState
 
         var stable = StabilizeText(_confirmedText, text);
 
-        // Re-check immediately before writing: a StartSession/InvalidateSession
-        // may have bumped the version while we were corrector-ing and stabilizing.
+        // Re-check before writing: StartSession/InvalidateSession may have bumped
+        // the version while we were correcting and stabilizing.
         if (!IsCurrentSession(sessionVersion))
         {
             return false;
@@ -85,18 +84,11 @@ internal sealed class StreamingTranscriptState
     }
 
     /// <summary>
-    ///     Merges a new partial transcript into the confirmed accumulator,
-    ///     preventing regressions where the model re-emits an earlier shorter
-    ///     hypothesis that would erase already-confirmed text.
-    ///     Strategy (in order of preference):
-    ///     1. If newText extends confirmed (starts with it), accept the extension.
-    ///     2. If the common prefix covers more than half of confirmed, splice
-    ///     the diverging tail onto the end of confirmed.
-    ///     3. Walk a sliding window backwards through confirmed looking for a
-    ///     suffix that newText starts with (model has backed up slightly
-    ///     but the new hypothesis still overlaps). Append the non-overlapping
-    ///     tail to confirmed.
-    ///     4. Fallback: trust newText entirely (major hypothesis revision).
+    ///     Merges a new partial transcript into the confirmed accumulator, preventing
+    ///     regressions where the model re-emits a shorter hypothesis erasing confirmed text.
+    ///     Strategy: (1) if newText extends confirmed, accept it; (2) if common prefix
+    ///     covers &gt;half of confirmed, splice the tail; (3) sliding-window backward search
+    ///     for a confirmed suffix that newText starts with; (4) fallback: trust newText.
     /// </summary>
     internal static string StabilizeText(string confirmed, string newText)
     {

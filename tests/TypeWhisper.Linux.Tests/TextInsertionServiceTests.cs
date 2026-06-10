@@ -181,15 +181,23 @@ public sealed class TextInsertionServiceTests
         Assert.False(platform.PasteSent);
     }
 
-    [Fact]
-    public async Task InsertTextAsync_terminal_process_uses_direct_typing()
+    [Theory]
+    [InlineData("kitty")]
+    // gnome-terminal / mate-terminal are client-server: the window-owning
+    // process is "*-terminal-server", and /proc/<pid>/comm (what
+    // Process.ProcessName reads) is truncated to 15 bytes — so we see these
+    // mangled forms in the wild and must still type, not paste.
+    [InlineData("gnome-terminal-server")]
+    [InlineData("gnome-terminal-")]
+    [InlineData("mate-terminal-s")]
+    public async Task InsertTextAsync_terminal_process_uses_direct_typing(string processName)
     {
         var platform = new FakeTextInsertionPlatform();
         var sut = new TextInsertionService(platform);
 
         var result = await sut.InsertTextAsync(
             "new text",
-            targetProcessName: "kitty",
+            targetProcessName: processName,
             targetWindowTitle: "typewhisper-linux"
         );
 

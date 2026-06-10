@@ -5,18 +5,10 @@ using TypeWhisper.Core.Interfaces;
 namespace TypeWhisper.Core.Services;
 
 /// <summary>
-///     Priority-based post-processing pipeline. Steps are sorted by priority (ascending)
-///     and executed sequentially. Built-in priorities:
-///     Plugin PostProcessors: their own Priority value
-///     Spoken Commands: 50
-///     Spoken Punctuation: 60
-///     Formatting: 150
-///     Cleanup: 250
-///     LLM Prompt Action: 300
-///     Snippet Expansion: 500
-///     Vocabulary Boosting: 550
-///     Dictionary Corrections: 600
-///     Translation: 900 (always last)
+///     Priority-based post-processing pipeline. Steps run in ascending priority order:
+///     SpokenCommands=50, SpokenPunctuation=60, Formatting=150, Cleanup=250,
+///     LLM=300, Snippets=500, VocabularyBoosting=550, Dictionary=600, Translation=900.
+///     Plugin post-processors insert at their own declared priority.
 /// </summary>
 public sealed class PostProcessingPipeline : IPostProcessingPipeline
 {
@@ -29,6 +21,42 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
     private const int VocabularyBoostingPriority = 550;
     private const int DictionaryPriority = 600;
     private const int TranslationPriority = 900;
+
+    // STT renders spoken commands inconsistently ("new line", "New Line.", "newline") and
+    // often pads them with stray punctuation. These patterns absorb the command plus
+    // surrounding spaces/punctuation while preserving preceding sentence punctuation
+    // ("Club?\nShould"). "new paragraph" must come before "new line" so the longer phrase wins.
+    private static readonly Regex s_newParagraph = new(
+        @"[ \t]*\bnew\s+paragraph\b[ \t]*[.,]?[ \t]*",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled
+    );
+
+    private static readonly Regex s_newLine = new(
+        @"[ \t]*\b(?:new\s+line|newline)\b[ \t]*[.,]?[ \t]*",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled
+    );
+
+    // Only high-confidence spoken-punctuation phrases: "question mark" and
+    // "exclamation point/mark" are almost never literal content, so deterministic
+    // conversion is safe. "period"/"comma"/"colon"/"dash" are common content words
+    // so we leave those to the fine-tuned LLM. Whitespace handling is LOCAL to the
+    // match — indentation and code snippets elsewhere in the transcript are untouched.
+    private static readonly Regex s_questionMark = new(
+        @"[ \t]*\bquestion\s+mark\b[ \t]*[.!?]*[ \t]*",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled
+    );
+
+    private static readonly Regex s_exclamation = new(
+        @"[ \t]*\bexclamation\s+(?:point|mark)\b[ \t]*[.!?]*[ \t]*",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled
+    );
+
+    // Removes the trailing space we insert after ?/! when it lands at end-of-text/line.
+    // Matches only "?/!" + one space + newline/end, leaving other whitespace intact.
+    private static readonly Regex s_trailingInsertedSpace = new(
+        @"([?!]) (?=\n|$)",
+        RegexOptions.Compiled
+    );
 
     public async Task<PostProcessingResult> ProcessAsync(
         string rawText,
@@ -82,11 +110,47 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
                 {
                     throw;
                 }
-                // Continue with current text — don't let one step break the pipeline
+                // Continue on current text so one failing step doesn't break the whole pipeline.
             }
         }
 
         return new PostProcessingResult { Text = text, Steps = stepResults };
+    }
+
+    /// <summary>
+    ///     Converts "new paragraph"/"new line"/"newline" into literal line breaks.
+    ///     Deterministic because LLMs don't reliably honor these verbal commands.
+    ///     Caveat: also fires when the phrase is literal content (e.g. "a new line of code").
+    /// </summary>
+    internal static string NormalizeSpokenLineBreaks(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        text = s_newParagraph.Replace(text, "\n\n");
+        text = s_newLine.Replace(text, "\n");
+        return text;
+    }
+
+    /// <summary>
+    ///     Converts "question mark" and "exclamation point/mark" to <c>?</c>/<c>!</c>.
+    ///     Deterministic because the fine-tuned model and STT engine are both intermittent on these.
+    ///     Caveat: also fires when the phrase is literal content (same trade-off as
+    ///     <see cref="NormalizeSpokenLineBreaks" />). Whitespace cleanup is local to each replacement.
+    /// </summary>
+    internal static string NormalizeSpokenPunctuation(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        text = s_questionMark.Replace(text, "? ");
+        text = s_exclamation.Replace(text, "! ");
+        text = s_trailingInsertedSpace.Replace(text, "$1");
+        return text;
     }
 
     private static List<(
@@ -97,8 +161,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
     {
         var steps = new List<(int, string, Func<string, CancellationToken, Task<string>>)>();
 
-        // Spoken line-break commands run first so the LLM (and everything
-        // after) sees real line breaks instead of the words "new line".
+        // Spoken line-break commands run first so the LLM sees real breaks, not the words.
         if (options.NormalizeSpokenLineBreaks)
         {
             steps.Add(
@@ -110,9 +173,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
-        // Spoken punctuation names ("question mark", "exclamation point") run
-        // right after line breaks so the symbol — not the words — reaches the
-        // LLM and everything downstream.
+        // Spoken punctuation runs right after line breaks so symbols reach the LLM, not words.
         if (options.NormalizeSpokenPunctuation)
         {
             steps.Add(
@@ -136,7 +197,6 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
-        // Plugin post-processors insert at their own Priority; context is captured in each closure
         if (options.PluginPostProcessors is { Count: > 0 } processors)
         {
             foreach (var processor in processors)
@@ -152,7 +212,6 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             }
         }
 
-        // Cleanup runs before LLM/snippets so the AI prompt receives already-cleaned text
         if (options.CleanupHandler is not null)
         {
             steps.Add((CleanupPriority, PostProcessingStepNames.Cleanup, options.CleanupHandler));
@@ -210,7 +269,6 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
-        // Translation is always last (priority 900) so it operates on the fully post-processed text
         if (
             options.TranslationHandler is not null
             && !string.IsNullOrEmpty(options.TranslationTarget)
@@ -245,97 +303,5 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
 
         steps.Sort((a, b) => a.Item1.CompareTo(b.Item1));
         return steps;
-    }
-
-    // STT renders the spoken command in varied ways ("new line", "New Line.",
-    // "newline"), often as its own little sentence with stray punctuation
-    // around it ("Club? New Line. Should"). These patterns absorb the command
-    // plus the trailing comma/period and surrounding spaces the recognizer pads
-    // it with, while leaving any preceding sentence punctuation intact
-    // ("Club?\nShould"). Order matters: "new paragraph" before "new line" so the
-    // longer phrase wins.
-    private static readonly Regex s_newParagraph = new(
-        @"[ \t]*\bnew\s+paragraph\b[ \t]*[.,]?[ \t]*",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled
-    );
-
-    private static readonly Regex s_newLine = new(
-        @"[ \t]*\b(?:new\s+line|newline)\b[ \t]*[.,]?[ \t]*",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled
-    );
-
-    /// <summary>
-    ///     Converts the spoken commands "new paragraph" and "new line"/"newline"
-    ///     into literal line breaks. Deterministic on purpose — LLMs do not
-    ///     reliably honor these verbal commands. Caveat: this also fires when
-    ///     "new line" is meant literally (e.g. "a new line of code"); that's the
-    ///     accepted trade-off dictation tools make for the command.
-    /// </summary>
-    internal static string NormalizeSpokenLineBreaks(string text)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return text;
-        }
-
-        text = s_newParagraph.Replace(text, "\n\n");
-        text = s_newLine.Replace(text, "\n");
-        return text;
-    }
-
-    // Only the high-confidence spoken-punctuation phrases are handled here.
-    // "question mark" and "exclamation point/mark" are almost never dictated as
-    // literal content, so converting them deterministically is safe. We
-    // deliberately do NOT touch "period"/"comma"/"colon"/"dash" — those are
-    // common content words ("during that period", "the Oxford comma"), so the
-    // collision risk outweighs the benefit; the fine-tuned LLM handles those.
-    // The match absorbs the horizontal whitespace AROUND the phrase (and any
-    // stray sentence punctuation the recognizer pads it with), then re-emits a
-    // single trailing space so a sentence-internal "X question mark Y" becomes
-    // "X? Y". Crucially the whitespace handling is LOCAL to the match — we never
-    // collapse whitespace elsewhere in the transcript, so indentation, aligned
-    // columns, and code snippets are left intact.
-    private static readonly Regex s_questionMark = new(
-        @"[ \t]*\bquestion\s+mark\b[ \t]*[.!?]*[ \t]*",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled
-    );
-
-    private static readonly Regex s_exclamation = new(
-        @"[ \t]*\bexclamation\s+(?:point|mark)\b[ \t]*[.!?]*[ \t]*",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled
-    );
-
-    // Drops the single trailing space we insert after a converted ?/! when it
-    // lands at end-of-text or end-of-line. Matches ONLY a "?"/"!" followed by
-    // exactly one space then a newline/end, so it can't touch indentation or
-    // other intentional whitespace.
-    private static readonly Regex s_trailingInsertedSpace = new(
-        @"([?!]) (?=\n|$)",
-        RegexOptions.Compiled
-    );
-
-    /// <summary>
-    ///     Converts the unambiguous spoken punctuation phrases "question mark"
-    ///     and "exclamation point"/"exclamation mark" into the literal
-    ///     <c>?</c>/<c>!</c> symbols. Deterministic on purpose — the model is
-    ///     intermittent on these, and the STT engine itself only sometimes
-    ///     converts them, so a code pass is the reliable safety net. Caveat:
-    ///     this also fires when the phrase is meant literally ("add a question
-    ///     mark there" → "add a? there"); that's the accepted trade-off, the
-    ///     same one <see cref="NormalizeSpokenLineBreaks" /> makes for "new
-    ///     line". Whitespace cleanup is confined to the replacement site, so it
-    ///     does not rewrite formatting elsewhere in the dictation.
-    /// </summary>
-    internal static string NormalizeSpokenPunctuation(string text)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return text;
-        }
-
-        text = s_questionMark.Replace(text, "? ");
-        text = s_exclamation.Replace(text, "! ");
-        text = s_trailingInsertedSpace.Replace(text, "$1");
-        return text;
     }
 }

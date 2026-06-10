@@ -65,10 +65,7 @@ public sealed class AudioFileService
             $"-v error -i \"{filePath}\" -vn -ac 1 -ar 16000 -f wav pipe:1"
         )
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true
         };
 
         process.Start();

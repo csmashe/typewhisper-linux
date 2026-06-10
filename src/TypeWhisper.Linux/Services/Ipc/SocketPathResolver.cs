@@ -8,12 +8,9 @@ namespace TypeWhisper.Linux.Services.Ipc;
 ///     containing directory exists with user-only permissions.
 /// </summary>
 /// <remarks>
-///     Preferred location is <c>$XDG_RUNTIME_DIR/typewhisper/control.sock</c>. The
-///     runtime dir is already owned by the user and created with mode 0700 by
-///     systemd-logind, so we only need to create the <c>typewhisper/</c> subdir.
-///     If <c>XDG_RUNTIME_DIR</c> is unset (older logind, sandbox, custom setups)
-///     we fall back to <c>/tmp/typewhisper-$UID/</c> and explicitly chmod 0700 so
-///     other local users can't probe or hijack the socket.
+///     Preferred: <c>$XDG_RUNTIME_DIR/typewhisper/control.sock</c> (runtime dir is
+///     already 0700 via systemd-logind). Falls back to <c>/tmp/typewhisper-$UID/</c>
+///     with an explicit chmod 0700 when <c>XDG_RUNTIME_DIR</c> is unset.
 /// </remarks>
 internal static class SocketPathResolver
 {
@@ -43,9 +40,7 @@ internal static class SocketPathResolver
             try
             {
                 Directory.CreateDirectory(dir);
-                // XDG_RUNTIME_DIR is 0700 by systemd-logind; inherited
-                // permissions are fine. Explicit chmod is cheap insurance
-                // against odd umasks.
+                // Explicit chmod is cheap insurance against odd umasks.
                 TryChmod(dir, 0b111_000_000); // 0700
                 return Path.Combine(dir, SocketFileName);
             }
@@ -60,14 +55,10 @@ internal static class SocketPathResolver
         var uid = (int)geteuid();
         var fallback = $"/tmp/typewhisper-{uid}";
 
-        // Defense against a pre-staged hostile directory. /tmp is world-
-        // writable, so another local user can create `/tmp/typewhisper-$UID`
-        // ahead of us with permissive modes and try to influence the
-        // socket. If the path already exists with anything other than the
-        // expected 0700 we don't trust it: try chmod first, and if a
-        // subsequent verification still shows wrong bits we fall back to a
-        // per-process scratch directory so we never bind inside an
-        // attacker-controlled path.
+        // /tmp is world-writable, so a hostile local user could pre-create
+        // this directory with permissive modes. If it exists with wrong bits,
+        // we try chmod; if verification still fails we use a per-process
+        // scratch dir rather than binding inside an attacker-controlled path.
         try
         {
             if (!Directory.Exists(fallback))
@@ -118,10 +109,8 @@ internal static class SocketPathResolver
         );
         Directory.CreateDirectory(privatePath);
         TryChmod(privatePath, 0b111_000_000); // 0700
-        // If chmod didn't take (read-only FS, unusual mount), don't return a
-        // path that might still be group/other-readable — refuse rather than
-        // expose the socket. This is the last-resort fallback; the caller
-        // surfaces the exception to the user instead of silently degrading.
+        // If chmod didn't take (read-only FS, odd mount), refuse rather than
+        // expose a group/other-readable socket — the caller surfaces the exception.
         if (!IsDirectoryPrivateAndOwned(privatePath, uid))
         {
             try

@@ -3,11 +3,9 @@ using TypeWhisper.Core.Interfaces;
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     Builds the <see cref="DeShortcutSpec" /> for TypeWhisper's dictation
-///     toggle from the user's saved hotkey. Shared by the Shortcuts settings
-///     panel and the onboarding setup checklist so both register exactly the
-///     same shortcut id, trigger, and command — a divergence would let one
-///     surface "install" a shortcut the other can't detect as installed.
+///     Builds the <see cref="DeShortcutSpec" /> for TypeWhisper's dictation toggle. Shared by the
+///     Shortcuts panel and onboarding checklist so both register the same id/trigger/command —
+///     a divergence would let one surface install a shortcut the other can't detect.
 /// </summary>
 public static class DictationShortcutSpecFactory
 {
@@ -16,10 +14,8 @@ public static class DictationShortcutSpecFactory
     public const string DefaultTrigger = "Ctrl+Shift+Space";
 
     /// <summary>
-    ///     Construct the spec for <paramref name="writer" />. PTT-capable
-    ///     desktops (Hyprland/Sway) get the press/release/cancel triplet that
-    ///     drives the CLI directly; toggle-only desktops (GNOME/KDE) get a
-    ///     single command.
+    ///     Builds the spec for <paramref name="writer" />. PTT desktops (Hyprland/Sway) get
+    ///     press/release/cancel triplet; toggle-only desktops (GNOME/KDE) get a single command.
     /// </summary>
     public static DeShortcutSpec Build(ISettingsService settings, IDeShortcutWriter writer)
     {
@@ -53,11 +49,9 @@ public static class DictationShortcutSpecFactory
     }
 
     /// <summary>
-    ///     The command the auto-installed shortcut should invoke. Resolves to
-    ///     the GUI apphost path when launched as the installed <c>typewhisper</c>
-    ///     binary, otherwise the bare <c>typewhisper</c> name. See the long
-    ///     note in the Shortcuts panel for why we don't trust ProcessPath when
-    ///     it points at the dotnet host (source / IDE runs).
+    ///     Returns the command for the auto-installed shortcut: the full apphost path when running as
+    ///     the installed binary, otherwise the bare <c>typewhisper</c> name. ProcessPath is not
+    ///     trusted when it points at the dotnet host (source/IDE runs).
     /// </summary>
     public static string ResolveGuiCommand()
     {

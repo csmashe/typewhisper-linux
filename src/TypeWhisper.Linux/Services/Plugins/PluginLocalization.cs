@@ -14,10 +14,7 @@ public sealed class PluginLocalization : IPluginLocalization
     private const string FallbackLanguage = "en";
     private const string LocalizationFolder = "Localization";
 
-    private static readonly JsonSerializerOptions s_jsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private readonly Dictionary<string, Dictionary<string, string>> _strings = [];
 

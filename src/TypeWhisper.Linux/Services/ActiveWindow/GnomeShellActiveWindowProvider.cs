@@ -6,14 +6,11 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
-///     GNOME Shell active-window provider. Gated on <c>XDG_CURRENT_DESKTOP</c>
-///     containing "GNOME" or "ubuntu". Talks to the
-///     <c>org.gnome.Shell.Introspect</c> session-bus interface via
-///     <c>gdbus</c> and parses the dict-of-dicts gvariant payload for the
-///     window with <c>has-focus: true</c>. When introspection is disabled
-///     (<c>gsettings set org.gnome.shell introspect true</c>) the
-///     <c>Source</c> stays "gnome-shell" so the failure tracker can surface
-///     the right remediation.
+///     GNOME Shell active-window provider. Calls <c>org.gnome.Shell.Introspect</c>
+///     via <c>gdbus</c> and parses the gvariant dict for the window with
+///     <c>has-focus: true</c>. If introspection is disabled, <c>Source</c>
+///     stays "gnome-shell" so the failure tracker can surface the fix
+///     (<c>gsettings set org.gnome.shell introspect true</c>).
 /// </summary>
 public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
 {
@@ -106,12 +103,8 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
 
     private static IEnumerable<(string Id, string Body)> EnumerateWindows(string output)
     {
-        // gdbus prints something like:
-        //   ({uint64 12345: {'app-id': <'Code'>, 'wm-class': <'code'>,
-        //                    'title': <'main.cs'>, 'has-focus': <true>, ...},
-        //     uint64 67890: { ... }},)
-        // We only need to find each "uint64 N: { ... }" pair. The inner
-        // braces don't nest beyond one level, so a depth counter is enough.
+        // gdbus output: ({uint64 N: {'app-id': <'...'>, ...}, uint64 N: {...}},)
+        // Inner braces don't nest beyond one level, so a depth counter suffices.
         var i = 0;
         while (i < output.Length)
         {
@@ -196,10 +189,7 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
 
     private static int? TryReadInt(string body, string key)
     {
-        // gdbus emits integers inside the boxed variant as
-        //   'pid': <uint32 1234>  or  'pid': <1234>
-        // depending on the underlying signature. The leading type token is
-        // optional, so the regex tolerates both shapes.
+        // gdbus emits 'pid': <uint32 1234> or 'pid': <1234> — optional type token.
         var pattern = $@"'{Regex.Escape(key)}'\s*:\s*<\s*(?:[a-z0-9]+\s+)?(\d+)\s*>";
         var m = Regex.Match(body, pattern);
         return m.Success && int.TryParse(m.Groups[1].Value, out var v) ? v : null;

@@ -48,8 +48,9 @@ public static class OpenAiChatHelper
         string systemPrompt,
         string userText,
         CancellationToken ct
-    ) =>
-        SendChatCompletionAsync(
+    )
+    {
+        return SendChatCompletionAsync(
             httpClient,
             baseUrl,
             apiKey,
@@ -57,11 +58,12 @@ public static class OpenAiChatHelper
             systemPrompt,
             userText,
             ct,
-            maxOutputTokens: 2048,
-            maxOutputTokenParameter: "max_tokens",
-            reasoningEffort: null,
-            temperature: 0.1
+            2048,
+            "max_tokens",
+            null,
+            0.1
         );
+    }
 
     /// <inheritdoc cref="SendChatCompletionAsync(HttpClient, string, string, string, string, string, CancellationToken)" />
     public static async Task<string> SendChatCompletionAsync(
@@ -80,7 +82,7 @@ public static class OpenAiChatHelper
     {
         var requestBody = JsonSerializer.Serialize(
             BuildRequestBody(model, systemPrompt, userText, maxOutputTokens,
-                maxOutputTokenParameter, reasoningEffort, temperature, stream: false));
+                maxOutputTokenParameter, reasoningEffort, temperature, false));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -96,11 +98,8 @@ public static class OpenAiChatHelper
 
     /// <summary>
     ///     Streaming sibling of <see cref="SendChatCompletionAsync(HttpClient, string, string, string, string, string, CancellationToken, int?, string, string?, double?)" />.
-    ///     Sends the same request body with <c>"stream": true</c> and yields each
-    ///     <c>choices[0].delta.content</c> token as it arrives over the SSE
-    ///     connection. Covers the whole OpenAI-compatible <c>/v1/chat/completions</c>
-    ///     cohort (OpenAI, Groq, Cerebras, Fireworks, Gemini, Cohere, OpenRouter,
-    ///     OpenAiCompatible).
+    ///     Sends the same body with <c>"stream": true</c> and yields each <c>choices[0].delta.content</c> token
+    ///     over SSE. Covers the full OpenAI-compatible cohort (OpenAI, Groq, Cerebras, Fireworks, Gemini, Cohere, OpenRouter).
     /// </summary>
     public static async IAsyncEnumerable<string> SendChatCompletionStreamingAsync(
         HttpClient httpClient,
@@ -109,7 +108,8 @@ public static class OpenAiChatHelper
         string model,
         string systemPrompt,
         string userText,
-        [EnumeratorCancellation] CancellationToken ct,
+        [EnumeratorCancellation]
+        CancellationToken ct,
         int? maxOutputTokens = 2048,
         string maxOutputTokenParameter = "max_tokens",
         string? reasoningEffort = null,
@@ -118,7 +118,7 @@ public static class OpenAiChatHelper
     {
         var requestBody = JsonSerializer.Serialize(
             BuildRequestBody(model, systemPrompt, userText, maxOutputTokens,
-                maxOutputTokenParameter, reasoningEffort, temperature, stream: true));
+                maxOutputTokenParameter, reasoningEffort, temperature, true));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -128,9 +128,9 @@ public static class OpenAiChatHelper
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
-        // ResponseHeadersRead so we start reading the body as it streams instead of
-        // buffering the whole response (the batch path's SendWithErrorHandlingAsync
-        // buffers, so we send + check the status line ourselves here).
+        // ResponseHeadersRead: start reading the body as it streams rather than buffering.
+        // The batch path uses SendWithErrorHandlingAsync (which buffers), so here we send and
+        // check the status line ourselves.
         using var response = await httpClient.SendAsync(
             request, HttpCompletionOption.ResponseHeadersRead, ct);
 
@@ -153,66 +153,42 @@ public static class OpenAiChatHelper
         {
             var line = rawLine.Trim();
             if (!line.StartsWith("data:", StringComparison.Ordinal))
+            {
                 continue;
+            }
 
-            // SSE makes the single space after "data:" optional; strip at most
-            // one so "data:{...}" / "data:[DONE]" frames aren't silently skipped.
+            // SSE spec makes the space after "data:" optional; strip at most one
+            // so "data:{...}" frames aren't silently skipped.
             var payload = line[5..];
             if (payload.StartsWith(' '))
+            {
                 payload = payload[1..];
-            if (payload == "[DONE]")
-                yield break;
+            }
 
-            // A chat-completions stream returns 200 then can fail mid-flight via a
-            // top-level `error` frame rather than an HTTP error. Throw so
-            // LlmStreamPump faults and the caller falls back to batch, instead of
-            // committing the partial deltas seen so far as a successful result.
+            if (payload == "[DONE]")
+            {
+                yield break;
+            }
+
+            // Providers can fail mid-stream via a top-level `error` frame after a 200.
+            // Throw so LlmStreamPump faults and the caller falls back to batch,
+            // rather than committing partial deltas as a successful result.
             if (ParseChatCompletionStreamError(payload) is { } error)
+            {
                 throw new InvalidOperationException(error);
+            }
 
             if (ParseChatCompletionStreamDelta(payload) is { Length: > 0 } delta)
+            {
                 yield return delta;
+            }
         }
     }
 
-    private static Dictionary<string, object?> BuildRequestBody(
-        string model,
-        string systemPrompt,
-        string userText,
-        int? maxOutputTokens,
-        string maxOutputTokenParameter,
-        string? reasoningEffort,
-        double? temperature,
-        bool stream
-    )
-    {
-        var body = new Dictionary<string, object?>
-        {
-            ["model"] = model,
-            ["messages"] = new object[]
-            {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = userText }
-            }
-        };
-
-        if (temperature is not null)
-            body["temperature"] = temperature.Value;
-        if (maxOutputTokens is not null)
-            body[maxOutputTokenParameter] = maxOutputTokens.Value;
-        if (!string.IsNullOrWhiteSpace(reasoningEffort))
-            body["reasoning_effort"] = reasoningEffort;
-        if (stream)
-            body["stream"] = true;
-
-        return body;
-    }
-
     /// <summary>
-    ///     Extracts <c>choices[0].delta.content</c> from a single SSE
-    ///     <c>chat.completion.chunk</c> <c>data:</c> payload, or <c>null</c> for a
-    ///     contentless / unparseable frame (heartbeats, role-only first frames,
-    ///     finish frames). Reflection-free (A18) via <see cref="JsonDocument" />.
+    ///     Extracts <c>choices[0].delta.content</c> from a single SSE chunk payload,
+    ///     or <c>null</c> for contentless/unparseable frames (heartbeats, role-only, finish).
+    ///     Reflection-free via <see cref="JsonDocument" />.
     /// </summary>
     internal static string? ParseChatCompletionStreamDelta(string dataPayload)
     {
@@ -244,12 +220,10 @@ public static class OpenAiChatHelper
     }
 
     /// <summary>
-    ///     Returns a provider error message when a single chat-completions SSE
-    ///     <c>data:</c> payload is a top-level <c>error</c> frame — OpenAI-compatible
-    ///     providers emit <c>{"error": {...}}</c> (or a string) mid-stream after a
-    ///     200 — otherwise <c>null</c>. A literal <c>"error": null</c> on a normal
-    ///     chunk is not treated as a failure. Reflection-free (A18) via
-    ///     <see cref="JsonDocument" />.
+    ///     Returns an error message when a SSE <c>data:</c> payload is a top-level
+    ///     <c>error</c> frame (OpenAI-compatible providers emit these mid-stream after a 200),
+    ///     otherwise <c>null</c>. A literal <c>"error": null</c> is not treated as failure.
+    ///     Reflection-free via <see cref="JsonDocument" />.
     /// </summary>
     internal static string? ParseChatCompletionStreamError(string dataPayload)
     {
@@ -281,15 +255,15 @@ public static class OpenAiChatHelper
             }
 
             if (error.ValueKind == JsonValueKind.String)
+            {
                 return error.GetString() ?? "Streaming error.";
+            }
 
             return "Streaming error.";
         }
     }
 
-    /// <summary>
-    ///     Parses an OpenAI chat completion JSON response and returns the content of the first choice.
-    /// </summary>
+    /// <summary>Returns <c>choices[0].message.content</c> from a chat completion JSON response.</summary>
     internal static string ParseChatCompletionResponse(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -308,5 +282,48 @@ public static class OpenAiChatHelper
         }
 
         return "";
+    }
+
+    private static Dictionary<string, object?> BuildRequestBody(
+        string model,
+        string systemPrompt,
+        string userText,
+        int? maxOutputTokens,
+        string maxOutputTokenParameter,
+        string? reasoningEffort,
+        double? temperature,
+        bool stream
+    )
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["model"] = model,
+            ["messages"] = new object[]
+            {
+                new { role = "system", content = systemPrompt }, new { role = "user", content = userText }
+            }
+        };
+
+        if (temperature is not null)
+        {
+            body["temperature"] = temperature.Value;
+        }
+
+        if (maxOutputTokens is not null)
+        {
+            body[maxOutputTokenParameter] = maxOutputTokens.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            body["reasoning_effort"] = reasoningEffort;
+        }
+
+        if (stream)
+        {
+            body["stream"] = true;
+        }
+
+        return body;
     }
 }

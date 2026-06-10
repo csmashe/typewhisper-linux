@@ -59,9 +59,7 @@ public sealed class CorrectionSuggestionService
         [
             new CorrectionSuggestion
             {
-                Original = original,
-                Replacement = replacement,
-                Confidence = Math.Round(confidence, 2)
+                Original = original, Replacement = replacement, Confidence = Math.Round(confidence, 2)
             }
         ];
     }

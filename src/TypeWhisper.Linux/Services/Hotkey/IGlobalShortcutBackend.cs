@@ -12,11 +12,9 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     bool SupportsPressRelease { get; }
 
     /// <summary>
-    ///     True when the backend delivers shortcuts regardless of which window
-    ///     owns focus. False for backends that only see events while the
-    ///     application has the keyboard (SharpHook on Wayland) — the status
-    ///     panel surfaces this so users aren't told their hotkey is "global"
-    ///     when in practice it isn't.
+    ///     True when shortcuts fire regardless of focus. False for backends that
+    ///     only see events while the app has the keyboard (e.g. SharpHook on
+    ///     Wayland) — surfaced in the status panel to avoid misleading users.
     /// </summary>
     bool IsGlobalScope { get; }
 
@@ -39,10 +37,8 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     event EventHandler? CancelRequested;
     event EventHandler<string>? PromptActionRequested;
 
-    // Profile hotkeys. Dictation variants carry the forced profile id;
-    // stop is parameterless (the id was consumed at session start). Only the
-    // dispatcher-backed backends (SharpHook, evdev) wire these to real events;
-    // the portal stub leaves them empty.
+    // Profile hotkeys: start/toggle carry the profile id; stop is parameterless
+    // (id consumed at session start). Portal stub leaves these unimplemented.
     event EventHandler<string>? ProfileDictationToggleRequested;
     event EventHandler<string>? ProfileDictationStartRequested;
     event EventHandler? ProfileDictationStopRequested;

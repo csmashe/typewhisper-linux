@@ -28,9 +28,8 @@ public sealed class ProfileService : IProfileService
 
     public void SeedFirstRunDefaultsIfMissing()
     {
-        // Seed only on a genuine first run — when the profiles file has never
-        // been written. If the user later disables or deletes the seeded
-        // profile the file still exists, so we never resurrect it.
+        // Seed only when the file has never been written; if the user later deletes
+        // the seeded profile the file still exists, so we never resurrect it.
         if (File.Exists(_filePath))
         {
             return;
@@ -52,9 +51,8 @@ public sealed class ProfileService : IProfileService
     public void AddProfile(Profile profile)
     {
         EnsureCacheLoaded();
-        // Stage on a copy and persist before swapping _cache so a save failure
-        // can't leave the service holding an unsaved profile that a later
-        // successful save would silently flush.
+        // Persist before swapping _cache so a save failure can't leave the service
+        // holding an unsaved profile that a later successful save would silently flush.
         var newCache = new List<Profile>(_cache) { profile };
         SortList(newCache);
         SaveToDisk(newCache);
@@ -99,9 +97,8 @@ public sealed class ProfileService : IProfileService
 
         if (forcedProfileId is not null)
         {
-            // Disabled profiles are excluded from the normal matching pipeline; a forced
-            // selection that points at a disabled profile should fall through too, otherwise
-            // the user can end up with a profile they've explicitly turned off.
+            // A forced selection pointing at a disabled profile should still fall through —
+            // don't activate a profile the user has explicitly turned off.
             var forced = _cache.FirstOrDefault(p => p.Id == forcedProfileId && p.IsEnabled);
             if (forced is not null)
             {
@@ -152,13 +149,10 @@ public sealed class ProfileService : IProfileService
                 && string.IsNullOrWhiteSpace(profile.HotkeyData)
             )
             {
-                // A profile with no app/URL matchers is normally the global
-                // fallback. But if it ALSO has a hotkey, it's a hotkey-only
-                // profile — the user bound it to an explicit trigger, not to
-                // "match everything." Excluding it here keeps it out of the
-                // ambient context cascade so it never hijacks plain dictation;
-                // it remains reachable through forcedProfileId (ManualOverride)
-                // when its chord is pressed.
+                // No app/URL matchers = global fallback, UNLESS it also has a hotkey,
+                // which makes it a hotkey-only profile (explicit trigger, not "match everything").
+                // Exclude it here so it never hijacks plain dictation; it's still reachable
+                // via forcedProfileId when its chord is pressed.
                 global.Add(profile);
             }
         }
@@ -270,10 +264,8 @@ public sealed class ProfileService : IProfileService
 
     private void SaveToDisk(IReadOnlyList<Profile> profiles)
     {
-        // Write to a sibling temp file and atomically move it over the target.
-        // A crash or power loss mid-write previously truncated _filePath, which
-        // EnsureCacheLoaded would then see as an unparseable file and silently
-        // discard — losing every saved profile.
+        // Atomic write-then-rename: a mid-write crash previously truncated _filePath,
+        // which EnsureCacheLoaded would silently discard, losing all saved profiles.
         string? tempPath = null;
         try
         {
@@ -304,9 +296,8 @@ public sealed class ProfileService : IProfileService
         }
         finally
         {
-            // Surface persistence failures to callers — swallowing them left
-            // _cache mutated and ProfilesChanged firing as if the write had
-            // succeeded. Cleanup the orphaned temp file before propagating.
+            // Surface persistence failures: swallowing them left _cache mutated
+            // and ProfilesChanged firing as if the write had succeeded.
             if (tempPath is not null)
             {
                 try

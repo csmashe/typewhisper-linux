@@ -77,8 +77,8 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
             CreateNoWindow = true
         };
 
-        // spd-say (Speech Dispatcher) handles audio output itself; espeak/
-        // espeak-ng are used with --stdout and piped into paplay/aplay below.
+        // spd-say handles its own audio output; espeak/espeak-ng use --stdout
+        // and are piped into paplay/aplay (see StartEspeakPlayback).
         if (command == "spd-say")
         {
             startInfo.ArgumentList.Add(request.Text);
@@ -104,12 +104,9 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
     private static Process? StartEspeakPlayback(ProcessStartInfo espeakStartInfo)
     {
-        // espeak/espeak-ng write PCM audio to stdout with --stdout. If a player
-        // (paplay for PipeWire/PulseAudio, aplay for ALSA) is available, pipe
-        // into it so we don't rely on espeak's built-in audio output (which
-        // requires its own audio library to be present).
-        // We use `sh -c '...' sh "$text"` to avoid shell word-splitting on the
-        // TTS text while still letting the pipe operator work in the command.
+        // Pipe espeak stdout into paplay/aplay so we don't depend on espeak's
+        // built-in audio library. `sh -c '...' sh "$text"` avoids word-splitting
+        // on the TTS text while still supporting the shell pipe operator.
         var player = ResolvePlayer();
         if (player is null)
         {
@@ -245,9 +242,8 @@ internal sealed class ProcessTtsPlaybackSession : ITtsPlaybackSession, IDisposab
 }
 
 /// <summary>
-///     Sentinel returned when TTS is not available or the text is empty.
-///     Immediately fires <see cref="Completed" /> to any subscriber so callers
-///     don't have to special-case a null session.
+///     Sentinel returned when TTS is unavailable or text is empty. Fires
+///     <see cref="Completed" /> immediately so callers need no null check.
 /// </summary>
 internal sealed class InactiveTtsPlaybackSession : ITtsPlaybackSession
 {

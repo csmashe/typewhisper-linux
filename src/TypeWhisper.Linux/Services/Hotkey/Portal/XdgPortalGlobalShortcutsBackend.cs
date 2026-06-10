@@ -1,39 +1,21 @@
 namespace TypeWhisper.Linux.Services.Hotkey.Portal;
 
 /// <summary>
-///     Toggle-only fallback for Wayland sessions where evdev isn't available
-///     (user not in <c>input</c> group, sandboxed app, etc.). Talks to
+///     Toggle-only fallback for Wayland sessions where evdev is unavailable
+///     (user not in <c>input</c> group, sandboxed app, etc.). Would talk to
 ///     <c>org.freedesktop.portal.GlobalShortcuts</c> via D-Bus.
-///     IMPLEMENTATION STATUS: stub. <see cref="IsAvailable" /> returns false
-///     so <see cref="BackendSelector" /> currently skips this backend and
-///     falls through to focused-only SharpHook. The wiring is in place so
-///     the real D-Bus implementation can be slotted in without further
-///     architecture changes.
-///     Implementation outline (retained for reference — only worth building
-///     if a sandboxed/Flatpak distribution ever makes the portal the sole
-///     option for Wayland global hotkeys):
-///     1. Add a D-Bus client dependency (e.g. Tmds.DBus.Protocol).
-///     2. Probe <c>org.freedesktop.portal.Desktop</c> exists on the session
-///     bus + exposes the <c>GlobalShortcuts</c> interface.
-///     3. Call <c>CreateSession</c> → wait for request response → get
-///     session handle; persist it across restarts so the user only
-///     sees the desktop's binding dialog on first run.
-///     4. Call
-///     <c>
-///         BindShortcuts(session, [(id, options)], parent_window,
-///         options)
-///     </c>
-///     with stable IDs:
-///     typewhisper.dictation.toggle
-///     typewhisper.prompt-palette
-///     typewhisper.recent
-///     typewhisper.copy-last
-///     typewhisper.transform-selection
-///     5. Subscribe to the <c>Activated(session, id, timestamp, options)</c>
-///     signal. The portal's <c>Deactivated</c> signal is unreliable
-///     across DEs, so treat every binding as press-only and report
-///     <see cref="GlobalShortcutRegistrationResult.RequiresToggleMode" />
-///     = true so the UI can warn users on PushToTalk/Hybrid modes.
+///     IMPLEMENTATION STATUS: stub — <see cref="IsAvailable" /> returns false
+///     so <see cref="BackendSelector" /> skips it and falls through to focused-only SharpHook.
+///     The wiring is in place for a future real implementation. Only worth building if
+///     a sandboxed/Flatpak distribution makes the portal the sole Wayland option.
+///     Implementation outline:
+///     1. Add a D-Bus client (e.g. Tmds.DBus.Protocol) and probe <c>org.freedesktop.portal.Desktop</c>.
+///     2. Call <c>CreateSession</c>, persist the handle across restarts (so binding dialog shows once).
+///     3. Call <c>BindShortcuts</c> with stable IDs: <c>typewhisper.dictation.toggle</c>,
+///        <c>typewhisper.prompt-palette</c>, <c>typewhisper.recent</c>, <c>typewhisper.copy-last</c>,
+///        <c>typewhisper.transform-selection</c>.
+///     4. Subscribe to <c>Activated</c> signal. Treat as press-only (portal's <c>Deactivated</c>
+///        is unreliable); set <see cref="GlobalShortcutRegistrationResult.RequiresToggleMode" />=true.
 /// </summary>
 public sealed class XdgPortalGlobalShortcutsBackend : IGlobalShortcutBackend
 {

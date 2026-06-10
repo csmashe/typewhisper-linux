@@ -22,10 +22,7 @@ public interface IPluginHostServices
     /// <summary>Names of all available dictation profiles.</summary>
     IReadOnlyList<string> AvailableProfileNames { get; }
 
-    /// <summary>
-    ///     Localization service for the plugin. Loads strings from JSON files in the
-    ///     plugin's Localization/ subdirectory (e.g. Localization/en.json, Localization/de.json).
-    /// </summary>
+    /// <summary>Localization service; loads strings from the plugin's Localization/ subdirectory (e.g. en.json).</summary>
     IPluginLocalization Localization { get; }
 
     /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
@@ -53,9 +50,8 @@ public interface IPluginHostServices
     void NotifyCapabilitiesChanged();
 
     /// <summary>
-    ///     Tells the host whether the plugin is currently rendering its own streaming text overlay.
-    ///     Pass <c>true</c> when starting a custom streaming display; <c>false</c> when done.
-    ///     While active, the host suppresses its built-in streaming overlay to avoid duplication.
+    ///     Signals that the plugin is rendering its own streaming overlay.
+    ///     While active, the host suppresses its built-in overlay to avoid duplication.
     /// </summary>
     void SetStreamingDisplayActive(bool active) { }
 }

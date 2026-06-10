@@ -5,27 +5,21 @@ using TypeWhisper.Core;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Linux-only UX preferences, stored separate from Core's AppSettings so the
-///     fork doesn't have to mutate upstream's data model. Tiny on purpose — holds
-///     only the toggles that are specific to Linux-desktop behavior (tray
-///     handling, compositor-specific hints, etc.).
+///     Linux-only UX preferences stored separately from Core's AppSettings to
+///     avoid mutating the upstream data model. Contains only Linux-desktop toggles
+///     (tray handling, compositor hints, etc.).
 /// </summary>
 public sealed record LinuxPreferences
 {
     /// <summary>
-    ///     When true, clicking the window's close (X) button hides the window
-    ///     to the tray icon — it leaves the dock/taskbar and the process keeps
-    ///     running, with the tray menu as the only entry point. When false
-    ///     (default), the X button fully quits the app — safer on desktops
-    ///     without a working SNI tray.
+    ///     When true, the close (X) button hides to the tray rather than quitting.
+    ///     Defaults to false — safer on desktops without a working SNI tray.
     /// </summary>
     public bool CloseToTray { get; init; }
 
     /// <summary>
-    ///     When true (default), the app checks GitHub for a newer release once
-    ///     per day on startup and surfaces a non-obtrusive banner if one is
-    ///     found. The manual "Check for Updates" button in About works
-    ///     regardless of this setting.
+    ///     When true (default), checks GitHub for a newer release once per day
+    ///     on startup. The manual "Check for Updates" button works regardless.
     /// </summary>
     public bool CheckForUpdatesOnStartup { get; init; } = true;
 
@@ -36,25 +30,20 @@ public sealed record LinuxPreferences
     public DateTime? LastUpdateCheckUtc { get; init; }
 
     /// <summary>
-    ///     The latest release version seen by the most recent successful check
-    ///     (e.g. "0.6.0"). Lets the startup path re-surface a known update
-    ///     without hitting the network when a check isn't yet due.
+    ///     Latest release version seen by the most recent check (e.g. "0.6.0").
+    ///     Allows re-surfacing a known update without a network call.
     /// </summary>
     public string? LastKnownLatestVersion { get; init; }
 
     /// <summary>
-    ///     The release page URL for <see cref="LastKnownLatestVersion"/>, cached
-    ///     so the startup path can point Download at the correct release without
-    ///     re-querying (and without falling back to GitHub's /latest endpoint,
-    ///     which can resolve to a republished older tag).
+    ///     Release page URL for <see cref="LastKnownLatestVersion" />, cached to
+    ///     avoid re-querying — GitHub's <c>/latest</c> endpoint can resolve to a
+    ///     republished older tag.
     /// </summary>
     public string? LastKnownLatestUrl { get; init; }
 
-    /// <summary>
-    ///     The version the user dismissed from the update banner. The banner
-    ///     stays hidden for this exact version but reappears when a newer one
-    ///     is published.
-    /// </summary>
+    /// <summary>Version dismissed from the update banner; banner reappears when
+    ///     a newer version is published.</summary>
     public string? DismissedUpdateVersion { get; init; }
 
     public static LinuxPreferences Default => new();
@@ -64,8 +53,7 @@ public sealed class LinuxPreferencesService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true
+        WriteIndented = true, PropertyNameCaseInsensitive = true
     };
 
     private readonly string _path;

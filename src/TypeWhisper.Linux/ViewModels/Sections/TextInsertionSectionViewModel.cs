@@ -37,8 +37,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
 
     public bool CompositorRejectsWtype => Snapshot.CompositorRejectsWtype;
 
-    // Hide on X11; hide once ydotool is fully configured and we own no
-    // integration — otherwise the panel is all-status, no-action.
+    // Hidden on X11, and hidden once fully configured with nothing left to act on.
     public bool ShowYdotoolSetup =>
         Snapshot.SessionType == "Wayland"
         && (ShowManualInstructions || CanSetUpAutomatically || CanRemoveIntegration);
@@ -96,9 +95,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
                 return "ydotool not installed. Install it via your package manager.";
             }
 
-            // Only flag the missing rule when /dev/uinput isn't already
-            // writable — when the kernel grants access directly the rule
-            // genuinely isn't needed and the warning would be wrong.
+            // Only flag the missing udev rule when /dev/uinput isn't already
+            // accessible — if the kernel grants it directly the rule isn't needed.
             if (!status.UdevRulePresent && !status.UinputAccessible)
             {
                 return "ydotool installed, but the /dev/uinput udev rule is missing.";
@@ -114,9 +112,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
                 return "ydotoold is active but its socket isn't reachable.";
             }
 
-            // Probe-only failure means the daemon is up but can't write
-            // /dev/uinput — usually EACCES. Don't show "Ready" in this
-            // state; it directly contradicts the setup-result popup.
+            // Probe failed: daemon is up but /dev/uinput is unwritable (usually EACCES).
+            // Showing "Ready" here would contradict the setup-result popup.
             if (!status.ProbeSucceeded)
             {
                 return
@@ -136,9 +133,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
 
     public bool ShowManualInstructions => !YdotoolStatus.BinaryInstalled;
 
-    // Rendered as a separate "Remove integration" block so the button
-    // stays reachable after a successful setup — otherwise the whole
-    // set-up panel (which gates Remove on CanSetUpAutomatically) vanishes.
+    // Kept as a separate block so Remove stays reachable after a successful
+    // setup (when CanSetUpAutomatically is false the setup panel would vanish).
     public bool CanRemoveIntegration =>
         YdotoolStatus.UdevRulePresent || YdotoolStatus.SystemdUnitActive;
 
@@ -197,9 +193,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
         StatusMessage = "Status refreshed.";
     }
 
-    // LinuxCapabilitySnapshot is a value type rebuilt out-of-band, so the
-    // snapshot-derived properties can't auto-notify. After actions that
-    // mutate it, raise PropertyChanged on everything the view binds to.
+    // LinuxCapabilitySnapshot is a value type rebuilt out-of-band and can't
+    // auto-notify, so raise PropertyChanged manually after mutating actions.
     private void RefreshDerivedProperties()
     {
         OnPropertyChanged(nameof(SessionType));

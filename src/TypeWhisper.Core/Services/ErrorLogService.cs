@@ -89,9 +89,7 @@ public sealed class ErrorLogService : IErrorLogService
             error_count = snapshot.Count,
             errors = snapshot.Select(e => new
             {
-                timestamp = e.Timestamp.ToString("o"),
-                category = e.Category,
-                message = e.Message
+                timestamp = e.Timestamp.ToString("o"), category = e.Category, message = e.Message
             })
         };
 
@@ -111,10 +109,7 @@ public sealed class ErrorLogService : IErrorLogService
             var entries = JsonSerializer.Deserialize<List<ErrorLogEntry>>(json);
             if (entries is not null)
             {
-                // Entries are persisted newest-first (AddEntry inserts at index 0).
-                // Trim to MaxEntries on load so a file written by an older build
-                // with a higher cap — or hand-edited — doesn't leave the in-memory
-                // cache permanently over budget until the next AddEntry trims it down.
+                // Trim on load: an older build or hand-edited file may exceed MaxEntries.
                 if (entries.Count > MaxEntries)
                 {
                     entries = entries.GetRange(0, MaxEntries);
@@ -135,10 +130,8 @@ public sealed class ErrorLogService : IErrorLogService
 
     private void SaveToDisk()
     {
-        // Caller must hold _lock. Serializing while holding the lock keeps
-        // the on-disk file in step with the in-memory list — without this
-        // contract, two writers could interleave snapshot + write and the
-        // older snapshot would land last.
+        // Caller must hold _lock so the on-disk snapshot stays in step with
+        // the in-memory list; two concurrent writers could otherwise interleave.
         try
         {
             var json = JsonSerializer.Serialize(
@@ -152,9 +145,7 @@ public sealed class ErrorLogService : IErrorLogService
                 Directory.CreateDirectory(dir);
             }
 
-            // Write to a sibling temp file and atomically replace the target,
-            // so a crash or kill mid-write can't leave error-log.json
-            // truncated and unreadable on the next start.
+            // Atomic temp-file + replace so a crash mid-write can't corrupt error-log.json.
             var tempPath = _logFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {

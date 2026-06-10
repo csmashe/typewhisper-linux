@@ -13,11 +13,7 @@ internal static class StatusCommand
     public static int Run()
     {
         var path = SocketPathResolver.ResolveControlSocketPath();
-        var request = new
-        {
-            v = JsonControlProtocol.CurrentVersion,
-            cmd = JsonControlProtocol.CmdStatus
-        };
+        var request = new { v = JsonControlProtocol.CurrentVersion, cmd = JsonControlProtocol.CmdStatus };
 
         if (!ControlSocketClient.TrySendJson(path, request, out var responseJson, out var error))
         {

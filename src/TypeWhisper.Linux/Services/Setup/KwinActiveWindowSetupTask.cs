@@ -4,15 +4,9 @@ namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
 ///     Installs <c>kdotool</c> on KDE Plasma Wayland, where KWin exposes no
-///     unprivileged active-window API: without it
-///     <see cref="ActiveWindow.KWinActiveWindowProvider" /> returns null, so
-///     per-app profiles can't match and dictations aren't attributed to any app.
-///     Unlike GNOME's browser-only Window Calls extension (the KDE counterpart to
-///     <see cref="ActiveWindowSetupTask" />), kdotool is in the distro repos, so
-///     this is a one-click <see cref="PackageInstaller" /> install. Recommended,
-///     not required — dictation works without it. KDE X11 is already covered by
-///     <see cref="ActiveWindow.XdotoolActiveWindowProvider" />, so this is
-///     Wayland-only.
+///     unprivileged active-window API. Without it, per-app profiles can't match
+///     and dictations aren't attributed to any app. Recommended but not required.
+///     Wayland-only — KDE X11 uses <see cref="ActiveWindow.XdotoolActiveWindowProvider" />.
 /// </summary>
 public sealed class KwinActiveWindowSetupTask : ISetupTask
 {
@@ -34,8 +28,7 @@ public sealed class KwinActiveWindowSetupTask : ISetupTask
 
     public bool AppliesToThisMachine()
     {
-        // Gate on the compositor (not just XDG_CURRENT_DESKTOP) so this can
-        // never surface on GNOME, and only on Wayland — KDE X11 uses xdotool.
+        // Gate on compositor + session type so this never surfaces on GNOME or KDE X11.
         var snapshot = _commands.GetSnapshot();
         return snapshot.SessionType == "Wayland" && snapshot.Compositor == "kde";
     }

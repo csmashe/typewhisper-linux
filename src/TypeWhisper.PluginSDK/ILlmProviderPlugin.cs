@@ -26,16 +26,16 @@ public interface ILlmProviderPlugin : ITypeWhisperPlugin
     );
 
     /// <summary>
-    ///     Streams the chat-completion response token-by-token. The default
-    ///     implementation wraps <see cref="ProcessAsync" /> and yields the entire
-    ///     result as a single chunk, so providers that do not override it remain
-    ///     correct (one bulk yield, byte-identical to the batch path).
+    ///     Streams the response token-by-token. The default implementation wraps
+    ///     <see cref="ProcessAsync" /> and yields a single chunk, so non-streaming
+    ///     providers remain correct without overriding this method.
     /// </summary>
     async IAsyncEnumerable<string> ProcessStreamingAsync(
         string systemPrompt,
         string userText,
         string model,
-        [EnumeratorCancellation] CancellationToken ct
+        [EnumeratorCancellation]
+        CancellationToken ct
     )
     {
         yield return await ProcessAsync(systemPrompt, userText, model, ct);

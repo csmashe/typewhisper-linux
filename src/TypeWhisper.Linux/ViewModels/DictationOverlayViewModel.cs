@@ -41,10 +41,10 @@ public partial class DictationOverlayViewModel : ObservableObject
     private bool _isRecording;
 
     [ObservableProperty]
-    private string? _partialText;
+    private string? _llmResponseText;
 
     [ObservableProperty]
-    private string? _llmResponseText;
+    private string? _partialText;
 
     [ObservableProperty]
     private double _recordingSeconds;
@@ -71,12 +71,9 @@ public partial class DictationOverlayViewModel : ObservableObject
         _recordingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _recordingTimer.Tick += (_, _) => RefreshRecordingSeconds();
 
-        // Auto-hide feedback after a user-configurable delay
-        // (AppSettings.PreviewBubbleAutoHideMilliseconds). Interval is set per
-        // arm via ArmFeedbackAutoHideTimer so live setting changes apply on
-        // the next feedback event. New events call RestartFeedbackTimer() to
-        // re-arm even when ShowFeedback is already true (a plain re-assignment
-        // skips OnShowFeedbackChanged due to value equality).
+        // Interval is set per arm so live setting changes take effect on the
+        // next event. RestartFeedbackTimer re-arms even when ShowFeedback is
+        // already true — plain re-assignment is skipped by value equality.
         _feedbackTimer = new DispatcherTimer();
         _feedbackTimer.Tick += (_, _) =>
         {
@@ -132,9 +129,7 @@ public partial class DictationOverlayViewModel : ObservableObject
     // Single pulsing dot: 10px at silence, grows to 18px at peak level.
     public double IndicatorSize => 10 + PerceptualLevel(AudioLevel) * 8;
 
-    // Each waveform bar's height reflects one slot of the rolling buffer.
-    // Idle slots collapse to 4px so the row reads as five-dots-at-rest;
-    // loud slots climb to 18px so the wave is clearly moving up and down.
+    // Each bar reflects one slot of the rolling buffer: 4px at silence, 18px at peak.
     public double WaveformBar0Height => BarHeight(_waveformLevels[0]);
     public double WaveformBar1Height => BarHeight(_waveformLevels[1]);
     public double WaveformBar2Height => BarHeight(_waveformLevels[2]);

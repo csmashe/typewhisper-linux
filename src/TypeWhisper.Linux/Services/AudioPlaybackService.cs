@@ -58,9 +58,8 @@ public sealed class AudioPlaybackService : IDisposable
             previous = DetachStreamLocked();
         }
 
-        // Tear down any existing stream WITHOUT holding _gate: Pa_StopStream
-        // blocks until the audio callback thread finishes, and that callback
-        // also takes _gate — stopping under the lock deadlocks the UI.
+        // Tear down outside _gate: Pa_StopStream blocks on the callback thread,
+        // which also takes _gate — stopping under the lock deadlocks the UI.
         DisposeStream(previous);
 
         if (toggleOff)
@@ -179,8 +178,7 @@ public sealed class AudioPlaybackService : IDisposable
             {
                 if (_stream is null)
                 {
-                    // Already stopped from Play()/Stop().
-                    return;
+                    return; // Already stopped from Play()/Stop().
                 }
 
                 if (_stream.IsActive && !_stream.IsStopped)
@@ -197,8 +195,8 @@ public sealed class AudioPlaybackService : IDisposable
         }
     }
 
-    // Clears playback state and hands back the active stream (if any) so the
-    // caller can dispose it OUTSIDE _gate. Must be called while holding _gate.
+    // Clears state and returns the stream so the caller can dispose it outside _gate.
+    // Must be called while holding _gate.
     private PaStream? DetachStreamLocked()
     {
         var stream = _stream;
@@ -210,8 +208,7 @@ public sealed class AudioPlaybackService : IDisposable
         return stream;
     }
 
-    // Stops and disposes a PortAudio stream. Pa_StopStream blocks on the audio
-    // callback thread, so this must never run while _gate is held.
+    // Pa_StopStream blocks on the audio callback thread — never call while holding _gate.
     private static void DisposeStream(PaStream? stream)
     {
         if (stream is null)
@@ -238,10 +235,8 @@ public sealed class AudioPlaybackService : IDisposable
         }
     }
 
-    // Resolve audioFileName relative to the audio root, rejecting anything
-    // that escapes via ".." — playback paths come from the history service
-    // and should never leave the audio directory, but we enforce that here
-    // as a defence-in-depth measure.
+    // Resolve relative to the audio root, rejecting ".." escapes as defence-in-depth
+    // (paths come from the history service and should never leave the audio directory).
     private static string? ResolveAudioPath(string? audioFileName)
     {
         if (string.IsNullOrWhiteSpace(audioFileName))
@@ -278,10 +273,8 @@ public sealed class AudioPlaybackService : IDisposable
 
     private static (float[] Samples, int SampleRate) LoadWav(string path)
     {
-        // Minimal chunk-walking parser. Skips unknown chunks (e.g. LIST,
-        // JUNK) to be compatible with WAVs produced by different tools,
-        // then enforces PCM mono 16-bit at the end since that's all
-        // PortAudio playback here supports.
+        // Minimal chunk-walker: skips unknown chunks (LIST, JUNK, etc.) for broad
+        // WAV compatibility, then enforces PCM mono 16-bit (all PortAudio supports here).
         using var stream = File.OpenRead(path);
         using var reader = new BinaryReader(stream);
 
@@ -328,8 +321,7 @@ public sealed class AudioPlaybackService : IDisposable
                 reader.BaseStream.Seek(chunkSize, SeekOrigin.Current);
             }
 
-            // The WAV spec requires every chunk to be padded to an even byte
-            // boundary; skip the pad byte when the chunk size is odd.
+            // WAV spec: chunks are padded to even boundaries; skip the pad byte if odd.
             if ((chunkSize & 1) == 1 && reader.BaseStream.Position < reader.BaseStream.Length)
             {
                 reader.BaseStream.Seek(1, SeekOrigin.Current);
@@ -365,9 +357,8 @@ public sealed class AudioPlaybackService : IDisposable
 
     private static void EnsurePortAudioInitialized()
     {
-        // Reference-counted to match AudioRecordingService's pattern: both
-        // services share the process-global PortAudio library and each
-        // Initialize() call must be balanced by a Terminate().
+        // Reference-counted: both services share the process-global PortAudio library
+        // and each Initialize() must be balanced by a Terminate().
         lock (s_paInitLock)
         {
             if (s_paInitCount == 0)

@@ -44,21 +44,16 @@ internal sealed class ControlSocketServer : IDisposable
     private readonly ISettingsService? _settings;
     private Task? _acceptLoop;
 
-    // True between successful bind and listener close — used by Dispose to
-    // distinguish "we created and own this socket path" from "we never
-    // succeeded in binding". The path-ownership check on dispose still
-    // probes the live socket to guard against a successor stealing the
-    // path during shutdown.
+    // True after a successful bind — lets Dispose distinguish "we own this path" from
+    // "we never bound", while the live-probe guard still covers a successor stealing the path.
     private bool _bound;
     private CancellationTokenSource? _cts;
     private int _disposed;
     private Task? _lastStartTask;
 
-    // Last time a record.start request was accepted by the server. Used by
-    // the start-then-immediate-stop race guard: a record.stop arriving
-    // within StartStopRaceWindow of an in-flight start treats the start as
-    // a tap and forces a stop once the start awaits complete. Stored as
-    // UTC ticks so reads are atomic without a lock.
+    // UTC ticks of the last accepted record.start; used by the tap race guard to decide
+    // whether an arriving record.stop should await the in-flight start before calling StopAsync.
+    // Stored as ticks so reads are atomic without a lock.
     private long _lastStartTicks;
     private Socket? _listener;
 
@@ -89,12 +84,9 @@ internal sealed class ControlSocketServer : IDisposable
             return;
         }
 
-        // Order matters: cancel first so the accept loop observes shutdown,
-        // then close the listener to unblock any in-flight AcceptAsync with
-        // ObjectDisposedException, then await the loop, then unlink the
-        // path. Reversing close/wait risks an indefinite wait on a blocked
-        // accept; reversing wait/unlink risks deleting the socket file
-        // while the loop is still touching it.
+        // Order: cancel → close listener (unblocks in-flight AcceptAsync) → await loop → unlink.
+        // Reversing close/wait risks an indefinite accept block; reversing wait/unlink risks
+        // deleting the file while the loop still holds it.
         try
         {
             _cts?.Cancel();
@@ -142,11 +134,8 @@ internal sealed class ControlSocketServer : IDisposable
             /* ignored */
         }
 
-        // Only unlink the path if we successfully bound it AND nobody else
-        // is currently listening on it. A successor instance can clean up
-        // what it thinks is our stale socket and bind a fresh one before
-        // our Dispose reaches this point; deleting that fresh socket would
-        // silently break their IPC until the next restart.
+        // Unlink only if we own the path AND no live peer is listening — a successor instance
+        // may have already taken it over before our Dispose reaches this point.
         try
         {
             if (_bound && File.Exists(SocketPath))
@@ -261,14 +250,11 @@ internal sealed class ControlSocketServer : IDisposable
             using var stream = new NetworkStream(client, true);
             using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true)
             {
-                AutoFlush = true,
-                NewLine = "\n"
+                AutoFlush = true, NewLine = "\n"
             };
 
-            // Read the first request line byte-by-byte rather than via
-            // StreamReader so we can enforce the 4 KB cap before allocating
-            // an unbounded buffer for a hostile or runaway client. The cap
-            // is shared with the client side via JsonControlProtocol.
+            // Byte-by-byte read enforces the 4 KB cap before allocating; StreamReader
+            // would buffer unboundedly for a runaway client.
             var line = await ReadCappedLineAsync(stream, JsonControlProtocol.MaxLineBytes, ct)
                 .ConfigureAwait(false);
             if (line is null)
@@ -299,21 +285,14 @@ internal sealed class ControlSocketServer : IDisposable
 
             var trimmed = line.Trim();
 
-            // Protocol detection by leading byte: '{' means JSON, anything
-            // else is treated as the Phase 4 plain-text protocol. The legacy
-            // path stays for upgrade-window compatibility — a Phase 4 binary
-            // in $PATH must still be able to toggle a running Phase 5 app.
+            // '{' → JSON (Phase 5); anything else → Phase 4 plain-text for upgrade-window compat.
             if (trimmed.StartsWith('{'))
             {
                 await HandleJsonRequestAsync(trimmed, writer, ct).ConfigureAwait(false);
             }
             else if (trimmed.Equals("toggle", StringComparison.Ordinal))
             {
-                // Fire-and-forget the toggle so the legacy bare-toggle client
-                // doesn't sit through the full transcription pipeline if the
-                // toggle happens to be the recording->idle direction. Phase 4
-                // clients use a 2 s receive timeout that StopAsync can blow
-                // through on any normal-length recording.
+                // Fire-and-forget: Phase 4 clients use a 2 s timeout that StopAsync can blow past.
                 DispatchOrchestratorAsync(() => _orchestrator.ToggleAsync(), "Legacy ToggleAsync");
                 await writer.WriteLineAsync("ok").ConfigureAwait(false);
             }
@@ -447,15 +426,10 @@ internal sealed class ControlSocketServer : IDisposable
     {
         var prev = SnapshotState();
 
-        // Publish the start marker BEFORE invoking the orchestrator. Async
-        // methods run synchronously until their first incomplete await, and
-        // StartAsync can hold _toggleGate + flip _audio.IsRecording before
-        // ever yielding. A near-simultaneous record.stop arriving in that
-        // window would otherwise observe no in-flight start and either
-        // race ahead of the start (failing _toggleGate.WaitAsync(0) and
-        // no-op'ing) or find IsRecording still false. The TCS is completed
-        // when the orchestrator's StartAsync returns, so HandleStopAsync
-        // can await it deterministically.
+        // Publish the TCS BEFORE invoking the orchestrator: StartAsync runs synchronously
+        // until its first real await and can hold _toggleGate before yielding. A concurrent
+        // record.stop would otherwise see IsRecording==false and no-op. HandleStopAsync awaits
+        // this TCS to ensure the start has completed before calling StopAsync.
         var startCompletion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -480,15 +454,9 @@ internal sealed class ControlSocketServer : IDisposable
     {
         var prev = SnapshotState();
 
-        // Hyprland `bindr` race guard: a record.stop arriving within
-        // StartStopRaceWindow of a record.start is almost certainly a tap.
-        // Await the in-flight start (signalled via the TCS that
-        // HandleStartAsync publishes before invoking the orchestrator) so
-        // StopAsync below sees IsRecording==true. Without this await, a
-        // tap-stop can land while the start handler is still synchronously
-        // entering StartAsync, _toggleGate.WaitAsync(0) fails for us, and
-        // the user is left with a stuck recording when the start completes
-        // with no matching stop.
+        // Hyprland `bindr` tap guard: a record.stop within StartStopRaceWindow of a start is
+        // treated as a tap. Await the in-flight start's TCS so StopAsync sees IsRecording==true;
+        // without this, _toggleGate.WaitAsync(0) fails and the user ends up with a stuck recording.
         var startTicks = Interlocked.Read(ref _lastStartTicks);
         var elapsed = DateTime.UtcNow - new DateTime(startTicks, DateTimeKind.Utc);
         if (elapsed < s_startStopRaceWindow)
@@ -509,15 +477,9 @@ internal sealed class ControlSocketServer : IDisposable
             }
         }
 
-        // Fire-and-forget the orchestrator stop. StopAsync runs the full
-        // transcription + post-processing + insertion pipeline before
-        // returning, which can take many seconds. The control socket
-        // client has a 2-second receive timeout and would otherwise
-        // misreport a successful stop as a transport failure (exit 2).
-        // The transition the caller cares about — audio capture has been
-        // told to stop — has been initiated by the time _orchestrator
-        // begins its work; we acknowledge that synchronously and let the
-        // transcription pipeline run in the background.
+        // Fire-and-forget: StopAsync runs the full transcription + insertion pipeline (many
+        // seconds) while the client has a 2 s receive timeout. Acknowledge immediately; the
+        // pipeline continues in the background.
         DispatchOrchestratorAsync(_orchestrator.StopAsync, "StopAsync");
         return JsonControlProtocol.SerializeAction(prev, JsonControlProtocol.StateIdle);
     }
@@ -525,15 +487,9 @@ internal sealed class ControlSocketServer : IDisposable
     private Task<string> HandleToggleAsync()
     {
         var prev = SnapshotState();
-        // Toggle has the same pipeline-blocking problem as stop when going
-        // from recording → idle (it routes through StopAsync). Fire-and-
-        // forget so the client gets a snappy ack regardless of which way
-        // the toggle goes.
+        // Fire-and-forget — toggle can route through StopAsync (pipeline-blocking like stop).
         DispatchOrchestratorAsync(() => _orchestrator.ToggleAsync(), "ToggleAsync");
-        // The wire response reflects the intent: if we were recording,
-        // we're about to stop (-> idle); if idle, about to start
-        // (-> recording). The orchestrator's own idempotency keeps state
-        // consistent even if a concurrent client read happens in flight.
+        // Wire response reflects intent rather than confirmed final state.
         var next =
             prev == JsonControlProtocol.StateRecording
                 ? JsonControlProtocol.StateIdle
@@ -551,10 +507,8 @@ internal sealed class ControlSocketServer : IDisposable
     }
 
     /// <summary>
-    ///     Runs an orchestrator verb on the thread pool with structured logging
-    ///     of synchronous and asynchronous faults. Used by stop/toggle/cancel
-    ///     to keep the control-socket response under the client's 2 s receive
-    ///     timeout while the full transcription pipeline runs in the background.
+    ///     Runs an orchestrator verb on the thread pool, logging faults. Used by stop/toggle/cancel
+    ///     to keep the socket response under the client's 2 s timeout while the pipeline runs in background.
     /// </summary>
     private static void DispatchOrchestratorAsync(Func<Task> start, string label)
     {
@@ -591,13 +545,7 @@ internal sealed class ControlSocketServer : IDisposable
         return JsonControlProtocol.SerializeStatus(response);
     }
 
-    /// <summary>
-    ///     Maps the orchestrator's observable state to the wire string. Sources
-    ///     the value from <see cref="DictationOrchestrator.CurrentStateLabel" />,
-    ///     which projects the audio capture flag plus the live overlay status
-    ///     text into the spec's idle / recording / transcribing / injecting
-    ///     vocabulary.
-    /// </summary>
+    /// <summary>Maps observable orchestrator state to the wire string via <see cref="DictationOrchestrator.CurrentStateLabel" />.</summary>
     private string SnapshotState()
     {
         return _orchestrator.CurrentStateLabel;
@@ -645,11 +593,7 @@ internal sealed class ControlSocketServer : IDisposable
         }
     }
 
-    /// <summary>
-    ///     Probes the path with a connect. ECONNREFUSED means no live listener
-    ///     (safe to unlink). A successful connect means another instance owns
-    ///     the path now and we must not touch it.
-    /// </summary>
+    /// <summary>True when ECONNREFUSED — no live listener, safe to unlink. False on any other outcome.</summary>
     private static bool NoLivePeer(string path)
     {
         try

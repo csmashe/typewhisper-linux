@@ -4,26 +4,14 @@ using TypeWhisper.Linux.Services.Hotkey.Evdev;
 namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
-///     Ensures the dictation hotkey fires globally AND supports the full
-///     tap-vs-hold behavior (tap toggles, hold = push-to-talk). The mechanism
-///     is the app's own in-process backend, not a desktop shortcut:
-///     <list type="bullet">
-///         <item>
-///             On an X11 session the in-app hook is already global — nothing
-///             to do.
-///         </item>
-///         <item>
-///             On a Wayland session the compositor won't deliver global keys to
-///             the app, so it reads input devices directly via evdev — which
-///             requires the user to be in the <c>input</c> group. We add them
-///             (one admin prompt) and they log out/in once to activate it.
-///         </item>
-///     </list>
-///     We deliberately do NOT use a desktop "custom shortcut" (gsettings / KDE /
-///     compositor bind): those only deliver a single activation pulse per press
-///     (no key-release), so they can't do hold-to-talk, and a held key
-///     autorepeats them into a rapid start/stop thrash. evdev gives real
-///     press/release events, which is what the hold modes need.
+///     Ensures the dictation hotkey fires globally with full tap-vs-hold support.
+///     On X11 the in-app hook is already global — nothing to do.
+///     On Wayland the compositor won't deliver global keys to the app, so it reads
+///     input devices directly via evdev (requires the <c>input</c> group; one admin
+///     prompt + re-login).
+///     Desktop "custom shortcuts" (gsettings / KDE / compositor binds) are deliberately
+///     avoided: they fire a single pulse per press with no release event, making
+///     hold-to-talk impossible and autorepeat thrashing start/stop rapidly.
 /// </summary>
 public sealed class GlobalHotkeySetupTask : ISetupTask
 {
@@ -36,26 +24,28 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         _runner = runner;
     }
 
-    public string Id => "global-hotkey";
-    public string Title => "Global dictation shortcut";
-    public SetupTaskSeverity Severity => SetupTaskSeverity.Required;
-
-    public bool AppliesToThisMachine() => true;
-
     private bool IsWayland => _commands.GetSnapshot().SessionType == "Wayland";
 
     private static string CurrentUser => Environment.UserName;
 
+    public string Id => "global-hotkey";
+    public string Title => "Global dictation shortcut";
+    public SetupTaskSeverity Severity => SetupTaskSeverity.Required;
+
+    public bool AppliesToThisMachine()
+    {
+        return true;
+    }
+
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
     {
-        // X11: the in-app hook captures global keys (with press/release) without
-        // any group membership — tap and hold both work already.
+        // X11: in-app hook captures global keys with press/release — no group needed.
         if (!IsWayland)
         {
             return Satisfied("Global shortcut active. Tap toggles; hold for push-to-talk.");
         }
 
-        // Wayland: evdev (and therefore the global hotkey) needs the input group.
+        // Wayland: evdev global hotkey requires the input group.
         if (InputGroupCheck.CurrentUserInInputGroup() == true)
         {
             return Satisfied(
@@ -63,10 +53,8 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             );
         }
 
-        // Added to /etc/group but not yet effective in this session: the only
-        // thing left is the re-login. Treat as satisfied-with-caveat (like a
-        // KDE shortcut that needs a session restart) so Finish isn't blocked —
-        // the wizard's final step reminds the user to log out.
+        // usermod ran but the new group isn't effective until re-login.
+        // Treat as satisfied-with-caveat so Finish isn't blocked.
         if (UserListedInInputGroupFile())
         {
             return Task.FromResult(
@@ -142,13 +130,14 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         );
     }
 
-    private static Task<SetupTaskState> Satisfied(string summary) =>
-        Task.FromResult(new SetupTaskState(SetupTaskStatusKind.Satisfied, summary));
+    private static Task<SetupTaskState> Satisfied(string summary)
+    {
+        return Task.FromResult(new SetupTaskState(SetupTaskStatusKind.Satisfied, summary));
+    }
 
     /// <summary>
-    ///     True if the current user appears in the <c>input</c> line of
-    ///     <c>/etc/group</c> — i.e. <c>usermod -aG</c> already ran, even though
-    ///     the running process won't pick the membership up until a re-login.
+    ///     True when the current user is listed in <c>/etc/group</c> for the <c>input</c>
+    ///     group — i.e. <c>usermod -aG</c> ran but the session hasn't been restarted yet.
     /// </summary>
     private static bool UserListedInInputGroupFile()
     {

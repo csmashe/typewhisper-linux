@@ -245,11 +245,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             ? null
             : SelectedSpokenFeedbackVoiceId;
         _settings.Save(
-            _settings.Current with
-            {
-                SpokenFeedbackProviderId = value,
-                SpokenFeedbackVoiceId = selectedVoiceId
-            }
+            _settings.Current with { SpokenFeedbackProviderId = value, SpokenFeedbackVoiceId = selectedVoiceId }
         );
         OnPropertyChanged(nameof(SelectedSpokenFeedbackProviderOption));
     }

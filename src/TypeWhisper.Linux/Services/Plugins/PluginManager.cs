@@ -13,10 +13,8 @@ namespace TypeWhisper.Linux.Services.Plugins;
 /// </summary>
 public sealed class PluginManager : IDisposable
 {
-    // Plugins enabled on a fresh install (no saved choice): the offline,
-    // no-API-key transcription engines, so dictation works out of the box.
-    // Everything else — cloud providers, LLM/utility integrations — defaults
-    // off until the user opts in.
+    // Fresh-install defaults: offline transcription engines only, so dictation works
+    // out of the box without a key. Cloud providers default off until opted in.
     private static readonly HashSet<string> DefaultEnabledPluginIds = new(StringComparer.Ordinal)
     {
         "com.typewhisper.whisper-cpp", // offline transcription (recommended default)
@@ -31,15 +29,14 @@ public sealed class PluginManager : IDisposable
     private readonly Dictionary<string, PluginHostServices> _hostServices = [];
     private readonly PluginLoader _loader;
     private readonly object _lock = new();
-
-    // Guards/debounces on-demand model re-polls (triggered when a model dropdown
-    // opens) so rapid reopens don't fire overlapping network fetches.
-    private bool _isRefreshingModels;
-    private DateTime _lastModelRefresh = DateTime.MinValue;
     private readonly IProfileService _profiles;
     private readonly string[] _searchDirectories;
     private readonly ISettingsService _settings;
     private List<IActionPlugin> _actionPlugins = [];
+
+    // Debounce guard for on-demand model re-polls (triggered when a dropdown opens).
+    private bool _isRefreshingModels;
+    private DateTime _lastModelRefresh = DateTime.MinValue;
 
     private List<ILlmProviderPlugin> _llmProviders = [];
     private List<IPostProcessorPlugin> _postProcessors = [];
@@ -232,14 +229,9 @@ public sealed class PluginManager : IDisposable
 
         foreach (var plugin in discovered)
         {
-            // Honor an explicit saved choice; otherwise default ON only for the
-            // offline/local engines that work with no API key, so a fresh install
-            // has a working transcription model out of the box without cluttering
-            // the list with cloud providers that can't do anything until the user
-            // enters a key. Cloud plugins default OFF until opted in (onboarding
-            // or the Plugins tab). Manifest IsLocal is unreliable across plugins,
-            // so we anchor on an explicit allowlist and also respect IsLocal when
-            // a manifest does set it.
+            // Honor saved choice; otherwise enable local/offline engines by default so a
+            // fresh install has working transcription without an API key. IsLocal in the
+            // manifest is unreliable across plugins, so we anchor on an explicit allowlist.
             var isEnabled = enabledState.TryGetValue(plugin.Manifest.Id, out var state)
                 ? state
                 : DefaultEnabledPluginIds.Contains(plugin.Manifest.Id) || plugin.Manifest.IsLocal;
@@ -263,9 +255,9 @@ public sealed class PluginManager : IDisposable
             return;
         }
 
-        // Short-circuit if already activated — otherwise a second call after
-        // the first activation task was removed from _activationTasks would
-        // run ActivatePluginAsync again and double-activate.
+        // Short-circuit if already activated to prevent double-activation after the task
+        // is removed from _activationTasks. Serialize per plugin so concurrent callers
+        // share one Task rather than both passing the Contains check.
         lock (_lock)
         {
             if (_activatedPlugins.Contains(pluginId))
@@ -275,9 +267,6 @@ public sealed class PluginManager : IDisposable
             }
         }
 
-        // Serialize activation per plugin so concurrent callers share one
-        // activation Task instead of both passing the Contains check and
-        // double-activating.
         var activation = _activationTasks.GetOrAdd(pluginId, _ => ActivatePluginAsync(plugin));
         bool success;
         try
@@ -367,8 +356,8 @@ public sealed class PluginManager : IDisposable
             await DeactivatePluginAsync(plugin);
         }
 
-        // Always run Unload, even if Dispose throws — otherwise the
-        // collectible ALC stays rooted and its native deps aren't freed.
+        // Always unload even if Dispose throws — otherwise the collectible ALC stays rooted
+        // and native deps aren't freed.
         try
         {
             plugin.Instance.Dispose();
@@ -406,8 +395,7 @@ public sealed class PluginManager : IDisposable
             return;
         }
 
-        // Tear down any existing plugin with the same Id through the normal
-        // lifecycle so we don't leak its host services or load context.
+        // Unload any existing plugin with the same Id to avoid leaking host services or load context.
         bool hasExisting;
         lock (_lock)
         {
@@ -440,6 +428,75 @@ public sealed class PluginManager : IDisposable
             return _ttsProviders.FirstOrDefault(provider =>
                 string.Equals(provider.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
             );
+        }
+    }
+
+    /// <summary>
+    ///     Re-polls activated <see cref="IModelCatalogProvider" /> plugins so newly added
+    ///     models (e.g. a freshly pulled Ollama model) appear without the user hitting "Validate".
+    ///     Uses the narrow model-catalog contract rather than <c>ValidateAsync</c>, which can have
+    ///     heavy/irreversible side effects (e.g. downloading TTS assets). Call when a model dropdown opens.
+    ///     Debounced and re-entrancy-guarded; each provider gets a 10 s timeout; failures are logged.
+    /// </summary>
+    public async Task RefreshProviderModelsAsync()
+    {
+        // Claim under the lock so concurrent callers don't both pass the guard.
+        // The lock only guards this cheap check, not the awaits below.
+        lock (_lock)
+        {
+            if (_isRefreshingModels)
+            {
+                return;
+            }
+
+            if (DateTime.UtcNow - _lastModelRefresh < TimeSpan.FromSeconds(2))
+            {
+                return;
+            }
+
+            _isRefreshingModels = true;
+        }
+
+        try
+        {
+            List<IModelCatalogProvider> providers;
+            lock (_lock)
+            {
+                providers = _allPlugins
+                    .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
+                    .Select(p => p.Instance)
+                    .OfType<IModelCatalogProvider>()
+                    .ToList();
+            }
+
+            foreach (var provider in providers)
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    await provider.RefreshModelCatalogAsync(cts.Token);
+                }
+                catch (Exception ex)
+                {
+                    // Best effort — one failing provider must not block the rest.
+                    Trace.WriteLine(
+                        $"[PluginManager] Model-catalog refresh failed for "
+                        + $"{provider.GetType().Name}: {ex.Message}"
+                    );
+                }
+            }
+
+            lock (_lock)
+            {
+                _lastModelRefresh = DateTime.UtcNow;
+            }
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _isRefreshingModels = false;
+            }
         }
     }
 
@@ -506,90 +563,6 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    /// <summary>
-    ///     Re-polls activated <see cref="IModelCatalogProvider" /> plugins for
-    ///     their current model list, so newly added server-side models (e.g. a
-    ///     freshly pulled Ollama model) appear in the UI without the user
-    ///     manually hitting "Validate". Each provider's read-only
-    ///     <see cref="IModelCatalogProvider.RefreshModelCatalogAsync" /> refreshes
-    ///     its cached models and raises a capability change, which the section
-    ///     view-models observe (via <see cref="PluginStateChanged" />) to rebuild
-    ///     their model dropdowns. Call this when a model dropdown opens.
-    ///     <para>
-    ///     Deliberately uses the narrow model-catalog contract rather than
-    ///     <c>IPluginSettingsProvider.ValidateAsync</c>: validation can carry
-    ///     heavy/irreversible side effects (e.g. a TTS plugin downloads model
-    ///     assets), which must never be triggered by a passive dropdown open.
-    ///     Debounced and re-entrancy-guarded so repeated opens don't overlap;
-    ///     each provider gets a short timeout and a failure is logged, not
-    ///     swallowed silently; an unreachable endpoint keeps its cached models.
-    ///     </para>
-    /// </summary>
-    public async Task RefreshProviderModelsAsync()
-    {
-        // Claim the refresh under the lock so two near-simultaneous callers
-        // can't both read a stale guard, pass it, and run overlapping
-        // refreshes. The lock only guards the cheap claim — never the awaits
-        // below.
-        lock (_lock)
-        {
-            if (_isRefreshingModels)
-            {
-                return;
-            }
-
-            if (DateTime.UtcNow - _lastModelRefresh < TimeSpan.FromSeconds(2))
-            {
-                return;
-            }
-
-            _isRefreshingModels = true;
-        }
-
-        try
-        {
-            List<IModelCatalogProvider> providers;
-            lock (_lock)
-            {
-                providers = _allPlugins
-                    .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
-                    .Select(p => p.Instance)
-                    .OfType<IModelCatalogProvider>()
-                    .ToList();
-            }
-
-            foreach (var provider in providers)
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                try
-                {
-                    await provider.RefreshModelCatalogAsync(cts.Token);
-                }
-                catch (Exception ex)
-                {
-                    // Best effort — one provider failing must not block the rest,
-                    // but surface it for diagnosability rather than swallowing.
-                    Trace.WriteLine(
-                        $"[PluginManager] Model-catalog refresh failed for "
-                            + $"{provider.GetType().Name}: {ex.Message}"
-                    );
-                }
-            }
-
-            lock (_lock)
-            {
-                _lastModelRefresh = DateTime.UtcNow;
-            }
-        }
-        finally
-        {
-            lock (_lock)
-            {
-                _isRefreshingModels = false;
-            }
-        }
-    }
-
     private void RebuildCapabilityIndices()
     {
         lock (_lock)
@@ -609,9 +582,7 @@ public sealed class PluginManager : IDisposable
             _ttsProviders = activePlugins.OfType<ITtsProviderPlugin>().ToList();
         }
 
-        // PluginStateChanged is raised outside _lock to avoid a deadlock if
-        // a handler (e.g. a ViewModel) calls back into PluginManager methods
-        // that also acquire _lock.
+        // Raise outside _lock to avoid deadlock if a handler calls back into PluginManager.
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -620,10 +591,7 @@ public sealed class PluginManager : IDisposable
         try
         {
             var current = _settings.Current;
-            var updatedState = new Dictionary<string, bool>(current.PluginEnabledState)
-            {
-                [pluginId] = enabled
-            };
+            var updatedState = new Dictionary<string, bool>(current.PluginEnabledState) { [pluginId] = enabled };
 
             _settings.Save(current with { PluginEnabledState = updatedState });
         }

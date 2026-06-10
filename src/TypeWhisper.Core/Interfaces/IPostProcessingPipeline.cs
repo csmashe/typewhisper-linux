@@ -46,23 +46,18 @@ public sealed record PipelineOptions
     public Func<string, CancellationToken, Task<string>>? CleanupHandler { get; init; }
 
     /// <summary>
-    ///     When true, spoken line-break commands ("new line", "new paragraph")
-    ///     are converted to actual line breaks as the very first step, before
-    ///     any LLM/cleanup runs. LLMs are unreliable at honoring these verbal
-    ///     commands, so we do it deterministically. Enabled for live dictation;
-    ///     left off for file transcription (where "new line" is content, not a
-    ///     command).
+    ///     When true, "new line"/"new paragraph" are converted to actual line breaks before
+    ///     LLM/cleanup runs. Done deterministically because LLMs are unreliable at honoring
+    ///     verbal commands. Enabled for live dictation; off for file transcription (where the
+    ///     phrase is content, not a command).
     /// </summary>
     public bool NormalizeSpokenLineBreaks { get; init; }
 
     /// <summary>
-    ///     When true, the unambiguous spoken punctuation phrases "question mark"
-    ///     and "exclamation point"/"exclamation mark" are converted to the
-    ///     literal <c>?</c>/<c>!</c> symbols early, before the LLM runs. The
-    ///     fine-tuned model is intermittent on these and the STT engine only
-    ///     sometimes converts them, so a deterministic pass is the reliable
-    ///     safety net. Enabled for live dictation; left off for file
-    ///     transcription (where the phrase is content, not a command).
+    ///     When true, "question mark" and "exclamation point/mark" are converted to
+    ///     <c>?</c>/<c>!</c> before the LLM runs. Deterministic because both the fine-tuned
+    ///     model and STT engine are intermittent on these. Enabled for live dictation;
+    ///     off for file transcription (where the phrase is content, not a command).
     /// </summary>
     public bool NormalizeSpokenPunctuation { get; init; }
 
@@ -91,18 +86,13 @@ public sealed record PipelineOptions
     public Func<string, Task>? StatusCallback { get; init; }
 }
 
-/// <summary>
-///     Represents a plugin post-processor with its priority.
-///     The delegate captures plugin-specific context (PostProcessingContext) in its closure.
-/// </summary>
+/// <summary>A plugin post-processor with its priority; context is captured in the delegate closure.</summary>
 public sealed record PluginPostProcessor(
     int Priority,
     Func<string, CancellationToken, Task<string>> ProcessAsync
 );
 
-/// <summary>
-///     Result from the post-processing pipeline.
-/// </summary>
+/// <summary>Result from the post-processing pipeline.</summary>
 public sealed record PostProcessingResult
 {
     /// <summary>The fully processed text.</summary>

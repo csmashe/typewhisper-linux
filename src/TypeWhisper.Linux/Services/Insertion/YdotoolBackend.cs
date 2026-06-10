@@ -1,14 +1,9 @@
 namespace TypeWhisper.Linux.Services.Insertion;
 
 /// <summary>
-///     Wire-level invocations for the <c>ydotool</c> client. Socket discovery
-///     lives on <see cref="SystemCommandAvailabilityService" /> (so it can run
-///     at snapshot-build time without us re-implementing it here); this class
-///     only knows how to talk to a daemon whose socket is already located.
-///     The argument vectors are stable enough that the calling platform can
-///     hand them straight to its process runner — we deliberately don't
-///     allocate a process here so the existing test harness (which intercepts
-///     runner.Run) keeps working.
+///     Builds ydotool argument vectors. Socket discovery is left to the caller;
+///     this class only constructs args for a daemon whose socket is already known.
+///     No process is spawned here so the test harness can intercept via the runner.
 /// </summary>
 internal static class YdotoolBackend
 {
@@ -23,65 +18,47 @@ internal static class YdotoolBackend
     private const int VKey = 47;
     private const int EnterKey = 28;
 
-    /// <summary>
-    ///     Build the environment overlay that points the ydotool client at
-    ///     the discovered daemon socket. The client also reads
-    ///     <c>YDOTOOL_SOCKET</c> from its own environment, so callers should
-    ///     merge this on top of their own env.
-    /// </summary>
+    /// <summary>Returns the env overlay (<c>YDOTOOL_SOCKET</c>) pointing the
+    ///     client at the daemon socket; callers merge this into their own env.</summary>
     public static IReadOnlyDictionary<string, string>? BuildEnv(string? socketPath)
     {
-        if (string.IsNullOrWhiteSpace(socketPath))
-        {
-            return null;
-        }
-
-        return new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath };
+        return string.IsNullOrWhiteSpace(socketPath) ? null 
+            : new Dictionary<string, string> { ["YDOTOOL_SOCKET"] = socketPath };
     }
 
     public static IReadOnlyList<string> TypeArgs(string text)
     {
-        // ydotool's `type` verb writes a string the daemon synthesizes as
-        // key presses. We prefix with `--` so leading dashes in the text
-        // aren't parsed as flags.
-        //
-        // The default --key-delay=20 --key-hold=20 means ~40 ms per
-        // character — visibly slow on multi-sentence dictations (a 200
-        // char block takes 8 s). xdotool's path uses --delay 8 for the
-        // same job; ydotool can go lower because it dispatches through
-        // /dev/uinput rather than a layout-translating tool. 2 / 2 gives
-        // ~250 chars/sec, fast enough that no realistic app drops events
-        // on modern hardware and still leaves margin for slow VMs.
-        return new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", text };
+        // `--` prevents leading dashes in the text being parsed as flags.
+        // Default delays (20/20 ms) give ~40 ms/char — ~8 s for 200 chars.
+        // 2/2 ms yields ~250 chars/sec via /dev/uinput; no realistic app
+        // drops events and there is still margin for slow VMs.
+        return ["type", "--key-delay", "2", "--key-hold", "2", "--", text];
     }
 
     public static IReadOnlyList<string> PasteArgs()
     {
-        // Ctrl+V emitted as raw evdev down/up pairs. ydotool's `key`
-        // verb takes `<code>:<value>` tuples — value 1 = press, 0 = release.
-        return new[] { "key", $"{LeftCtrlKey}:1", $"{VKey}:1", $"{VKey}:0", $"{LeftCtrlKey}:0" };
+        // Raw evdev down/up pairs: code:1 = press, code:0 = release.
+        return ["key", $"{LeftCtrlKey}:1", $"{VKey}:1", $"{VKey}:0", $"{LeftCtrlKey}:0"];
     }
 
     public static IReadOnlyList<string> CopyArgs()
     {
-        return new[] { "key", $"{LeftCtrlKey}:1", $"{CKey}:1", $"{CKey}:0", $"{LeftCtrlKey}:0" };
+        return ["key", $"{LeftCtrlKey}:1", $"{CKey}:1", $"{CKey}:0", $"{LeftCtrlKey}:0"];
     }
 
     public static IReadOnlyList<string> EnterArgs()
     {
-        return new[] { "key", $"{EnterKey}:1", $"{EnterKey}:0" };
+        return ["key", $"{EnterKey}:1", $"{EnterKey}:0"];
     }
 
     /// <summary>
-    ///     No-op key release used by <c>YdotoolSetupHelper</c> to prove the
-    ///     full client → socket → daemon → /dev/uinput pipe is usable.
-    ///     Releasing an unpressed key (Left Alt, code 56) generates no
-    ///     visible effect in any window but still requires the daemon to
-    ///     successfully write an evdev event — which is exactly what fails
-    ///     with EACCES when the user lacks uinput access.
+    ///     No-op probe used by <c>YdotoolSetupHelper</c> to verify the
+    ///     client→socket→daemon→/dev/uinput path. Releasing Left Alt (code 56)
+    ///     has no visible effect but still requires a successful evdev write —
+    ///     which fails with EACCES when the user lacks uinput access.
     /// </summary>
     public static IReadOnlyList<string> ProbeArgs()
     {
-        return new[] { "key", "56:0" };
+        return ["key", "56:0"];
     }
 }

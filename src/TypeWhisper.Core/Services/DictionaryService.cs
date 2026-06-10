@@ -133,9 +133,7 @@ public sealed class DictionaryService : IDictionaryService
                 .ToList();
         }
 
-        // Accumulate usage increments and persist once at the end. A per-match
-        // SaveToDisk would mean N file writes for a transcript with N
-        // corrections, which adds noticeable I/O to every dictation.
+        // Accumulate usage increments and persist once at the end to avoid N file writes per dictation.
         var usedCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (var entry in corrections)
@@ -148,11 +146,9 @@ public sealed class DictionaryService : IDictionaryService
             {
                 var pattern = Regex.Escape(entry.Original);
                 var options = entry.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
-                // \b only anchors between a word char and a non-word char, so a
-                // bare \b on each side silently fails for originals like "C#" or
-                // ".NET" whose ends are non-word. Anchor each side based on what
-                // the original actually starts/ends with: \b on word ends, and a
-                // string/non-word lookaround on symbol ends.
+                // \b silently fails for originals like "C#" or ".NET" whose ends are non-word chars.
+                // Anchor each side based on what the original starts/ends with: \b on word-chars,
+                // lookaround on symbol-chars.
                 var prefix = char.IsLetterOrDigit(entry.Original[0]) || entry.Original[0] == '_'
                     ? @"\b"
                     : @"(?<=\W|^)";
@@ -160,12 +156,8 @@ public sealed class DictionaryService : IDictionaryService
                 var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
                     ? @"\b"
                     : @"(?=\W|$)";
-                // Use the MatchEvaluator overload so dollar sequences in
-                // user-supplied replacements (e.g. "$1", "$&") are inserted
-                // verbatim rather than interpreted as regex substitution tokens.
-                // Count each match so UsageCount/TimesApplied reflect the
-                // actual number of replacements — not just whether any
-                // replacement happened for the entry.
+                // MatchEvaluator overload: prevents "$1"/"$&" in user replacements from being
+                // interpreted as regex substitution tokens; also counts each match individually.
                 var replacement = entry.Replacement!;
                 var matchCount = 0;
                 var replaced = Regex.Replace(
@@ -260,9 +252,7 @@ public sealed class DictionaryService : IDictionaryService
                 newCache.Add(
                     new DictionaryEntry
                     {
-                        Id = Guid.NewGuid().ToString(),
-                        EntryType = DictionaryEntryType.Term,
-                        Original = term
+                        Id = Guid.NewGuid().ToString(), EntryType = DictionaryEntryType.Term, Original = term
                     }
                 );
             }
@@ -368,9 +358,7 @@ public sealed class DictionaryService : IDictionaryService
                 {
                     newCache[idx] = existing with
                     {
-                        Replacement = replacement,
-                        CaseSensitive = caseSensitive,
-                        IsEnabled = true
+                        Replacement = replacement, CaseSensitive = caseSensitive, IsEnabled = true
                     };
                 }
             }
@@ -575,8 +563,7 @@ public sealed class DictionaryService : IDictionaryService
                     continue;
                 }
 
-                // Term rows must not carry a Replacement: it's meaningless for
-                // terms and a hand-edited CSV with a stray value would break
+                // Term rows must not carry a Replacement: a stray value would break
                 // DictionaryEntryKey-based de-duplication on re-import.
                 if (entryType != DictionaryEntryType.Correction)
                 {
@@ -627,8 +614,7 @@ public sealed class DictionaryService : IDictionaryService
         var changed = false;
         lock (_gate)
         {
-            // Pack term entries use a deterministic ID "pack:<packId>:<term>" so we can
-            // detect duplicates without a full text scan and cleanly remove them in DeactivatePack.
+            // Deterministic IDs "pack:<packId>:<term>" enable duplicate detection and clean removal in DeactivatePack.
             var existingPackIds = _cache
                 .Where(e => e.EntryType == DictionaryEntryType.Term)
                 .Select(e => e.Id)
@@ -638,9 +624,7 @@ public sealed class DictionaryService : IDictionaryService
                 .Terms.Where(t => !existingPackIds.Contains($"pack:{pack.Id}:{t}"))
                 .Select(t => new DictionaryEntry
                 {
-                    Id = $"pack:{pack.Id}:{t}",
-                    EntryType = DictionaryEntryType.Term,
-                    Original = t
+                    Id = $"pack:{pack.Id}:{t}", EntryType = DictionaryEntryType.Term, Original = t
                 })
                 .ToList();
 
@@ -728,13 +712,8 @@ public sealed class DictionaryService : IDictionaryService
             }
             catch (Exception ex)
             {
-                // Usage tracking is best-effort. ApplyCorrections has already
-                // produced corrected text by the time this runs; if SaveToDisk
-                // throws (load-failed guard, disk full, permission), the
-                // post-processing pipeline would otherwise treat the whole
-                // correction step as failed and return the pre-correction text.
-                // Drop the increments so memory stays consistent with disk and
-                // swallow the exception.
+                // Usage tracking is best-effort — the corrected text is already produced.
+                // Swallow so a disk/permission error doesn't roll back the correction result.
                 Trace.WriteLine(
                     $"[DictionaryService] Could not persist usage counts for {deltas.Count} entries: {ex.Message}"
                 );
@@ -744,10 +723,8 @@ public sealed class DictionaryService : IDictionaryService
 
     private void EnsureCacheLoaded()
     {
-        // Volatile reads/writes pair the unsynchronized fast-path check with the
-        // in-lock state mutation: without them, a reader could see
-        // _cacheLoaded == true while _cache hasn't been published yet on weaker
-        // memory architectures (ARM/AArch64).
+        // Volatile read pairs with the in-lock write: without it, ARM/AArch64 could observe
+        // _cacheLoaded == true before _cache is published.
         if (Volatile.Read(ref _cacheLoaded))
         {
             return;
@@ -806,9 +783,7 @@ public sealed class DictionaryService : IDictionaryService
 
     private void SaveToDisk(IReadOnlyList<DictionaryEntry> entries)
     {
-        // If the on-disk file existed but we couldn't read it, don't overwrite
-        // it with whatever's currently in _cache — we'd silently destroy the
-        // user's dictionary.
+        // Refuse to overwrite when the previous load failed — would silently destroy the user's data.
         if (_cacheLoadFailed)
         {
             Trace.WriteLine(
@@ -830,8 +805,7 @@ public sealed class DictionaryService : IDictionaryService
             new JsonSerializerOptions { WriteIndented = true }
         );
 
-        // Write to a sibling temp file and atomically replace, so a crash
-        // mid-write can't leave the user's dictionary truncated.
+        // Atomic write via temp file + replace so a mid-write crash can't truncate the dictionary.
         var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {

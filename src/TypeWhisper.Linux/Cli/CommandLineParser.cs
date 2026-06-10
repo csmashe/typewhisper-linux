@@ -1,11 +1,6 @@
 namespace TypeWhisper.Linux.Cli;
 
-/// <summary>
-///     What the parsed argv tells us to do. The driver in <c>Program.Main</c>
-///     switches on the <see cref="Kind" /> to decide between launching the GUI,
-///     sending a legacy toggle to a running instance, or running a CLI
-///     subcommand that prints to stdout and exits.
-/// </summary>
+/// <summary>What the parsed argv tells us to do; Program.Main switches on <see cref="Kind" />.</summary>
 internal enum CliActionKind
 {
     /// <summary>Launch the GUI (single-instance probe runs separately).</summary>
@@ -27,11 +22,7 @@ internal enum CliActionKind
     Invalid
 }
 
-/// <summary>
-///     Result of parsing the command line. The driver does not need a class
-///     hierarchy here — there are only a handful of shapes and they all fit in
-///     a small bag of optional fields.
-/// </summary>
+/// <summary>Result of parsing the command line.</summary>
 internal sealed record CliAction(
     CliActionKind Kind,
     string? RecordVerb = null,
@@ -40,17 +31,12 @@ internal sealed record CliAction(
 );
 
 /// <summary>
-///     Translates raw <c>argv</c> into a <see cref="CliAction" />. Centralizing
-///     this keeps <c>Program.Main</c> readable and means the test surface is a
-///     pure function — no socket calls, no Avalonia startup.
+///     Translates raw argv into a <see cref="CliAction" />. Pure function —
+///     no socket calls or Avalonia startup — so the parse path is fully testable.
 /// </summary>
 internal static class CommandLineParser
 {
-    /// <summary>
-    ///     Multi-line usage string printed for <c>--help</c> and on parse
-    ///     errors. Plain text, no ANSI; the binary may be invoked from
-    ///     non-terminal contexts (autostart, compositor binds).
-    /// </summary>
+    /// <summary>Usage string for --help and parse errors. Plain text (no ANSI) — may run from non-terminal contexts.</summary>
     public const string UsageText =
         "Usage:\n"
         + "  typewhisper                       Launch the GUI, or toggle dictation if already running.\n"
@@ -69,8 +55,7 @@ internal static class CommandLineParser
             return new CliAction(CliActionKind.BareToggle);
         }
 
-        // --help is checked first so it short-circuits even alongside
-        // unrelated flags like --minimized in unusual launch wrappers.
+        // --help short-circuits even alongside other flags like --minimized.
         foreach (var a in args)
         {
             if (
@@ -82,11 +67,8 @@ internal static class CommandLineParser
             }
         }
 
-        // GUI-only flag from Phase 4. If --minimized is present and no
-        // subcommand is, we launch the GUI minimized. We treat any extra
-        // unknown flags as "GUI launch" rather than rejecting, to avoid
-        // breaking forward-compat with autostart entries shipped by older
-        // installers.
+        // --minimized with no subcommand launches the GUI minimized. Unknown flags
+        // are treated as GUI launch to preserve forward-compat with older autostart entries.
         var minimized = false;
         var sawNonFlag = false;
         var firstNonFlag = -1;
@@ -112,15 +94,11 @@ internal static class CommandLineParser
 
         if (!sawNonFlag)
         {
-            // All args were flags. With no subcommand verb, launch the GUI.
             return new CliAction(CliActionKind.LaunchGui, StartMinimized: minimized);
         }
 
-        // Subcommand starts at args[firstNonFlag]. The CLI grammar only
-        // recognizes 'record' and 'status' today; anything else is invalid.
-        // Trailing positional arguments past the documented forms are
-        // rejected — silently dropping them would let typos like
-        // `typewhisper status pls` succeed with surprising semantics.
+        // Only 'record' and 'status' are recognized; trailing positional arguments
+        // are rejected so typos like `typewhisper status pls` don't silently succeed.
         var verb = args[firstNonFlag];
         if (string.Equals(verb, "record", StringComparison.OrdinalIgnoreCase))
         {
@@ -169,11 +147,9 @@ internal static class CommandLineParser
     }
 
     /// <summary>
-    ///     Returns true if any argument after index <paramref name="lastConsumedIndex" />
-    ///     is a non-flag positional. Flags like <c>--minimized</c> that may
-    ///     trail a subcommand stay tolerated for forward compatibility with
-    ///     wrapper scripts, but unknown operands are rejected so typos don't
-    ///     silently execute the action.
+    ///     Returns true if any argument after <paramref name="lastConsumedIndex" />
+    ///     is a non-flag positional. Trailing flags are tolerated for forward compat;
+    ///     unknown operands are rejected so typos don't silently execute the action.
     /// </summary>
     private static bool HasUnexpectedTrailingOperand(string[] args, int lastConsumedIndex)
     {

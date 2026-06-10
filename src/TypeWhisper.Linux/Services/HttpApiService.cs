@@ -11,13 +11,9 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Local HTTP API exposing dictation/transcription/history endpoints to
-///     CLI tools and browser scripts. Binds only to <c>http://localhost/</c>
-///     prefixes (loopback host + loopback origin checks) — there is no
-///     plaintext-over-LAN deployment story for the bearer auth scheme used
-///     here. CORS is echoed only for the listener's own loopback origin and
-///     port, so a remote page cannot induce a localhost-origin request to
-///     leak the API.
+///     Local HTTP API for dictation/transcription/history. Binds to localhost
+///     only; CORS is echoed only for the same loopback origin and port so a
+///     remote page cannot induce a localhost-origin request to leak the API.
 /// </summary>
 public sealed class HttpApiService : IDisposable
 {
@@ -36,13 +32,13 @@ public sealed class HttpApiService : IDisposable
 
     private readonly AudioFileService _audioFiles;
     private readonly DictationOrchestrator _dictation;
-    private readonly DictationSessionResultStore _sessionResults;
     private readonly IDictionaryService _dictionary;
     private readonly ApiDiscoveryFile _discoveryFile;
     private readonly IHistoryService _history;
     private readonly ModelManagerService _models;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly IProfileService _profiles;
+    private readonly DictationSessionResultStore _sessionResults;
     private readonly ISettingsService _settings;
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
@@ -171,6 +167,26 @@ public sealed class HttpApiService : IDisposable
             : ApiKeyProtection.Decrypt(settings.ApiServerBearerToken);
     }
 
+    internal static object? BuildAccelerationDto(
+        ITranscriptionEnginePlugin? plugin,
+        AppSettings settings
+    )
+    {
+        if (plugin?.AccelerationStatus is not { } status)
+        {
+            return null;
+        }
+
+        return new
+        {
+            preference = AppSettings.NormalizeLocalModelAcceleration(settings.LocalModelAcceleration),
+            activeBackend = FormatAccelerationBackend(status.ActiveBackend),
+            displayText = status.DisplayText,
+            detail = status.Detail,
+            requiresRestart = status.RequiresRestart
+        };
+    }
+
     public event Action? StateChanged;
 
     private void Stop(bool updateStatus)
@@ -232,8 +248,7 @@ public sealed class HttpApiService : IDisposable
             var method = request.HttpMethod;
             var allowedOrigin = GetAllowedOrigin(request);
 
-            // CORS preflight: respond before auth so browsers can complete the
-            // handshake. The actual request that follows still goes through auth.
+            // CORS preflight: respond before auth so browsers can complete the handshake.
             if (string.Equals(method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
             {
                 if (!string.IsNullOrWhiteSpace(allowedOrigin))
@@ -253,8 +268,7 @@ public sealed class HttpApiService : IDisposable
             if (!IsAuthorized(request))
             {
                 response.Headers["WWW-Authenticate"] = "Bearer";
-                // Include CORS headers so browser clients from allowed loopback
-                // origins can actually read the 401 body and react.
+                // Include CORS so browser clients from allowed loopback origins can read the 401.
                 await WriteJsonAsync(
                     response,
                     401,
@@ -320,9 +334,8 @@ public sealed class HttpApiService : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine($"[HttpApiService] Request failed: {ex}");
-            // Re-resolve origin from context.Request; allowedOrigin from the try
-            // block isn't in scope here (the exception may have been thrown
-            // before or after it was computed).
+            // Re-resolve origin: allowedOrigin may not be in scope if the exception
+            // was thrown before it was computed.
             var recoveredOrigin = GetAllowedOrigin(context.Request);
             await WriteJsonAsync(
                 response,
@@ -364,32 +377,14 @@ public sealed class HttpApiService : IDisposable
         );
     }
 
-    internal static object? BuildAccelerationDto(
-        ITranscriptionEnginePlugin? plugin,
-        AppSettings settings
-    )
+    private static string FormatAccelerationBackend(TranscriptionAccelerationBackend backend)
     {
-        if (plugin?.AccelerationStatus is not { } status)
-        {
-            return null;
-        }
-
-        return new
-        {
-            preference = AppSettings.NormalizeLocalModelAcceleration(settings.LocalModelAcceleration),
-            activeBackend = FormatAccelerationBackend(status.ActiveBackend),
-            displayText = status.DisplayText,
-            detail = status.Detail,
-            requiresRestart = status.RequiresRestart
-        };
-    }
-
-    private static string FormatAccelerationBackend(TranscriptionAccelerationBackend backend) =>
-        backend switch
+        return backend switch
         {
             TranscriptionAccelerationBackend.NvidiaCuda => "nvidia-cuda",
-            _ => "cpu",
+            _ => "cpu"
         };
+    }
 
     private (int, string) HandleModels()
     {
@@ -423,9 +418,8 @@ public sealed class HttpApiService : IDisposable
         CancellationToken ct
     )
     {
-        // ContentLength64 is -1 for chunked (Transfer-Encoding: chunked) uploads.
-        // Reject empty bodies and known-too-large bodies up front; let chunked
-        // requests through so LimitedReadStream can enforce the cap while reading.
+        // ContentLength64 is -1 for chunked uploads; reject empty/over-limit known
+        // lengths up front, let chunked requests through for LimitedReadStream to cap.
         if (request.ContentLength64 == 0 || request.ContentLength64 > MaxTranscribeRequestBytes)
         {
             return (413, Serialize(new { error = "Request body too large" }));
@@ -536,10 +530,8 @@ public sealed class HttpApiService : IDisposable
     {
         var modelId = ResolveRequestedModelId(opts.Engine, opts.Model);
 
-        // Refuse to silently block on a model download/restore when the caller
-        // didn't opt in via await_download=1. EnsureModelLoadedCoreAsync would
-        // otherwise call DownloadAndLoadModelCoreAsync for any missing local
-        // model, hitting the CLI's 5-min budget before returning.
+        // Refuse to block on a model download unless the caller opted in via
+        // await_download=1 — otherwise the CLI's 5-min budget would be consumed.
         if (!opts.AwaitDownload)
         {
             var resolvedModelId = modelId ?? _settings.Current.SelectedModelId;
@@ -551,18 +543,14 @@ public sealed class HttpApiService : IDisposable
                 return (
                     503,
                     Serialize(
-                        new
-                        {
-                            error = "Model is not downloaded. Pass await_download=1 to wait for the download."
-                        }
+                        new { error = "Model is not downloaded. Pass await_download=1 to wait for the download." }
                     )
                 );
             }
         }
 
         // Decode audio before acquiring the lease — ffmpeg shells out and
-        // must not monopolize the global model lock while no transcription
-        // runs.
+        // must not hold the model lock while no transcription runs.
         var wav = await _audioFiles.LoadAudioAsWavAsync(audioPath, ct);
         var settings = _settings.Current;
         var language = opts.Language ?? (settings.Language == "auto" ? null : settings.Language);
@@ -572,8 +560,8 @@ public sealed class HttpApiService : IDisposable
             _dictionary.GetTermsForPrompt()
         );
 
-        // Hold the transcription lease only around plugin.TranscribeAsync so
-        // a concurrent caller cannot swap the shared plugin's model mid-run.
+        // Hold the lease only around TranscribeAsync so no concurrent caller
+        // can swap the shared plugin's model mid-run.
         PluginTranscriptionResult result;
         string engineProviderId;
         string? selectedModelId;
@@ -651,9 +639,7 @@ public sealed class HttpApiService : IDisposable
                         model = selectedModelId,
                         segments = result.Segments.Select(segment => new
                         {
-                            text = segment.Text,
-                            start = segment.Start,
-                            end = segment.End
+                            text = segment.Text, start = segment.Start, end = segment.End
                         })
                     }
                 )
@@ -675,18 +661,6 @@ public sealed class HttpApiService : IDisposable
             )
         );
     }
-
-    private sealed record TranscriptionRunOptions(
-        string? Language,
-        IReadOnlyList<string> LanguageHints,
-        TranscriptionTask Task,
-        string? TargetLanguage,
-        string ResponseFormat,
-        string? Prompt,
-        string? Engine,
-        string? Model,
-        bool AwaitDownload
-    );
 
     private (int, string) HandleHistorySearch(HttpListenerRequest request)
     {
@@ -721,13 +695,7 @@ public sealed class HttpApiService : IDisposable
         return (
             200,
             Serialize(
-                new
-                {
-                    total = records.Count,
-                    offset,
-                    limit,
-                    records = paged
-                }
+                new { total = records.Count, offset, limit, records = paged }
             )
         );
     }
@@ -792,19 +760,16 @@ public sealed class HttpApiService : IDisposable
 
         var sessionId = await _dictation.StartAsync();
 
-        // The orchestrator can bail silently (no device, model load failure,
-        // toggle gate already held); reflect actual state in the response.
+        // Orchestrator can bail silently (no device, load failure, gate held);
+        // reflect actual state in the response.
         if (!_dictation.IsRecording)
         {
             return (409, Serialize(new { error = "Failed to start dictation" }));
         }
 
-        // sessionId <= 0 means *this* call did not allocate the session — most
-        // commonly because a concurrent /v1/dictation/start (or hotkey toggle)
-        // already owned the toggle gate. The dictation that IS recording
-        // belongs to that other caller and has a session id we can't surface
-        // here, so we'd otherwise hand back `sessionId: 0` and the polling
-        // client would never resolve. Treat it as a 409 instead.
+        // sessionId <= 0 means this call didn't allocate the session — a concurrent
+        // start or hotkey toggle already owned the gate. Return 409 rather than
+        // handing back sessionId: 0 that a polling client would never resolve.
         if (sessionId <= 0)
         {
             return (
@@ -976,9 +941,7 @@ public sealed class HttpApiService : IDisposable
                 {
                     corrections = corrections.Select(c => new
                     {
-                        original = c.Original,
-                        replacement = c.Replacement,
-                        caseSensitive = c.CaseSensitive
+                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive
                     }),
                     count = corrections.Count
                 }
@@ -1037,9 +1000,7 @@ public sealed class HttpApiService : IDisposable
                 {
                     corrections = corrections.Select(c => new
                     {
-                        original = c.Original,
-                        replacement = c.Replacement,
-                        caseSensitive = c.CaseSensitive
+                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive
                     }),
                     count = corrections.Count
                 }
@@ -1090,9 +1051,7 @@ public sealed class HttpApiService : IDisposable
                     deleted,
                     corrections = corrections.Select(c => new
                     {
-                        original = c.Original,
-                        replacement = c.Replacement,
-                        caseSensitive = c.CaseSensitive
+                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive
                     }),
                     count = corrections.Count
                 }
@@ -1219,21 +1178,16 @@ public sealed class HttpApiService : IDisposable
         var decryptedToken = ReadBearerToken(current);
         if (!string.IsNullOrWhiteSpace(decryptedToken))
         {
-            // Decrypt succeeded, so a token already exists. storedToken
-            // equals decryptedToken only when it was stored as plaintext
-            // by an older build (ApiKeyProtection.Decrypt is a no-op on
-            // non-base64 blobs). Re-encrypt on the way through so the
-            // stored value is always at-rest protected going forward.
+            // Token exists. storedToken == decryptedToken only when stored as plaintext
+            // by an older build (Decrypt is a no-op on non-base64 blobs) — re-encrypt
+            // on the way through so the stored value is always at-rest protected.
             if (!string.Equals(storedToken, decryptedToken, StringComparison.Ordinal))
             {
                 return;
             }
 
             _settings.Save(
-                current with
-                {
-                    ApiServerBearerToken = ApiKeyProtection.Encrypt(decryptedToken)
-                }
+                current with { ApiServerBearerToken = ApiKeyProtection.Encrypt(decryptedToken) }
             );
             return;
         }
@@ -1260,9 +1214,8 @@ public sealed class HttpApiService : IDisposable
         }
 
         var providedToken = authorization["Bearer ".Length..].Trim();
-        // Short-circuit on length before FixedTimeEquals to avoid allocating
-        // byte arrays of wildly different sizes, while keeping the constant-time
-        // comparison for same-length inputs to prevent timing side-channels.
+        // Length short-circuit avoids allocating mismatched byte arrays;
+        // FixedTimeEquals then gives constant-time comparison for same-length inputs.
         if (providedToken.Length != expectedToken.Length)
         {
             return false;
@@ -1282,9 +1235,8 @@ public sealed class HttpApiService : IDisposable
             return null;
         }
 
-        // Only echo back origins on the same loopback address and same port
-        // as the listener — prevents a cross-origin page from using the API
-        // by claiming a localhost origin.
+        // Only echo origins on the same loopback address and port — prevents
+        // a cross-origin page from claiming a localhost origin.
         if (
             Uri.TryCreate(origin, UriKind.Absolute, out var originUri)
             && IsAllowedLoopbackHost(originUri.Host)
@@ -1320,6 +1272,18 @@ public sealed class HttpApiService : IDisposable
                || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
                || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
     }
+
+    private sealed record TranscriptionRunOptions(
+        string? Language,
+        IReadOnlyList<string> LanguageHints,
+        TranscriptionTask Task,
+        string? TargetLanguage,
+        string ResponseFormat,
+        string? Prompt,
+        string? Engine,
+        string? Model,
+        bool AwaitDownload
+    );
 }
 
 internal sealed record DictionaryTermsRequest(IReadOnlyList<string> Terms, bool? Replace);

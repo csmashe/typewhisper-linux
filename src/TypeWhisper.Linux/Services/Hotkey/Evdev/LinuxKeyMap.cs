@@ -3,13 +3,11 @@ using SharpHook.Native;
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 
 /// <summary>
-///     Maps Linux kernel <c>KEY_*</c> codes (from <c>linux/input-event-codes.h</c>)
-///     to the SharpHook <see cref="KeyCode" /> enum and to <see cref="ModifierMask" />
-///     bits so the evdev backend can feed events into the shared
-///     <see cref="ShortcutDispatcher" /> without diverging from SharpHook semantics.
-///     Coverage tracks the chord keys the existing hotkey parser supports
-///     (letters, digits, F1–F24, named keys, four modifier groups). Unmapped
-///     codes return <see langword="null" /> and are dropped.
+///     Maps Linux kernel <c>KEY_*</c> codes (<c>linux/input-event-codes.h</c>)
+///     to <see cref="KeyCode" /> and <see cref="ModifierMask" /> so the evdev
+///     backend feeds <see cref="ShortcutDispatcher" /> with SharpHook-compatible
+///     events. Covers letters, digits, F1–F24, named keys, and modifiers;
+///     unmapped codes return <see langword="null" /> and are dropped.
 /// </summary>
 internal static class LinuxKeyMap
 {

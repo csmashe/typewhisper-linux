@@ -76,12 +76,9 @@ public sealed class TextInsertionService
     {
     }
 
-    // DI-preferred ctor: takes the shared SystemCommandAvailabilityService
-    // singleton so the platform can subscribe to snapshot refreshes
-    // fired by YdotoolSetupHelper and rebuild its backend chain in
-    // place — without this the singleton's chain is frozen at startup
-    // and one-click ydotool setup appears to work but auto-paste keeps
-    // falling back until the app is restarted.
+    // DI-preferred ctor: passes the shared SystemCommandAvailabilityService so the platform
+    // subscribes to snapshot refreshes and rebuilds its chain live after ydotool setup —
+    // without this the singleton's chain is frozen at startup and ydotool changes need a restart.
     public TextInsertionService(
         IErrorLogService errorLog,
         SystemCommandAvailabilityService commands
@@ -167,21 +164,11 @@ public sealed class TextInsertionService
                 TextInsertionStrategy.DirectTyping => true,
                 TextInsertionStrategy.ClipboardPaste => false,
                 _ => ShouldTypeDirectly(targetProcessName, targetWindowTitle)
-                     // Wayland without xdotool can't identify the focused app,
-                     // so process/title are both null. Defaulting to paste in
-                     // that case hits things that don't bind Ctrl+V to paste
-                     // (terminals, Claude Code's image-paste shortcut, vim
-                     // normal mode). Direct typing via ydotool is universal —
-                     // BUT only for ASCII. ydotool's `type` synthesizes evdev
-                     // keycodes through the user's keyboard layout, so
-                     // non-ASCII chars (smart quotes, em-dashes, accented
-                     // letters, emoji) can silently render as the wrong glyph
-                     // on non-US layouts. Fall back to clipboard paste when
-                     // any non-ASCII byte is in the text — safer for unicode
-                     // even if the resulting paste fails in a terminal, since
-                     // the orchestrator's reason-aware fallback popup at
-                     // least surfaces the issue instead of silently
-                     // corrupting the user's document.
+                     // On Wayland without xdotool, process/title are null; defaulting to paste
+                     // hits terminals (readline quoted-insert), vim, and Claude Code's image-paste.
+                     // Direct typing via ydotool is universal — BUT only for ASCII: ydotool
+                     // synthesizes evdev keycodes via the keyboard layout, so non-ASCII chars
+                     // can silently render as the wrong glyph on non-US layouts.
                      || (
                          string.IsNullOrEmpty(targetProcessName)
                          && string.IsNullOrEmpty(targetWindowTitle)
@@ -421,13 +408,11 @@ public sealed class TextInsertionService
                    );
         }
 
-        // Terminals don't interpret a synthesized Ctrl+V as paste — bash's
-        // readline binds it to quoted-insert, so the paste produces nothing
-        // visible. Direct typing avoids the modifier entirely. The list
-        // covers known terminals by exact name; the trailing pattern check
-        // catches the long tail (anything that ends with "term" or
-        // "-terminal", e.g. xfce4-terminal, deepin-terminal, lxterm) so a
-        // new terminal doesn't require a code change to be supported.
+        // Terminals bind Ctrl+V to readline quoted-insert, not paste. Direct typing is used
+        // instead. Substring match on "terminal" (not suffix) is intentional: GNOME/MATE use
+        // a client-server model so the process is "gnome-terminal-server", and Linux truncates
+        // /proc/pid/comm to 15 bytes, yielding "gnome-terminal-" — contains "terminal", but
+        // doesn't end with it. The trailing `EndsWith("term")` catches xfce4-terminal etc.
         static bool IsTerminalProcess(string? value)
         {
             if (string.IsNullOrWhiteSpace(value))
@@ -458,18 +443,16 @@ public sealed class TextInsertionService
                 return true;
             }
 
-            return process.EndsWith("-terminal", StringComparison.OrdinalIgnoreCase)
+            return process.Contains("terminal", StringComparison.OrdinalIgnoreCase)
                    || process.EndsWith("term", StringComparison.OrdinalIgnoreCase);
         }
     }
 
     /// <summary>
-    ///     Pure-ASCII safety check used to decide whether ydotool's
-    ///     layout-dependent <c>type</c> can be trusted for an unknown target.
-    ///     0x09 (tab), 0x0A (newline), and 0x20–0x7E (printable ASCII) are
-    ///     the keycodes ydotool can synthesize without consulting a non-US
-    ///     layout; everything else may render as a wrong glyph and is
-    ///     routed through clipboard paste instead.
+    ///     True when the text is safe for ydotool's layout-dependent <c>type</c>.
+    ///     Tab, newline, and printable ASCII (0x20–0x7E) are synthesizable without
+    ///     a layout lookup; anything outside that range may render as the wrong glyph
+    ///     on non-US keyboards and is routed through clipboard paste instead.
     /// </summary>
     private static bool IsAsciiSafe(string text)
     {
@@ -582,11 +565,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         : this(commands.GetSnapshot(), processRunner, processRunnerWithStderr)
     {
         _commands = commands;
-        // Subscribe so that when YdotoolSetupHelper.SetUpAsync (or any
-        // future code path) calls RefreshSnapshot the live chain
-        // rebuilds in place. Without this the DI singleton freezes its
-        // chain at startup and the one-click ydotool setup looks
-        // successful but auto-paste still falls through until restart.
+        // Rebuild chain in place whenever the snapshot refreshes (e.g. after ydotool setup).
         commands.SnapshotChanged += OnSnapshotChanged;
     }
 
@@ -632,15 +611,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public bool IsKdePlasma => _snapshot.Compositor == "kde";
 
-    // On Wayland an unidentified target must be TYPED, never pasted: Ctrl+V
-    // is rejected by terminals (readline quoted-insert), reinterpreted by
-    // Claude Code as image-paste, and garbled by vim normal mode. The old
-    // gate keyed off `!HasXdotool`, but xdotool's presence says nothing about
-    // Wayland — it can neither see Wayland windows nor type into them, yet a
-    // copy installed by some unrelated package would silently flip this off
-    // and route every unknown target through paste. Gate instead on actually
-    // having a Wayland-native typing backend: ydotool (universal, injects
-    // below the compositor) or wtype where the compositor honours it (wlroots).
+    // On Wayland, unknown targets must be typed (not pasted): Ctrl+V is rejected by
+    // terminals (readline quoted-insert), misread by vim normal mode, and treated as
+    // image-paste by Claude Code. Gate on a Wayland-native typing backend (ydotool or wtype),
+    // not on xdotool's presence — xdotool can't see Wayland windows.
     public bool PrefersDirectTypingForUnknownTarget =>
         _isWayland
         && (
@@ -714,10 +688,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public string? GetActiveWindowId()
     {
-        // xdotool's getactivewindow returns the X server's idea of the
-        // focused window, which on Wayland is the XWayland surface (if
-        // any) — useless for ydotool/wtype. Only X11 sessions get a
-        // meaningful window id.
+        // On Wayland, getactivewindow returns the XWayland surface — useless for ydotool/wtype.
         if (_isWayland || !_snapshot.HasXdotool)
         {
             return null;
@@ -950,9 +921,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         {
             var psi = new ProcessStartInfo("xdotool", arguments)
             {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
             };
             using var p = Process.Start(psi);
             if (p is null)
@@ -989,11 +958,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private async Task<bool> RunWtypeAsync(params string[] args)
     {
-        // Capture stderr so we can detect "Compositor does not support
-        // the virtual keyboard protocol" and skip wtype permanently for
-        // the rest of this process — without that fast-skip, every
-        // dictation on GNOME / KDE Wayland wastes ~225 ms retrying a
-        // doomed backend before falling through.
+        // Capture stderr to detect compositor rejection and disable wtype permanently —
+        // without this every dictation on GNOME/KDE Wayland wastes ~225 ms on a doomed backend.
         if (_processRunnerWithStderr is not null)
         {
             var (exitCode, stderr) = await _processRunnerWithStderr("wtype", args)
@@ -1001,11 +967,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             if (exitCode != 0 && IsWtypeCompositorRejection(stderr))
             {
                 _disabled.Add(InputBackend.Wtype);
-                // First-failing backend's reason wins: if an earlier
-                // backend (e.g. ydotool) already recorded a specific
-                // diagnostic, keep it. Otherwise on GNOME/KDE with a
-                // broken-but-set-up ydotool the user would see "Set up
-                // ydotool" advice when ydotool is the actual problem.
+                // First-failing backend's reason wins — keep an earlier specific diagnostic.
                 if (LastFailureReason == InsertionFailureReason.None)
                 {
                     LastFailureReason = InsertionFailureReason.WtypeCompositorUnsupported;
@@ -1044,13 +1006,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         var exit = await RunWithEnv(YdotoolBackend.ExecutableName, args, env);
         if (exit != 0)
         {
-            // Daemon ran but the request failed — almost always EACCES
-            // on /dev/uinput (user not in input group, uaccess didn't
-            // apply) or a wedged socket. Either way the failure is
-            // sticky for this process lifetime: disable so the chain
-            // skips it next time instead of paying for another spawn,
-            // and surface a ydotool-specific reason so the orchestrator
-            // can tell the user to check the Text insertion panel.
+            // Almost always EACCES on /dev/uinput (uaccess didn't apply, not in input group)
+            // or a wedged socket. Mark as sticky — disable for this process lifetime so the
+            // chain skips ydotool rather than spawning it on every subsequent dictation.
             if (LastFailureReason == InsertionFailureReason.None)
             {
                 LastFailureReason = InsertionFailureReason.YdotoolSocketUnreachable;
@@ -1080,11 +1038,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     {
         try
         {
-            var psi = new ProcessStartInfo(fileName)
-            {
-                RedirectStandardError = true,
-                UseShellExecute = false
-            };
+            var psi = new ProcessStartInfo(fileName) { RedirectStandardError = true, UseShellExecute = false };
             foreach (var arg in args)
             {
                 psi.ArgumentList.Add(arg);
@@ -1123,9 +1077,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         {
             var psi = new ProcessStartInfo(fileName)
             {
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false
+                RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false
             };
             foreach (var arg in args)
             {
