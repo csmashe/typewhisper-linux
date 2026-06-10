@@ -43,6 +43,25 @@ public sealed class YdotoolSetupHelper
         + "# logind (Devuan, Alpine without elogind, etc.).\n"
         + "KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n";
 
+    // The udev rule above can only grant access to a device whose kernel
+    // module is actually loaded. Distros like Arch / Omarchy do NOT auto-load
+    // uinput, so /dev/uinput exists only as a root-owned static node and the
+    // rule never applies — ydotoold then fails to open it (EACCES, exit 2) and
+    // crash-loops into systemd's start-limit. We fix that by loading the module
+    // now (modprobe, in the pkexec script) and persisting it across reboots via
+    // modules-load.d so the device is present for udev to apply the rule to on
+    // every boot.
+    private const string ModulesLoadPath = "/etc/modules-load.d/uinput.conf";
+
+    private const string ModulesLoadContent =
+        "# "
+        + OwnershipMarker
+        + " — load the uinput kernel module at boot so /dev/uinput exists\n"
+        + "# for the udev rule (60-ydotool.rules) to grant access. Without this,\n"
+        + "# distros that don't auto-load uinput (e.g. Arch) leave ydotoold unable\n"
+        + "# to open the device. Delete this file to roll back.\n"
+        + "uinput\n";
+
     // The user-level systemd unit name. Fedora's ydotool package ships
     // only a system-level `ydotool.service` (runs ydotoold as root, with
     // a root-owned socket the user can't reach), so on a clean install no
@@ -114,13 +133,16 @@ public sealed class YdotoolSetupHelper
             );
         }
 
-        // pkexec presence is only required when we actually need to write
-        // the udev rule. Skip it entirely when the rule is already on disk
-        // (manual install, earlier setup run, distro default) OR when the
-        // kernel already grants this process read/write on /dev/uinput —
-        // in that case the rule is genuinely unnecessary and prompting for
-        // an admin password would just be a needless nag.
-        if (!File.Exists(UdevRulePath) && !UinputIsAccessible())
+        // Gate the privileged path on the ground truth — "can this process
+        // read+write /dev/uinput?" — NOT on "does the rule file exist?". A
+        // prior run (or a manual install) may have written the rule yet left
+        // the uinput module unloaded, so the device is still inaccessible and
+        // the rule has never applied. Keying off rule-existence would skip the
+        // fix (modprobe + modules-load.d) on exactly that retry and the task
+        // would stay stuck. When uinput is already accessible we skip entirely
+        // — the rule is genuinely unnecessary and prompting for an admin
+        // password would just be a needless nag.
+        if (!UinputIsAccessible())
         {
             var ruleInstalled = await InstallUdevRuleAsync(ct).ConfigureAwait(false);
             if (!ruleInstalled.Success)
@@ -292,42 +314,62 @@ public sealed class YdotoolSetupHelper
                 .ConfigureAwait(false);
         }
 
-        var ruleNotOursMessage = (string?)null;
-        if (File.Exists(UdevRulePath))
+        // Remove the root-owned files we installed — the udev rule and the
+        // modules-load entry — in a single privileged call so the user sees at
+        // most one auth prompt. Each is ownership-gated independently: both use
+        // conventional paths a user or distro package might have written first,
+        // so a file lacking our marker is left untouched and reported.
+        var leftoverMessages = new List<string>();
+        var privilegedRemovals = new List<string>();
+        foreach (var path in new[] { UdevRulePath, ModulesLoadPath })
         {
-            // Ownership guard: 60-ydotool.rules is the conventional name
-            // used in every ydotool guide on the internet, so the user
-            // (or a distro package) may have written one before
-            // discovering TypeWhisper. Don't pkexec-rm privileged
-            // config we didn't put there.
-            if (!IsFileOwnedByTypeWhisper(UdevRulePath))
+            if (!File.Exists(path))
             {
-                ruleNotOursMessage =
-                    $"Left {UdevRulePath} in place — it doesn't carry TypeWhisper's ownership marker, so we won't delete it. Remove it manually if you want to.";
+                continue;
             }
-            else if (!DesktopDetector.BinaryExists("pkexec"))
+
+            if (!IsFileOwnedByTypeWhisper(path))
             {
-                // Fail closed: the rule is ours and still on disk, but
-                // without pkexec we can't delete root-owned config. Don't
-                // report success while leaving privileged state behind.
+                leftoverMessages.Add(
+                    $"Left {path} in place — it doesn't carry TypeWhisper's ownership marker, so we won't delete it. Remove it manually if you want to."
+                );
+                continue;
+            }
+
+            if (!DesktopDetector.BinaryExists("pkexec"))
+            {
+                // Fail closed: the file is ours and still on disk, but without
+                // pkexec we can't delete root-owned config. Don't report
+                // success while leaving privileged state behind.
                 return new SetupResult(
                     false,
-                    $"Could not remove {UdevRulePath} — pkexec is not available to delete root-owned config.",
-                    $"Remove it manually: sudo rm -f {UdevRulePath}"
+                    $"Could not remove {path} — pkexec is not available to delete root-owned config.",
+                    $"Remove it manually: sudo rm -f {path}"
                 );
             }
-            else
+
+            privilegedRemovals.Add(path);
+        }
+
+        if (privilegedRemovals.Count > 0)
+        {
+            // Also unload the uinput module we loaded, so a subsequent fresh
+            // install re-exercises the full module-load path rather than
+            // finding the device already present. `-r` no-ops harmlessly if
+            // the module is builtin or still in use by something else.
+            var script =
+                "set -e\n"
+                + "rm -f " + string.Join(" ", privilegedRemovals) + "\n"
+                + "modprobe -r uinput 2>/dev/null || true\n";
+            var rm = await _runner
+                .RunAsync("pkexec", new[] { "/bin/sh" }, standardInput: script, ct: ct)
+                .ConfigureAwait(false);
+            if (!rm.Succeeded)
             {
-                var rm = await _runner
-                    .RunAsync("pkexec", new[] { "rm", "-f", UdevRulePath }, ct: ct)
-                    .ConfigureAwait(false);
-                if (!rm.Succeeded)
-                {
-                    return new SetupResult(
-                        false,
-                        $"Could not remove udev rule: {rm.StandardError.Trim()}"
-                    );
-                }
+                return new SetupResult(
+                    false,
+                    $"Could not remove root-owned config: {rm.StandardError.Trim()}"
+                );
             }
         }
 
@@ -335,7 +377,9 @@ public sealed class YdotoolSetupHelper
 
         var detail = string.Join(
             "\n",
-            new[] { unitLeftMessage, ruleNotOursMessage }.Where(m => !string.IsNullOrWhiteSpace(m))
+            new[] { unitLeftMessage }
+                .Concat(leftoverMessages)
+                .Where(m => !string.IsNullOrWhiteSpace(m))
         );
         return new SetupResult(
             true,
@@ -559,29 +603,47 @@ public sealed class YdotoolSetupHelper
                 false,
                 "pkexec is not available, so the udev rule can't be installed automatically.",
                 "Run this manually:\n"
+                + $"  sudo tee {ModulesLoadPath} > /dev/null <<'EOF'\n"
+                + ModulesLoadContent
+                + "EOF\n"
                 + $"  sudo tee {UdevRulePath} > /dev/null <<'EOF'\n"
                 + UdevRuleContent
                 + "EOF\n"
-                + "  sudo udevadm control --reload && sudo udevadm trigger\n"
-                + "  systemctl --user enable --now ydotoold.service\n"
-                // enable --now won't restart an already-running ydotoold, so a
-                // daemon that started before the rule's uaccess ACL landed keeps
-                // a stale EACCES /dev/uinput handle. Restart forces a fresh open
-                // with current perms — mirrors the automated path's restart.
-                + "  systemctl --user restart ydotoold.service"
+                + "  sudo udevadm control --reload\n"
+                // modprobe AFTER the reload so the freshly-written rule is in
+                // effect when the module's add-event fires and the device node
+                // is created — that's what applies the input group + uaccess ACL.
+                + "  sudo modprobe uinput\n"
+                + "  sudo udevadm trigger --subsystem-match=misc --action=change\n"
+                // Don't hand the user `systemctl --user enable --now ydotoold.service`
+                // here: on a clean install no user unit exists yet (we return before
+                // EnsureUserUnitExistsAsync runs), so that command would just fail
+                // with "Unit ydotoold.service not found". Once the steps above make
+                // /dev/uinput accessible, rerunning setup skips the pkexec path
+                // entirely and creates + enables + restarts the unit for you.
+                + "Then reopen Settings → Text insertion and run setup again — "
+                + "TypeWhisper will create and start the ydotoold user service."
             );
         }
 
         // pkexec runs the helper as root with the user's authentication.
-        // We pipe the rule content through `tee` rather than passing it
+        // We pipe file contents through here-docs rather than passing them
         // on the command line so a content typo can't be persisted as
-        // shell metadata.
+        // shell metadata. Order matters: write both files, reload udev so the
+        // new rule is live, THEN load the module — the add-event creates the
+        // device node with the rule already in effect, applying the input
+        // group + uaccess ACL. The trailing trigger is belt-and-suspenders for
+        // the case where uinput was somehow already loaded.
         var script =
             $"set -e\n"
+            + $"cat > {ModulesLoadPath} <<'EOF'\n"
+            + ModulesLoadContent
+            + "EOF\n"
             + $"cat > {UdevRulePath} <<'EOF'\n"
             + UdevRuleContent
             + "EOF\n"
             + "udevadm control --reload\n"
+            + "modprobe uinput || true\n"
             + "udevadm trigger --subsystem-match=misc --action=change || true\n";
 
         var run = await _runner

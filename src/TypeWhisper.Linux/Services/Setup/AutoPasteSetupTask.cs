@@ -4,12 +4,16 @@ namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
 ///     Ensures automatic paste — typing the transcript straight into the
-///     focused window — works on this machine. The mechanism is
-///     session-specific: on Wayland we install and configure <c>ydotool</c>
-///     (the only path that works under GNOME/KDE, which reject wtype's
-///     virtual-keyboard protocol); on X11 we install <c>xdotool</c>. The fix
-///     can chain two steps in one click on Wayland — install the package, then
-///     run the udev-rule + service setup (which prompts for admin rights).
+///     focused window — works on this machine. On Wayland we install and
+///     configure <c>ydotool</c>: it injects through the kernel's uinput device,
+///     BELOW the display server, so it reaches both native-Wayland and XWayland
+///     windows. (wtype — which the insertion chain still prefers when present —
+///     only reaches native-Wayland windows via the virtual-keyboard protocol;
+///     it can't type into XWayland apps, and the app itself runs under
+///     XWayland, so ydotool is the universal path the setup guarantees.) On X11
+///     we install <c>xdotool</c>. The Wayland fix chains two steps in one click
+///     — install the package, then run the udev-rule + service setup (which
+///     prompts for admin rights).
 /// </summary>
 public sealed class AutoPasteSetupTask : ISetupTask
 {

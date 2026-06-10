@@ -162,6 +162,12 @@ public class App : Application
             overlay.Initialize();
             BootTrace.Stage("overlay.Initialize");
 
+            // On tiling window managers the overlay is suppressed (it's the wrong
+            // primitive there); recording is surfaced via a desktop notification
+            // instead. No-op on desktop environments, which keep the overlay.
+            services.GetRequiredService<RecordingNotificationService>().Initialize();
+            BootTrace.Stage("recordingNotification.Initialize");
+
             // Sync the hotkey service's mode + binding with AppSettings. The
             // handler re-runs on every settings change so flipping the mode
             // in Settings → Shortcuts takes effect without a restart.

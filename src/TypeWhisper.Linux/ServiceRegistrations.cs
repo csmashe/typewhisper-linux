@@ -167,6 +167,10 @@ internal static class ServiceRegistrations
         services.AddSingleton<AboutSectionViewModel>();
         services.AddTransient<WelcomeWizardViewModel>();
 
+        // Recording indicator for tiling window managers — a desktop
+        // notification in place of the overlay; no-op on desktop environments.
+        services.AddSingleton<RecordingNotificationService>();
+
         // Avalonia windows
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();

@@ -22,6 +22,53 @@
         <StackPanel Margin="28"
                     MaxWidth="980"
                     Spacing="18">
+            <!-- Tiling window managers: recording is a desktop notification, not
+                 the overlay, so the overlay controls below don't apply. Show what
+                 the notification looks like instead. -->
+            <StackPanel IsVisible="{Binding UsesNotificationIndicator}"
+                        Spacing="18">
+                <TextBlock Text="Recording indicator"
+                           Classes="section-title" />
+                <Border Classes="panel"
+                        Padding="18,16">
+                    <StackPanel Spacing="14">
+                        <TextBlock TextWrapping="Wrap"
+                                   Foreground="#C7D2DE"
+                                   Text="On tiling window managers (Hyprland, Sway, …) TypeWhisper shows recording as a desktop notification instead of the floating overlay — the overlay would reserve a tile and take keyboard focus away from the window you're dictating into. The notification is styled by your notification daemon (mako, dunst, …), so it matches the rest of your desktop." />
+                        <!-- Mock of the real notification (text mirrors what's shown). -->
+                        <Border Background="#1E222B"
+                                BorderBrush="#2A3340"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Padding="14"
+                                HorizontalAlignment="Left"
+                                MaxWidth="430">
+                            <Grid ColumnDefinitions="Auto,*"
+                                  ColumnSpacing="12">
+                                <Image Width="34"
+                                       Height="34"
+                                       Source="avares://typewhisper/Resources/typewhisper-64.png"
+                                       VerticalAlignment="Top" />
+                                <StackPanel Grid.Column="1"
+                                            Spacing="3">
+                                    <TextBlock Text="🔴 Recording"
+                                               FontWeight="SemiBold"
+                                               FontSize="13.5" />
+                                    <TextBlock Text="{Binding NotificationBodyPreview}"
+                                               Foreground="#9BAABC"
+                                               FontSize="12"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Desktop environments (GNOME/KDE/Cinnamon/…): the overlay is the
+                 indicator, with these layout controls. -->
+            <StackPanel IsVisible="{Binding UsesOverlay}"
+                        Spacing="18">
             <TextBlock Text="Overlay layout"
                        Classes="section-title" />
 
@@ -244,6 +291,7 @@
                     </Grid>
                 </Border>
             </Border>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

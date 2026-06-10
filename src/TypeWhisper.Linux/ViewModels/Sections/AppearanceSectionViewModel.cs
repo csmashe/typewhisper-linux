@@ -2,6 +2,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -36,6 +38,21 @@ public partial class AppearanceSectionViewModel : ObservableObject
         Refresh(settings.Current);
         _settings.SettingsChanged += Refresh;
     }
+
+    /// <summary>
+    ///     On tiling window managers the recording indicator is a desktop
+    ///     notification, not the overlay — so the overlay layout controls don't
+    ///     apply and the view shows the notification panel instead. Cached: the
+    ///     desktop can't change within a session.
+    /// </summary>
+    public bool UsesNotificationIndicator { get; } =
+        DesktopDetector.UsesNotificationRecordingIndicator();
+
+    public bool UsesOverlay => !UsesNotificationIndicator;
+
+    /// <summary>Mode-aware body text matching what the notification actually shows.</summary>
+    public string NotificationBodyPreview =>
+        RecordingNotificationService.BodyFor(_settings.Current.Mode);
 
     public IReadOnlyList<OverlayPositionOption> OverlayPositions { get; } =
         [new(OverlayPosition.Top, "Top"), new(OverlayPosition.Bottom, "Bottom")];
@@ -108,9 +125,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
         ResetOverlayPositionCommand.NotifyCanExecuteChanged();
 
         // Mode changes elsewhere don't flip the selected widget, but HotkeyMode
-        // preview text still needs to refresh.
+        // preview text and the notification body preview still need to refresh.
         OnPropertyChanged(nameof(PreviewLeftText));
         OnPropertyChanged(nameof(PreviewRightText));
+        OnPropertyChanged(nameof(NotificationBodyPreview));
     }
 
     private static bool IsTextWidget(OverlayWidget? widget)

@@ -5,6 +5,7 @@ using Avalonia.Threading;
 using System.ComponentModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.ViewModels;
 
 namespace TypeWhisper.Linux.Views;
@@ -33,6 +34,8 @@ public partial class DictationOverlayWindow : Window
         ShowActivated = false;
         CanResize = false;
         Topmost = true;
+
+        Title = "TypeWhisper Overlay";
 
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(PositionOverlay);
@@ -111,24 +114,32 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
-        // WORKAROUND (docs/plans/2026-05-13-linux-backlog.md item 16):
-        // Show() once and never Hide() — on Wayland with
-        // ShowActivated="False" / Topmost="True" / ShowInTaskbar="False",
-        // Avalonia's Window.Show() after a prior Hide() is unreliable
-        // on GNOME Mutter: some shows succeed, some leave the window
-        // invisible until the app is restarted. The recording overlay
-        // would appear for the first one or two dictations and then
-        // disappear permanently even though dictation kept working.
-        // Driving visibility via Opacity keeps the window alive
-        // throughout the app's lifetime and avoids the race entirely.
-        // The inner Border bindings (IsVisible="{Binding ...}") still
-        // handle which content (if any) is drawn, and a fully
-        // transparent surface is essentially free on modern Wayland
-        // compositors.
+        // On tiling window managers the overlay is suppressed entirely — a
+        // desktop notification (RecordingNotificationService) is the recording
+        // indicator there. An XWayland toplevel on a tiler reserves a tile,
+        // steals focus from the dictation target, and blurs into a box, none of
+        // which we can cleanly avoid — so keep it unmapped.
+        if (UsesNotificationIndicator)
+        {
+            if (IsVisible)
+            {
+                Hide();
+            }
+
+            return;
+        }
+
+        // Desktop environments (GNOME / KDE / Cinnamon / …): the overlay works
+        // well and stays exactly as it was.
         //
-        // Revisit if Avalonia ships a fix for Show()-after-Hide() on
-        // Wayland utility windows, or if we switch to recreating the
-        // overlay window per-dictation.
+        // WORKAROUND (docs/plans/2026-05-13-linux-backlog.md item 16):
+        // Show() once and never Hide() — Avalonia's Window.Show() after a prior
+        // Hide() is unreliable on GNOME Mutter for these utility-window flags
+        // (ShowActivated=False / Topmost / ShowInTaskbar=False): some shows
+        // leave the window invisible until restart. Driving visibility via
+        // Opacity keeps the window alive and avoids the race. The inner Border
+        // bindings still handle which content is drawn, and a fully transparent
+        // surface is essentially free.
         var hasContent = _viewModel.HasVisibleContent;
 
         if (!IsVisible)
@@ -144,6 +155,11 @@ public partial class DictationOverlayWindow : Window
             Dispatcher.UIThread.Post(PositionOverlay, DispatcherPriority.Loaded);
         }
     }
+
+    // Tiling WMs (Hyprland/Sway/…) use the notification indicator instead of
+    // this overlay. Cached — the desktop can't change within a session.
+    private static readonly bool UsesNotificationIndicator =
+        DesktopDetector.UsesNotificationRecordingIndicator();
 
     private void PositionOverlay()
     {

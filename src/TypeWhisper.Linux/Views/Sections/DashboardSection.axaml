@@ -446,10 +446,10 @@
                                                     Spacing="10">
                                             <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm}'}"
                                                        FontSize="11"
-                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                       Foreground="#9BB0C4" />
                                             <TextBlock Text="{Binding AppName}"
                                                        FontSize="11"
-                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                       Foreground="#9BB0C4" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>

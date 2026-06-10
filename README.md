@@ -239,10 +239,16 @@ This Linux branch has been tested on the maintainer's current setups:
 - Fedora 44 / KDE Plasma 6.6 / Wayland session (global hotkey via the
   evdev backend with `input`-group membership, `ydotool` for keyboard
   input, and `kdotool` for active-window detection)
+- Arch Linux (Omarchy 3.8.2) / Hyprland 0.55.2 / Wayland session
+  (recording indicator via a desktop notification instead of the overlay;
+  global hotkey via the evdev backend with `input`-group membership;
+  `ydotool` for keyboard input, with the `uinput` module loaded and
+  persisted during setup; and Hyprland's compositor-native window provider
+  for active-window detection)
 
-Other Wayland setups (Hyprland, Sway, and other GNOME versions) should
-work via their respective compositor-native window providers, but have
-not been tested at this time.
+Other Wayland setups (Sway and other wlroots compositors, and other GNOME
+versions) should work via their respective compositor-native window
+providers, but have not been tested at this time.
 
 Linux desktop behavior can vary by distribution, compositor, desktop
 environment, and especially Wayland implementation. Compositor-native
