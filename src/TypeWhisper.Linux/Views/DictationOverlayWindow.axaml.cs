@@ -41,13 +41,43 @@ public partial class DictationOverlayWindow : Window
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(PositionOverlay);
 
-        Opened += (_, _) => PositionOverlay();
+        Opened += OnOverlayOpened;
+        Closed += OnOverlayClosed;
         SizeChanged += (_, _) => PositionOverlay();
 
         PointerPressed += OnUserPointerPressed;
         PointerReleased += OnUserPointerReleased;
         PointerCaptureLost += OnUserPointerCaptureLost;
         PositionChanged += OnUserPositionChanged;
+    }
+
+    private void OnOverlayOpened(object? sender, EventArgs e)
+    {
+        PositionOverlay();
+
+        // Recover from display changes (monitor hotplug, resolution change, resume from
+        // sleep, session unlock) — the WM can leave the overlay off-screen or on a monitor
+        // that no longer exists. Re-running PositionOverlay re-clamps it to a valid work
+        // area (or the saved screen if it's back). Avalonia surfaces all of these through
+        // Screens.Changed; the Win32 SystemEvents equivalents upstream uses don't exist here.
+        if (Screens is { } screens)
+        {
+            screens.Changed += OnScreensChanged;
+        }
+    }
+
+    private void OnOverlayClosed(object? sender, EventArgs e)
+    {
+        if (Screens is { } screens)
+        {
+            screens.Changed -= OnScreensChanged;
+        }
+    }
+
+    private void OnScreensChanged(object? sender, EventArgs e)
+    {
+        // Post so Avalonia has settled the new screen geometry before we re-measure work areas.
+        Dispatcher.UIThread.Post(PositionOverlay);
     }
 
     public void Initialize()
