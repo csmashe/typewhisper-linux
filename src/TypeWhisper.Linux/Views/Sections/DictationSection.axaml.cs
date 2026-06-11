@@ -1,5 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
+using System.Linq;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -51,6 +53,34 @@ public partial class DictationSection : UserControl
         if (confirmed)
         {
             await viewModel.DeleteSelectedModelAsync();
+        }
+    }
+
+    private async void OnChangeModelStorage(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not DictationSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.StorageProvider is null)
+        {
+            return;
+        }
+
+        var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions
+            {
+                Title = "Choose model storage folder",
+                AllowMultiple = false,
+            }
+        );
+
+        var path = folders.FirstOrDefault()?.TryGetLocalPath();
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            await viewModel.ChangeModelStorageAsync(path);
         }
     }
 }

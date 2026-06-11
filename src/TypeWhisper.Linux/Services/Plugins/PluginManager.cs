@@ -512,6 +512,7 @@ public sealed class PluginManager : IDisposable
                 _activeWindow,
                 EventBus,
                 _profiles,
+                _settings,
                 () =>
                 {
                     RebuildCapabilityIndices();
