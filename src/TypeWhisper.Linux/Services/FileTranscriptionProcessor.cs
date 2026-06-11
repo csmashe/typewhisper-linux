@@ -1,6 +1,7 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
@@ -179,7 +180,7 @@ public sealed class FileTranscriptionProcessor(
                 );
             }
 
-            return ModelManagerService.GetPluginModelId(engine.PluginId, model);
+            return ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model);
         }
 
         if (!string.IsNullOrWhiteSpace(options?.ModelId))
@@ -194,7 +195,7 @@ public sealed class FileTranscriptionProcessor(
                 );
             }
 
-            return ModelManagerService.GetPluginModelId(engine.PluginId, options.ModelId);
+            return ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), options.ModelId);
         }
 
         return settings.Current.SelectedModelId;

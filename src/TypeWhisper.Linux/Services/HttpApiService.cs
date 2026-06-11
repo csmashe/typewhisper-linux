@@ -391,7 +391,7 @@ public sealed class HttpApiService : IDisposable
         var models = _models.PluginManager.TranscriptionEngines.SelectMany(engine =>
             engine.TranscriptionModels.Select(model =>
             {
-                var id = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
+                var id = ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model.Id);
                 return new
                 {
                     id = model.Id,
@@ -1102,7 +1102,7 @@ public sealed class HttpApiService : IDisposable
                 );
             }
 
-            return ModelManagerService.GetPluginModelId(engine.PluginId, model);
+            return ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model);
         }
 
         if (!string.IsNullOrWhiteSpace(requestedModel))
@@ -1115,7 +1115,7 @@ public sealed class HttpApiService : IDisposable
                 throw new HttpApiRequestException(404, $"Unknown model: {requestedModel}");
             }
 
-            return ModelManagerService.GetPluginModelId(engine.PluginId, requestedModel);
+            return ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), requestedModel);
         }
 
         return _settings.Current.SelectedModelId;

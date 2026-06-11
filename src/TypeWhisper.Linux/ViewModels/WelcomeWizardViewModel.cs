@@ -10,6 +10,7 @@ using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels;
 
@@ -297,7 +298,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         {
             foreach (var model in engine.TranscriptionModels)
             {
-                var modelId = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
+                var modelId = ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model.Id);
                 var downloaded = engine.SupportsModelDownload
                     ? engine.IsModelDownloaded(model.Id)
                     : engine.IsConfigured;
@@ -391,7 +392,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             var existing = AvailableModels[i];
             var (pluginId, rawModelId) = ModelManagerService.ParsePluginModelId(existing.ModelId);
             var engine = _pluginManager.TranscriptionEngines.FirstOrDefault(e =>
-                e.PluginId == pluginId
+                e.GetTranscriptionSelectionId() == pluginId
             );
             if (engine is null)
             {
