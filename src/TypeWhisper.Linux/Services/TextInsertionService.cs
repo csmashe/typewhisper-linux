@@ -730,21 +730,77 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         );
     }
 
-    public async Task<bool> TypeTextAsync(string text)
+    public Task<bool> TypeTextAsync(string text)
     {
-        return await WalkChainAsync(async backend =>
-            backend switch
+        // Map newlines to Shift+Enter rather than a bare Return so that
+        // dictated paragraph breaks insert a newline instead of submitting
+        // in chat boxes (Slack / Discord / web chat / Claude's box), where
+        // Enter sends. Shift+Enter inserts a newline in effectively every
+        // app — editors, terminals, chat — so this is safe across all
+        // direct-typed targets. The clipboard-paste path is unaffected
+        // (pasted multiline text does not trigger a submit).
+        return WalkChainAsync(backend => TypeWithNewlinesAsync(backend, text));
+    }
+
+    private async Task<bool> TypeWithNewlinesAsync(InputBackend backend, string text)
+    {
+        // Normalize CRLF / lone CR to LF so each line break is one Shift+Enter.
+        var normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        if (!normalized.Contains('\n'))
+        {
+            return await TypeSegmentAsync(backend, normalized);
+        }
+
+        // A backend that fails mid-stream returns false and the chain retries
+        // the next backend from scratch — same all-or-nothing risk the single
+        // type() call already carried; partial duplication needs a rare
+        // mid-sequence failure (the first call fails fast on a dead backend).
+        var segments = normalized.Split('\n');
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (i > 0 && !await SendShiftEnterAsync(backend))
             {
-                InputBackend.Wtype => await RunWtypeAsync("--", text),
-                InputBackend.Xdotool => await RunWithEnv(
-                    "xdotool",
-                    new[] { "type", "--clearmodifiers", "--delay", "8", "--", text },
-                    null
-                ) == 0,
-                InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.TypeArgs(text)),
-                _ => false
+                return false;
             }
-        );
+
+            var segment = segments[i];
+            if (segment.Length > 0 && !await TypeSegmentAsync(backend, segment))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TypeSegmentAsync(InputBackend backend, string segment)
+    {
+        return backend switch
+        {
+            InputBackend.Wtype => await RunWtypeAsync("--", segment),
+            InputBackend.Xdotool => await RunWithEnv(
+                "xdotool",
+                new[] { "type", "--clearmodifiers", "--delay", "8", "--", segment },
+                null
+            ) == 0,
+            InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.TypeArgs(segment)),
+            _ => false
+        };
+    }
+
+    private async Task<bool> SendShiftEnterAsync(InputBackend backend)
+    {
+        return backend switch
+        {
+            InputBackend.Wtype => await RunWtypeAsync("-M", "shift", "-k", "Return", "-m", "shift"),
+            InputBackend.Xdotool => await RunWithEnv(
+                "xdotool",
+                new[] { "key", "--clearmodifiers", "shift+Return" },
+                null
+            ) == 0,
+            InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.ShiftEnterArgs()),
+            _ => false
+        };
     }
 
     public async Task<bool> SendCopyAsync()

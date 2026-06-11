@@ -894,6 +894,147 @@ public sealed class TextInsertionServiceTests
         Assert.Equal("ydotool", Assert.Single(runner.Calls).FileName);
     }
 
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_Wtype_TypesNewlineAsShiftEnter()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            runner.Run
+        );
+
+        var result = await platform.TypeTextAsync("line one\nline two");
+
+        Assert.True(result);
+        Assert.All(runner.Calls, call => Assert.Equal("wtype", call.FileName));
+        Assert.Equal(
+            new[]
+            {
+                new[] { "--", "line one" },
+                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
+                new[] { "--", "line two" }
+            },
+            runner.Calls.Select(c => c.Arguments).ToArray()
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_Ydotool_TypesNewlineAsShiftEnter()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, false, "gnome", true, true),
+            runner.Run
+        );
+
+        var result = await platform.TypeTextAsync("line one\nline two");
+
+        Assert.True(result);
+        Assert.All(runner.Calls, call => Assert.Equal("ydotool", call.FileName));
+        Assert.Equal(
+            new[]
+            {
+                new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "line one" },
+                // LEFTSHIFT(42)+ENTER(28) press/release pairs.
+                new[] { "key", "42:1", "28:1", "28:0", "42:0" },
+                new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "line two" }
+            },
+            runner.Calls.Select(c => c.Arguments).ToArray()
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_Xdotool_TypesNewlineAsShiftEnter()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("X11", true, false),
+            runner.Run
+        );
+
+        var result = await platform.TypeTextAsync("line one\nline two");
+
+        Assert.True(result);
+        Assert.All(runner.Calls, call => Assert.Equal("xdotool", call.FileName));
+        Assert.Equal(
+            new[]
+            {
+                new[] { "type", "--clearmodifiers", "--delay", "8", "--", "line one" },
+                new[] { "key", "--clearmodifiers", "shift+Return" },
+                new[] { "type", "--clearmodifiers", "--delay", "8", "--", "line two" }
+            },
+            runner.Calls.Select(c => c.Arguments).ToArray()
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ParagraphBreak_EmitsTwoShiftEntersAndSkipsEmptySegment()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            runner.Run
+        );
+
+        // "\n\n" yields segments ["first", "", "second"] — the empty middle
+        // segment is skipped but both line breaks still emit a Shift+Enter.
+        var result = await platform.TypeTextAsync("first\n\nsecond");
+
+        Assert.True(result);
+        Assert.Equal(
+            new[]
+            {
+                new[] { "--", "first" },
+                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
+                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
+                new[] { "--", "second" }
+            },
+            runner.Calls.Select(c => c.Arguments).ToArray()
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_CrlfNewline_NormalizedToSingleShiftEnter()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            runner.Run
+        );
+
+        var result = await platform.TypeTextAsync("a\r\nb");
+
+        Assert.True(result);
+        Assert.Equal(
+            new[]
+            {
+                new[] { "--", "a" },
+                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
+                new[] { "--", "b" }
+            },
+            runner.Calls.Select(c => c.Arguments).ToArray()
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_NoNewline_TypesInSingleCall()
+    {
+        // Regression: the common (no-newline) path must remain a single
+        // type() invocation — no Shift+Enter machinery, no extra calls.
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            runner.Run
+        );
+
+        var result = await platform.TypeTextAsync("just one line");
+
+        Assert.True(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("wtype", call.FileName);
+        Assert.Equal(new[] { "--", "just one line" }, call.Arguments);
+    }
+
     private static LinuxCapabilitySnapshot SnapshotFor(
         string sessionType,
         bool hasXdotool,
