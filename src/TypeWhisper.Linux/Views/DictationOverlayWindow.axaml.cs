@@ -5,6 +5,7 @@ using Avalonia.Threading;
 using System.ComponentModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.ViewModels;
 
@@ -132,6 +133,7 @@ public partial class DictationOverlayWindow : Window
         if (!IsVisible)
         {
             Show();
+            MakeStickyAcrossWorkspaces();
         }
 
         Opacity = hasContent ? 1.0 : 0.0;
@@ -146,6 +148,25 @@ public partial class DictationOverlayWindow : Window
     // Cached — the desktop environment can't change within a session.
     private static readonly bool UsesNotificationIndicator =
         DesktopDetector.UsesNotificationRecordingIndicator();
+
+    // The overlay is mapped once and kept alive via Opacity (see UpdateWindowVisibility),
+    // so it stays pinned to the workspace it was first mapped on. Marking it sticky lets the
+    // WM show it on the active workspace instead — so the recording indicator follows the user.
+    // Posted at Loaded priority so the X11 toplevel is mapped before the request is sent
+    // (an unmapped window's _NET_WM_STATE ClientMessage is ignored by the WM).
+    private void MakeStickyAcrossWorkspaces()
+    {
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                var handle = TryGetPlatformHandle();
+                if (handle is { Handle: var xid } && xid != IntPtr.Zero)
+                {
+                    X11StickyWindow.MakeSticky((nuint)(nint)xid);
+                }
+            },
+            DispatcherPriority.Loaded);
+    }
 
     private void PositionOverlay()
     {
