@@ -572,8 +572,31 @@ public sealed class PluginManager : IDisposable
                 .Select(p => p.Instance)
                 .ToList();
 
-            _llmProviders = activePlugins.OfType<ILlmProviderPlugin>().ToList();
-            _transcriptionEngines = activePlugins.OfType<ITranscriptionEnginePlugin>().ToList();
+            // Fold in extra provider/engine roles contributed by a single plugin
+            // (e.g. OpenAI-compatible profiles), then de-dup by selection ID so a
+            // role and the plugin's own default never collide. GroupBy().First()
+            // keeps the first occurrence — the plugin's primary role is enumerated
+            // before its additional roles.
+            _llmProviders = activePlugins
+                .OfType<ILlmProviderPlugin>()
+                .Concat(
+                    activePlugins
+                        .OfType<IAdditionalLlmProvidersProvider>()
+                        .SelectMany(p => p.AdditionalLlmProviders)
+                )
+                .GroupBy(p => p.GetLlmSelectionId(), StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+            _transcriptionEngines = activePlugins
+                .OfType<ITranscriptionEnginePlugin>()
+                .Concat(
+                    activePlugins
+                        .OfType<IAdditionalTranscriptionEnginesProvider>()
+                        .SelectMany(p => p.AdditionalTranscriptionEngines)
+                )
+                .GroupBy(p => p.GetTranscriptionSelectionId(), StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
             _postProcessors = activePlugins
                 .OfType<IPostProcessorPlugin>()
                 .OrderBy(p => p.Priority)

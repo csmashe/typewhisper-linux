@@ -76,6 +76,105 @@ public sealed class OpenAiCompatiblePluginTests
         Assert.Equal("bulk", chunks[0]);
     }
 
+    private static HttpClient ModelsClient() =>
+        new(new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"data":[{"id":"m1"},{"id":"m2"}]}""",
+                Encoding.UTF8, "application/json")
+        }));
+
+    private static PluginCollectionItem ProfileItem(
+        string name, string baseUrl, string? apiKey = null,
+        string? llmModel = null, string? id = "") =>
+        new(new Dictionary<string, string?>
+        {
+            ["name"] = name,
+            ["baseUrl"] = baseUrl,
+            ["api-key"] = apiKey,
+            ["selectedLlmModel"] = llmModel,
+            ["__id"] = id,
+        });
+
+    [Fact]
+    public async Task SetItemsAsync_AddsProfile_ExposesRoleWithProfileSelectionId()
+    {
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Local Ollama", "http://localhost:11434", apiKey: "secret123", llmModel: "m1")]);
+
+        Assert.True(result.IsSuccess);
+
+        var llm = Assert.Single(sut.AdditionalLlmProviders);
+        Assert.Equal("Local Ollama", llm.ProviderName);
+        Assert.True(llm.IsAvailable);
+
+        var selectionId = llm.GetLlmSelectionId();
+        Assert.StartsWith("openai-compatible-", selectionId);
+        Assert.DoesNotContain(":", selectionId); // must round-trip in plugin:{id}:{model}
+
+        var engine = Assert.Single(sut.AdditionalTranscriptionEngines);
+        Assert.Equal(selectionId, engine.GetTranscriptionSelectionId());
+        Assert.Equal(sut.PluginId, engine.PluginId); // role keeps the owner's plugin id
+    }
+
+    [Fact]
+    public async Task GetItemsAsync_DoesNotEchoApiKey()
+    {
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Local Ollama", "http://localhost:11434", apiKey: "secret123")]);
+
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+
+        Assert.Null(item.Values["api-key"]);
+        Assert.Equal("Local Ollama", item.Values["name"]);
+        Assert.Equal("http://localhost:11434", item.Values["baseUrl"]);
+    }
+
+    [Fact]
+    public async Task AdditionalProfiles_PersistAndReloadWithSecret()
+    {
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P1", "http://localhost:11434", apiKey: "k", llmModel: "m1")]);
+
+        // A fresh instance over the same host (same settings + secrets) reloads them.
+        var reloaded = new OpenAiCompatiblePlugin(httpClient);
+        await reloaded.ActivateAsync(host);
+
+        var llm = Assert.Single(reloaded.AdditionalLlmProviders);
+        Assert.Equal("P1", llm.ProviderName);
+        Assert.True(llm.IsAvailable);
+    }
+
+    [Fact]
+    public async Task SetItemsAsync_RejectsInvalidBaseUrl()
+    {
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("Bad", "not-a-url")]);
+
+        Assert.False(result.IsSuccess);
+        Assert.Empty(sut.AdditionalLlmProviders);
+    }
+
     private sealed class CapturingHandler(Func<HttpRequestMessage, string?, HttpResponseMessage> responder)
         : HttpMessageHandler
     {
