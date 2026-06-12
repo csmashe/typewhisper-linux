@@ -612,6 +612,21 @@ public sealed partial class OpenAiCompatiblePlugin
                 id = CreateProfileId(seenIds);
             seenIds.Add(id);
 
+            var key = Get(item, "api-key");
+            var keyChanged = !string.IsNullOrWhiteSpace(key);
+            if (keyChanged)
+                keyUpdates[id] = key!.Trim();
+
+            // Preserve the fetched model catalog only when the endpoint is unchanged.
+            // A changed base URL (or updated credentials) can point at a different
+            // server, so drop the stale catalog and let the refetch below repopulate
+            // it — otherwise the profile would keep advertising the previous server's
+            // model IDs to dictation and prompt selection.
+            var hadProfile = previousById.TryGetValue(id, out var prev);
+            var endpointUnchanged = hadProfile
+                && !keyChanged
+                && string.Equals(prev!.BaseUrl, baseUrl, StringComparison.Ordinal);
+
             newProfiles.Add(new OpenAiCompatibleProfile
             {
                 Id = id,
@@ -619,12 +634,8 @@ public sealed partial class OpenAiCompatiblePlugin
                 BaseUrl = baseUrl,
                 SelectedModelId = NullIfWhiteSpace(Get(item, "selectedModel")),
                 SelectedLlmModelId = NullIfWhiteSpace(Get(item, "selectedLlmModel")),
-                FetchedModels = previousById.TryGetValue(id, out var prev) ? prev.FetchedModels : [],
+                FetchedModels = endpointUnchanged ? prev!.FetchedModels : [],
             });
-
-            var key = Get(item, "api-key");
-            if (!string.IsNullOrWhiteSpace(key))
-                keyUpdates[id] = key.Trim();
         }
 
         _additionalProfiles.Clear();
@@ -648,8 +659,9 @@ public sealed partial class OpenAiCompatiblePlugin
         PersistAdditionalProfiles(notify: false);
 
         // Best-effort: populate model catalogs so prompts/dictation can list each
-        // profile's models. A profile keeps its previously fetched catalog when it
-        // already had one (e.g. only the name changed).
+        // profile's models. New profiles and profiles whose endpoint changed have an
+        // empty catalog here and get (re)fetched; an unchanged endpoint keeps its
+        // existing catalog and is skipped.
         foreach (var profile in _additionalProfiles.Where(p => p.FetchedModels.Count == 0))
         {
             var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
@@ -760,6 +772,46 @@ public sealed partial class OpenAiCompatiblePlugin
             userText,
             ct
         );
+    }
+
+    // Mirrors the default endpoint's streaming behavior for an additional profile:
+    // honors the shared streamResponses toggle and streams token deltas via the
+    // OpenAI chat helper, so prompt actions through a profile don't silently
+    // regress to a single bulk chunk.
+    internal async IAsyncEnumerable<string> ProcessStreamingForProfileAsync(
+        string id,
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        if (!_streamResponses)
+        {
+            yield return await ProcessForProfileAsync(id, systemPrompt, userText, model, ct);
+            yield break;
+        }
+
+        var profile = RequireAdditional(id);
+        if (string.IsNullOrEmpty(profile.BaseUrl))
+            throw new InvalidOperationException("Server URL not configured.");
+
+        var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
+        if (string.IsNullOrEmpty(modelId))
+            throw new InvalidOperationException("No LLM model selected.");
+
+        var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            _httpClient,
+            profile.BaseUrl,
+            GetProfileApiKey(id) ?? "",
+            modelId,
+            systemPrompt,
+            userText,
+            ct
+        );
+
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
     }
 
     private async Task LoadAdditionalProfilesAsync(IPluginHostServices host)
@@ -930,6 +982,13 @@ public sealed partial class OpenAiCompatiblePlugin
             string model,
             CancellationToken ct
         ) => owner.ProcessForProfileAsync(profileId, systemPrompt, userText, model, ct);
+
+        public IAsyncEnumerable<string> ProcessStreamingAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        ) => owner.ProcessStreamingForProfileAsync(profileId, systemPrompt, userText, model, ct);
 
         public void Dispose() { }
     }

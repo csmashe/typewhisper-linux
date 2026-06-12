@@ -175,6 +175,76 @@ public sealed class OpenAiCompatiblePluginTests
         Assert.Empty(sut.AdditionalLlmProviders);
     }
 
+    [Fact]
+    public async Task SetItemsAsync_EndpointChange_RefetchesCatalog()
+    {
+        // /v1/models returns different models depending on the server port, so we can
+        // tell whether the catalog was refetched after the base URL changed.
+        var handler = new CapturingHandler((request, _) =>
+        {
+            var models = request.RequestUri!.Port == 11434
+                ? """{"data":[{"id":"m1"},{"id":"m2"}]}"""
+                : """{"data":[{"id":"x1"}]}""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(models, Encoding.UTF8, "application/json"),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        await sut.SetItemsAsync("profiles", [ProfileItem("P", "http://localhost:11434")]);
+        var id = Assert.Single(await sut.GetItemsAsync("profiles")).Values["__id"];
+        Assert.Contains(sut.AdditionalLlmProviders[0].SupportedModels, m => m.Id == "m1");
+
+        // Re-save the SAME profile (same __id) pointing at a different server.
+        await sut.SetItemsAsync("profiles", [ProfileItem("P", "http://localhost:9999", id: id)]);
+
+        var models = sut.AdditionalLlmProviders[0].SupportedModels.Select(m => m.Id).ToList();
+        Assert.Contains("x1", models);
+        Assert.DoesNotContain("m1", models); // stale catalog must not survive the endpoint change
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThroughProfile_StreamsDeltas()
+    {
+        var sse = string.Join("\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
+            "",
+            "data: [DONE]",
+            "");
+        var handler = new CapturingHandler((request, _) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            return path.EndsWith("/chat/completions", StringComparison.Ordinal)
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+                }
+                : new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"data":[{"id":"m1"}]}""", Encoding.UTF8, "application/json"),
+                };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices()); // streamResponses defaults true
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P", "http://localhost:11434", llmModel: "m1")]);
+
+        var role = Assert.Single(sut.AdditionalLlmProviders);
+        var chunks = new List<string>();
+        await foreach (var chunk in role.ProcessStreamingAsync("sys", "user", "m1", CancellationToken.None))
+            chunks.Add(chunk);
+
+        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+    }
+
     private sealed class CapturingHandler(Func<HttpRequestMessage, string?, HttpResponseMessage> responder)
         : HttpMessageHandler
     {
