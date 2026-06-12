@@ -469,19 +469,37 @@ public sealed partial class OpenAiCompatiblePlugin
     // models clears the cache.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(_baseUrl))
-            return;
+        if (!string.IsNullOrEmpty(_baseUrl))
+        {
+            var models = await FetchModelsAsync(ct);
+            if (models is not null && CatalogChanged(models, _fetchedModels))
+                SetFetchedModels(models);
+        }
 
-        var models = await FetchModelsAsync(ct);
-        if (models is null)
-            return;
+        // Refresh additional profiles on the same dropdown-open path so their
+        // catalogs don't go stale when a server adds or removes models after the
+        // profile was first saved.
+        var anyProfileChanged = false;
+        foreach (var profile in _additionalProfiles)
+        {
+            if (string.IsNullOrEmpty(profile.BaseUrl))
+                continue;
 
-        var changed =
-            models.Count != _fetchedModels.Count
-            || !models.Select(m => m.Id).SequenceEqual(_fetchedModels.Select(m => m.Id));
-        if (changed)
-            SetFetchedModels(models);
+            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            if (models is null || !CatalogChanged(models, profile.FetchedModels))
+                continue;
+
+            profile.FetchedModels = models;
+            anyProfileChanged = true;
+        }
+
+        if (anyProfileChanged)
+            PersistAdditionalProfiles(notify: true);
     }
+
+    private static bool CatalogChanged(List<FetchedModel> fetched, IReadOnlyList<FetchedModel> current) =>
+        fetched.Count != current.Count
+        || !fetched.Select(m => m.Id).SequenceEqual(current.Select(m => m.Id));
 
     private IReadOnlyList<PluginSettingOption>? BuildModelOptions()
     {

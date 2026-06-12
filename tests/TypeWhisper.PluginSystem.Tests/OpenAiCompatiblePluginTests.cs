@@ -207,6 +207,31 @@ public sealed class OpenAiCompatiblePluginTests
     }
 
     [Fact]
+    public async Task RefreshModelCatalogAsync_UpdatesProfileCatalog()
+    {
+        var modelsJson = """{"data":[{"id":"m1"}]}""";
+        // Responder reads the current modelsJson each call, so we can simulate the
+        // server's model list changing after the profile was first saved.
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(modelsJson, Encoding.UTF8, "application/json"),
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        await sut.SetItemsAsync("profiles", [ProfileItem("P", "http://localhost:11434")]);
+
+        Assert.Contains(sut.AdditionalLlmProviders[0].SupportedModels, m => m.Id == "m1");
+        Assert.DoesNotContain(sut.AdditionalLlmProviders[0].SupportedModels, m => m.Id == "m2");
+
+        // Server gains a model; the dropdown-open refresh path should pick it up.
+        modelsJson = """{"data":[{"id":"m1"},{"id":"m2"}]}""";
+        await sut.RefreshModelCatalogAsync();
+
+        Assert.Contains(sut.AdditionalLlmProviders[0].SupportedModels, m => m.Id == "m2");
+    }
+
+    [Fact]
     public async Task ProcessStreamingAsync_ThroughProfile_StreamsDeltas()
     {
         var sse = string.Join("\n",
