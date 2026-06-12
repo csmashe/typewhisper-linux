@@ -81,6 +81,58 @@ public class SonioxPluginTests
     }
 
     [Fact]
+    public void ParseTranscript_GroupsTokensIntoSubtitleSegments()
+    {
+        var transcript = """
+        {
+          "text": "The quick brown fox jumps. Over the lazy dog.",
+          "tokens": [
+            { "text": "The",    "start_ms": 0,    "end_ms": 400 },
+            { "text": "quick",  "start_ms": 400,  "end_ms": 800 },
+            { "text": "brown",  "start_ms": 800,  "end_ms": 1200 },
+            { "text": "fox",    "start_ms": 1200, "end_ms": 1600 },
+            { "text": "jumps.", "start_ms": 1600, "end_ms": 2000 },
+            { "text": "Over",   "start_ms": 3000, "end_ms": 3400 },
+            { "text": "the",    "start_ms": 3400, "end_ms": 3800 },
+            { "text": "lazy",   "start_ms": 3800, "end_ms": 4200 },
+            { "text": "dog.",   "start_ms": 4200, "end_ms": 4600 }
+          ]
+        }
+        """;
+        using var details = JsonDocument.Parse("{}");
+
+        var result = SonioxPlugin.ParseTranscript(transcript, details.RootElement, null);
+
+        // A sentence terminator ends the first segment; the >0.75s pause forces the
+        // second — so nine word tokens collapse into two subtitle cues, not nine.
+        Assert.Equal(2, result.Segments.Count);
+        Assert.Equal("The quick brown fox jumps.", result.Segments[0].Text);
+        Assert.Equal("Over the lazy dog.", result.Segments[1].Text);
+    }
+
+    [Fact]
+    public void ParseTranscript_DropsTokensWithNonPositiveDuration()
+    {
+        var transcript = """
+        {
+          "text": "Hello there",
+          "tokens": [
+            { "text": "Hello", "start_ms": 0,    "end_ms": 500 },
+            { "text": "bad",   "start_ms": 1000, "end_ms": 1000 },
+            { "text": "there", "start_ms": 1100, "end_ms": 1600 }
+          ]
+        }
+        """;
+        using var details = JsonDocument.Parse("{}");
+
+        var result = SonioxPlugin.ParseTranscript(transcript, details.RootElement, null);
+
+        var segment = Assert.Single(result.Segments);
+        Assert.DoesNotContain("bad", segment.Text);
+        Assert.Equal("Hello there", segment.Text);
+    }
+
+    [Fact]
     public void BuildConfigMessage_IncludesRawPcmFormatAndModel()
     {
         var json = SonioxSession.BuildConfigMessage("k-123", SonioxSession.RealtimeModel, null);
@@ -376,7 +428,8 @@ public class SonioxPluginTests
         Assert.Equal("Hallo Welt", result.Text);
         Assert.Equal("de", result.DetectedLanguage);
         Assert.Equal(660.0, result.DurationSeconds);
-        Assert.Equal(["Hallo", "Welt"], result.Segments.Select(s => s.Text).ToArray());
+        // Tokens are now grouped into subtitle-sized segments rather than one cue per token.
+        Assert.Equal(["Hallo Welt"], result.Segments.Select(s => s.Text).ToArray());
         Assert.Contains("DELETE https://api.soniox.com/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721", seen);
         Assert.Contains("DELETE https://api.soniox.com/v1/files/84c32fc6-4fb5-4e7a-b656-b5ec70493753", seen);
     }
