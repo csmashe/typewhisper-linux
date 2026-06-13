@@ -87,6 +87,7 @@ public sealed class LocalModelStorageServiceTests : IDisposable
         Assert.True(File.Exists(movedModel));
         Assert.Equal("weights", File.ReadAllText(movedModel));
         Assert.True(File.Exists(Path.Join(target, "root-asset.txt")));
+        Assert.False(File.Exists(Path.Join(source, "root-asset.txt")));
         Assert.False(File.Exists(Path.Join(modelDir, "ggml-base.bin")));
         Assert.Equal(Path.GetFullPath(target), settings.Current.LocalModelStoragePath);
     }

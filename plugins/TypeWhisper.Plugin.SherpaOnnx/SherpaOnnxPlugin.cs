@@ -378,7 +378,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     }
 
     private string GetModelDirectory(string modelId) =>
-        Path.Combine(_host?.PluginAssetDirectory ?? ".", "Models", modelId);
+        Path.Join(_host?.PluginAssetDirectory ?? ".", "Models", modelId);
 
     private static ModelDefinition GetModelDefinition(string modelId) =>
         Models.FirstOrDefault(m => m.Id == modelId)
