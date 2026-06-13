@@ -499,9 +499,8 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         if (token.End - currentStart > MaxSubtitleSegmentDurationSeconds)
             return true;
 
-        var currentLength = NormalizeSubtitleText(currentText.ToString()).Length;
-        var tokenLength = NormalizeSubtitleText(token.Text).Length;
-        return currentLength > 0 && currentLength + tokenLength > MaxSubtitleSegmentCharacters;
+        var combinedNormalizedLength = NormalizeSubtitleText(currentText.ToString() + token.Text).Length;
+        return combinedNormalizedLength > MaxSubtitleSegmentCharacters;
     }
 
     private static bool ShouldEndSubtitleSegment(StringBuilder currentText, double start, double end)
