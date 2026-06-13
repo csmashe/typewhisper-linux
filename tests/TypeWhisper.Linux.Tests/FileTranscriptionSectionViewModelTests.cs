@@ -8,7 +8,7 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class FileTranscriptionSectionViewModelTests : IDisposable
 {
     private readonly string _tempDir =
-        Path.Combine(Path.GetTempPath(), "TypeWhisper.FileQueue.Tests_" + Guid.NewGuid().ToString("N"));
+        Path.Join(Path.GetTempPath(), "TypeWhisper.FileQueue.Tests_" + Guid.NewGuid().ToString("N"));
 
     public FileTranscriptionSectionViewModelTests() => Directory.CreateDirectory(_tempDir);
 
@@ -68,7 +68,7 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
 
     private FileTranscriptionSectionViewModel CreateViewModel()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         var commands = new SystemCommandAvailabilityService();
         var audioFiles = new AudioFileService(commands);
         var watchFolder = new WatchFolderService();
