@@ -480,11 +480,8 @@ public sealed partial class OpenAiCompatiblePlugin
         // catalogs don't go stale when a server adds or removes models after the
         // profile was first saved.
         var anyProfileChanged = false;
-        foreach (var profile in _additionalProfiles)
+        foreach (var profile in _additionalProfiles.Where(p => !string.IsNullOrEmpty(p.BaseUrl)))
         {
-            if (string.IsNullOrEmpty(profile.BaseUrl))
-                continue;
-
             var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
             if (models is null || !CatalogChanged(models, profile.FetchedModels))
                 continue;
@@ -625,10 +622,7 @@ public sealed partial class OpenAiCompatiblePlugin
                     false, $"Profile '{label}': base URL must be an absolute http:// or https:// URL.");
             }
 
-            var id = (Get(item, "__id") ?? "").Trim();
-            if (id.Length == 0 || seenIds.Contains(id))
-                id = CreateProfileId(seenIds);
-            seenIds.Add(id);
+            var id = NormalizeProfileId(Get(item, "__id"), seenIds);
 
             var key = Get(item, "api-key");
             var keyChanged = !string.IsNullOrWhiteSpace(key);
@@ -656,9 +650,10 @@ public sealed partial class OpenAiCompatiblePlugin
             });
         }
 
-        _additionalProfiles.Clear();
-        _additionalProfiles.AddRange(newProfiles);
-
+        // Do the fallible host secret-store writes before swapping the shared
+        // profile set, so a failure here can't leave _additionalProfiles half
+        // updated. Each _additionalApiKeys mutation is paired with its host op,
+        // so the cache stays consistent with the store even on a mid-loop throw.
         if (_host is not null)
         {
             foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
@@ -674,6 +669,11 @@ public sealed partial class OpenAiCompatiblePlugin
             }
         }
 
+        _additionalProfiles.Clear();
+        _additionalProfiles.AddRange(newProfiles);
+
+        // State is now persisted; the best-effort model fetch below may fail or be
+        // cancelled, but that must not revert the saved profiles.
         PersistAdditionalProfiles(notify: false);
 
         // Best-effort: populate model catalogs so prompts/dictation can list each
@@ -840,15 +840,9 @@ public sealed partial class OpenAiCompatiblePlugin
         var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var profile in stored)
+        foreach (var profile in stored.Where(p => p is not null))
         {
-            if (profile is null)
-                continue;
-
-            profile.Id = string.IsNullOrWhiteSpace(profile.Id) || seen.Contains(profile.Id)
-                ? CreateProfileId(seen)
-                : profile.Id.Trim();
-            seen.Add(profile.Id);
+            profile.Id = NormalizeProfileId(profile.Id, seen);
 
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
             profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl ?? "");
@@ -937,6 +931,26 @@ public sealed partial class OpenAiCompatiblePlugin
         if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
             normalized = normalized[..^3];
         return normalized;
+    }
+
+    // Validates a profile id and adds it to taken. A trimmed id is kept only when
+    // it is non-empty, colon-free (so it round-trips inside plugin:{id}:{model}),
+    // carries the profile prefix, and is not already taken; otherwise a fresh id is
+    // generated. Centralizes the SetItemsAsync and LoadAdditionalProfilesAsync sites
+    // so repaired/normalized ids replace invalid or duplicate ones.
+    private string NormalizeProfileId(string? rawId, ISet<string> taken)
+    {
+        var id = (rawId ?? "").Trim();
+        if (id.Length == 0
+            || id.Contains(':')
+            || !id.StartsWith(ProfileIdPrefix, StringComparison.Ordinal)
+            || taken.Contains(id))
+        {
+            id = CreateProfileId(taken);
+        }
+
+        taken.Add(id);
+        return id;
     }
 
     private string CreateProfileId(ISet<string> taken)

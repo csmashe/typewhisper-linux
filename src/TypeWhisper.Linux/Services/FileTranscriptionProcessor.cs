@@ -185,17 +185,30 @@ public sealed class FileTranscriptionProcessor(
 
         if (!string.IsNullOrWhiteSpace(options?.ModelId))
         {
-            var engine = modelManager.PluginManager.TranscriptionEngines.FirstOrDefault(candidate =>
-                candidate.TranscriptionModels.Any(model => model.Id == options.ModelId)
-            );
-            if (engine is null)
+            // A bare model id is no longer globally unique: multiple engines/profiles
+            // can advertise the same id. Don't silently route to the first match —
+            // require the caller to disambiguate with an explicit engine.
+            var matches = modelManager
+                .PluginManager.TranscriptionEngines.Where(candidate =>
+                    candidate.TranscriptionModels.Any(model => model.Id == options.ModelId)
+                )
+                .ToList();
+            if (matches.Count == 0)
             {
                 throw new InvalidOperationException(
                     $"Unknown transcription model: {options.ModelId}"
                 );
             }
 
-            return ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), options.ModelId);
+            if (matches.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Ambiguous transcription model '{options.ModelId}': provided by multiple engines. "
+                        + "Specify the engine explicitly or use the full plugin-qualified model id."
+                );
+            }
+
+            return ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId);
         }
 
         return settings.Current.SelectedModelId;

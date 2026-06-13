@@ -582,7 +582,7 @@ public sealed class PluginManager : IDisposable
                 .Concat(
                     activePlugins
                         .OfType<IAdditionalLlmProvidersProvider>()
-                        .SelectMany(p => p.AdditionalLlmProviders)
+                        .SelectMany(SafeAdditionalLlmProviders)
                 )
                 .GroupBy(p => p.GetLlmSelectionId(), StringComparer.Ordinal)
                 .Select(group => group.First())
@@ -592,7 +592,7 @@ public sealed class PluginManager : IDisposable
                 .Concat(
                     activePlugins
                         .OfType<IAdditionalTranscriptionEnginesProvider>()
-                        .SelectMany(p => p.AdditionalTranscriptionEngines)
+                        .SelectMany(SafeAdditionalTranscriptionEngines)
                 )
                 .GroupBy(p => p.GetTranscriptionSelectionId(), StringComparer.Ordinal)
                 .Select(group => group.First())
@@ -607,6 +607,44 @@ public sealed class PluginManager : IDisposable
 
         // Raise outside _lock to avoid deadlock if a handler calls back into PluginManager.
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // A misbehaving third-party plugin must not be able to abort the whole
+    // capability rebuild: materialize each provider's additional roles inside a
+    // try/catch so a throwing getter (or one that throws mid-enumeration) just
+    // contributes nothing and is logged. Grouping/dedup downstream is unchanged.
+    private static IEnumerable<ILlmProviderPlugin> SafeAdditionalLlmProviders(
+        IAdditionalLlmProvidersProvider provider
+    )
+    {
+        try
+        {
+            return provider.AdditionalLlmProviders?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Skipping additional LLM providers from {provider.GetType().Name}: {ex.Message}"
+            );
+            return [];
+        }
+    }
+
+    private static IEnumerable<ITranscriptionEnginePlugin> SafeAdditionalTranscriptionEngines(
+        IAdditionalTranscriptionEnginesProvider provider
+    )
+    {
+        try
+        {
+            return provider.AdditionalTranscriptionEngines?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Skipping additional transcription engines from {provider.GetType().Name}: {ex.Message}"
+            );
+            return [];
+        }
     }
 
     private void PersistEnabledState(string pluginId, bool enabled)
