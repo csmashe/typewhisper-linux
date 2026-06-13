@@ -192,7 +192,7 @@ public partial class DictationOverlayWindow : Window
                 var handle = TryGetPlatformHandle();
                 if (handle is { Handle: var xid } && xid != IntPtr.Zero)
                 {
-                    X11StickyWindow.MakeSticky((nuint)(nint)xid);
+                    X11StickyWindow.MakeSticky((nuint)xid);
                 }
             },
             DispatcherPriority.Loaded);
