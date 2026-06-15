@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -13,7 +14,6 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed partial class RecordingNotificationService : IDisposable
 {
-    private const string Summary = "🔴 Recording";
     private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(3);
 
     private readonly DictationOrchestrator _dictation;
@@ -68,9 +68,9 @@ public sealed partial class RecordingNotificationService : IDisposable
     {
         return mode switch
         {
-            RecordingMode.Toggle => "Speak now — press the shortcut again to stop",
-            RecordingMode.PushToTalk => "Speak now — release to insert",
-            _ => "Speak now — release, or press the shortcut again, to insert"
+            RecordingMode.Toggle => Loc.Instance["Notify.BodyToggle"],
+            RecordingMode.PushToTalk => Loc.Instance["Notify.BodyPushToTalk"],
+            _ => Loc.Instance["Notify.BodyHybrid"]
         };
     }
 
@@ -133,7 +133,8 @@ public sealed partial class RecordingNotificationService : IDisposable
                     {
                         "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
                         "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify",
-                        "TypeWhisper", replaceId.ToString(), ResolveIconPath(), Summary, ResolveBody(), "[]", // actions
+                        "TypeWhisper", replaceId.ToString(), ResolveIconPath(),
+                        Loc.Instance["Appearance.NotificationRecordingTitle"], ResolveBody(), "[]", // actions
                         "{}", // hints
                         "0" // expire_timeout 0 → stay up until we close it
                     },

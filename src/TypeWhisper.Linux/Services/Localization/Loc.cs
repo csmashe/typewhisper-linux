@@ -92,9 +92,11 @@ public sealed class Loc : INotifyPropertyChanged
     ///     Loads every Resources/Localization/*.json file found beside the app.
     ///     Call once at startup before the first window is built.
     /// </summary>
-    public void Initialize()
+    public void Initialize(string? localizationDirOverride = null)
     {
-        var localizationDir = Path.Combine(AppContext.BaseDirectory, "Resources", "Localization");
+        var localizationDir =
+            localizationDirOverride
+            ?? Path.Combine(AppContext.BaseDirectory, "Resources", "Localization");
         var available = new List<string>();
 
         if (Directory.Exists(localizationDir))
@@ -162,7 +164,7 @@ public sealed class Loc : INotifyPropertyChanged
         return key;
     }
 
-    public string GetString(string key, params object[] args)
+    public string GetString(string key, params object?[] args)
     {
         var template = GetString(key);
         try

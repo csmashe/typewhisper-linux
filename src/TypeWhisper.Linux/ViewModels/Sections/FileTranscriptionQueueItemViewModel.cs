@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -36,8 +37,8 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
         Status = status;
         StatusText =
             status == FileTranscriptionQueueItemStatus.Unsupported
-                ? "Unsupported format"
-                : "Queued";
+                ? Loc.Instance["FileTranscription.UnsupportedFormat"]
+                : Loc.Instance["FileTranscription.Queued"];
         ErrorText = status == FileTranscriptionQueueItemStatus.Unsupported ? StatusText : "";
     }
 

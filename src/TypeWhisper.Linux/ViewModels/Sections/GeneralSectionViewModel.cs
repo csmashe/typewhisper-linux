@@ -146,8 +146,12 @@ public partial class GeneralSectionViewModel : ObservableObject
         CliBundledAvailable = state.BundledCliAvailable;
         CliInstalled = state.Installed;
         CliBundledPathText = state.BundledPath is null
-            ? $"Installer target: {state.LauncherPath}"
-            : $"Bundled: {state.BundledPath}  |  Target: {state.LauncherPath}";
+            ? Loc.Instance.GetString("General.CliInstallerTarget", state.LauncherPath)
+            : Loc.Instance.GetString(
+                "General.CliBundledTarget",
+                state.BundledPath,
+                state.LauncherPath
+            );
     }
 
     private void RefreshExamples(int port)

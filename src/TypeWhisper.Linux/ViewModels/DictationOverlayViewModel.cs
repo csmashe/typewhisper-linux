@@ -317,9 +317,9 @@ public partial class DictationOverlayViewModel : ObservableObject
             OverlayWidget.Profile => ActiveProfileName ?? "",
             OverlayWidget.HotkeyMode => _settings.Current.Mode switch
             {
-                RecordingMode.Toggle => Loc.Instance["Overlay.ModeToggle"],
-                RecordingMode.PushToTalk => Loc.Instance["Overlay.ModePushToTalk"],
-                RecordingMode.Hybrid => Loc.Instance["Overlay.ModeHybrid"],
+                RecordingMode.Toggle => Loc.Instance["Common.ModeToggle"],
+                RecordingMode.PushToTalk => Loc.Instance["Common.ModePushToTalk"],
+                RecordingMode.Hybrid => Loc.Instance["Common.ModeHybrid"],
                 _ => ""
             },
             OverlayWidget.AppName => ActiveAppName ?? "",

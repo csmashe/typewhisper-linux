@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Insertion;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -48,12 +49,12 @@ public partial class TextInsertionSectionViewModel : ObservableObject
         {
             if (!Snapshot.HasXdotool)
             {
-                return "Not installed.";
+                return Loc.Instance["TextInsertion.NotInstalled"];
             }
 
             return Snapshot.SessionType == "Wayland"
-                ? "Installed — XWayland windows only."
-                : "Installed.";
+                ? Loc.Instance["TextInsertion.XdotoolInstalledXWaylandOnly"]
+                : Loc.Instance["TextInsertion.Installed"];
         }
     }
 
@@ -66,17 +67,17 @@ public partial class TextInsertionSectionViewModel : ObservableObject
         {
             if (!Snapshot.HasWtype)
             {
-                return "Not installed.";
+                return Loc.Instance["TextInsertion.NotInstalled"];
             }
 
             if (Snapshot.SessionType != "Wayland")
             {
-                return "Installed (Wayland only).";
+                return Loc.Instance["TextInsertion.WtypeInstalledWaylandOnly"];
             }
 
             return Snapshot.CompositorRejectsWtype
-                ? "Installed, but this compositor doesn't support wtype's virtual-keyboard protocol."
-                : "Installed.";
+                ? Loc.Instance["TextInsertion.WtypeUnsupportedCompositor"]
+                : Loc.Instance["TextInsertion.Installed"];
         }
     }
 
@@ -92,24 +93,24 @@ public partial class TextInsertionSectionViewModel : ObservableObject
             var status = YdotoolStatus;
             if (!status.BinaryInstalled)
             {
-                return "ydotool not installed. Install it via your package manager.";
+                return Loc.Instance["TextInsertion.YdotoolNotInstalled"];
             }
 
             // Only flag the missing udev rule when /dev/uinput isn't already
             // accessible — if the kernel grants it directly the rule isn't needed.
             if (!status.UdevRulePresent && !status.UinputAccessible)
             {
-                return "ydotool installed, but the /dev/uinput udev rule is missing.";
+                return Loc.Instance["TextInsertion.YdotoolUdevRuleMissing"];
             }
 
             if (!status.SystemdUnitActive)
             {
-                return "ydotoold systemd user unit is not active.";
+                return Loc.Instance["TextInsertion.YdotoolUnitInactive"];
             }
 
             if (!status.SocketReachable)
             {
-                return "ydotoold is active but its socket isn't reachable.";
+                return Loc.Instance["TextInsertion.YdotoolSocketUnreachable"];
             }
 
             // Probe failed: daemon is up but /dev/uinput is unwritable (usually EACCES).
@@ -120,7 +121,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
                     "ydotoold socket reachable, but a test keystroke failed. Check that your user has read/write access to /dev/uinput (run `groups` — you should see `input`; if not, `sudo usermod -aG input $USER` then log out and back in).";
             }
 
-            return $"Ready. Socket: {status.SocketPath}";
+            return Loc.Instance.GetString("TextInsertion.YdotoolReady", status.SocketPath);
         }
     }
 
@@ -146,7 +147,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     [RelayCommand]
     private async Task SetUpYdotoolAsync()
     {
-        IntegrationStatusMessage = "Setting up ydotool… (you may be asked for your admin password)";
+        IntegrationStatusMessage = Loc.Instance["TextInsertion.SettingUpYdotool"];
         try
         {
             var result = await _setup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
@@ -156,7 +157,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            IntegrationStatusMessage = $"Setup failed: {ex.Message}";
+            IntegrationStatusMessage = Loc.Instance.GetString("TextInsertion.SetupFailed", ex.Message);
         }
         finally
         {
@@ -167,7 +168,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     [RelayCommand]
     private async Task RemoveYdotoolAsync()
     {
-        IntegrationStatusMessage = "Removing ydotool integration…";
+        IntegrationStatusMessage = Loc.Instance["TextInsertion.RemovingYdotool"];
         try
         {
             var result = await _setup.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
@@ -177,7 +178,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            IntegrationStatusMessage = $"Removal failed: {ex.Message}";
+            IntegrationStatusMessage = Loc.Instance.GetString("TextInsertion.RemovalFailed", ex.Message);
         }
         finally
         {
@@ -190,7 +191,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     {
         _commands.RefreshSnapshot();
         RefreshDerivedProperties();
-        StatusMessage = "Status refreshed.";
+        StatusMessage = Loc.Instance["TextInsertion.StatusRefreshed"];
     }
 
     // LinuxCapabilitySnapshot is a value type rebuilt out-of-band and can't

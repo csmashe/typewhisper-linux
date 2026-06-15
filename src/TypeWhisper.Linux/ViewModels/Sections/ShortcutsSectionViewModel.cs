@@ -5,6 +5,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -101,8 +102,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             }
 
             return global.Value
-                ? "Global (works in any focused window)"
-                : "Focused only (TypeWhisper window)";
+                ? Loc.Instance["Shortcuts.ScopeGlobal"]
+                : Loc.Instance["Shortcuts.ScopeFocusedOnly"];
         }
     }
 
@@ -155,10 +156,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public string PushToTalkSnippetHint =>
         DesktopName switch
         {
-            "Hyprland" =>
-                "Hyprland supports separate press/release binds. Use this pair for true push-to-talk:",
-            "Sway" =>
-                "Sway supports a press/release pair. Use these two binds for true push-to-talk:",
+            "Hyprland" => Loc.Instance["Shortcuts.PushToTalkSnippetHintHyprland"],
+            "Sway" => Loc.Instance["Shortcuts.PushToTalkSnippetHintSway"],
             _ => ""
         };
 
@@ -232,8 +231,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     public string SetupAutomaticallyLabel =>
         ActiveWriter is null
-            ? "Set up automatically"
-            : $"Set up automatically ({ActiveWriter.DisplayName})";
+            ? Loc.Instance["TextInsertion.SetUpAutomatically"]
+            : Loc.Instance.GetString("Shortcuts.SetupAutomaticallyOn", ActiveWriter.DisplayName);
 
     public string IntegrationPreview
     {
@@ -280,14 +279,17 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             StatusMessage = string.IsNullOrWhiteSpace(
                 _hotkey.CurrentRecentTranscriptionsHotkeyString
             )
-                ? "Recent transcriptions hotkey cleared."
-                : $"Recent transcriptions hotkey set to {_hotkey.CurrentRecentTranscriptionsHotkeyString}.";
+                ? Loc.Instance["Shortcuts.RecentTranscriptionsHotkeyCleared"]
+                : Loc.Instance.GetString(
+                    "Shortcuts.RecentTranscriptionsHotkeySet",
+                    _hotkey.CurrentRecentTranscriptionsHotkeyString
+                );
             RecentTranscriptionsHotkeyText = _hotkey.CurrentRecentTranscriptionsHotkeyString;
         }
         else
         {
             StatusMessage =
-                $"Could not parse '{RecentTranscriptionsHotkeyText}' or it collides with another shortcut.";
+                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", RecentTranscriptionsHotkeyText);
         }
     }
 
@@ -305,14 +307,17 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             StatusMessage = string.IsNullOrWhiteSpace(
                 _hotkey.CurrentCopyLastTranscriptionHotkeyString
             )
-                ? "Copy last transcription hotkey cleared."
-                : $"Copy last transcription hotkey set to {_hotkey.CurrentCopyLastTranscriptionHotkeyString}.";
+                ? Loc.Instance["Shortcuts.CopyLastTranscriptionHotkeyCleared"]
+                : Loc.Instance.GetString(
+                    "Shortcuts.CopyLastTranscriptionHotkeySet",
+                    _hotkey.CurrentCopyLastTranscriptionHotkeyString
+                );
             CopyLastTranscriptionHotkeyText = _hotkey.CurrentCopyLastTranscriptionHotkeyString;
         }
         else
         {
             StatusMessage =
-                $"Could not parse '{CopyLastTranscriptionHotkeyText}' or it collides with another shortcut.";
+                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", CopyLastTranscriptionHotkeyText);
         }
     }
 
@@ -325,14 +330,17 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 _settings.Current with { TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentTransformSelectionHotkeyString)
-                ? "Transform selection hotkey cleared."
-                : $"Transform selection hotkey set to {_hotkey.CurrentTransformSelectionHotkeyString}.";
+                ? Loc.Instance["Shortcuts.TransformSelectionHotkeyCleared"]
+                : Loc.Instance.GetString(
+                    "Shortcuts.TransformSelectionHotkeySet",
+                    _hotkey.CurrentTransformSelectionHotkeyString
+                );
             TransformSelectionHotkeyText = _hotkey.CurrentTransformSelectionHotkeyString;
         }
         else
         {
             StatusMessage =
-                $"Could not parse '{TransformSelectionHotkeyText}' or it collides with another shortcut.";
+                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", TransformSelectionHotkeyText);
         }
     }
 
@@ -342,11 +350,12 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         var writer = ActiveWriter;
         if (writer is null)
         {
-            IntegrationStatusMessage = "No automatic setup is available for this desktop.";
+            IntegrationStatusMessage = Loc.Instance["Shortcuts.NoAutomaticSetup"];
             return;
         }
 
-        IntegrationStatusMessage = $"Installing shortcut on {writer.DisplayName}…";
+        IntegrationStatusMessage =
+            Loc.Instance.GetString("Shortcuts.InstallingShortcut", writer.DisplayName);
         try
         {
             var result = await writer
@@ -356,7 +365,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            IntegrationStatusMessage = $"Setup failed: {ex.Message}";
+            IntegrationStatusMessage = Loc.Instance.GetString("Shortcuts.SetupFailed", ex.Message);
         }
     }
 
@@ -366,11 +375,12 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         var writer = ActiveWriter;
         if (writer is null)
         {
-            IntegrationStatusMessage = "No automatic setup is available for this desktop.";
+            IntegrationStatusMessage = Loc.Instance["Shortcuts.NoAutomaticSetup"];
             return;
         }
 
-        IntegrationStatusMessage = $"Removing shortcut from {writer.DisplayName}…";
+        IntegrationStatusMessage =
+            Loc.Instance.GetString("Shortcuts.RemovingShortcut", writer.DisplayName);
         try
         {
             var result = await writer
@@ -380,15 +390,15 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            IntegrationStatusMessage = $"Removal failed: {ex.Message}";
+            IntegrationStatusMessage = Loc.Instance.GetString("Shortcuts.RemovalFailed", ex.Message);
         }
     }
 
     private static string FormatResultMessage(DeShortcutWriteResult result)
     {
-        var prefix = result.Success ? "" : "Could not finish: ";
+        var prefix = result.Success ? "" : Loc.Instance["Shortcuts.CouldNotFinishPrefix"];
         var msg = string.IsNullOrWhiteSpace(result.UserMessage)
-            ? result.Success ? "Done." : "Unknown error."
+            ? result.Success ? Loc.Instance["Shortcuts.Done"] : Loc.Instance["Shortcuts.UnknownError"]
             : result.UserMessage;
         return string.IsNullOrWhiteSpace(result.Warning)
             ? prefix + msg
@@ -399,7 +409,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     private void CopyCustomShortcut()
     {
         CopyCustomShortcutRequested?.Invoke(this, CustomShortcutCommand);
-        StatusMessage = $"Copied '{CustomShortcutCommand}' to the clipboard.";
+        StatusMessage = Loc.Instance.GetString("Shortcuts.CopiedToClipboard", CustomShortcutCommand);
     }
 
     [RelayCommand]
@@ -411,7 +421,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
 
         CopyCustomShortcutRequested?.Invoke(this, PushToTalkPressSnippet);
-        StatusMessage = "Copied press bind to the clipboard.";
+        StatusMessage = Loc.Instance["Shortcuts.CopiedPressBind"];
     }
 
     [RelayCommand]
@@ -423,7 +433,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
 
         CopyCustomShortcutRequested?.Invoke(this, PushToTalkReleaseSnippet);
-        StatusMessage = "Copied release bind to the clipboard.";
+        StatusMessage = Loc.Instance["Shortcuts.CopiedReleaseBind"];
     }
 
     [RelayCommand]
@@ -436,7 +446,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
         var combined = $"{PushToTalkPressSnippet}\n{PushToTalkReleaseSnippet}";
         CopyCustomShortcutRequested?.Invoke(this, combined);
-        StatusMessage = "Copied push-to-talk binds to the clipboard.";
+        StatusMessage = Loc.Instance["Shortcuts.CopiedPushToTalkBinds"];
     }
 
     [RelayCommand]
@@ -445,13 +455,13 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         if (_hotkey.TrySetHotkeyFromString(HotkeyText))
         {
             _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
-            StatusMessage = $"Hotkey set to {_hotkey.CurrentHotkeyString}.";
+            StatusMessage = Loc.Instance.GetString("Shortcuts.HotkeySet", _hotkey.CurrentHotkeyString);
             HotkeyText = _hotkey.CurrentHotkeyString;
         }
         else
         {
             StatusMessage =
-                $"Could not parse '{HotkeyText}'. Try e.g. Ctrl+Shift+Space, Alt+F9, Ctrl+K.";
+                Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", HotkeyText);
         }
     }
 
@@ -464,14 +474,17 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 _settings.Current with { PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentPromptPaletteHotkeyString)
-                ? "Prompt palette hotkey cleared."
-                : $"Prompt palette hotkey set to {_hotkey.CurrentPromptPaletteHotkeyString}.";
+                ? Loc.Instance["Shortcuts.PromptPaletteHotkeyCleared"]
+                : Loc.Instance.GetString(
+                    "Shortcuts.PromptPaletteHotkeySet",
+                    _hotkey.CurrentPromptPaletteHotkeyString
+                );
             PromptPaletteHotkeyText = _hotkey.CurrentPromptPaletteHotkeyString;
         }
         else
         {
             StatusMessage =
-                $"Could not parse '{PromptPaletteHotkeyText}'. Try e.g. Ctrl+Shift+P, Alt+F10, Ctrl+K.";
+                Loc.Instance.GetString("Shortcuts.PromptPaletteHotkeyParseFailed", PromptPaletteHotkeyText);
         }
     }
 
@@ -485,11 +498,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         _settings.Save(_settings.Current with { Mode = value });
         StatusMessage = value switch
         {
-            RecordingMode.Toggle => "Press the hotkey to start, press again to stop.",
-            RecordingMode.PushToTalk =>
-                "Hold the hotkey to record; release to stop and transcribe.",
-            RecordingMode.Hybrid =>
-                "Starts immediately. Short press keeps recording; hold past ~600 ms stops on release.",
+            RecordingMode.Toggle => Loc.Instance["Shortcuts.ModeToggleStatus"],
+            RecordingMode.PushToTalk => Loc.Instance["Shortcuts.ModePushToTalkStatus"],
+            RecordingMode.Hybrid => Loc.Instance["Shortcuts.ModeHybridStatus"],
             _ => ""
         };
         OnPropertyChanged(nameof(ShowCapabilityMismatch));
@@ -504,15 +515,18 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
         _settings.Save(_settings.Current with { WaylandEvdevHotkeysEnabled = value });
         StatusMessage = value
-            ? "Global keyboard reads enabled."
-            : "Falling back to focused-only hotkeys.";
+            ? Loc.Instance["Shortcuts.GlobalReadsEnabled"]
+            : Loc.Instance["Shortcuts.FocusedOnlyFallback"];
 
         // Hot-swap immediately: a restart-only opt-out would be a consent gap
         // for a setting that controls global keyboard event access.
         var task = SwitchBackendAndNotifyAsync();
         task.ContinueWith(
             t =>
-                StatusMessage = $"Backend switch failed: {t.Exception?.GetBaseException().Message}",
+                StatusMessage = Loc.Instance.GetString(
+                    "Shortcuts.BackendSwitchFailed",
+                    t.Exception?.GetBaseException().Message ?? ""
+                ),
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted,
             TaskScheduler.FromCurrentSynchronizationContext()
@@ -528,7 +542,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Backend switch failed: {ex.Message}";
+            StatusMessage = Loc.Instance.GetString("Shortcuts.BackendSwitchFailed", ex.Message);
             return;
         }
 

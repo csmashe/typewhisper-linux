@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -86,7 +87,7 @@ public sealed class SpeechFeedbackService : IDisposable
     public IReadOnlyList<TtsVoiceOption> GetVoiceOptions(string? providerId)
     {
         var provider = FindProvider(providerId) ?? _systemProvider;
-        var voices = new List<TtsVoiceOption> { new(DefaultVoiceOptionId, "System default voice") };
+        var voices = new List<TtsVoiceOption> { new(DefaultVoiceOptionId, Loc.Instance["Speech.SystemDefaultVoice"]) };
 
         voices.AddRange(
             provider.AvailableVoices.Select(voice =>
@@ -162,7 +163,7 @@ public sealed class SpeechFeedbackService : IDisposable
 
     public void AnnounceRecordingStarted()
     {
-        Speak("Recording");
+        Speak(Loc.Instance["Speech.Recording"]);
     }
 
     public void AnnounceTranscriptionComplete(
@@ -176,7 +177,7 @@ public sealed class SpeechFeedbackService : IDisposable
 
     public void AnnounceError(string reason)
     {
-        Speak($"Error: {reason}");
+        Speak(Loc.Instance.GetString("Speech.Error", reason));
     }
 
     public void Stop()

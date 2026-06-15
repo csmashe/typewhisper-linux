@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -64,8 +65,11 @@ public partial class DictionarySectionViewModel : ObservableObject
 
     public string VocabularyBoostingStatusText =>
         ActiveBoostingTermCount == 0
-            ? "No active terms available for boosting"
-            : $"{ActiveBoostingTermCount} active term(s) available for boosting";
+            ? Loc.Instance["Dictionary.NoActiveBoostingTerms"]
+            : Loc.Instance.GetString(
+                "Dictionary.ActiveBoostingTerms",
+                ActiveBoostingTermCount
+            );
 
     public bool IsAllTabSelected => SelectedTab == 0;
     public bool IsTermsTabSelected => SelectedTab == 1;
@@ -83,17 +87,17 @@ public partial class DictionarySectionViewModel : ObservableObject
     public string EmptyStateTitle =>
         SelectedTab switch
         {
-            1 => "No terms yet",
-            2 => "No corrections yet",
-            _ => "No entries yet"
+            1 => Loc.Instance["Dictionary.EmptyTitleTerms"],
+            2 => Loc.Instance["Dictionary.EmptyTitleCorrections"],
+            _ => Loc.Instance["Dictionary.EmptyTitleAll"]
         };
 
     public string EmptyStateSubtitle =>
         SelectedTab switch
         {
-            1 => "Add terms or enable a pack",
-            2 => "Add corrections to rewrite recognized text",
-            _ => "Add terms and corrections or enable a pack"
+            1 => Loc.Instance["Dictionary.EmptySubtitleTerms"],
+            2 => Loc.Instance["Dictionary.EmptySubtitleCorrections"],
+            _ => Loc.Instance["Dictionary.EmptySubtitleAll"]
         };
 
     public bool IsNewTypeCorrection
@@ -373,7 +377,7 @@ public partial class TermPackItemViewModel : ObservableObject
     public TermPack Pack { get; }
 
     public int TermCount => Pack.Terms.Length;
-    public string TermCountLabel => $"{TermCount} Terms";
+    public string TermCountLabel => Loc.Instance.GetString("Dictionary.TermCountLabel", TermCount);
 
     public string TermsPreview =>
         string.Join(", ", Pack.Terms.Take(8))

@@ -4,6 +4,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -55,21 +56,25 @@ public partial class AppearanceSectionViewModel : ObservableObject
         RecordingNotificationService.BodyFor(_settings.Current.Mode);
 
     public IReadOnlyList<OverlayPositionOption> OverlayPositions { get; } =
-        [new(OverlayPosition.Top, "Top"), new(OverlayPosition.Bottom, "Bottom")];
+    [
+        new(OverlayPosition.Top, Loc.Instance["Appearance.PositionTop"]),
+        new(OverlayPosition.Bottom, Loc.Instance["Appearance.PositionBottom"])
+    ];
 
     public IReadOnlyList<OverlayWidgetOption> OverlayWidgets { get; } =
     [
-        new(OverlayWidget.None, "None"),
-        new(OverlayWidget.Indicator, "Indicator"),
-        new(OverlayWidget.Timer, "Timer"),
-        new(OverlayWidget.Waveform, "Waveform"),
-        new(OverlayWidget.Clock, "Clock"),
-        new(OverlayWidget.Profile, "Profile"),
-        new(OverlayWidget.HotkeyMode, "Hotkey mode"),
-        new(OverlayWidget.AppName, "App name")
+        new(OverlayWidget.None, Loc.Instance["Appearance.WidgetNone"]),
+        new(OverlayWidget.Indicator, Loc.Instance["Appearance.WidgetIndicator"]),
+        new(OverlayWidget.Timer, Loc.Instance["Appearance.WidgetTimer"]),
+        new(OverlayWidget.Waveform, Loc.Instance["Appearance.WidgetWaveform"]),
+        new(OverlayWidget.Clock, Loc.Instance["Appearance.WidgetClock"]),
+        new(OverlayWidget.Profile, Loc.Instance["Appearance.WidgetProfile"]),
+        new(OverlayWidget.HotkeyMode, Loc.Instance["Appearance.WidgetHotkeyMode"]),
+        new(OverlayWidget.AppName, Loc.Instance["Appearance.WidgetAppName"])
     ];
 
-    public string PreviewBubbleAutoHideSecondsText => $"{PreviewBubbleAutoHideSeconds:0.##} s";
+    public string PreviewBubbleAutoHideSecondsText =>
+        Loc.Instance.GetString("Appearance.AutoHideSecondsValue", $"{PreviewBubbleAutoHideSeconds:0.##}");
 
     public bool IsOverlayPositionCustomized =>
         _settings.Current.OverlayCustomLeft is not null
@@ -77,8 +82,11 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     public string OverlayPositionStatusText =>
         IsOverlayPositionCustomized
-            ? $"Custom position: {(int)Math.Round(_settings.Current.OverlayCustomLeft ?? 0)}, {(int)Math.Round(_settings.Current.OverlayCustomTop ?? 0)}"
-            : "Using default (Top/Bottom)";
+            ? Loc.Instance.GetString(
+                "Appearance.CustomPositionStatus",
+                (int)Math.Round(_settings.Current.OverlayCustomLeft ?? 0),
+                (int)Math.Round(_settings.Current.OverlayCustomTop ?? 0))
+            : Loc.Instance["Appearance.UsingDefaultPosition"];
 
     public bool PreviewLeftIsIndicator => SelectedLeftWidget?.Value == OverlayWidget.Indicator;
     public bool PreviewLeftIsWaveform => SelectedLeftWidget?.Value == OverlayWidget.Waveform;
@@ -143,15 +151,15 @@ public partial class AppearanceSectionViewModel : ObservableObject
         {
             OverlayWidget.Timer => "0:05",
             OverlayWidget.Clock => "10:24",
-            OverlayWidget.Profile => "Default profile",
+            OverlayWidget.Profile => Loc.Instance["Appearance.SampleProfile"],
             OverlayWidget.HotkeyMode => _settings.Current.Mode switch
             {
-                RecordingMode.Toggle => "Toggle",
-                RecordingMode.PushToTalk => "Push to talk",
-                RecordingMode.Hybrid => "Hybrid",
+                RecordingMode.Toggle => Loc.Instance["Common.ModeToggle"],
+                RecordingMode.PushToTalk => Loc.Instance["Common.ModePushToTalk"],
+                RecordingMode.Hybrid => Loc.Instance["Common.ModeHybrid"],
                 _ => ""
             },
-            OverlayWidget.AppName => "Sample app",
+            OverlayWidget.AppName => Loc.Instance["Appearance.SampleAppName"],
             _ => ""
         };
     }

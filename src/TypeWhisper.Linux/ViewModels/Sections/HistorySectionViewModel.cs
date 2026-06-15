@@ -7,6 +7,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 
 // ReSharper disable UnusedParameterInPartialMethod
 
@@ -31,12 +32,12 @@ public partial class HistorySectionViewModel : ObservableObject
     private string _searchQuery = "";
 
     [ObservableProperty]
-    private string _selectedAppFilter = "All apps";
+    private string _selectedAppFilter = Loc.Instance["History.AllApps"];
 
     private int _shownCount;
 
     [ObservableProperty]
-    private string _summary = "0 entries · 0 words";
+    private string _summary = Loc.Instance.GetString("History.Summary", 0, 0);
 
     // Suppresses RecordsChanged-triggered refresh while SaveEdit is mid-flight:
     // correction suggestions must be updated before rows are rebuilt.
@@ -70,7 +71,7 @@ public partial class HistorySectionViewModel : ObservableObject
     }
 
     public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];
-    public ObservableCollection<string> AvailableApps { get; } = ["All apps"];
+    public ObservableCollection<string> AvailableApps { get; } = [Loc.Instance["History.AllApps"]];
 
     public bool ShowTimeline => !IsLoading && HasVisibleRecords;
     public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
@@ -137,7 +138,11 @@ public partial class HistorySectionViewModel : ObservableObject
                 }
             }
 
-            Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
+            Summary = Loc.Instance.GetString(
+                "History.Summary",
+                _history.TotalRecords,
+                _history.TotalWords
+            );
         }
         finally
         {
@@ -301,7 +306,11 @@ public partial class HistorySectionViewModel : ObservableObject
 
         if (
             !string.IsNullOrWhiteSpace(SelectedAppFilter)
-            && !string.Equals(SelectedAppFilter, "All apps", StringComparison.Ordinal)
+            && !string.Equals(
+                SelectedAppFilter,
+                Loc.Instance["History.AllApps"],
+                StringComparison.Ordinal
+            )
         )
         {
             records = records.Where(record =>
@@ -337,7 +346,11 @@ public partial class HistorySectionViewModel : ObservableObject
         Groups.Clear();
         AppendNextPage();
 
-        Summary = $"{_history.TotalRecords} entries · {_history.TotalWords} words";
+        Summary = Loc.Instance.GetString(
+            "History.Summary",
+            _history.TotalRecords,
+            _history.TotalWords
+        );
         OnPropertyChanged(nameof(HasVisibleRecords));
         OnPropertyChanged(nameof(ShowTimeline));
         OnPropertyChanged(nameof(ShowEmptyState));
@@ -379,14 +392,15 @@ public partial class HistorySectionViewModel : ObservableObject
     private void RebuildAppFilter()
     {
         var current = SelectedAppFilter;
+        var allApps = Loc.Instance["History.AllApps"];
         AvailableApps.Clear();
-        AvailableApps.Add("All apps");
+        AvailableApps.Add(allApps);
         foreach (var app in _history.GetDistinctApps())
         {
             AvailableApps.Add(app);
         }
 
-        SelectedAppFilter = AvailableApps.Contains(current) ? current : "All apps";
+        SelectedAppFilter = AvailableApps.Contains(current) ? current : allApps;
     }
 
     private static string ComputeDateGroup(DateTime timestamp)
@@ -396,25 +410,25 @@ public partial class HistorySectionViewModel : ObservableObject
 
         if (date == today)
         {
-            return "Today";
+            return Loc.Instance["History.GroupToday"];
         }
 
         if (date == today.AddDays(-1))
         {
-            return "Yesterday";
+            return Loc.Instance["History.GroupYesterday"];
         }
 
         var daysSinceMonday = ((int)today.DayOfWeek + 6) % 7;
         var thisMonday = today.AddDays(-daysSinceMonday);
         if (date >= thisMonday)
         {
-            return "This Week";
+            return Loc.Instance["History.GroupThisWeek"];
         }
 
         var lastMonday = thisMonday.AddDays(-7);
         if (date >= lastMonday)
         {
-            return "Last Week";
+            return Loc.Instance["History.GroupLastWeek"];
         }
 
         return timestamp.ToString("MMMM yyyy");
@@ -464,7 +478,8 @@ public partial class HistoryRecordRow : ObservableObject
     public bool HasLanguage => !string.IsNullOrWhiteSpace(Record.Language);
     public bool HasSessionAudio => _owner.HasSessionAudio(Record);
     public bool IsPlaying => _owner.IsPlaying(Record);
-    public string PlaybackButtonText => IsPlaying ? "Stop" : "Play";
+    public string PlaybackButtonText =>
+        IsPlaying ? Loc.Instance["History.Stop"] : Loc.Instance["History.Play"];
     public bool ShowReadOnlyText => IsExpanded && !IsEditing;
     public bool ShowEditPanel => IsExpanded && IsEditing;
     public bool ShowExpandedMeta => IsExpanded && !IsEditing;

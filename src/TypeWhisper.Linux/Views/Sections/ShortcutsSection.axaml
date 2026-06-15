@@ -188,17 +188,17 @@
                                         Orientation="Horizontal"
                                         Spacing="14"
                                         VerticalAlignment="Center">
-                                <RadioButton Content="{loc:Str Shortcuts.ModeToggle}"
+                                <RadioButton Content="{loc:Str Common.ModeToggle}"
                                              GroupName="mode"
                                              IsChecked="{Binding Mode, Mode=TwoWay,
                                                                  Converter={x:Static local:EnumBoolConverter.Instance},
                                                                  ConverterParameter={x:Static models:RecordingMode.Toggle}}" />
-                                <RadioButton Content="{loc:Str Shortcuts.ModePushToTalk}"
+                                <RadioButton Content="{loc:Str Common.ModePushToTalk}"
                                              GroupName="mode"
                                              IsChecked="{Binding Mode, Mode=TwoWay,
                                                                  Converter={x:Static local:EnumBoolConverter.Instance},
                                                                  ConverterParameter={x:Static models:RecordingMode.PushToTalk}}" />
-                                <RadioButton Content="{loc:Str Shortcuts.ModeHybrid}"
+                                <RadioButton Content="{loc:Str Common.ModeHybrid}"
                                              GroupName="mode"
                                              IsChecked="{Binding Mode, Mode=TwoWay,
                                                                  Converter={x:Static local:EnumBoolConverter.Instance},
