@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Interactivity;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Views;
 
@@ -38,10 +39,12 @@ public partial class MessageDialogWindow : Window
     public async Task<bool> ShowConfirmationAsync(
         string title,
         string message,
-        string confirmText = "OK",
-        string cancelText = "Cancel"
+        string? confirmText = null,
+        string? cancelText = null
     )
     {
+        confirmText ??= Loc.Instance["Common.OK"];
+        cancelText ??= Loc.Instance["Common.Cancel"];
         ConfigureButtons(true, confirmText, cancelText);
         _result = false;
         Title = title;
@@ -79,12 +82,12 @@ public partial class MessageDialogWindow : Window
 
     private void ConfigureButtons(
         bool isConfirmation,
-        string confirmText = "OK",
-        string cancelText = "Cancel"
+        string? confirmText = null,
+        string? cancelText = null
     )
     {
-        OkButton.Content = confirmText;
-        CancelButton.Content = cancelText;
+        OkButton.Content = confirmText ?? Loc.Instance["Common.OK"];
+        CancelButton.Content = cancelText ?? Loc.Instance["Common.Cancel"];
         CancelButton.IsVisible = isConfirmation;
     }
 }

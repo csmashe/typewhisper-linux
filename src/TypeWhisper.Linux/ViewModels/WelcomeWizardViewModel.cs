@@ -7,6 +7,7 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -43,11 +44,10 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private bool _cleanedUp;
 
     [ObservableProperty]
-    private string _cudaBenchmarkStatus = "Run CUDA check if you plan to use GPU acceleration.";
+    private string _cudaBenchmarkStatus = Loc.Instance["Wizard.CudaBenchmarkIdle"];
 
     [ObservableProperty]
-    private string _firstDictationStatus =
-        "Record a short phrase to verify the selected model can transcribe audio.";
+    private string _firstDictationStatus = Loc.Instance["Wizard.FirstDictationIdle"];
 
     [ObservableProperty]
     private string _firstDictationText = "";
@@ -74,7 +74,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private double _micLevel;
 
     [ObservableProperty]
-    private string _micTestStatus = "Start the microphone test and speak normally.";
+    private string _micTestStatus = Loc.Instance["Wizard.MicTestIdle"];
 
     [ObservableProperty]
     private double _modelDownloadProgress;
@@ -89,7 +89,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private bool _pasteTestPassed;
 
     [ObservableProperty]
-    private string _pasteTestStatus = "Run the paste test to verify text can land in this wizard.";
+    private string _pasteTestStatus = Loc.Instance["Wizard.PasteTestIdle"];
 
     [ObservableProperty]
     private string _selectedIndustryPresetId = "general";
@@ -156,8 +156,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public int StepCount => 6;
     public bool IsFirstStep => StepIndex == 0;
     public bool IsLastStep => StepIndex == StepCount - 1;
-    public string NextLabel => IsLastStep ? "Finish" : "Next";
-    public string StepText => $"Step {StepIndex + 1} of {StepCount}";
+    public string NextLabel => IsLastStep ? Loc.Instance["Common.Finish"] : Loc.Instance["Common.Next"];
+    public string StepText => Loc.Instance.GetString("Wizard.StepText", StepIndex + 1, StepCount);
 
     // All required, machine-applicable tasks must be satisfied before Finish is allowed.
     public bool AllRequiredReady =>
@@ -165,10 +165,13 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     // Final step is blocked until all required tasks are ready; Skip bypasses this.
     public bool CanAdvance => !IsLastStep || AllRequiredReady;
-    public string MicTestButtonText => IsMicTestRunning ? "Stop mic test" : "Start mic test";
+    public string MicTestButtonText =>
+        IsMicTestRunning ? Loc.Instance["Wizard.StopMicTest"] : Loc.Instance["Wizard.StartMicTest"];
 
     public string FirstDictationButtonText =>
-        IsFirstDictationRecording ? "Stop and transcribe" : "Record phrase";
+        IsFirstDictationRecording
+            ? Loc.Instance["Wizard.StopAndTranscribe"]
+            : Loc.Instance["Wizard.RecordPhrase"];
 
     // Gate on GPU presence, not on CUDA being fully usable — the check diagnoses GPU
     // acceleration even when CUDA libs are missing (RunCudaBenchmarkAsync reports that case).
@@ -182,7 +185,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     {
         PasteTestPassed = false;
         PasteSmokeText = "";
-        PasteTestStatus = "Running paste test...";
+        PasteTestStatus = Loc.Instance["Wizard.PasteTestRunning"];
 
         InsertionResult result;
         try
@@ -196,37 +199,38 @@ public partial class WelcomeWizardViewModel : ObservableObject
         {
             PasteSmokeText = ex.Message;
             PasteTestPassed = false;
-            PasteTestStatus = $"Paste test failed: {ex.Message}";
+            PasteTestStatus = Loc.Instance.GetString("Wizard.PasteTestFailed", ex.Message);
             return false;
         }
 
         if (result is InsertionResult.MissingClipboardTool)
         {
-            PasteTestStatus =
-                "Clipboard helper is missing; install the helper shown in System check.";
+            PasteTestStatus = Loc.Instance["Wizard.PasteTestMissingClipboard"];
             return false;
         }
 
         if (result is InsertionResult.MissingPasteTool)
         {
-            PasteTestStatus =
-                $"Automatic paste helper is missing. {_commands.GetSnapshot().PasteToolInstallHint}";
+            PasteTestStatus = Loc.Instance.GetString(
+                "Wizard.PasteTestMissingPaste",
+                _commands.GetSnapshot().PasteToolInstallHint
+            );
             return false;
         }
 
         if (result is InsertionResult.CopiedToClipboard)
         {
-            PasteTestStatus = "Paste did not complete; test text was left on the clipboard.";
+            PasteTestStatus = Loc.Instance["Wizard.PasteTestCopiedOnly"];
             return false;
         }
 
         if (result is not InsertionResult.Pasted)
         {
-            PasteTestStatus = $"Paste test returned {result}.";
+            PasteTestStatus = Loc.Instance.GetString("Wizard.PasteTestUnexpected", result);
             return false;
         }
 
-        PasteTestStatus = "Paste command sent. Checking the test field...";
+        PasteTestStatus = Loc.Instance["Wizard.PasteTestSent"];
         return true;
     }
 
@@ -238,8 +242,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
             StringComparison.OrdinalIgnoreCase
         );
         PasteTestStatus = PasteTestPassed
-            ? "Paste test passed."
-            : "Paste test did not find the expected text in the field.";
+            ? Loc.Instance["Wizard.PasteTestPassed"]
+            : Loc.Instance["Wizard.PasteTestNotFound"];
     }
 
     // Guards against Avalonia firing Closed more than once on certain backends.
@@ -492,15 +496,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
         {
             if (SelectedModel is not { } row)
             {
-                ModelStatus =
-                    "No transcription models are available. Enable a transcription plugin and try again.";
+                ModelStatus = Loc.Instance["Wizard.NoModelsAvailable"];
                 return;
             }
 
             var needsDownload = !_models.IsDownloaded(row.ModelId);
             ModelStatus = needsDownload
-                ? $"Downloading {row.DisplayName}..."
-                : $"Loading {row.DisplayName}...";
+                ? Loc.Instance.GetString("Wizard.Downloading", row.DisplayName)
+                : Loc.Instance.GetString("Wizard.Loading", row.DisplayName);
 
             // Show the progress bar immediately for a real download so it's
             // visible from 0% — the status-change handler then drives it live.
@@ -514,14 +517,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
             {
                 await _models.DownloadAndLoadModelAsync(row.ModelId);
                 _settings.Save(_settings.Current with { SelectedModelId = row.ModelId });
-                ModelStatus = $"{row.DisplayName} is ready.";
+                ModelStatus = Loc.Instance.GetString("Wizard.ModelReady", row.DisplayName);
                 IsModelDownloading = false;
                 RefreshModelState();
             }
             catch (Exception ex)
             {
                 IsModelDownloading = false;
-                ModelStatus = $"Failed: {ex.Message}";
+                ModelStatus = Loc.Instance.GetString("Wizard.ModelFailed", ex.Message);
                 return;
             }
         }
@@ -531,13 +534,13 @@ public partial class WelcomeWizardViewModel : ObservableObject
         {
             if (!_hotkey.TrySetHotkeyFromString(HotkeyText))
             {
-                HotkeyStatus = $"Could not parse '{HotkeyText}'. Try Ctrl+Shift+Space or Alt+F9.";
+                HotkeyStatus = Loc.Instance.GetString("Wizard.HotkeyParseFailed", HotkeyText);
                 return;
             }
 
             _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
             HotkeyText = _hotkey.CurrentHotkeyString;
-            HotkeyStatus = $"Hotkey set to {_hotkey.CurrentHotkeyString}.";
+            HotkeyStatus = Loc.Instance.GetString("Wizard.HotkeySet", _hotkey.CurrentHotkeyString);
 
             if (SelectedMic is not null)
             {
@@ -636,7 +639,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             {
                 state = new SetupTaskState(
                     SetupTaskStatusKind.Failed,
-                    $"Could not check this item: {ex.Message}"
+                    Loc.Instance.GetString("Wizard.SetupCheckFailed", ex.Message)
                 );
             }
 
@@ -657,11 +660,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         var outstanding = SetupItems.Where(r => r.IsRequired && !r.IsSatisfied).ToList();
         SetupSummary = SetupItems.All(r => r.IsSatisfied)
-            ? "Everything's set — you're ready to dictate."
+            ? Loc.Instance["Wizard.SetupAllSet"]
             : outstanding.Count == 0
-                ? "All required items are ready. The remaining items are optional."
-                : $"{outstanding.Count} required item(s) still need attention: "
-                  + $"{string.Join(", ", outstanding.Select(r => r.Title))}.";
+                ? Loc.Instance["Wizard.SetupRequiredReady"]
+                : Loc.Instance.GetString(
+                    "Wizard.SetupOutstanding",
+                    outstanding.Count,
+                    string.Join(", ", outstanding.Select(r => r.Title))
+                );
 
         OnPropertyChanged(nameof(AllRequiredReady));
         OnPropertyChanged(nameof(CanAdvance));
@@ -688,7 +694,10 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            outcome = new SetupActionOutcome(false, $"Action failed: {ex.Message}");
+            outcome = new SetupActionOutcome(
+                false,
+                Loc.Instance.GetString("Wizard.SetupActionFailed", ex.Message)
+            );
         }
 
         row.EndAction(outcome);
@@ -711,7 +720,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             _audio.StopPreview();
             IsMicTestRunning = false;
             MicLevel = 0;
-            MicTestStatus = "Microphone test stopped.";
+            MicTestStatus = Loc.Instance["Wizard.MicTestStopped"];
             return;
         }
 
@@ -723,13 +732,13 @@ public partial class WelcomeWizardViewModel : ObservableObject
         if (_audio.StartPreview())
         {
             IsMicTestRunning = true;
-            MicTestStatus = "Listening. Speak normally and watch the level meter.";
+            MicTestStatus = Loc.Instance["Wizard.MicTestListening"];
         }
         else
         {
             IsMicTestRunning = false;
             MicLevel = 0;
-            MicTestStatus = "Could not start microphone input.";
+            MicTestStatus = Loc.Instance["Wizard.MicTestStartFailed"];
         }
     }
 
@@ -744,7 +753,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             }
 
             FirstDictationText = "";
-            FirstDictationStatus = "Recording. Say a short phrase, then stop.";
+            FirstDictationStatus = Loc.Instance["Wizard.FirstDictationRecording"];
             if (SelectedMic is not null)
             {
                 _audio.SelectedDeviceIndex = SelectedMic.Index;
@@ -756,14 +765,17 @@ public partial class WelcomeWizardViewModel : ObservableObject
             }
             catch (Exception ex)
             {
-                FirstDictationStatus = $"Could not start recording: {ex.Message}";
+                FirstDictationStatus = Loc.Instance.GetString(
+                    "Wizard.FirstDictationStartFailed",
+                    ex.Message
+                );
                 IsFirstDictationRecording = false;
                 return;
             }
 
             if (!_audio.IsRecording)
             {
-                FirstDictationStatus = "Could not start recording.";
+                FirstDictationStatus = Loc.Instance["Wizard.FirstDictationStartFailedGeneric"];
                 IsFirstDictationRecording = false;
                 return;
             }
@@ -773,7 +785,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
 
         IsFirstDictationRecording = false;
-        FirstDictationStatus = "Stopping recording...";
+        FirstDictationStatus = Loc.Instance["Wizard.FirstDictationStopping"];
         byte[] wav;
         try
         {
@@ -781,13 +793,13 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            FirstDictationStatus = $"Recording failed: {ex.Message}";
+            FirstDictationStatus = Loc.Instance.GetString("Wizard.RecordingFailed", ex.Message);
             return;
         }
 
         if (wav.Length == 0)
         {
-            FirstDictationStatus = "No audio was captured.";
+            FirstDictationStatus = Loc.Instance["Wizard.NoAudioCaptured"];
             return;
         }
 
@@ -800,7 +812,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             }
             catch (InvalidOperationException)
             {
-                FirstDictationStatus = "Could not load the selected transcription model.";
+                FirstDictationStatus = Loc.Instance["Wizard.ModelLoadFailed"];
                 return;
             }
 
@@ -808,7 +820,10 @@ public partial class WelcomeWizardViewModel : ObservableObject
             await using (lease)
             {
                 var plugin = lease.Plugin;
-                FirstDictationStatus = $"Transcribing with {plugin.ProviderDisplayName}...";
+                FirstDictationStatus = Loc.Instance.GetString(
+                    "Wizard.Transcribing",
+                    plugin.ProviderDisplayName
+                );
                 var result = await plugin.TranscribeAsync(
                     wav,
                     null,
@@ -821,12 +836,12 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
             FirstDictationText = transcript;
             FirstDictationStatus = string.IsNullOrWhiteSpace(FirstDictationText)
-                ? "The model returned no text."
-                : "First dictation test passed.";
+                ? Loc.Instance["Wizard.NoTextReturned"]
+                : Loc.Instance["Wizard.FirstDictationPassed"];
         }
         catch (Exception ex)
         {
-            FirstDictationStatus = $"Transcription failed: {ex.Message}";
+            FirstDictationStatus = Loc.Instance.GetString("Wizard.TranscriptionFailed", ex.Message);
         }
     }
 
@@ -845,7 +860,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
 
         IsCudaBenchmarkRunning = true;
-        CudaBenchmarkStatus = "Checking CUDA...";
+        CudaBenchmarkStatus = Loc.Instance["Wizard.CudaChecking"];
         try
         {
             var result = await _commands.RunCudaBenchmarkAsync();
@@ -870,7 +885,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             MicLevel = Math.Clamp(level * 8, 0, 1);
             if (IsMicTestRunning && MicLevel > 0.05)
             {
-                MicTestStatus = "Microphone input detected.";
+                MicTestStatus = Loc.Instance["Wizard.MicInputDetected"];
             }
         });
     }
@@ -960,7 +975,7 @@ public sealed partial class SetupTaskRow : ObservableObject
     private SetupTaskStatusKind _kind = SetupTaskStatusKind.Working;
 
     [ObservableProperty]
-    private string _summary = "Checking…";
+    private string _summary = Loc.Instance["Wizard.SetupChecking"];
 
     public SetupTaskRow(ISetupTask source)
     {
@@ -973,7 +988,8 @@ public sealed partial class SetupTaskRow : ObservableObject
     public string Id => Source.Id;
     public string Title { get; }
     public bool IsRequired { get; }
-    public string RequirementLabel => IsRequired ? "Required" : "Recommended";
+    public string RequirementLabel =>
+        IsRequired ? Loc.Instance["Wizard.Required"] : Loc.Instance["Wizard.Recommended"];
 
     public bool IsSatisfied => Kind == SetupTaskStatusKind.Satisfied;
     public bool HasDetail => !string.IsNullOrWhiteSpace(Detail);
@@ -1011,7 +1027,7 @@ public sealed partial class SetupTaskRow : ObservableObject
     {
         IsBusy = true;
         Kind = SetupTaskStatusKind.Working;
-        ActionMessage = "Working… (you may be prompted for your admin password).";
+        ActionMessage = Loc.Instance["Wizard.SetupWorking"];
         NotifyDerived();
     }
 

@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels;
 
@@ -55,7 +56,7 @@ public partial class DictationOverlayViewModel : ObservableObject
     private bool _showFeedback;
 
     [ObservableProperty]
-    private string _statusText = "Ready";
+    private string _statusText = Loc.Instance["Overlay.Ready"];
 
     public DictationOverlayViewModel(
         DictationOrchestrator dictation,
@@ -316,9 +317,9 @@ public partial class DictationOverlayViewModel : ObservableObject
             OverlayWidget.Profile => ActiveProfileName ?? "",
             OverlayWidget.HotkeyMode => _settings.Current.Mode switch
             {
-                RecordingMode.Toggle => "Toggle",
-                RecordingMode.PushToTalk => "Push to talk",
-                RecordingMode.Hybrid => "Hybrid",
+                RecordingMode.Toggle => Loc.Instance["Overlay.ModeToggle"],
+                RecordingMode.PushToTalk => Loc.Instance["Overlay.ModePushToTalk"],
+                RecordingMode.Hybrid => Loc.Instance["Overlay.ModeHybrid"],
                 _ => ""
             },
             OverlayWidget.AppName => ActiveAppName ?? "",

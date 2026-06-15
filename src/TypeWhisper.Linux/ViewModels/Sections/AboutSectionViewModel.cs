@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -18,7 +19,7 @@ public partial class AboutSectionViewModel : ObservableObject
     private readonly UpdateCheckService _updateCheck;
 
     [ObservableProperty]
-    private string _backupStatusText = "Back up settings, profiles, snippets, and plugin data.";
+    private string _backupStatusText = Loc.Instance["About.BackupStatusDefault"];
 
     [ObservableProperty]
     private bool _isBackupBusy;
@@ -33,7 +34,7 @@ public partial class AboutSectionViewModel : ObservableObject
     private bool _updateAvailable;
 
     [ObservableProperty]
-    private string _updateStatusText = "Check for the latest TypeWhisper for Linux release.";
+    private string _updateStatusText = Loc.Instance["About.UpdateStatusDefault"];
 
     public AboutSectionViewModel(
         IErrorLogService errorLog,
@@ -93,12 +94,12 @@ public partial class AboutSectionViewModel : ObservableObject
         }
 
         IsBackupBusy = true;
-        BackupStatusText = "Creating settings backup...";
+        BackupStatusText = Loc.Instance["About.CreatingBackup"];
         try
         {
             var result = await Task.Run(() => _settingsBackup.CreateBackup(path));
             BackupStatusText =
-                $"Backup created with {result.FileCount} file(s). Models, audio, logs, and plugin binaries were skipped.";
+                Loc.Instance.GetString("About.BackupCreated", result.FileCount);
             return result;
         }
         finally
@@ -115,7 +116,7 @@ public partial class AboutSectionViewModel : ObservableObject
         }
 
         IsBackupBusy = true;
-        BackupStatusText = "Restoring settings backup...";
+        BackupStatusText = Loc.Instance["About.RestoringBackup"];
         try
         {
             var result = await Task.Run(() => _settingsBackup.RestoreBackup(path));
@@ -124,7 +125,7 @@ public partial class AboutSectionViewModel : ObservableObject
             _settings.Save(_settings.Load());
             _linuxPreferences.Save(_linuxPreferences.Load());
             BackupStatusText =
-                $"Backup restored from {result.FileCount} file(s). Some restored settings may require an app restart.";
+                Loc.Instance.GetString("About.BackupRestored", result.FileCount);
             return result;
         }
         finally
@@ -142,7 +143,7 @@ public partial class AboutSectionViewModel : ObservableObject
         }
 
         IsCheckingForUpdates = true;
-        UpdateStatusText = "Checking for updates...";
+        UpdateStatusText = Loc.Instance["About.CheckingForUpdates"];
         try
         {
             var result = await _updateCheck.CheckAsync();
@@ -185,7 +186,7 @@ public partial class AboutSectionViewModel : ObservableObject
             UpdateAvailable = false;
             LatestReleaseUrl = null;
             UpdateStatusText =
-                "Couldn't check for updates right now. Try again later or visit the releases page.";
+                Loc.Instance["About.UpdateCheckFailed"];
             return;
         }
 
@@ -194,7 +195,7 @@ public partial class AboutSectionViewModel : ObservableObject
             UpdateAvailable = true;
             LatestReleaseUrl = result.ReleaseUrl;
             UpdateStatusText =
-                $"A new version is available: v{result.LatestVersion} (you have v{result.CurrentVersion}).";
+                Loc.Instance.GetString("About.NewVersionAvailable", result.LatestVersion, result.CurrentVersion);
             return;
         }
 
@@ -204,8 +205,8 @@ public partial class AboutSectionViewModel : ObservableObject
         // Distinguish "on latest" from "ahead of latest" — a dev build shouldn't
         // claim it is the latest published release.
         UpdateStatusText = AppVersion.Compare(result.CurrentVersion, result.LatestVersion) > 0
-            ? $"You're running v{result.CurrentVersion}, which is newer than the latest published release (v{result.LatestVersion})."
-            : $"You're on the latest version (v{result.CurrentVersion}).";
+            ? Loc.Instance.GetString("About.NewerThanLatest", result.CurrentVersion, result.LatestVersion)
+            : Loc.Instance.GetString("About.OnLatestVersion", result.CurrentVersion);
     }
 
     [RelayCommand]
