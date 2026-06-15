@@ -572,8 +572,31 @@ public sealed class PluginManager : IDisposable
                 .Select(p => p.Instance)
                 .ToList();
 
-            _llmProviders = activePlugins.OfType<ILlmProviderPlugin>().ToList();
-            _transcriptionEngines = activePlugins.OfType<ITranscriptionEnginePlugin>().ToList();
+            // Fold in extra provider/engine roles contributed by a single plugin
+            // (e.g. OpenAI-compatible profiles), then de-dup by selection ID so a
+            // role and the plugin's own default never collide. GroupBy().First()
+            // keeps the first occurrence — the plugin's primary role is enumerated
+            // before its additional roles.
+            _llmProviders = activePlugins
+                .OfType<ILlmProviderPlugin>()
+                .Concat(
+                    activePlugins
+                        .OfType<IAdditionalLlmProvidersProvider>()
+                        .SelectMany(SafeAdditionalLlmProviders)
+                )
+                .GroupBy(p => p.GetLlmSelectionId(), StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+            _transcriptionEngines = activePlugins
+                .OfType<ITranscriptionEnginePlugin>()
+                .Concat(
+                    activePlugins
+                        .OfType<IAdditionalTranscriptionEnginesProvider>()
+                        .SelectMany(SafeAdditionalTranscriptionEngines)
+                )
+                .GroupBy(p => p.GetTranscriptionSelectionId(), StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
             _postProcessors = activePlugins
                 .OfType<IPostProcessorPlugin>()
                 .OrderBy(p => p.Priority)
@@ -584,6 +607,44 @@ public sealed class PluginManager : IDisposable
 
         // Raise outside _lock to avoid deadlock if a handler calls back into PluginManager.
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // A misbehaving third-party plugin must not be able to abort the whole
+    // capability rebuild: materialize each provider's additional roles inside a
+    // try/catch so a throwing getter (or one that throws mid-enumeration) just
+    // contributes nothing and is logged. Grouping/dedup downstream is unchanged.
+    private static IEnumerable<ILlmProviderPlugin> SafeAdditionalLlmProviders(
+        IAdditionalLlmProvidersProvider provider
+    )
+    {
+        try
+        {
+            return provider.AdditionalLlmProviders?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Skipping additional LLM providers from {provider.GetType().Name}: {ex.Message}"
+            );
+            return [];
+        }
+    }
+
+    private static IEnumerable<ITranscriptionEnginePlugin> SafeAdditionalTranscriptionEngines(
+        IAdditionalTranscriptionEnginesProvider provider
+    )
+    {
+        try
+        {
+            return provider.AdditionalTranscriptionEngines?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Skipping additional transcription engines from {provider.GetType().Name}: {ex.Message}"
+            );
+            return [];
+        }
     }
 
     private void PersistEnabledState(string pluginId, bool enabled)

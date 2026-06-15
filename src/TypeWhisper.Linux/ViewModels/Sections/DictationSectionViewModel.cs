@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -477,7 +478,9 @@ public partial class DictationSectionViewModel : ObservableObject
         {
             foreach (var model in engine.TranscriptionModels)
             {
-                var fullModelId = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
+                var fullModelId = ModelManagerService.GetPluginModelId(
+                    engine.GetTranscriptionSelectionId(),
+                    model.Id);
                 ModelOptions.Add(
                     new DictationModelOption(
                         fullModelId,

@@ -391,7 +391,7 @@ public sealed class HttpApiService : IDisposable
         var models = _models.PluginManager.TranscriptionEngines.SelectMany(engine =>
             engine.TranscriptionModels.Select(model =>
             {
-                var id = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
+                var id = ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model.Id);
                 return new
                 {
                     id = model.Id,
@@ -1102,20 +1102,34 @@ public sealed class HttpApiService : IDisposable
                 );
             }
 
-            return ModelManagerService.GetPluginModelId(engine.PluginId, model);
+            return ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model);
         }
 
         if (!string.IsNullOrWhiteSpace(requestedModel))
         {
-            var engine = _models.PluginManager.TranscriptionEngines.FirstOrDefault(candidate =>
-                candidate.TranscriptionModels.Any(model => model.Id == requestedModel)
-            );
-            if (engine is null)
+            // A bare model id is no longer globally unique: multiple engines/profiles
+            // can advertise the same id. Don't silently route to the first match —
+            // require the caller to disambiguate with an explicit engine.
+            var matches = _models
+                .PluginManager.TranscriptionEngines.Where(candidate =>
+                    candidate.TranscriptionModels.Any(model => model.Id == requestedModel)
+                )
+                .ToList();
+            if (matches.Count == 0)
             {
                 throw new HttpApiRequestException(404, $"Unknown model: {requestedModel}");
             }
 
-            return ModelManagerService.GetPluginModelId(engine.PluginId, requestedModel);
+            if (matches.Count > 1)
+            {
+                throw new HttpApiRequestException(
+                    400,
+                    $"Ambiguous model '{requestedModel}': provided by multiple engines. "
+                        + "Specify the engine explicitly or use the full plugin-qualified model id."
+                );
+            }
+
+            return ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), requestedModel);
         }
 
         return _settings.Current.SelectedModelId;

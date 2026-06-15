@@ -61,7 +61,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             {
                 var (pluginId, _) = ParsePluginModelId(_activeModelId);
                 var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
-                    e.PluginId == pluginId
+                    e.GetTranscriptionSelectionId() == pluginId
                 );
                 if (plugin is not null)
                 {
@@ -83,7 +83,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
 
             var (pluginId, _) = ParsePluginModelId(_activeModelId);
-            return PluginManager.TranscriptionEngines.FirstOrDefault(e => e.PluginId == pluginId);
+            return PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId);
         }
     }
 
@@ -149,7 +149,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
         var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
-            e.PluginId == pluginId
+            e.GetTranscriptionSelectionId() == pluginId
         );
 
         if (plugin is null)
@@ -176,7 +176,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
         var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
-            e.PluginId == pluginId
+            e.GetTranscriptionSelectionId() == pluginId
         );
 
         if (plugin is null)
@@ -272,7 +272,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
         var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
-            e.PluginId == pluginId
+            e.GetTranscriptionSelectionId() == pluginId
         );
 
         return plugin is { SupportsModelDownload: true } && plugin.IsModelDownloaded(pluginModelId);
@@ -480,7 +480,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
         var plugin =
-            PluginManager.TranscriptionEngines.FirstOrDefault(e => e.PluginId == pluginId)
+            PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId)
             ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
 
         try
@@ -513,7 +513,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
         var plugin =
-            PluginManager.TranscriptionEngines.FirstOrDefault(e => e.PluginId == pluginId)
+            PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId)
             ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
 
         if (!plugin.IsConfigured && !plugin.SupportsModelDownload)
@@ -649,7 +649,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             var (pluginId, pluginModelId) = ParsePluginModelId(modelId);
             var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
-                e.PluginId == pluginId
+                e.GetTranscriptionSelectionId() == pluginId
             );
 
             if (plugin is { SupportsModelDownload: true })
