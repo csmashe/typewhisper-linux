@@ -169,6 +169,48 @@
                 </Grid>
             </Border>
 
+            <TextBlock Text="Model storage"
+                       Classes="group-title" />
+            <Border Classes="settings-panel">
+                <Grid RowDefinitions="Auto,1,Auto">
+                    <Border Grid.Row="0"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto,Auto"
+                              ColumnSpacing="10">
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Storage location"
+                                           Classes="row-label" />
+                                <TextBlock Text="{Binding ModelStoragePath}"
+                                           FontSize="12"
+                                           Foreground="#8A9AAE"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="Change…"
+                                    Click="OnChangeModelStorage"
+                                    IsEnabled="{Binding !IsMigratingModelStorage}" />
+                            <Button Grid.Column="2"
+                                    Content="Reset"
+                                    Command="{Binding ResetModelStorageCommand}"
+                                    IsVisible="{Binding IsUsingCustomModelStorage}"
+                                    IsEnabled="{Binding !IsMigratingModelStorage}" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Classes="row"
+                            IsVisible="{Binding ModelStorageStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding ModelStorageStatusText}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </Border>
+                </Grid>
+            </Border>
+
             <TextBlock Text="Microphone"
                        Classes="group-title" />
             <Border Classes="settings-panel">

@@ -50,6 +50,9 @@ public record AppSettings
     public string? SelectedModelId { get; init; }
     public string LocalModelAcceleration { get; init; } = LocalModelAccelerationAuto;
 
+    // Custom on-disk location for large local model assets. Null = default app-data path.
+    public string? LocalModelStoragePath { get; init; }
+
     // Manual file transcription
     public string? FileTranscriptionEngineOverride { get; init; }
     public string? FileTranscriptionModelOverride { get; init; }
@@ -173,6 +176,15 @@ public record AppSettings
         }
 
         return LocalModelAccelerationAuto;
+    }
+
+    // Treats blank/whitespace as "use the default storage path" (null); trims otherwise.
+    public static string? NormalizeLocalModelStoragePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return value.Trim();
     }
 
     public static int NormalizePreviewBubbleAutoHideMilliseconds(int milliseconds)
