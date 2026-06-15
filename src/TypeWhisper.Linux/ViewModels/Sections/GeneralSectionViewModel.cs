@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -73,27 +74,14 @@ public partial class GeneralSectionViewModel : ObservableObject
     public ObservableCollection<CommandExample> CurlExamples { get; } = [];
     public ObservableCollection<CommandExample> CliExamples { get; } = [];
 
+    // Only the languages we actually ship a JSON catalog for (plus "Auto"),
+    // discovered at startup by Loc — no dead/un-translated choices.
     public IReadOnlyList<UiLanguageOption> UiLanguageChoices { get; } =
-    [
-        new(null, "Auto (System)"),
-        new("en", "English"),
-        new("de", "Deutsch"),
-        new("fr", "Français"),
-        new("es", "Español"),
-        new("pt", "Português"),
-        new("ja", "日本語"),
-        new("zh", "中文"),
-        new("ko", "한국어"),
-        new("it", "Italiano"),
-        new("nl", "Nederlands"),
-        new("pl", "Polski"),
-        new("ru", "Русский")
-    ];
+        Loc.Instance.AvailableUiLanguages
+            .Select(o => new UiLanguageOption(o.Code, o.DisplayName))
+            .ToList();
 
-    public bool IsUiLanguageSupported => false;
-
-    public string UiLanguageSupportMessage =>
-        "Interface language is not implemented in the Linux build yet.";
+    public bool IsUiLanguageSupported => true;
 
     public UiLanguageOption? SelectedUiLanguageOption
     {
@@ -180,6 +168,7 @@ public partial class GeneralSectionViewModel : ObservableObject
     partial void OnUiLanguageChanged(string? value)
     {
         _settings.Save(_settings.Current with { UiLanguage = value });
+        Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(value);
         OnPropertyChanged(nameof(SelectedUiLanguageOption));
     }
 

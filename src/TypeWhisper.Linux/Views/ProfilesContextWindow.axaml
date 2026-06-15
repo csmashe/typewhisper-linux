@@ -1,10 +1,11 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+        xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         x:Class="TypeWhisper.Linux.Views.ProfilesContextWindow"
         x:DataType="vm:ProfilesSectionViewModel"
         RequestedThemeVariant="Dark"
-        Title="Live Context"
+        Title="{loc:Str ProfilesContext.Title}"
         Width="460"
         Height="320"
         MinWidth="420"
@@ -35,7 +36,7 @@
             </Grid>
 
             <TextBlock Grid.Row="1"
-                       Text="Select a profile first to apply the current app or URL as a rule."
+                       Text="{loc:Str ProfilesContext.SelectProfileFirst}"
                        Margin="0,0,0,14"
                        TextWrapping="Wrap"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
@@ -48,7 +49,7 @@
                     Margin="0,0,0,10">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Current App" FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str ProfilesContext.CurrentApp}" FontWeight="SemiBold" />
                         <TextBlock Text="{Binding CurrentProcessName}" />
                         <TextBlock Text="{Binding CurrentWindowTitle}"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
@@ -56,7 +57,7 @@
                                    IsVisible="{Binding HasCurrentWindowTitle}" />
                     </StackPanel>
                     <Button Grid.Column="1"
-                            Content="Use current app"
+                            Content="{loc:Str ProfilesContext.UseCurrentApp}"
                             Command="{Binding AddCurrentProcessRuleCommand}"
                             IsEnabled="{Binding HasSelectedProfile}"
                             IsVisible="{Binding HasCurrentProcess}"
@@ -70,7 +71,7 @@
                     Padding="12">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Current Domain" FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str ProfilesContext.CurrentDomain}" FontWeight="SemiBold" />
                         <TextBlock Text="{Binding CurrentUrlPattern}"
                                    IsVisible="{Binding HasCurrentUrl}" />
                         <!-- Window title is shown here too as context for which
@@ -79,12 +80,12 @@
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    TextWrapping="Wrap"
                                    IsVisible="{Binding HasCurrentWindowTitle}" />
-                        <TextBlock Text="No browser URL available"
+                        <TextBlock Text="{loc:Str ProfilesContext.NoBrowserUrl}"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    IsVisible="{Binding ShowNoBrowserUrlHint}" />
                     </StackPanel>
                     <Button Grid.Column="1"
-                            Content="Use current domain"
+                            Content="{loc:Str ProfilesContext.UseCurrentDomain}"
                             Command="{Binding AddCurrentUrlRuleCommand}"
                             IsEnabled="{Binding HasSelectedProfile}"
                             IsVisible="{Binding HasCurrentUrl}"

@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.AppearanceSection"
              x:DataType="vm:AppearanceSectionViewModel">
     <UserControl.Styles>
@@ -27,14 +28,14 @@
                  the notification looks like instead. -->
             <StackPanel IsVisible="{Binding UsesNotificationIndicator}"
                         Spacing="18">
-                <TextBlock Text="Recording indicator"
+                <TextBlock Text="{loc:Str Appearance.RecordingIndicator}"
                            Classes="section-title" />
                 <Border Classes="panel"
                         Padding="18,16">
                     <StackPanel Spacing="14">
                         <TextBlock TextWrapping="Wrap"
                                    Foreground="#C7D2DE"
-                                   Text="On tiling window managers (Hyprland, Sway, …) TypeWhisper shows recording as a desktop notification instead of the floating overlay — the overlay would reserve a tile and take keyboard focus away from the window you're dictating into. The notification is styled by your notification daemon (mako, dunst, …), so it matches the rest of your desktop." />
+                                   Text="{loc:Str Appearance.NotificationIndicatorHint}" />
                         <!-- Mock of the real notification (text mirrors what's shown). -->
                         <Border Background="#1E222B"
                                 BorderBrush="#2A3340"
@@ -51,7 +52,7 @@
                                        VerticalAlignment="Top" />
                                 <StackPanel Grid.Column="1"
                                             Spacing="3">
-                                    <TextBlock Text="🔴 Recording"
+                                    <TextBlock Text="{loc:Str Appearance.NotificationRecordingTitle}"
                                                FontWeight="SemiBold"
                                                FontSize="13.5" />
                                     <TextBlock Text="{Binding NotificationBodyPreview}"
@@ -69,7 +70,7 @@
                  indicator, with these layout controls. -->
             <StackPanel IsVisible="{Binding UsesOverlay}"
                         Spacing="18">
-            <TextBlock Text="Overlay layout"
+            <TextBlock Text="{loc:Str Appearance.OverlayLayout}"
                        Classes="section-title" />
 
             <Border Classes="panel">
@@ -77,7 +78,7 @@
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Position"
+                            <TextBlock Text="{loc:Str Appearance.Position}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
@@ -98,7 +99,7 @@
                     <Border Grid.Row="2" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Left content"
+                            <TextBlock Text="{loc:Str Appearance.LeftContent}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
@@ -119,7 +120,7 @@
                     <Border Grid.Row="4" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Right content"
+                            <TextBlock Text="{loc:Str Appearance.RightContent}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
@@ -142,9 +143,9 @@
                               ColumnSpacing="16">
                             <StackPanel VerticalAlignment="Center"
                                         Spacing="2">
-                                <TextBlock Text="Auto-hide delay"
+                                <TextBlock Text="{loc:Str Appearance.AutoHideDelay}"
                                            FontWeight="SemiBold" />
-                                <TextBlock Text="Time the post-dictation feedback bubble stays visible (0 hides it)."
+                                <TextBlock Text="{loc:Str Appearance.AutoHideDelayHint}"
                                            Foreground="#9BAABC"
                                            FontSize="11.5"
                                            TextWrapping="Wrap" />
@@ -173,9 +174,9 @@
                               ColumnSpacing="16">
                             <StackPanel VerticalAlignment="Center"
                                         Spacing="2">
-                                <TextBlock Text="Window position"
+                                <TextBlock Text="{loc:Str Appearance.WindowPosition}"
                                            FontWeight="SemiBold" />
-                                <TextBlock Text="Drag the overlay anywhere to move it; reset here."
+                                <TextBlock Text="{loc:Str Appearance.WindowPositionHint}"
                                            Foreground="#9BAABC"
                                            FontSize="11.5"
                                            TextWrapping="Wrap" />
@@ -186,7 +187,7 @@
                                            Foreground="#9BAABC"
                                            FontSize="12"
                                            HorizontalAlignment="Right" />
-                                <Button Content="Reset to default"
+                                <Button Content="{loc:Str Appearance.ResetToDefault}"
                                         HorizontalAlignment="Right"
                                         Command="{Binding ResetOverlayPositionCommand}"
                                         IsEnabled="{Binding IsOverlayPositionCustomized}" />
@@ -196,7 +197,7 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="Preview"
+            <TextBlock Text="{loc:Str Appearance.Preview}"
                        Classes="section-title" />
 
             <!-- Mirrors DictationOverlayWindow's bubble so users see the
@@ -247,7 +248,7 @@
                                    IsVisible="{Binding PreviewLeftIsText}" />
 
                         <TextBlock Grid.Column="1"
-                                   Text="Recording"
+                                   Text="{loc:Str Appearance.PreviewRecording}"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    FontSize="13"

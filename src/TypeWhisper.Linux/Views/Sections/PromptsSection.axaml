@@ -3,6 +3,7 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.PromptsSection"
              x:DataType="vm:PromptsSectionViewModel">
     <UserControl.Styles>
@@ -28,7 +29,7 @@
                 <Grid ColumnDefinitions="*,Auto"
                       ColumnSpacing="16">
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Prompts"
+                        <TextBlock Text="{loc:Str Prompts.Title}"
                                    FontSize="16"
                                    FontWeight="SemiBold" />
                         <TextBlock Text="{Binding Summary}"
@@ -41,7 +42,7 @@
                     </StackPanel>
 
                     <Button Grid.Column="1"
-                            Content="+ New"
+                            Content="{loc:Str Common.New}"
                             Command="{Binding StartCreateCommand}"
                             Padding="18,8"
                             Background="#2196F3"
@@ -63,7 +64,7 @@
                     <TextBlock Text="!"
                                FontWeight="Bold"
                                Foreground="#FFD400" />
-                    <TextBlock Text="No LLM provider configured"
+                    <TextBlock Text="{loc:Str Prompts.NoProvider}"
                                FontWeight="SemiBold"
                                Foreground="White" />
                     <TextBlock Text="{Binding ProviderWarningText}"
@@ -74,12 +75,12 @@
             <Border Classes="panel">
                 <Grid>
                     <StackPanel IsVisible="{Binding ShowEmptyState}">
-                        <TextBlock Text="No prompts yet."
+                        <TextBlock Text="{loc:Str Prompts.EmptyState}"
                                    HorizontalAlignment="Center"
                                    Margin="0,70,0,8"
                                    FontSize="16"
                                    FontWeight="SemiBold" />
-                        <Button Content="+ New"
+                        <Button Content="{loc:Str Common.New}"
                                 Command="{Binding StartCreateCommand}"
                                 HorizontalAlignment="Center"
                                 Margin="0,0,0,70"
@@ -134,7 +135,7 @@
                                         </StackPanel>
 
                                         <Button Grid.Column="2"
-                                                Content="Edit"
+                                                Content="{loc:Str Common.Edit}"
                                                 Command="{Binding $parent[ItemsControl].((vm:PromptsSectionViewModel)DataContext).EditActionCommand}"
                                                 CommandParameter="{Binding}"
                                                 VerticalAlignment="Center"
@@ -166,7 +167,7 @@
 
                     <StackPanel Grid.Row="1"
                                 Grid.ColumnSpan="2">
-                        <TextBlock Text="Name"
+                        <TextBlock Text="{loc:Str Prompts.Name}"
                                    Margin="0,0,0,6" />
                         <TextBox Text="{Binding EditName}" />
                     </StackPanel>
@@ -174,7 +175,7 @@
                     <StackPanel Grid.Row="2"
                                 Grid.ColumnSpan="2"
                                 Margin="0,14,0,0">
-                        <TextBlock Text="System Prompt"
+                        <TextBlock Text="{loc:Str Prompts.SystemPrompt}"
                                    Margin="0,0,0,6" />
                         <TextBox Text="{Binding EditSystemPrompt}"
                                  AcceptsReturn="True"
@@ -184,7 +185,7 @@
 
                     <StackPanel Grid.Row="3"
                                 Margin="0,14,0,0">
-                        <TextBlock Text="Provider"
+                        <TextBlock Text="{loc:Str Prompts.Provider}"
                                    Margin="0,0,0,6" />
                         <ComboBox ItemsSource="{Binding AvailableProviders}"
                                   SelectedItem="{Binding SelectedEditProvider}"
@@ -200,7 +201,7 @@
                     <StackPanel Grid.Row="3"
                                 Grid.Column="1"
                                 Margin="0,14,0,0">
-                        <TextBlock Text="Action Plugin"
+                        <TextBlock Text="{loc:Str Prompts.ActionPlugin}"
                                    Margin="0,0,0,6" />
                         <ComboBox ItemsSource="{Binding ActionPluginOptions}"
                                   SelectedValue="{Binding EditTargetActionPluginId}"
@@ -215,20 +216,20 @@
 
                     <StackPanel Grid.Row="4"
                                 Margin="0,14,0,0">
-                        <TextBlock Text="Hotkey"
+                        <TextBlock Text="{loc:Str Prompts.Hotkey}"
                                    Margin="0,0,0,6" />
                         <TextBox Text="{Binding EditHotkeyKey}"
-                                 PlaceholderText="e.g. Ctrl+Alt+R" />
+                                 PlaceholderText="{loc:Str Prompts.HotkeyPlaceholder}" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="4"
                                 Grid.Column="1"
                                 Margin="0,14,0,0">
-                        <TextBlock Text="Manual only"
+                        <TextBlock Text="{loc:Str Prompts.ManualOnly}"
                                    Margin="0,0,0,6" />
                         <ToggleSwitch IsChecked="{Binding EditIsManualOnly}"
-                                      OnContent="Hidden from auto post-processing"
-                                      OffContent="Available everywhere" />
+                                      OnContent="{loc:Str Prompts.ManualOnlyOn}"
+                                      OffContent="{loc:Str Prompts.ManualOnlyOff}" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="5"
@@ -237,20 +238,20 @@
                                 HorizontalAlignment="Right"
                                 Spacing="8"
                                 Margin="0,18,0,0">
-                        <Button Content="Up"
+                        <Button Content="{loc:Str Common.Up}"
                                 Command="{Binding MoveUpCommand}"
                                 CommandParameter="{Binding SelectedAction}"
                                 IsVisible="{Binding CanEditExistingAction}" />
-                        <Button Content="Down"
+                        <Button Content="{loc:Str Common.Down}"
                                 Command="{Binding MoveDownCommand}"
                                 CommandParameter="{Binding SelectedAction}"
                                 IsVisible="{Binding CanEditExistingAction}" />
-                        <Button Content="Delete"
+                        <Button Content="{loc:Str Common.Delete}"
                                 Command="{Binding DeleteSelectedActionCommand}"
                                 IsVisible="{Binding CanEditExistingAction}" />
-                        <Button Content="Cancel"
+                        <Button Content="{loc:Str Common.Cancel}"
                                 Command="{Binding CancelEditCommand}" />
-                        <Button Content="Save"
+                        <Button Content="{loc:Str Common.Save}"
                                 Command="{Binding SaveActionCommand}"
                                 Background="#2196F3"
                                 BorderBrush="#2196F3"

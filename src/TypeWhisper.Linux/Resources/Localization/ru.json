@@ -1,0 +1,41 @@
+{
+  "Nav.GroupOverview": "Обзор",
+  "Nav.GroupCapture": "Запись",
+  "Nav.GroupLibrary": "Библиотека",
+  "Nav.GroupAi": "ИИ",
+  "Nav.GroupSystem": "Система",
+
+  "Nav.Dashboard": "Обзор",
+  "Nav.Dictation": "Диктовка",
+  "Nav.Shortcuts": "Горячие клавиши",
+  "Nav.TextInsertion": "Вставка текста",
+  "Nav.FileTranscription": "Транскрипция файлов",
+  "Nav.Recorder": "Диктофон",
+  "Nav.History": "История",
+  "Nav.Dictionary": "Словарь",
+  "Nav.Snippets": "Сниппеты",
+  "Nav.Profiles": "Профили",
+  "Nav.Prompts": "Промпты",
+  "Nav.Plugins": "Плагины",
+  "Nav.General": "Общие",
+  "Nav.Appearance": "Оформление",
+  "Nav.Advanced": "Дополнительно",
+  "Nav.About": "О программе",
+
+  "Update.Available": "Доступно обновление — v{0}",
+
+  "Common.Refresh": "Обновить",
+  "Common.Install": "Установить",
+
+  "General.Language": "Язык",
+  "General.UiLanguage": "Язык интерфейса",
+  "General.UiLanguageHint": "Язык пользовательского интерфейса. Изменения применяются сразу.",
+  "General.Startup": "Запуск",
+  "General.Autostart": "Запускать при входе в систему",
+  "General.AutostartHint": "TypeWhisper запускается автоматически при входе в систему.",
+  "General.Window": "Окно",
+  "General.Services": "Службы",
+  "General.LocalApi": "Включить локальный API",
+  "General.Port": "Порт",
+  "General.CommandLine": "Командная строка"
+}

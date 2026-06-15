@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.TextInsertionSection"
              x:DataType="vm:TextInsertionSectionViewModel">
     <UserControl.Styles>
@@ -52,14 +53,14 @@
         <StackPanel Margin="28"
                     MaxWidth="860">
             <StackPanel Margin="0,0,0,18">
-                <TextBlock Text="Text insertion"
+                <TextBlock Text="{loc:Str TextInsertion.Title}"
                            Classes="page-title" />
                 <TextBlock
-                    Text="Control how dictated text reaches your focused app. GNOME and KDE Wayland sessions need ydotool for auto-paste; wlroots compositors (Hyprland, Sway) use wtype; X11 uses xdotool."
+                    Text="{loc:Str TextInsertion.Subtitle}"
                     Classes="page-subtitle" />
             </StackPanel>
 
-            <TextBlock Text="Session"
+            <TextBlock Text="{loc:Str TextInsertion.Session}"
                        Classes="section-label" />
             <Border Classes="section-panel">
                 <Border Classes="section-row">
@@ -74,7 +75,7 @@
                 </Border>
             </Border>
 
-            <TextBlock Text="Backends"
+            <TextBlock Text="{loc:Str TextInsertion.Backends}"
                        Classes="section-label" />
             <Border Classes="section-panel">
                 <StackPanel>
@@ -109,14 +110,14 @@
                     <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
 
                     <Border Classes="section-row">
-                        <Button Content="Refresh status"
+                        <Button Content="{loc:Str TextInsertion.RefreshStatus}"
                                 Command="{Binding RefreshStatusCommand}" />
                     </Border>
                 </StackPanel>
             </Border>
 
             <StackPanel IsVisible="{Binding ShowYdotoolSetup}">
-                <TextBlock Text="Set up ydotool"
+                <TextBlock Text="{loc:Str TextInsertion.SetUpYdotool}"
                            Classes="section-label" />
                 <Border Classes="section-panel">
                     <Border Classes="section-row">
@@ -124,10 +125,10 @@
                             <StackPanel IsVisible="{Binding ShowManualInstructions}"
                                         Margin="0,0,0,16">
                                 <TextBlock Classes="row-title"
-                                           Text="Install ydotool first" />
+                                           Text="{loc:Str TextInsertion.InstallYdotoolFirst}" />
                                 <TextBlock Classes="row-hint"
                                            TextWrapping="Wrap"
-                                           Text="ydotool isn't installed yet. Install it through your package manager, then come back here to finish the one-click setup." />
+                                           Text="{loc:Str TextInsertion.InstallYdotoolFirstHint}" />
 
                                 <Border Background="#0E1620"
                                         BorderBrush="#1AFFFFFF"
@@ -144,10 +145,10 @@
 
                             <StackPanel IsVisible="{Binding CanSetUpAutomatically}">
                                 <TextBlock Classes="row-title"
-                                           Text="Set up automatically" />
+                                           Text="{loc:Str TextInsertion.SetUpAutomatically}" />
                                 <TextBlock Classes="row-hint"
                                            TextWrapping="Wrap"
-                                           Text="TypeWhisper creates a ydotoold user service if your distro doesn't ship one, and grants /dev/uinput access if needed. Granting access runs through pkexec — it asks for your admin password once." />
+                                           Text="{loc:Str TextInsertion.SetUpAutomaticallyHint}" />
 
                                 <Border Background="#0E1620"
                                         BorderBrush="#1AFFFFFF"
@@ -164,7 +165,7 @@
                                 <StackPanel Orientation="Horizontal"
                                             Spacing="8"
                                             Margin="0,10,0,0">
-                                    <Button Content="Set up ydotool"
+                                    <Button Content="{loc:Str TextInsertion.SetUpYdotool}"
                                             Command="{Binding SetUpYdotoolCommand}" />
                                 </StackPanel>
                             </StackPanel>
@@ -176,14 +177,14 @@
                             <StackPanel IsVisible="{Binding CanRemoveIntegration}"
                                         Margin="0,10,0,0">
                                 <TextBlock Classes="row-title"
-                                           Text="Remove integration" />
+                                           Text="{loc:Str Common.RemoveIntegration}" />
                                 <TextBlock Classes="row-hint"
                                            TextWrapping="Wrap"
-                                           Text="Disables the ydotoold user service and deletes the TypeWhisper-owned udev rule. Rules installed by other tools or by you are left untouched." />
+                                           Text="{loc:Str TextInsertion.RemoveIntegrationHint}" />
                                 <StackPanel Orientation="Horizontal"
                                             Spacing="8"
                                             Margin="0,10,0,0">
-                                    <Button Content="Remove integration"
+                                    <Button Content="{loc:Str Common.RemoveIntegration}"
                                             Command="{Binding RemoveYdotoolCommand}" />
                                 </StackPanel>
                             </StackPanel>

@@ -4,6 +4,7 @@
              xmlns:svc="using:TypeWhisper.Linux.Services"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.DictationSection"
              x:DataType="vm:DictationSectionViewModel">
     <UserControl.Styles>
@@ -38,7 +39,7 @@
                   HorizontalScrollBarVisibility="Disabled">
         <StackPanel Margin="28,22,28,28"
                     MaxWidth="980">
-            <TextBlock Text="Engine"
+            <TextBlock Text="{loc:Str Dictation.Engine}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
                 <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,Auto">
@@ -46,7 +47,7 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,320,Auto"
                               ColumnSpacing="10">
-                            <TextBlock Text="Default model"
+                            <TextBlock Text="{loc:Str Dictation.DefaultModel}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       ItemsSource="{Binding ModelOptions}"
@@ -60,7 +61,7 @@
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
                             <Button Grid.Column="2"
-                                    Content="Delete model files"
+                                    Content="{loc:Str Dictation.DeleteModelFiles}"
                                     IsEnabled="{Binding CanDeleteSelectedModel}"
                                     Click="OnDeleteSelectedModel" />
                         </Grid>
@@ -72,7 +73,7 @@
                     <Border Grid.Row="2"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="Engine"
+                            <TextBlock Text="{loc:Str Dictation.Engine}"
                                        Classes="row-label" />
                             <TextBlock Grid.Column="1"
                                        Text="{Binding EngineName}"
@@ -90,7 +91,7 @@
                             Classes="row"
                             Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1439B980|False=Transparent'}">
                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                            <TextBlock Text="Model status"
+                            <TextBlock Text="{loc:Str Dictation.ModelStatus}"
                                        Classes="row-label" />
                             <!-- Live progress bar while downloading; static status badge otherwise. -->
                             <StackPanel Grid.Column="1"
@@ -131,7 +132,7 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,320,Auto"
                               ColumnSpacing="10">
-                            <TextBlock Text="Local model acceleration"
+                            <TextBlock Text="{loc:Str Dictation.LocalModelAcceleration}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       ItemsSource="{Binding AccelerationOptions}"
@@ -169,14 +170,14 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="Microphone"
+            <TextBlock Text="{loc:Str Dictation.Microphone}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
                 <Grid RowDefinitions="Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,320">
-                            <TextBlock Text="Input device"
+                            <TextBlock Text="{loc:Str Dictation.InputDevice}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       ItemsSource="{Binding Devices}"
@@ -199,7 +200,7 @@
                         <Grid ColumnDefinitions="Auto,*"
                               ColumnSpacing="12">
                             <Button Grid.Column="0"
-                                    Content="Refresh"
+                                    Content="{loc:Str Common.Refresh}"
                                     Command="{Binding RefreshDevicesCommand}" />
                             <ProgressBar Grid.Column="1"
                                          Minimum="0"
@@ -212,14 +213,14 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="Language"
+            <TextBlock Text="{loc:Str Dictation.Language}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
                 <Grid RowDefinitions="Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="Spoken language"
+                            <TextBlock Text="{loc:Str Dictation.SpokenLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       ItemsSource="{Binding LanguageChoices}"
@@ -240,7 +241,7 @@
                     <Border Grid.Row="2"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="Target language"
+                            <TextBlock Text="{loc:Str Dictation.TargetLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       ItemsSource="{Binding TranslationTargetOptions}"
@@ -257,14 +258,14 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="Settings"
+            <TextBlock Text="{loc:Str Dictation.Settings}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
                 <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Auto paste after transcription"
+                            <TextBlock Text="{loc:Str Dictation.AutoPaste}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding AutoPaste}"
@@ -278,13 +279,13 @@
                     <Border Grid.Row="2"
                             Classes="row">
                         <StackPanel Spacing="10">
-                            <TextBlock Text="App insertion strategies"
+                            <TextBlock Text="{loc:Str Dictation.AppInsertionStrategies}"
                                        Classes="row-label" />
 
                             <Grid ColumnDefinitions="*,180,Auto"
                                   ColumnSpacing="10">
                                 <TextBox Grid.Column="0"
-                                         PlaceholderText="Process name, e.g. kitty or firefox"
+                                         PlaceholderText="{loc:Str Dictation.ProcessNamePlaceholder}"
                                          Text="{Binding NewInsertionAppProcess}" />
                                 <ComboBox Grid.Column="1"
                                           ItemsSource="{Binding InsertionStrategyOptions}"
@@ -296,7 +297,7 @@
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
                                 <Button Grid.Column="2"
-                                        Content="Add"
+                                        Content="{loc:Str Common.Add}"
                                         Command="{Binding AddAppInsertionStrategyCommand}" />
                             </Grid>
 
@@ -318,7 +319,7 @@
                                                 </ComboBox.ItemTemplate>
                                             </ComboBox>
                                             <Button Grid.Column="2"
-                                                    Content="Remove"
+                                                    Content="{loc:Str Common.Remove}"
                                                     Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).RemoveAppInsertionStrategyCommand}"
                                                     CommandParameter="{Binding}" />
                                         </Grid>
@@ -335,10 +336,10 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Auto-learn approved history corrections"
+                                <TextBlock Text="{loc:Str Dictation.AutoLearnCorrections}"
                                            Classes="row-label" />
                                 <TextBlock
-                                    Text="When you edit a history item, clear phrase-level suggestions can be learned immediately."
+                                    Text="{loc:Str Dictation.AutoLearnCorrectionsHint}"
                                     FontSize="11"
                                     Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
@@ -354,7 +355,7 @@
                     <Border Grid.Row="6"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="Auto cleanup"
+                            <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       ItemsSource="{Binding CleanupLevelOptions}"
@@ -375,7 +376,7 @@
                     <Border Grid.Row="8"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Whisper Mode (AGC)"
+                            <TextBlock Text="{loc:Str Common.WhisperMode}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding WhisperModeEnabled}"
@@ -390,7 +391,7 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Sound Feedback"
+                                <TextBlock Text="{loc:Str Dictation.SoundFeedback}"
                                            Classes="row-label" />
                                 <TextBlock Text="{Binding SoundFeedbackUnavailableReason}"
                                            FontSize="11"
@@ -411,7 +412,7 @@
                     <Border Grid.Row="12"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Transcribe short or quiet clips"
+                            <TextBlock Text="{loc:Str Dictation.TranscribeShortQuietClips}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding TranscribeShortQuietClipsAggressively}"
@@ -425,7 +426,7 @@
                     <Border Grid.Row="14"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Auto-stop on silence"
+                            <TextBlock Text="{loc:Str Dictation.AutoStopOnSilence}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding SilenceAutoStopEnabled}"
@@ -439,7 +440,7 @@
                     <Border Grid.Row="16"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Silence timeout (seconds)"
+                            <TextBlock Text="{loc:Str Dictation.SilenceTimeoutSeconds}"
                                        Classes="row-label" />
                             <TextBox Grid.Column="1"
                                      Width="120"
@@ -455,10 +456,10 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Live transcription preview"
+                                <TextBlock Text="{loc:Str Dictation.LiveTranscriptionPreview}"
                                            Classes="row-label" />
                                 <TextBlock
-                                    Text="Show partial text in the recording overlay while you speak."
+                                    Text="{loc:Str Dictation.LiveTranscriptionPreviewHint}"
                                     FontSize="11"
                                     Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
@@ -475,10 +476,10 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Online batch live preview"
+                                <TextBlock Text="{loc:Str Dictation.OnlineBatchLivePreview}"
                                            Classes="row-label" />
                                 <TextBlock
-                                    Text="Also run repeated online transcription calls while recording for providers without real-time streaming."
+                                    Text="{loc:Str Dictation.OnlineBatchLivePreviewHint}"
                                     FontSize="11"
                                     Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
@@ -496,10 +497,10 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Real-time streaming live preview"
+                                <TextBlock Text="{loc:Str Dictation.RealtimeStreamingLivePreview}"
                                            Classes="row-label" />
                                 <TextBlock
-                                    Text="Use the provider's WebSocket streaming API for partials (lower latency, lower bandwidth than batch re-upload). Falls back to batch transcription if the connection drops."
+                                    Text="{loc:Str Dictation.RealtimeStreamingLivePreviewHint}"
                                     FontSize="11"
                                     Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                     TextWrapping="Wrap" />
@@ -513,7 +514,7 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="System audio"
+            <TextBlock Text="{loc:Str Dictation.SystemAudio}"
                        Classes="group-title" />
             <Border Classes="settings-panel"
                     Margin="0">
@@ -522,7 +523,7 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Reduce other audio while recording"
+                                <TextBlock Text="{loc:Str Dictation.ReduceOtherAudio}"
                                            Classes="row-label" />
                                 <TextBlock Text="{Binding AudioDuckingUnavailableReason}"
                                            FontSize="11"
@@ -546,7 +547,7 @@
                             ToolTip.Tip="{Binding AudioDuckingUnavailableReason}">
                         <StackPanel>
                             <TextBlock Classes="row-label">
-                                <Run Text="Ducking level" />
+                                <Run Text="{loc:Str Dictation.DuckingLevel}" />
                                 <Run Text=" " />
                                 <Run Text="{Binding AudioDuckingLevel, StringFormat='{}{0:P0}'}" />
                             </TextBlock>
@@ -566,7 +567,7 @@
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Pause media playback while recording"
+                                <TextBlock Text="{loc:Str Dictation.PauseMediaPlayback}"
                                            Classes="row-label" />
                                 <TextBlock Text="{Binding MediaPauseUnavailableReason}"
                                            FontSize="11"

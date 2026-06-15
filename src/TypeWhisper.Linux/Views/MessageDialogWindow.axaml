@@ -3,6 +3,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
+        xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         x:Class="TypeWhisper.Linux.Views.MessageDialogWindow"
         RequestedThemeVariant="Dark"
         Width="420"
@@ -29,10 +30,10 @@
                     Spacing="8"
                     HorizontalAlignment="Right">
             <Button x:Name="CancelButton"
-                    Content="Cancel"
+                    Content="{loc:Str Common.Cancel}"
                     IsVisible="False"
                     Click="CancelButton_OnClick" />
-            <Button Content="OK"
+            <Button Content="{loc:Str Common.OK}"
                     x:Name="OkButton"
                     Classes="accent"
                     Click="OkButton_OnClick" />

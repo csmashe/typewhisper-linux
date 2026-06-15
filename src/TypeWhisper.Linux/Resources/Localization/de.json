@@ -1,0 +1,41 @@
+{
+  "Nav.GroupOverview": "Übersicht",
+  "Nav.GroupCapture": "Aufnahme",
+  "Nav.GroupLibrary": "Bibliothek",
+  "Nav.GroupAi": "KI",
+  "Nav.GroupSystem": "System",
+
+  "Nav.Dashboard": "Dashboard",
+  "Nav.Dictation": "Diktat",
+  "Nav.Shortcuts": "Tastenkürzel",
+  "Nav.TextInsertion": "Texteinfügung",
+  "Nav.FileTranscription": "Datei-Transkription",
+  "Nav.Recorder": "Aufnahmen",
+  "Nav.History": "Verlauf",
+  "Nav.Dictionary": "Wörterbuch",
+  "Nav.Snippets": "Snippets",
+  "Nav.Profiles": "Profile",
+  "Nav.Prompts": "Prompts",
+  "Nav.Plugins": "Plugins",
+  "Nav.General": "Allgemein",
+  "Nav.Appearance": "Darstellung",
+  "Nav.Advanced": "Erweitert",
+  "Nav.About": "Über",
+
+  "Update.Available": "Update verfügbar — v{0}",
+
+  "Common.Refresh": "Aktualisieren",
+  "Common.Install": "Installieren",
+
+  "General.Language": "Sprache",
+  "General.UiLanguage": "Oberflächensprache",
+  "General.UiLanguageHint": "Sprache für die Benutzeroberfläche. Änderungen werden sofort übernommen.",
+  "General.Startup": "Autostart",
+  "General.Autostart": "Beim Systemstart automatisch starten",
+  "General.AutostartHint": "TypeWhisper startet automatisch, wenn Sie sich anmelden.",
+  "General.Window": "Fenster",
+  "General.Services": "Dienste",
+  "General.LocalApi": "Lokale API aktivieren",
+  "General.Port": "Port",
+  "General.CommandLine": "Befehlszeile"
+}

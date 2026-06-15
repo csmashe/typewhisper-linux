@@ -8,6 +8,7 @@
         xmlns:fluent="using:FluentIcons.Common"
         xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
         xmlns:sections="using:TypeWhisper.Linux.Views.Sections"
+        xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="760"
         x:Class="TypeWhisper.Linux.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -131,7 +132,7 @@
                                 BorderThickness="0"
                                 Padding="8,4"
                                 MinHeight="0"
-                                ToolTip.Tip="Open About to download the update">
+                                ToolTip.Tip="{loc:Str MainWindow.OpenUpdateTooltip}">
                             <StackPanel Orientation="Horizontal"
                                         Spacing="7"
                                         VerticalAlignment="Center">
@@ -155,14 +156,14 @@
                                 Padding="6,4"
                                 MinHeight="0"
                                 Foreground="#8A9AAE"
-                                ToolTip.Tip="Dismiss" />
+                                ToolTip.Tip="{loc:Str Common.Dismiss}" />
                     </StackPanel>
                 </Border>
 
                 <StackPanel Grid.Column="1"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
-                    <Button Content="Open Wizard"
+                    <Button Content="{loc:Str Common.OpenWizard}"
                             Command="{Binding OpenWizardCommand}" />
                 </StackPanel>
             </Grid>

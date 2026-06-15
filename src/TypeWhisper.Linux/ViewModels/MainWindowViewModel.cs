@@ -7,6 +7,7 @@ using FluentIcons.Common;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.ObjectModel;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
 
@@ -53,6 +54,7 @@ public partial class MainWindowViewModel : ObservableObject
         _services = services;
         _updateCheck = updateCheck;
         _updateCheck.ResultChanged += OnUpdateResultChanged;
+        Loc.Instance.LanguageChanged += (_, _) => RefreshUpdateBannerText();
         ApplyUpdateResult(_updateCheck.LastResult);
         Dashboard = dashboard;
         Dictation = dictation;
@@ -73,27 +75,27 @@ public partial class MainWindowViewModel : ObservableObject
 
         NavItems =
         [
-            new NavItem("Overview", null, null, true),
-            new NavItem("Dashboard", Symbol.Home, Dashboard, false),
-            new NavItem("Capture", null, null, true),
-            new NavItem("Dictation", Symbol.Mic, Dictation, false),
-            new NavItem("Shortcuts", Symbol.Keyboard, Shortcuts, false),
-            new NavItem("Text insertion", Symbol.TextAlignLeft, TextInsertion, false),
-            new NavItem("File transcription", Symbol.DocumentText, FileTranscription, false),
-            new NavItem("Recorder", Symbol.Record, Recorder, false),
-            new NavItem("Library", null, null, true),
-            new NavItem("History", Symbol.History, History, false),
-            new NavItem("Dictionary", Symbol.Book, Dictionary, false),
-            new NavItem("Snippets", Symbol.Cut, Snippets, false),
-            new NavItem("Profiles", Symbol.Person, Profiles, false),
-            new NavItem("AI", null, null, true),
-            new NavItem("Prompts", Symbol.Prompt, Prompts, false),
-            new NavItem("Plugins", Symbol.PlugConnected, Plugins, false),
-            new NavItem("System", null, null, true),
-            new NavItem("General", Symbol.Settings, General, false),
-            new NavItem("Appearance", Symbol.Color, Appearance, false),
-            new NavItem("Advanced", Symbol.AppsSettings, Advanced, false),
-            new NavItem("About", Symbol.Info, About, false)
+            new NavItem("Nav.GroupOverview", null, null, true),
+            new NavItem("Nav.Dashboard", Symbol.Home, Dashboard, false),
+            new NavItem("Nav.GroupCapture", null, null, true),
+            new NavItem("Nav.Dictation", Symbol.Mic, Dictation, false),
+            new NavItem("Nav.Shortcuts", Symbol.Keyboard, Shortcuts, false),
+            new NavItem("Nav.TextInsertion", Symbol.TextAlignLeft, TextInsertion, false),
+            new NavItem("Nav.FileTranscription", Symbol.DocumentText, FileTranscription, false),
+            new NavItem("Nav.Recorder", Symbol.Record, Recorder, false),
+            new NavItem("Nav.GroupLibrary", null, null, true),
+            new NavItem("Nav.History", Symbol.History, History, false),
+            new NavItem("Nav.Dictionary", Symbol.Book, Dictionary, false),
+            new NavItem("Nav.Snippets", Symbol.Cut, Snippets, false),
+            new NavItem("Nav.Profiles", Symbol.Person, Profiles, false),
+            new NavItem("Nav.GroupAi", null, null, true),
+            new NavItem("Nav.Prompts", Symbol.Prompt, Prompts, false),
+            new NavItem("Nav.Plugins", Symbol.PlugConnected, Plugins, false),
+            new NavItem("Nav.GroupSystem", null, null, true),
+            new NavItem("Nav.General", Symbol.Settings, General, false),
+            new NavItem("Nav.Appearance", Symbol.Color, Appearance, false),
+            new NavItem("Nav.Advanced", Symbol.AppsSettings, Advanced, false),
+            new NavItem("Nav.About", Symbol.Info, About, false)
         ];
 
         SelectedItem = NavItems.First(i => i.Content is DashboardSectionViewModel);
@@ -203,6 +205,8 @@ public partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    private string? _updateVersion;
+
     private void ApplyUpdateResult(UpdateCheckResult result)
     {
         var show =
@@ -210,24 +214,37 @@ public partial class MainWindowViewModel : ObservableObject
             && !_updateCheck.IsDismissed(result.LatestVersion);
 
         UpdateBannerVisible = show;
-        UpdateBannerText = show ? $"Update available — v{result.LatestVersion}" : string.Empty;
+        _updateVersion = show ? result.LatestVersion : null;
+        RefreshUpdateBannerText();
+    }
+
+    private void RefreshUpdateBannerText()
+    {
+        UpdateBannerText = _updateVersion is null
+            ? string.Empty
+            : Loc.Instance.GetString("Update.Available", _updateVersion);
     }
 }
 
 public partial class NavItem : ObservableObject
 {
+    private readonly string _labelKey;
+
     [ObservableProperty]
     private bool _isSelected;
 
-    public NavItem(string label, Symbol? icon, object? content, bool isHeader)
+    public NavItem(string labelKey, Symbol? icon, object? content, bool isHeader)
     {
-        Label = label;
+        _labelKey = labelKey;
         Icon = icon ?? (isHeader ? null : Symbol.Home);
         Content = content;
         IsHeader = isHeader;
+        // Refresh the label whenever the interface language changes. NavItems
+        // live for the app's lifetime, so this handler is never orphaned.
+        Loc.Instance.PropertyChanged += (_, _) => OnPropertyChanged(nameof(Label));
     }
 
-    public string Label { get; }
+    public string Label => Loc.Instance[_labelKey];
     public Symbol? Icon { get; }
     public object? Content { get; }
     public bool IsHeader { get; }

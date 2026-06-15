@@ -3,11 +3,12 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:models="using:TypeWhisper.Core.Models"
+        xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         mc:Ignorable="d"
         x:Class="TypeWhisper.Linux.Views.PromptPaletteWindow"
         x:DataType="models:PromptAction"
         RequestedThemeVariant="Dark"
-        Title="Prompt Palette"
+        Title="{loc:Str PromptPalette.Title}"
         Width="400"
         Height="400"
         MinWidth="400"
@@ -19,7 +20,7 @@
     <Grid RowDefinitions="Auto,*,Auto" Margin="10">
         <TextBox Grid.Row="0"
                  x:Name="SearchBox"
-                 PlaceholderText="Search prompt actions"
+                 PlaceholderText="{loc:Str PromptPalette.SearchPlaceholder}"
                  TextChanged="SearchBox_OnTextChanged"
                  KeyDown="SearchBox_OnKeyDown" />
 
@@ -67,7 +68,7 @@
 
         <TextBlock Grid.Row="1"
                    x:Name="EmptyText"
-                   Text="No actions found"
+                   Text="{loc:Str PromptPalette.NoActions}"
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"

@@ -3,6 +3,7 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.DictionarySection"
              x:DataType="vm:DictionarySectionViewModel">
     <UserControl.Styles>
@@ -44,15 +45,15 @@
             <Grid ColumnDefinitions="*,Auto,Auto"
                   ColumnSpacing="10"
                   Margin="0,0,0,14">
-                <TextBlock Text="Dictionary"
+                <TextBlock Text="{loc:Str Dictionary.Title}"
                            Classes="page-title"
                            VerticalAlignment="Center" />
                 <Button Grid.Column="1"
-                        Content="Import"
+                        Content="{loc:Str Common.Import}"
                         Click="OnImport"
                         Padding="12,7" />
                 <Button Grid.Column="2"
-                        Content="Export"
+                        Content="{loc:Str Common.Export}"
                         Click="OnExport"
                         Padding="12,7" />
             </Grid>
@@ -63,11 +64,11 @@
                 <Grid ColumnDefinitions="*,Auto"
                       ColumnSpacing="16">
                     <StackPanel>
-                        <TextBlock Text="Enable vocabulary boosting"
+                        <TextBlock Text="{loc:Str Dictionary.EnableVocabularyBoosting}"
                                    FontSize="13"
                                    FontWeight="SemiBold" />
                         <TextBlock
-                            Text="Improves recognition of active dictionary terms and packs for local transcriptions"
+                            Text="{loc:Str Dictionary.VocabularyBoostingHint}"
                             FontSize="12"
                             Foreground="#8A9AAE"
                             TextWrapping="Wrap"
@@ -93,7 +94,7 @@
                         Foreground="{Binding IsAllTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#FFFFFF|False=#D6DEE9'}"
                         Padding="12,8"
                         Margin="0,0,8,0"
-                        Content="All" />
+                        Content="{loc:Str Dictionary.TabAll}" />
                 <Button Command="{Binding SetTabCommand}"
                         CommandParameter="1"
                         Background="{Binding IsTermsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
@@ -101,7 +102,7 @@
                         Foreground="{Binding IsTermsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#FFFFFF|False=#D6DEE9'}"
                         Padding="12,8"
                         Margin="0,0,8,0"
-                        Content="Terms" />
+                        Content="{loc:Str Dictionary.TabTerms}" />
                 <Button Command="{Binding SetTabCommand}"
                         CommandParameter="2"
                         Background="{Binding IsCorrectionsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
@@ -109,14 +110,14 @@
                         Foreground="{Binding IsCorrectionsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#FFFFFF|False=#D6DEE9'}"
                         Padding="12,8"
                         Margin="0,0,8,0"
-                        Content="Corrections" />
+                        Content="{loc:Str Dictionary.TabCorrections}" />
                 <Button Command="{Binding SetTabCommand}"
                         CommandParameter="3"
                         Background="{Binding IsPacksTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
                         BorderBrush="{Binding IsPacksTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
                         Foreground="{Binding IsPacksTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#FFFFFF|False=#D6DEE9'}"
                         Padding="12,8"
-                        Content="Packs" />
+                        Content="{loc:Str Dictionary.TabPacks}" />
             </StackPanel>
 
             <Border Classes="panel"
@@ -127,7 +128,7 @@
                       ColumnSpacing="12">
                     <TextBox Grid.Column="0"
                              Text="{Binding SearchText}"
-                             PlaceholderText="Search entries..."
+                             PlaceholderText="{loc:Str Dictionary.SearchPlaceholder}"
                              IsVisible="{Binding ShowSearchBox}" />
                     <TextBlock Grid.Column="1"
                                Text="{Binding EntryCount, StringFormat='{}{0} Entries'}"
@@ -138,7 +139,7 @@
             </Border>
 
             <TextBlock
-                Text="Packs add specialized terminology so speech recognition better understands domain vocabulary."
+                Text="{loc:Str Dictionary.PacksHeader}"
                 FontSize="12.5"
                 Foreground="#8A9AAE"
                 TextWrapping="Wrap"
@@ -263,7 +264,7 @@
                                                           VerticalAlignment="Center" />
 
                                             <Button Grid.Column="5"
-                                                    Content="Delete"
+                                                    Content="{loc:Str Common.Delete}"
                                                     Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DeleteCommand}"
                                                     CommandParameter="{Binding}"
                                                     Padding="12,6"
@@ -331,33 +332,33 @@
                       ColumnSpacing="10">
                     <TextBox Grid.Column="0"
                              Text="{Binding NewOriginal}"
-                             PlaceholderText="Enter original..." />
+                             PlaceholderText="{loc:Str Dictionary.OriginalPlaceholder}" />
                     <TextBlock Grid.Column="1"
                                Text="→"
                                VerticalAlignment="Center"
                                Foreground="#8A9AAE" />
                     <TextBox Grid.Column="2"
                              Text="{Binding NewReplacement}"
-                             PlaceholderText="Replacement (optional)" />
+                             PlaceholderText="{loc:Str Dictionary.ReplacementPlaceholder}" />
                     <NumericUpDown Grid.Column="3"
                                    Minimum="0"
                                    Maximum="999"
                                    Value="{Binding NewPriority}"
-                                   PlaceholderText="Priority" />
+                                   PlaceholderText="{loc:Str Dictionary.PriorityPlaceholder}" />
                     <ToggleButton Grid.Column="4"
                                   IsChecked="{Binding IsNewTypeCorrection}"
-                                  Content="Correction"
+                                  Content="{loc:Str Dictionary.TypeCorrection}"
                                   Padding="10,6" />
                     <ToggleButton Grid.Column="5"
                                   IsChecked="{Binding IsNewTypeTerm}"
-                                  Content="Term"
+                                  Content="{loc:Str Dictionary.TypeTerm}"
                                   Padding="10,6" />
                     <CheckBox Grid.Column="6"
                               Content="Aa"
                               IsChecked="{Binding CaseSensitive}"
                               VerticalAlignment="Center" />
                     <Button Grid.Column="7"
-                            Content="+ Add"
+                            Content="{loc:Str Dictionary.Add}"
                             Command="{Binding AddEntryCommand}"
                             Padding="14,7" />
                 </Grid>

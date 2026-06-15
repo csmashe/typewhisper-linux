@@ -3,6 +3,7 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.ProfilesSection"
              x:DataType="vm:ProfilesSectionViewModel">
     <UserControl.Styles>
@@ -80,7 +81,7 @@
         <Grid Grid.Column="0"
               RowDefinitions="Auto,*,Auto">
             <StackPanel Margin="0,0,0,8">
-                <TextBlock Text="Profiles"
+                <TextBlock Text="{loc:Str Profiles.Title}"
                            Classes="panel-title" />
                 <TextBlock Text="{Binding Summary}"
                            Classes="page-subtitle" />
@@ -124,7 +125,7 @@
             </ListBox>
 
             <Button Grid.Row="2"
-                    Content="+ New Profile"
+                    Content="{loc:Str Profiles.NewProfile}"
                     Command="{Binding AddProfileCommand}"
                     Padding="12,8"
                     Margin="0,12,0,0" />
@@ -152,7 +153,7 @@
                                            FontSize="12"
                                            TextWrapping="Wrap" />
                                 <Button Grid.Row="1"
-                                        Content="Install Window Calls extension"
+                                        Content="{loc:Str Profiles.InstallWindowCallsExtension}"
                                         HorizontalAlignment="Left"
                                         IsVisible="{Binding CanInstallWindowCallsExtension}"
                                         Command="{Binding InstallWindowCallsExtensionCommand}" />
@@ -172,10 +173,10 @@
                                 <StackPanel Grid.Row="1"
                                             Orientation="Horizontal"
                                             Spacing="8">
-                                    <Button Content="Enable browser URL detection"
+                                    <Button Content="{loc:Str Profiles.EnableBrowserUrlDetection}"
                                             IsVisible="{Binding CanEnableBrowserAccessibility}"
                                             Command="{Binding EnableBrowserAccessibilityCommand}" />
-                                    <Button Content="Revert browser URL detection"
+                                    <Button Content="{loc:Str Profiles.RevertBrowserUrlDetection}"
                                             IsVisible="{Binding CanRevertBrowserAccessibility}"
                                             Command="{Binding RevertBrowserAccessibilityCommand}" />
                                 </StackPanel>
@@ -186,18 +187,18 @@
                                 Padding="18,16"
                                 Margin="0,0,0,18">
                             <StackPanel>
-                                <TextBlock Text="Name"
+                                <TextBlock Text="{loc:Str Profiles.Name}"
                                            Classes="field-label" />
                                 <TextBox Text="{Binding EditName}"
                                          Margin="0,0,0,14" />
 
                                 <TextBlock
-                                    Text="No matchers — this profile will apply to any app that no other profile matches."
+                                    Text="{loc:Str Profiles.NoMatchersHint}"
                                     Classes="page-subtitle"
                                     Margin="0,0,0,14"
                                     IsVisible="{Binding IsGlobalFallbackProfile}" />
 
-                                <TextBlock Text="Apps"
+                                <TextBlock Text="{loc:Str Profiles.Apps}"
                                            Classes="field-label" />
                                 <ItemsControl ItemsSource="{Binding ProcessNameChips}"
                                               Margin="0,0,0,6">
@@ -227,19 +228,19 @@
                                       Margin="0,0,0,8">
                                     <TextBox Grid.Column="0"
                                              Text="{Binding ProcessNameInput}"
-                                             PlaceholderText="Add process name and press Enter"
+                                             PlaceholderText="{loc:Str Profiles.ProcessNameWatermark}"
                                              KeyDown="OnProcessNameKeyDown" />
                                     <Button Grid.Column="1"
-                                            Content="Capture current"
+                                            Content="{loc:Str Profiles.CaptureCurrent}"
                                             Command="{Binding CaptureCurrentProcessNameCommand}" />
                                 </Grid>
                                 <TextBlock
-                                    Text="Enter process names and press Enter, or use Live Context for the current app."
+                                    Text="{loc:Str Profiles.ProcessNamesHint}"
                                     Classes="page-subtitle"
                                     Margin="0,0,0,14" />
 
                                 <StackPanel IsVisible="{Binding IsUrlPatternsSectionVisible}">
-                                    <TextBlock Text="URL Patterns"
+                                    <TextBlock Text="{loc:Str Profiles.UrlPatterns}"
                                                Classes="field-label" />
                                     <ItemsControl ItemsSource="{Binding UrlPatternChips}"
                                                   Margin="0,0,0,6">
@@ -269,19 +270,19 @@
                                           Margin="0,0,0,8">
                                         <TextBox Grid.Column="0"
                                                  Text="{Binding UrlPatternInput}"
-                                                 PlaceholderText="Add URL pattern and press Enter"
+                                                 PlaceholderText="{loc:Str Profiles.UrlPatternWatermark}"
                                                  KeyDown="OnUrlPatternKeyDown" />
                                         <Button Grid.Column="1"
-                                                Content="Capture current"
+                                                Content="{loc:Str Profiles.CaptureCurrent}"
                                                 Command="{Binding CaptureCurrentUrlPatternCommand}" />
                                     </Grid>
-                                    <TextBlock Text="Enter URL patterns and press Enter (e.g. slack.com, *.github.com)"
+                                    <TextBlock Text="{loc:Str Profiles.UrlPatternsHint}"
                                                Classes="page-subtitle" />
                                 </StackPanel>
                             </StackPanel>
                         </Border>
 
-                        <TextBlock Text="Overrides"
+                        <TextBlock Text="{loc:Str Profiles.Overrides}"
                                    FontSize="14.5"
                                    FontWeight="SemiBold"
                                    Margin="0,0,0,8" />
@@ -292,7 +293,7 @@
                                 <Border Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
-                                        <TextBlock Text="Language"
+                                        <TextBlock Text="{loc:Str Profiles.Language}"
                                                    Classes="row-label"
                                                    VerticalAlignment="Center" />
                                         <ComboBox Grid.Column="1"
@@ -306,10 +307,10 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Task"
+                                            <TextBlock Text="{loc:Str Profiles.Task}"
                                                        Classes="row-label" />
                                             <TextBlock
-                                                Text="Choose when this profile should transcribe normally or translate instead."
+                                                Text="{loc:Str Profiles.TaskHint}"
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
@@ -325,10 +326,10 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Translation"
+                                            <TextBlock Text="{loc:Str Profiles.Translation}"
                                                        Classes="row-label" />
                                             <TextBlock
-                                                Text="Overrides the global translation setting for this profile."
+                                                Text="{loc:Str Profiles.TranslationHint}"
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
@@ -350,9 +351,9 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Model"
+                                            <TextBlock Text="{loc:Str Profiles.Model}"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Override the global transcription model for this profile."
+                                            <TextBlock Text="{loc:Str Profiles.ModelHint}"
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
@@ -374,9 +375,9 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Prompt Action"
+                                            <TextBlock Text="{loc:Str Profiles.PromptAction}"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Run a prompt action after transcription for this profile."
+                                            <TextBlock Text="{loc:Str Profiles.PromptActionHint}"
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
@@ -397,10 +398,10 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Whisper Mode (AGC)"
+                                            <TextBlock Text="{loc:Str Common.WhisperMode}"
                                                        Classes="row-label" />
                                             <TextBlock
-                                                Text="Override the global whisper mode behavior for this profile."
+                                                Text="{loc:Str Profiles.WhisperModeHint}"
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
@@ -421,10 +422,10 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Style Preset"
+                                            <TextBlock Text="{loc:Str Profiles.StylePreset}"
                                                        Classes="row-label" />
                                             <TextBlock
-                                                Text="Controls cleanup and developer-safe formatting for this profile."
+                                                Text="{loc:Str Profiles.StylePresetHint}"
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
@@ -446,10 +447,10 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Cleanup Override"
+                                            <TextBlock Text="{loc:Str Profiles.CleanupOverride}"
                                                        Classes="row-label" />
                                             <TextBlock
-                                                Text="Use this only when the style preset needs a different cleanup level."
+                                                Text="{loc:Str Profiles.CleanupOverrideHint}"
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
@@ -470,10 +471,10 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Developer Formatting Override"
+                                            <TextBlock Text="{loc:Str Profiles.DeveloperFormattingOverride}"
                                                        Classes="row-label" />
                                             <TextBlock
-                                                Text="Force symbol and casing formatting on or off for this profile."
+                                                Text="{loc:Str Profiles.DeveloperFormattingOverrideHint}"
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
@@ -497,9 +498,9 @@
                                     <Grid ColumnDefinitions="*,150"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Priority"
+                                            <TextBlock Text="{loc:Str Profiles.Priority}"
                                                        Classes="row-label" />
-                                            <TextBlock Text="Higher priority profiles win when multiple rules match."
+                                            <TextBlock Text="{loc:Str Profiles.PriorityHint}"
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
@@ -515,16 +516,16 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
-                                            <TextBlock Text="Profile Hotkey"
+                                            <TextBlock Text="{loc:Str Profiles.ProfileHotkey}"
                                                        Classes="row-label" />
                                             <TextBlock
-                                                Text="Global shortcut to trigger this profile. Behavior below decides dictation vs. transforming the current selection."
+                                                Text="{loc:Str Profiles.ProfileHotkeyHint}"
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Spacing="8">
                                             <TextBox Text="{Binding EditHotkeyData}"
-                                                     PlaceholderText="e.g. Ctrl+Alt+E" />
+                                                     PlaceholderText="{loc:Str Profiles.HotkeyWatermark}" />
                                             <ComboBox HorizontalAlignment="Stretch"
                                                       ItemsSource="{Binding HotkeyBehaviorOptions}"
                                                       SelectedItem="{Binding SelectedHotkeyBehaviorOption}">
@@ -540,7 +541,7 @@
                             </Grid>
                         </Border>
 
-                        <TextBlock Text="Activation"
+                        <TextBlock Text="{loc:Str Profiles.Activation}"
                                    FontSize="14.5"
                                    FontWeight="SemiBold"
                                    Margin="0,0,0,8" />
@@ -550,7 +551,7 @@
                             <Border Padding="18,14">
                                 <Grid ColumnDefinitions="*,Auto,Auto"
                                       ColumnSpacing="14">
-                                    <TextBlock Text="Enabled"
+                                    <TextBlock Text="{loc:Str Profiles.Enabled}"
                                                Classes="row-label"
                                                VerticalAlignment="Center" />
                                     <ToggleSwitch Grid.Column="1"
@@ -574,19 +575,19 @@
                         Padding="18,16">
                     <Grid ColumnDefinitions="*,Auto,Auto,Auto"
                           ColumnSpacing="10">
-                        <TextBlock Text="Save once after changing rules, overrides, or activation."
+                        <TextBlock Text="{loc:Str Profiles.SaveHint}"
                                    Classes="page-subtitle"
                                    VerticalAlignment="Center" />
                         <Button Grid.Column="1"
-                                Content="Delete"
+                                Content="{loc:Str Common.Delete}"
                                 Click="OnDeleteProfile"
                                 Padding="12,8" />
                         <Button Grid.Column="2"
-                                Content="Open live context"
+                                Content="{loc:Str Profiles.OpenLiveContext}"
                                 Command="{Binding OpenLiveContextWindowCommand}"
                                 Padding="12,8" />
                         <Button Grid.Column="3"
-                                Content="Save"
+                                Content="{loc:Str Common.Save}"
                                 Command="{Binding SaveProfileCommand}"
                                 Padding="16,8"
                                 Background="#2196F3"
@@ -610,12 +611,12 @@
                         VerticalAlignment="Center"
                         Width="312">
                     <StackPanel>
-                        <TextBlock Text="Select Profile"
+                        <TextBlock Text="{loc:Str Profiles.SelectProfile}"
                                    FontSize="16"
                                    FontWeight="SemiBold"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8" />
-                        <TextBlock Text="Select a profile from the list or create a new one"
+                        <TextBlock Text="{loc:Str Profiles.SelectProfileHint}"
                                    Classes="page-subtitle"
                                    TextAlignment="Center" />
                     </StackPanel>

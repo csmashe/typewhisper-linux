@@ -3,6 +3,7 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.AboutSection"
              x:DataType="vm:AboutSectionViewModel">
     <UserControl.Styles>
@@ -26,7 +27,7 @@
                            FontSize="22"
                            FontWeight="SemiBold"
                            HorizontalAlignment="Center" />
-                <TextBlock Text="Speech-to-text for your Linux desktop"
+                <TextBlock Text="{loc:Str About.Tagline}"
                            FontSize="13.5"
                            Foreground="#9BAABC"
                            HorizontalAlignment="Center" />
@@ -38,10 +39,10 @@
                             Spacing="8"
                             HorizontalAlignment="Center"
                             Margin="0,10,0,0">
-                    <Button Content="Check for Updates"
+                    <Button Content="{loc:Str About.CheckForUpdates}"
                             Command="{Binding CheckForUpdatesCommand}"
                             IsEnabled="{Binding CanCheckForUpdates}" />
-                    <Button Content="Download"
+                    <Button Content="{loc:Str About.Download}"
                             Command="{Binding OpenReleasePageCommand}"
                             IsVisible="{Binding UpdateAvailable}" />
                 </StackPanel>
@@ -51,11 +52,11 @@
                            HorizontalAlignment="Center"
                            TextWrapping="Wrap"
                            Margin="0,6,0,18" />
-                <TextBlock Text="Works with local and cloud transcription engines"
+                <TextBlock Text="{loc:Str About.EnginesNote}"
                            FontSize="13"
                            Foreground="#B7C4D3"
                            HorizontalAlignment="Center" />
-                <TextBlock Text="License: GPL-3.0-or-later"
+                <TextBlock Text="{loc:Str About.License}"
                            FontSize="13"
                            Foreground="#B7C4D3"
                            HorizontalAlignment="Center" />
@@ -75,7 +76,7 @@
                     <StackPanel Spacing="4">
                         <StackPanel Orientation="Horizontal"
                                     Spacing="10">
-                            <TextBlock Text="Settings Backup"
+                            <TextBlock Text="{loc:Str About.SettingsBackup}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ProgressBar Width="90"
@@ -89,12 +90,12 @@
                                    TextWrapping="Wrap" />
                     </StackPanel>
                     <Button Grid.Column="1"
-                            Content="Back Up"
+                            Content="{loc:Str About.BackUp}"
                             IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
                             VerticalAlignment="Center"
                             Click="OnBackupSettings" />
                     <Button Grid.Column="2"
-                            Content="Restore"
+                            Content="{loc:Str About.Restore}"
                             IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
                             VerticalAlignment="Center"
                             Click="OnRestoreSettings" />
@@ -109,15 +110,15 @@
                             BorderThickness="0,0,0,1">
                         <Grid ColumnDefinitions="*,Auto,Auto"
                               ColumnSpacing="10">
-                            <TextBlock Text="Error Log"
+                            <TextBlock Text="{loc:Str About.ErrorLog}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <Button Grid.Column="1"
-                                    Content="Clear"
+                                    Content="{loc:Str Common.Clear}"
                                     Command="{Binding ClearErrorsCommand}"
                                     IsVisible="{Binding HasErrors}" />
                             <Button Grid.Column="2"
-                                    Content="Export Diagnostics"
+                                    Content="{loc:Str About.ExportDiagnostics}"
                                     Click="OnExportDiagnostics" />
                         </Grid>
                     </Border>
@@ -130,7 +131,7 @@
                                        FontSize="42"
                                        Foreground="#8DA0B8"
                                        HorizontalAlignment="Center" />
-                            <TextBlock Text="No errors recorded."
+                            <TextBlock Text="{loc:Str About.NoErrors}"
                                        FontSize="13"
                                        Foreground="#8A9AAE"
                                        HorizontalAlignment="Center" />

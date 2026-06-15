@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:svc="using:TypeWhisper.Linux.Services"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.FileTranscriptionSection"
              x:DataType="vm:FileTranscriptionSectionViewModel">
     <UserControl.Styles>
@@ -58,14 +59,14 @@
         <StackPanel Margin="28"
                     MaxWidth="860">
             <StackPanel Margin="0,0,0,18">
-                <TextBlock Text="File transcription"
+                <TextBlock Text="{loc:Str FileTranscription.Title}"
                            Classes="page-title" />
                 <TextBlock
-                    Text="Transcribe existing recordings or media files without using the microphone. Audio and video inputs are converted locally before transcription."
+                    Text="{loc:Str FileTranscription.Subtitle}"
                     Classes="page-subtitle" />
             </StackPanel>
 
-            <TextBlock Text="Import"
+            <TextBlock Text="{loc:Str Common.Import}"
                        Classes="section-label" />
             <Border Classes="section-panel">
                 <StackPanel>
@@ -73,15 +74,15 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Choose source files"
+                                <TextBlock Text="{loc:Str FileTranscription.ChooseSourceFiles}"
                                            Classes="row-title" />
                                 <TextBlock
-                                    Text="Drop supported audio or video files here, or browse manually. Supported formats include WAV, MP3, M4A, FLAC, MP4, MOV, MKV, AVI, and WEBM."
+                                    Text="{loc:Str FileTranscription.ChooseSourceFilesHint}"
                                     Classes="row-hint" />
                             </StackPanel>
 
                             <Button Grid.Column="1"
-                                    Content="Select files..."
+                                    Content="{loc:Str FileTranscription.SelectFiles}"
                                     Click="OnSelectFile"
                                     IsEnabled="{Binding CanImportFiles}"
                                     VerticalAlignment="Center" />
@@ -99,12 +100,12 @@
                                 IsEnabled="{Binding CanImportFiles}">
                             <StackPanel HorizontalAlignment="Center"
                                         Spacing="8">
-                                <TextBlock Text="Drag audio/video files here"
+                                <TextBlock Text="{loc:Str FileTranscription.DragHere}"
                                            FontSize="15"
                                            FontWeight="SemiBold"
                                            HorizontalAlignment="Center" />
                                 <TextBlock
-                                    Text="The file is converted to a mono 16 kHz WAV stream before transcription."
+                                    Text="{loc:Str FileTranscription.DragHereHint}"
                                     Classes="row-hint"
                                     TextAlignment="Center"
                                     HorizontalAlignment="Center"
@@ -127,14 +128,14 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Importer status"
+                                <TextBlock Text="{loc:Str FileTranscription.ImporterStatus}"
                                            Classes="row-title" />
                                 <TextBlock Text="{Binding StatusText}"
                                            Classes="row-hint" />
                             </StackPanel>
 
                             <Button Grid.Column="1"
-                                    Content="Cancel"
+                                    Content="{loc:Str Common.Cancel}"
                                     Command="{Binding CancelCommand}"
                                     IsVisible="{Binding IsProcessing}"
                                     VerticalAlignment="Center" />
@@ -154,7 +155,7 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="Queue"
+            <TextBlock Text="{loc:Str FileTranscription.Queue}"
                        Classes="section-label" />
             <Border Classes="section-panel">
                 <StackPanel>
@@ -162,13 +163,13 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel>
-                                <TextBlock Text="Batch transcription"
+                                <TextBlock Text="{loc:Str FileTranscription.BatchTranscription}"
                                            Classes="row-title" />
                                 <TextBlock Text="{Binding StatusText}"
                                            Classes="row-hint" />
                             </StackPanel>
                             <Button Grid.Column="1"
-                                    Content="Cancel all"
+                                    Content="{loc:Str FileTranscription.CancelAll}"
                                     Command="{Binding CancelCommand}"
                                     IsVisible="{Binding IsProcessing}"
                                     VerticalAlignment="Center" />
@@ -204,23 +205,23 @@
                                                     Orientation="Horizontal"
                                                     Spacing="6"
                                                     VerticalAlignment="Center">
-                                            <Button Content="Copy"
+                                            <Button Content="{loc:Str Common.Copy}"
                                                     Click="OnCopyItem"
                                                     IsVisible="{Binding HasResult}" />
-                                            <Button Content="TXT"
+                                            <Button Content="{loc:Str FileTranscription.ExportTxt}"
                                                     Click="OnExportItemText"
                                                     IsVisible="{Binding HasResult}" />
-                                            <Button Content="SRT"
+                                            <Button Content="{loc:Str FileTranscription.ExportSrt}"
                                                     Click="OnExportItemSrt"
                                                     IsVisible="{Binding CanExportSubtitles}" />
-                                            <Button Content="VTT"
+                                            <Button Content="{loc:Str FileTranscription.ExportVtt}"
                                                     Click="OnExportItemVtt"
                                                     IsVisible="{Binding CanExportSubtitles}" />
-                                            <Button Content="Cancel"
+                                            <Button Content="{loc:Str Common.Cancel}"
                                                     Command="{Binding $parent[UserControl].((vm:FileTranscriptionSectionViewModel)DataContext).CancelItemCommand, FallbackValue={x:Null}}"
                                                     CommandParameter="{Binding}"
                                                     IsVisible="{Binding CanCancel}" />
-                                            <Button Content="Remove"
+                                            <Button Content="{loc:Str Common.Remove}"
                                                     Command="{Binding $parent[UserControl].((vm:FileTranscriptionSectionViewModel)DataContext).RemoveItemCommand, FallbackValue={x:Null}}"
                                                     CommandParameter="{Binding}"
                                                     IsVisible="{Binding !IsProcessing}" />
@@ -233,7 +234,7 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="Transcript"
+            <TextBlock Text="{loc:Str FileTranscription.Transcript}"
                        Classes="section-label" />
             <Border Classes="section-panel"
                     Margin="0">
@@ -242,10 +243,10 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Result"
+                                <TextBlock Text="{loc:Str FileTranscription.Result}"
                                            Classes="row-title" />
                                 <TextBlock Classes="row-hint">
-                                    <Run Text="Detected language: " />
+                                    <Run Text="{loc:Str FileTranscription.DetectedLanguage}" />
                                     <Run Text="{Binding DetectedLanguage}" />
                                 </TextBlock>
                             </StackPanel>
@@ -255,9 +256,9 @@
                                         Spacing="8"
                                         VerticalAlignment="Center"
                                         IsVisible="{Binding HasResult}">
-                                <Button Content="Copy"
+                                <Button Content="{loc:Str Common.Copy}"
                                         Click="OnCopy" />
-                                <Button Content="TXT"
+                                <Button Content="{loc:Str FileTranscription.ExportTxt}"
                                         Click="OnExportText" />
                             </StackPanel>
                         </Grid>
@@ -280,7 +281,7 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="Watch folder"
+            <TextBlock Text="{loc:Str FileTranscription.WatchFolder}"
                        Classes="section-label" />
             <Border Classes="section-panel"
                     Margin="0">
@@ -289,7 +290,7 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel>
-                                <TextBlock Text="Automation"
+                                <TextBlock Text="{loc:Str FileTranscription.Automation}"
                                            Classes="row-title" />
                                 <TextBlock Text="{Binding WatchFolderStatusText}"
                                            Classes="row-hint" />
@@ -297,10 +298,10 @@
                             <StackPanel Grid.Column="1"
                                         Orientation="Horizontal"
                                         Spacing="8">
-                                <Button Content="Start"
+                                <Button Content="{loc:Str FileTranscription.Start}"
                                         Command="{Binding StartWatchFolderCommand}"
                                         IsEnabled="{Binding IsWatchFolderStopped}" />
-                                <Button Content="Stop"
+                                <Button Content="{loc:Str FileTranscription.Stop}"
                                         Command="{Binding StopWatchFolderCommand}"
                                         IsEnabled="{Binding IsWatchFolderRunning}" />
                             </StackPanel>
@@ -318,44 +319,44 @@
                               RowSpacing="10">
                             <TextBox Grid.Column="0"
                                      Text="{Binding WatchFolderPath}"
-                                     PlaceholderText="Folder to watch" />
+                                     PlaceholderText="{loc:Str FileTranscription.FolderToWatch}" />
                             <Button Grid.Row="0"
                                     Grid.Column="1"
-                                    Content="Choose..."
+                                    Content="{loc:Str FileTranscription.Choose}"
                                     Click="OnSelectWatchFolder" />
 
                             <TextBox Grid.Row="1"
                                      Grid.Column="0"
                                      Text="{Binding WatchFolderOutputPath}"
-                                     PlaceholderText="Output folder (optional)" />
+                                     PlaceholderText="{loc:Str FileTranscription.OutputFolderOptional}" />
                             <StackPanel Grid.Row="1"
                                         Grid.Column="1"
                                         Orientation="Horizontal"
                                         Spacing="8">
-                                <Button Content="Choose..."
+                                <Button Content="{loc:Str FileTranscription.Choose}"
                                         Click="OnSelectWatchFolderOutput" />
-                                <Button Content="Clear"
+                                <Button Content="{loc:Str Common.Clear}"
                                         Command="{Binding ClearWatchFolderOutputPathCommand}" />
                             </StackPanel>
 
                             <TextBox Grid.Row="2"
                                      Grid.Column="0"
                                      Text="{Binding WatchFolderOutputFormat}"
-                                     PlaceholderText="Output format: md, txt, srt, vtt" />
+                                     PlaceholderText="{loc:Str FileTranscription.OutputFormatHint}" />
                             <TextBox Grid.Row="2"
                                      Grid.Column="1"
                                      Text="{Binding WatchFolderLanguage}"
-                                     PlaceholderText="Language" />
+                                     PlaceholderText="{loc:Str FileTranscription.LanguagePlaceholder}" />
 
                             <CheckBox Grid.Row="3"
                                       Grid.Column="0"
                                       Grid.ColumnSpan="2"
-                                      Content="Start watching automatically when TypeWhisper opens"
+                                      Content="{loc:Str FileTranscription.AutoStartWatching}"
                                       IsChecked="{Binding WatchFolderAutoStart}" />
                             <CheckBox Grid.Row="4"
                                       Grid.Column="0"
                                       Grid.ColumnSpan="2"
-                                      Content="Delete source files after successful transcription"
+                                      Content="{loc:Str FileTranscription.DeleteSourceAfter}"
                                       IsChecked="{Binding WatchFolderDeleteSource}" />
                         </Grid>
                     </Border>
@@ -367,10 +368,10 @@
                     <Border Classes="section-row">
                         <StackPanel>
                             <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Text="History"
+                                <TextBlock Text="{loc:Str FileTranscription.History}"
                                            Classes="row-title" />
                                 <Button Grid.Column="1"
-                                        Content="Clear"
+                                        Content="{loc:Str Common.Clear}"
                                         Command="{Binding ClearWatchFolderHistoryCommand}"
                                         IsEnabled="{Binding HasWatchFolderHistory}" />
                             </Grid>
