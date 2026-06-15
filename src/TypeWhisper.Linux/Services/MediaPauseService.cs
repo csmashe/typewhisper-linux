@@ -21,7 +21,13 @@ public sealed class MediaPauseService : IMediaPauseService
 
         try
         {
-            var players = RunCommand("playerctl", "-a --format '{{playerName}} {{status}}' status");
+            var players = RunCommand(
+                "playerctl",
+                "-a",
+                "--format",
+                "{{playerName}} {{status}}",
+                "status"
+            );
             if (string.IsNullOrWhiteSpace(players))
             {
                 return;
@@ -47,7 +53,7 @@ public sealed class MediaPauseService : IMediaPauseService
                     continue;
                 }
 
-                if (RunCommand("playerctl", $"-p {parts[0]} pause") is not null)
+                if (RunCommand("playerctl", "-p", parts[0], "pause") is not null)
                 {
                     _pausedPlayers.Add(parts[0]);
                 }
@@ -71,7 +77,7 @@ public sealed class MediaPauseService : IMediaPauseService
         {
             foreach (var player in _pausedPlayers)
             {
-                RunCommand("playerctl", $"-p {player} play");
+                RunCommand("playerctl", "-p", player, "play");
             }
         }
         catch (Exception ex)
@@ -84,20 +90,26 @@ public sealed class MediaPauseService : IMediaPauseService
         }
     }
 
-    private static string? RunCommand(string fileName, string arguments)
+    private static string? RunCommand(string fileName, params string[] arguments)
     {
         try
         {
-            using var process = Process.Start(
-                new ProcessStartInfo(fileName, arguments)
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            );
+            var psi = new ProcessStartInfo(fileName)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            foreach (var argument in arguments)
+            {
+                psi.ArgumentList.Add(argument);
+            }
 
+            // Force a stable, parseable locale for command output.
+            psi.Environment["LC_ALL"] = "C";
+
+            using var process = Process.Start(psi);
             if (process is null)
             {
                 return null;
