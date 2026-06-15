@@ -30,9 +30,18 @@ public static class LocalModelStoragePaths
     /// </summary>
     public static string ResolvePluginAssetDirectory(AppSettings? settings, string pluginId)
     {
-        var safePluginId = Path.GetFileName(pluginId.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        if (string.IsNullOrWhiteSpace(safePluginId) || safePluginId is "." or "..")
-            throw new ArgumentException("Plugin ID must not be empty.", nameof(pluginId));
+        // Reject (rather than silently strip) path separators: stripping would map
+        // distinct IDs like "com/test/id" and "id" onto the same directory and risk
+        // cross-plugin asset corruption. Check both '/' and '\' regardless of platform.
+        var safePluginId = pluginId?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(safePluginId)
+            || safePluginId is "." or ".."
+            || safePluginId.Contains('/')
+            || safePluginId.Contains('\\'))
+        {
+            throw new ArgumentException(
+                "Plugin ID must not be empty or contain path separators.", nameof(pluginId));
+        }
 
         if (settings is null
             || AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is null)

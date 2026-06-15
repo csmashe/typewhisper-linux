@@ -100,6 +100,18 @@ public sealed class LocalModelStorageService
             return;
         }
 
+        // A target nested under the source would make MigrateModelRootContents copy the
+        // source's contents into one of its own subdirectories — self-recursive copying.
+        if (IsNestedUnder(targetRoot, sourceRoot))
+        {
+            throw new InvalidOperationException(
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Target model storage folder '{0}' must not be inside the current folder '{1}'.",
+                    targetRoot,
+                    sourceRoot));
+        }
+
         _unloadActiveModels?.Invoke();
 
         await Task.Run(() =>
@@ -280,4 +292,18 @@ public sealed class LocalModelStorageService
             Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             StringComparison.Ordinal);
+
+    // True when child is strictly nested under ancestor. Ordinal comparison matches
+    // PathsEqual: Linux filesystems are case-sensitive, so distinct casings are
+    // distinct paths.
+    private static bool IsNestedUnder(string child, string ancestor)
+    {
+        var ancestorFull = Path.GetFullPath(ancestor)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var childFull = Path.GetFullPath(child)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        return childFull.Length > ancestorFull.Length
+            && childFull.StartsWith(ancestorFull + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+    }
 }

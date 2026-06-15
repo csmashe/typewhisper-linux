@@ -74,10 +74,12 @@ public sealed partial class OpenAiCompatiblePlugin
 
         await LoadAdditionalProfilesAsync(host);
 
+        // Don't log the raw base URL: it is user-supplied and could carry credentials
+        // (userinfo or a query token) into shared log/support bundles. IsConfigured
+        // already conveys whether an endpoint is set.
         host.Log(
             PluginLogLevel.Info,
-            $"Activated (baseUrl={_baseUrl}, configured={IsConfigured}, "
-                + $"additionalProfiles={_additionalProfiles.Count})");
+            $"Activated (configured={IsConfigured}, additionalProfiles={_additionalProfiles.Count})");
     }
 
     public Task DeactivateAsync()

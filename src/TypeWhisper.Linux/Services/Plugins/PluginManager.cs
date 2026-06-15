@@ -620,7 +620,10 @@ public sealed class PluginManager : IDisposable
     {
         try
         {
-            return provider.AdditionalLlmProviders?.ToList() ?? [];
+            // Drop null entries: the downstream GroupBy key selector calls an extension
+            // method (GetLlmSelectionId) that dereferences the instance, so a null from a
+            // misbehaving plugin would throw outside this try/catch and abort the rebuild.
+            return provider.AdditionalLlmProviders?.Where(p => p is not null).ToList() ?? [];
         }
         catch (Exception ex)
         {
@@ -637,7 +640,10 @@ public sealed class PluginManager : IDisposable
     {
         try
         {
-            return provider.AdditionalTranscriptionEngines?.ToList() ?? [];
+            // Drop null entries: the downstream GroupBy key selector calls an extension
+            // method (GetTranscriptionSelectionId) that dereferences the instance, so a
+            // null from a misbehaving plugin would throw outside this try/catch.
+            return provider.AdditionalTranscriptionEngines?.Where(e => e is not null).ToList() ?? [];
         }
         catch (Exception ex)
         {
