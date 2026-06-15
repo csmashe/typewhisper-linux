@@ -5,6 +5,7 @@ using Avalonia.Threading;
 using System.ComponentModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.ViewModels;
 
@@ -40,13 +41,43 @@ public partial class DictationOverlayWindow : Window
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(PositionOverlay);
 
-        Opened += (_, _) => PositionOverlay();
+        Opened += OnOverlayOpened;
+        Closed += OnOverlayClosed;
         SizeChanged += (_, _) => PositionOverlay();
 
         PointerPressed += OnUserPointerPressed;
         PointerReleased += OnUserPointerReleased;
         PointerCaptureLost += OnUserPointerCaptureLost;
         PositionChanged += OnUserPositionChanged;
+    }
+
+    private void OnOverlayOpened(object? sender, EventArgs e)
+    {
+        PositionOverlay();
+
+        // Recover from display changes (monitor hotplug, resolution change, resume from
+        // sleep, session unlock) — the WM can leave the overlay off-screen or on a monitor
+        // that no longer exists. Re-running PositionOverlay re-clamps it to a valid work
+        // area (or the saved screen if it's back). Avalonia surfaces all of these through
+        // Screens.Changed; the Win32 SystemEvents equivalents upstream uses don't exist here.
+        if (Screens is { } screens)
+        {
+            screens.Changed += OnScreensChanged;
+        }
+    }
+
+    private void OnOverlayClosed(object? sender, EventArgs e)
+    {
+        if (Screens is { } screens)
+        {
+            screens.Changed -= OnScreensChanged;
+        }
+    }
+
+    private void OnScreensChanged(object? sender, EventArgs e)
+    {
+        // Post so Avalonia has settled the new screen geometry before we re-measure work areas.
+        Dispatcher.UIThread.Post(PositionOverlay);
     }
 
     public void Initialize()
@@ -132,6 +163,7 @@ public partial class DictationOverlayWindow : Window
         if (!IsVisible)
         {
             Show();
+            MakeStickyAcrossWorkspaces();
         }
 
         Opacity = hasContent ? 1.0 : 0.0;
@@ -146,6 +178,25 @@ public partial class DictationOverlayWindow : Window
     // Cached — the desktop environment can't change within a session.
     private static readonly bool UsesNotificationIndicator =
         DesktopDetector.UsesNotificationRecordingIndicator();
+
+    // The overlay is mapped once and kept alive via Opacity (see UpdateWindowVisibility),
+    // so it stays pinned to the workspace it was first mapped on. Marking it sticky lets the
+    // WM show it on the active workspace instead — so the recording indicator follows the user.
+    // Posted at Loaded priority so the X11 toplevel is mapped before the request is sent
+    // (an unmapped window's _NET_WM_STATE ClientMessage is ignored by the WM).
+    private void MakeStickyAcrossWorkspaces()
+    {
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                var handle = TryGetPlatformHandle();
+                if (handle is { Handle: var xid } && xid != IntPtr.Zero)
+                {
+                    X11StickyWindow.MakeSticky((nuint)xid);
+                }
+            },
+            DispatcherPriority.Loaded);
+    }
 
     private void PositionOverlay()
     {

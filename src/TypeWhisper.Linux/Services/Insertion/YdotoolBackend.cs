@@ -14,6 +14,7 @@ internal static class YdotoolBackend
     // (non-US punctuation) can render wrong; the chain falls back to
     // clipboard paste for that case.
     private const int LeftCtrlKey = 29;
+    private const int LeftShiftKey = 42;
     private const int CKey = 46;
     private const int VKey = 47;
     private const int EnterKey = 28;
@@ -49,6 +50,18 @@ internal static class YdotoolBackend
     public static IReadOnlyList<string> EnterArgs()
     {
         return ["key", $"{EnterKey}:1", $"{EnterKey}:0"];
+    }
+
+    /// <summary>
+    ///     Shift+Enter — a non-submitting newline. Chat targets (Slack,
+    ///     Discord, web chat, Claude's box) bind Enter to "send" and
+    ///     Shift+Enter to "insert newline", so dictated paragraph breaks
+    ///     must be typed this way to avoid submitting partial text.
+    ///     Press shift, tap Enter, release shift.
+    /// </summary>
+    public static IReadOnlyList<string> ShiftEnterArgs()
+    {
+        return ["key", $"{LeftShiftKey}:1", $"{EnterKey}:1", $"{EnterKey}:0", $"{LeftShiftKey}:0"];
     }
 
     /// <summary>
