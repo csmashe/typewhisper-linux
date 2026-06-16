@@ -126,9 +126,9 @@ public sealed partial class OpenAiCompatiblePlugin
     )
     {
         if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException("Server-URL nicht konfiguriert");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
         if (string.IsNullOrEmpty(_selectedModelId))
-            throw new InvalidOperationException("Kein Transkriptions-Modell ausgewählt");
+            throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
@@ -169,11 +169,11 @@ public sealed partial class OpenAiCompatiblePlugin
     )
     {
         if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException("Server-URL nicht konfiguriert");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
         var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException("Kein LLM-Modell ausgewählt");
+            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
@@ -200,11 +200,11 @@ public sealed partial class OpenAiCompatiblePlugin
         }
 
         if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException("Server-URL nicht konfiguriert");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
         var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException("Kein LLM-Modell ausgewählt");
+            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
@@ -756,9 +756,9 @@ public sealed partial class OpenAiCompatiblePlugin
     {
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException("Server URL not configured.");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
         if (string.IsNullOrEmpty(profile.SelectedModelId))
-            throw new InvalidOperationException("No transcription model selected.");
+            throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
@@ -784,11 +784,11 @@ public sealed partial class OpenAiCompatiblePlugin
     {
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException("Server URL not configured.");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
         var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException("No LLM model selected.");
+            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
@@ -821,11 +821,11 @@ public sealed partial class OpenAiCompatiblePlugin
 
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException("Server URL not configured.");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
         var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException("No LLM model selected.");
+            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,

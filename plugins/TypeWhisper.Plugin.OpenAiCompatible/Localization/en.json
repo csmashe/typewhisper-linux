@@ -21,6 +21,9 @@
   "Settings.ProfileLlmModelDescription": "Optional default; prompts can use any fetched model.",
   "Settings.AddProfile": "Add profile",
   "Settings.UnknownCollection": "Unknown collection.",
+  "Settings.ServerUrlNotConfigured": "Server URL not configured.",
+  "Settings.NoTranscriptionModelSelected": "No transcription model selected.",
+  "Settings.NoLlmModelSelected": "No LLM model selected.",
   "Manifest.Name": "OpenAI Compatible",
   "Manifest.Description": "Connect to any OpenAI-compatible server (Ollama, LM Studio, vLLM, etc.)"
 }

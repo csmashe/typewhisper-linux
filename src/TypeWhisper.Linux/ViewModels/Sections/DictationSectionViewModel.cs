@@ -741,7 +741,17 @@ public partial class DictationSectionViewModel : ObservableObject
         }
         catch (LocalModelStorageUnavailableException ex)
         {
-            ModelStorageStatusText = ex.Message;
+            ModelStorageStatusText = ex.Reason switch
+            {
+                LocalModelStorageUnavailableReason.DoesNotExist =>
+                    Loc.Instance.GetString("Dictation.ModelStorageDoesNotExist", ex.Path),
+                LocalModelStorageUnavailableReason.NotWritable =>
+                    Loc.Instance.GetString("Dictation.ModelStorageNotWritable", ex.Path),
+                LocalModelStorageUnavailableReason.NestedUnderCurrentFolder =>
+                    Loc.Instance.GetString(
+                        "Dictation.ModelStorageNestedUnderCurrent", ex.Path, ex.CurrentPath ?? string.Empty),
+                _ => Loc.Instance.GetString("Dictation.ModelStorageChangeFailed", ex.Message)
+            };
         }
         catch (Exception ex)
         {

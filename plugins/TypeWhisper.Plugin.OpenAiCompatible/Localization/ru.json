@@ -21,6 +21,9 @@
   "Settings.ProfileLlmModelDescription": "Необязательное значение по умолчанию; промпты могут использовать любую загруженную модель.",
   "Settings.AddProfile": "Добавить профиль",
   "Settings.UnknownCollection": "Неизвестная коллекция.",
+  "Settings.ServerUrlNotConfigured": "URL-адрес сервера не настроен.",
+  "Settings.NoTranscriptionModelSelected": "Модель транскрипции не выбрана.",
+  "Settings.NoLlmModelSelected": "Модель LLM не выбрана.",
   "Manifest.Name": "OpenAI-совместимый",
   "Manifest.Description": "Подключение к любому OpenAI-совместимому серверу (Ollama, LM Studio, vLLM и т. д.)"
 }
