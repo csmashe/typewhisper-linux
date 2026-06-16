@@ -25,7 +25,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _audioDuckingEnabled;
 
     [ObservableProperty]
-    private double _audioDuckingLevel = 0.2;
+    private double _audioDuckingLevel = 0.4;
 
     [ObservableProperty]
     private bool _autoAddDictionaryCorrections;
@@ -1056,11 +1056,33 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings.Save(_settings.Current with { AudioDuckingEnabled = value });
     }
 
+    // Lower and upper bounds for how quiet ducking may make other audio,
+    // expressed as the surviving volume fraction. 0.1 => reduce by 90%
+    // (near-silent), 0.8 => reduce by 20% (gentle). Keeps the slider out of
+    // the sub-audible cliff while still allowing a strong duck.
+    private const double MinDuckingLevel = 0.1;
+    private const double MaxDuckingLevel = 0.8;
+
+    /// <summary>
+    ///     Slider-facing value: how much to reduce other audio, as a percent
+    ///     (higher = quieter). Backed by <see cref="AudioDuckingLevel" />, which
+    ///     stores the surviving volume fraction the ducking service multiplies by.
+    /// </summary>
+    public double AudioDuckingReductionPercent
+    {
+        get => Math.Round((1d - AudioDuckingLevel) * 100d);
+        set => AudioDuckingLevel = Math.Clamp(1d - value / 100d, MinDuckingLevel, MaxDuckingLevel);
+    }
+
     partial void OnAudioDuckingLevelChanged(double value)
     {
         _settings.Save(
-            _settings.Current with { AudioDuckingLevel = (float)Math.Clamp(value, 0d, 0.5d) }
+            _settings.Current with
+            {
+                AudioDuckingLevel = (float)Math.Clamp(value, MinDuckingLevel, MaxDuckingLevel)
+            }
         );
+        OnPropertyChanged(nameof(AudioDuckingReductionPercent));
     }
 
     partial void OnPauseMediaDuringRecordingChanged(bool value)

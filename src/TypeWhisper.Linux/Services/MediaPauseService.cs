@@ -21,7 +21,13 @@ public sealed class MediaPauseService : IMediaPauseService
 
         try
         {
-            var players = RunCommand("playerctl", "-a --format '{{playerName}} {{status}}' status");
+            var players = CommandRunner.Run(
+                "playerctl",
+                "-a",
+                "--format",
+                "{{playerName}} {{status}}",
+                "status"
+            );
             if (string.IsNullOrWhiteSpace(players))
             {
                 return;
@@ -47,7 +53,7 @@ public sealed class MediaPauseService : IMediaPauseService
                     continue;
                 }
 
-                if (RunCommand("playerctl", $"-p {parts[0]} pause") is not null)
+                if (CommandRunner.Run("playerctl", "-p", parts[0], "pause") is not null)
                 {
                     _pausedPlayers.Add(parts[0]);
                 }
@@ -71,7 +77,7 @@ public sealed class MediaPauseService : IMediaPauseService
         {
             foreach (var player in _pausedPlayers)
             {
-                RunCommand("playerctl", $"-p {player} play");
+                CommandRunner.Run("playerctl", "-p", player, "play");
             }
         }
         catch (Exception ex)
@@ -81,35 +87,6 @@ public sealed class MediaPauseService : IMediaPauseService
         finally
         {
             _pausedPlayers.Clear();
-        }
-    }
-
-    private static string? RunCommand(string fileName, string arguments)
-    {
-        try
-        {
-            using var process = Process.Start(
-                new ProcessStartInfo(fileName, arguments)
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            );
-
-            if (process is null)
-            {
-                return null;
-            }
-
-            var stdout = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(1500);
-            return process.ExitCode == 0 ? stdout.Trim() : null;
-        }
-        catch
-        {
-            return null;
         }
     }
 }
