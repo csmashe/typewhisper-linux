@@ -450,7 +450,7 @@
 
                         <TextBlock Margin="0,12,0,0"
                                    Classes="row-hint"
-                                   Text="{Binding DesktopName, StringFormat='Detected desktop: {0}'}" />
+                                   Text="{Binding DesktopName, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.DetectedDesktop}" />
                         <TextBlock Margin="0,4,0,0"
                                    Classes="row-hint"
                                    TextWrapping="Wrap"

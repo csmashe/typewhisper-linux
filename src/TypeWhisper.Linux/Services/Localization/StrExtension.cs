@@ -49,8 +49,11 @@ public sealed class LocKeyConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         Loc.Instance[parameter as string ?? ""];
 
+    // Display-only converter: Avalonia invokes ConvertBack for some target
+    // properties (e.g. Run.Text), so return DoNothing rather than throwing —
+    // throwing only spams the binding log without changing the (correct) display.
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
+        BindingOperations.DoNothing;
 }
 
 /// <summary>
@@ -66,6 +69,9 @@ public sealed class LocFormatConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         Loc.Instance.GetString(parameter as string ?? "", value);
 
+    // Display-only converter: Avalonia invokes ConvertBack for some target
+    // properties (e.g. Run.Text), so return DoNothing rather than throwing —
+    // throwing only spams the binding log without changing the (correct) display.
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
+        BindingOperations.DoNothing;
 }

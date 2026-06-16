@@ -66,9 +66,9 @@
                 <Border Classes="section-row">
                     <StackPanel>
                         <TextBlock Classes="row-title"
-                                   Text="{Binding CompositorDisplayName, StringFormat='Desktop: {0}'}" />
+                                   Text="{Binding CompositorDisplayName, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=TextInsertion.StatusDesktop}" />
                         <TextBlock Classes="row-hint"
-                                   Text="{Binding SessionType, StringFormat='Display server: {0}'}" />
+                                   Text="{Binding SessionType, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=TextInsertion.StatusDisplayServer}" />
                         <TextBlock Classes="row-hint"
                                    Text="{Binding ClipboardToolStatus}" />
                     </StackPanel>
