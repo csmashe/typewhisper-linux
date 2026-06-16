@@ -1,9 +1,18 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:loc="clr-namespace:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.App"
              RequestedThemeVariant="Dark">
 
     <Application.Styles>
         <FluentTheme />
+
+        <!-- Localize the default ToggleSwitch On/Off labels app-wide.
+             Toggles that set their own OnContent/OffContent (a local value)
+             override this style, so per-control labels still win. -->
+        <Style Selector="ToggleSwitch">
+            <Setter Property="OnContent" Value="{loc:Str Common.On}" />
+            <Setter Property="OffContent" Value="{loc:Str Common.Off}" />
+        </Style>
     </Application.Styles>
 </Application>
