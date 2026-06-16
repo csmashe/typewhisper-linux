@@ -40,7 +40,7 @@
                                       SelectedItem="{Binding SelectedUiLanguageOption}"
                                       IsEnabled="{Binding IsUiLanguageSupported}">
                                 <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:UiLanguageOption">
+                                    <DataTemplate x:DataType="loc:UiLanguageOption">
                                         <TextBlock Text="{Binding DisplayName}" />
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>

@@ -77,9 +77,7 @@ public partial class GeneralSectionViewModel : ObservableObject
     // Only the languages we actually ship a JSON catalog for (plus "Auto"),
     // discovered at startup by Loc — no dead/un-translated choices.
     public IReadOnlyList<UiLanguageOption> UiLanguageChoices { get; } =
-        Loc.Instance.AvailableUiLanguages
-            .Select(o => new UiLanguageOption(o.Code, o.DisplayName))
-            .ToList();
+        Loc.Instance.AvailableUiLanguages;
 
     public bool IsUiLanguageSupported => true;
 
@@ -87,11 +85,11 @@ public partial class GeneralSectionViewModel : ObservableObject
     {
         get =>
             UiLanguageChoices.FirstOrDefault(option =>
-                string.Equals(option.Value, UiLanguage, StringComparison.Ordinal)
+                string.Equals(option.Code, UiLanguage, StringComparison.Ordinal)
             );
         set
         {
-            var selected = value?.Value;
+            var selected = value?.Code;
             if (string.Equals(selected, UiLanguage, StringComparison.Ordinal))
             {
                 return;
@@ -223,7 +221,5 @@ public partial class GeneralSectionViewModel : ObservableObject
         _linuxPrefs.Save(_linuxPrefs.Current with { CloseToTray = value });
     }
 }
-
-public sealed record UiLanguageOption(string? Value, string DisplayName);
 
 public sealed record CommandExample(string Command);
