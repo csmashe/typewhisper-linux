@@ -4,9 +4,11 @@ using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -18,9 +20,22 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly ModelManagerService _models;
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
+    private readonly LocalModelStorageService _modelStorage;
 
     [ObservableProperty]
     private string _activeModelLabel = Loc.Instance["Dictation.NoModelLoaded"];
+
+    [ObservableProperty]
+    private string _modelStoragePath = "";
+
+    [ObservableProperty]
+    private bool _isUsingCustomModelStorage;
+
+    [ObservableProperty]
+    private bool _isMigratingModelStorage;
+
+    [ObservableProperty]
+    private string _modelStorageStatusText = "";
 
     [ObservableProperty]
     private bool _audioDuckingEnabled;
@@ -142,6 +157,9 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings = settings;
         _pluginManager = pluginManager;
         _commands = commands;
+        // Unload the active local model before moving its files so the source
+        // path isn't held open during migration.
+        _modelStorage = new LocalModelStorageService(_settings, () => _models.UnloadModel());
 
         _dictation.RecordingStateChanged += (_, recording) =>
             Dispatcher.UIThread.Post(() =>
@@ -478,7 +496,9 @@ public partial class DictationSectionViewModel : ObservableObject
         {
             foreach (var model in engine.TranscriptionModels)
             {
-                var fullModelId = ModelManagerService.GetPluginModelId(engine.PluginId, model.Id);
+                var fullModelId = ModelManagerService.GetPluginModelId(
+                    engine.GetTranscriptionSelectionId(),
+                    model.Id);
                 ModelOptions.Add(
                     new DictationModelOption(
                         fullModelId,
@@ -501,6 +521,9 @@ public partial class DictationSectionViewModel : ObservableObject
         LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
             settings.LocalModelAcceleration
         );
+        ModelStoragePath = _modelStorage.ResolvedModelStoragePath;
+        IsUsingCustomModelStorage =
+            AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
         LiveTranscriptionEnabled = settings.LiveTranscriptionEnabled;
@@ -697,6 +720,57 @@ public partial class DictationSectionViewModel : ObservableObject
         {
             _ = ReloadActiveModelForAccelerationChangeAsync(selected);
         }
+    }
+
+    // Moves any already-downloaded models to the chosen folder and makes it the
+    // active storage location. Invoked from the section code-behind, which supplies
+    // the folder path picked via the platform folder picker.
+    public async Task ChangeModelStorageAsync(string? folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath) || IsMigratingModelStorage)
+        {
+            return;
+        }
+
+        IsMigratingModelStorage = true;
+        ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageMoving"];
+        try
+        {
+            await _modelStorage.MoveDownloadsAndUsePathAsync(folderPath);
+            ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageUpdated"];
+        }
+        catch (LocalModelStorageUnavailableException ex)
+        {
+            ModelStorageStatusText = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            ModelStorageStatusText = Loc.Instance.GetString("Dictation.ModelStorageChangeFailed", ex.Message);
+        }
+        finally
+        {
+            IsMigratingModelStorage = false;
+            // SettingsChanged already fires RefreshFromSettings on success, but refresh
+            // explicitly so the displayed path is correct even on the no-op/equal path.
+            ModelStoragePath = _modelStorage.ResolvedModelStoragePath;
+            IsUsingCustomModelStorage =
+                AppSettings.NormalizeLocalModelStoragePath(_settings.Current.LocalModelStoragePath)
+                is not null;
+        }
+    }
+
+    [RelayCommand]
+    private void ResetModelStorage()
+    {
+        if (!IsUsingCustomModelStorage || IsMigratingModelStorage)
+        {
+            return;
+        }
+
+        // Leaves already-moved files where they are and points future downloads back
+        // at the default app-data location.
+        _modelStorage.ResetToDefault();
+        ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageResetStatus"];
     }
 
     private async Task ReloadActiveModelForAccelerationChangeAsync(DictationModelOption selected)

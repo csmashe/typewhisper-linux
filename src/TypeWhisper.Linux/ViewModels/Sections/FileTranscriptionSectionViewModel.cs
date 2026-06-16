@@ -120,6 +120,10 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     public ObservableCollection<WatchFolderHistoryItem> WatchFolderHistory { get; } = [];
 
     public bool HasItems => Items.Count > 0;
+
+    // Items in a terminal state (finished/failed/cancelled/unsupported) can be cleared
+    // in bulk; active or queued items are left untouched.
+    public bool HasClearableItems => Items.Any(item => IsClearableStatus(item.Status));
     public bool CanImportFiles => _audioFiles.IsImporterAvailable;
     public bool ShowImporterUnavailableReason => !CanImportFiles;
 
@@ -286,6 +290,29 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         RefreshSelectedItemResult();
     }
 
+    [RelayCommand]
+    private void ClearQueue()
+    {
+        // Remove only terminal items; leave queued/loading/transcribing work running.
+        foreach (var item in Items.Where(item => IsClearableStatus(item.Status)).ToList())
+        {
+            Items.Remove(item);
+        }
+
+        if (SelectedItem is null || !Items.Contains(SelectedItem))
+        {
+            SelectedItem = Items.FirstOrDefault();
+        }
+
+        RefreshSelectedItemResult();
+    }
+
+    private static bool IsClearableStatus(FileTranscriptionQueueItemStatus status) =>
+        status is FileTranscriptionQueueItemStatus.Completed
+            or FileTranscriptionQueueItemStatus.Cancelled
+            or FileTranscriptionQueueItemStatus.Error
+            or FileTranscriptionQueueItemStatus.Unsupported;
+
     private async Task ProcessQueueAsync()
     {
         if (_isProcessingQueue)
@@ -407,6 +434,10 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
 
     private void RefreshStatusText()
     {
+        // Re-evaluated here because every add/remove (CollectionChanged) and every
+        // status transition (SetStatus) routes through this method.
+        OnPropertyChanged(nameof(HasClearableItems));
+
         var total = Items.Count;
         if (total == 0)
         {

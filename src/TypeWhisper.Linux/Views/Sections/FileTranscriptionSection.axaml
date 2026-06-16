@@ -168,11 +168,17 @@
                                 <TextBlock Text="{Binding StatusText}"
                                            Classes="row-hint" />
                             </StackPanel>
-                            <Button Grid.Column="1"
-                                    Content="{loc:Str FileTranscription.CancelAll}"
-                                    Command="{Binding CancelCommand}"
-                                    IsVisible="{Binding IsProcessing}"
-                                    VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        VerticalAlignment="Center">
+                                <Button Content="{loc:Str FileTranscription.ClearFinished}"
+                                        Command="{Binding ClearQueueCommand}"
+                                        IsVisible="{Binding HasClearableItems}" />
+                                <Button Content="{loc:Str FileTranscription.CancelAll}"
+                                        Command="{Binding CancelCommand}"
+                                        IsVisible="{Binding IsProcessing}" />
+                            </StackPanel>
                         </Grid>
                     </Border>
 

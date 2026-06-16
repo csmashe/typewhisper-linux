@@ -10,6 +10,14 @@ public interface IPluginHostServices
     /// <summary>Directory where the plugin can store its own data files.</summary>
     string PluginDataDirectory { get; }
 
+    /// <summary>
+    ///     Directory for large model and runtime assets. Defaults to
+    ///     <see cref="PluginDataDirectory"/>, but the host may redirect it to a
+    ///     user-configured model storage location (e.g. a larger drive). Small
+    ///     per-plugin config (settings.json) stays under <see cref="PluginDataDirectory"/>.
+    /// </summary>
+    string PluginAssetDirectory => PluginDataDirectory;
+
     /// <summary>Process name of the currently active foreground application, or null.</summary>
     string? ActiveAppProcessName { get; }
 

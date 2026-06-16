@@ -12,8 +12,20 @@ public sealed partial class OpenAiCompatiblePlugin
         ILlmProviderPlugin,
         IPluginSettingsProvider,
         IModelCatalogProvider,
-        IPluginLocalizationAware
+        IPluginLocalizationAware,
+        IPluginCollectionSettingsProvider,
+        IAdditionalTranscriptionEnginesProvider,
+        IAdditionalLlmProvidersProvider
 {
+    // Additional named endpoints ("profiles") layered on top of the default endpoint.
+    // Each becomes its own selectable transcription engine / LLM provider via the
+    // role wrapper below. The default endpoint keeps using the original flat settings
+    // keys (baseUrl/api-key/selectedModel/...) so existing single-endpoint setups are
+    // unchanged.
+    private const string AdditionalProfilesSettingKey = "additionalProfiles";
+    private const string ProfilesCollectionKey = "profiles";
+    private const string ProfileIdPrefix = "openai-compatible-";
+
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
@@ -22,6 +34,8 @@ public sealed partial class OpenAiCompatiblePlugin
     private string? _selectedLlmModelId;
     private List<FetchedModel> _fetchedModels = [];
     private bool _streamResponses = true;
+    private readonly List<OpenAiCompatibleProfile> _additionalProfiles = [];
+    private readonly Dictionary<string, string?> _additionalApiKeys = new(StringComparer.Ordinal);
 
     public OpenAiCompatiblePlugin()
         : this(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
@@ -35,7 +49,7 @@ public sealed partial class OpenAiCompatiblePlugin
 
     public string PluginId => "com.typewhisper.openai-compatible";
     public string PluginName => "OpenAI Compatible";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => "1.0.1";
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -59,7 +73,14 @@ public sealed partial class OpenAiCompatiblePlugin
             }
         }
 
-        host.Log(PluginLogLevel.Info, $"Activated (baseUrl={_baseUrl}, configured={IsConfigured})");
+        await LoadAdditionalProfilesAsync(host);
+
+        // Don't log the raw base URL: it is user-supplied and could carry credentials
+        // (userinfo or a query token) into shared log/support bundles. IsConfigured
+        // already conveys whether an endpoint is set.
+        host.Log(
+            PluginLogLevel.Info,
+            $"Activated (configured={IsConfigured}, additionalProfiles={_additionalProfiles.Count})");
     }
 
     public Task DeactivateAsync()
@@ -457,19 +478,34 @@ public sealed partial class OpenAiCompatiblePlugin
     // models clears the cache.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(_baseUrl))
-            return;
+        if (!string.IsNullOrEmpty(_baseUrl))
+        {
+            var models = await FetchModelsAsync(ct);
+            if (models is not null && CatalogChanged(models, _fetchedModels))
+                SetFetchedModels(models);
+        }
 
-        var models = await FetchModelsAsync(ct);
-        if (models is null)
-            return;
+        // Refresh additional profiles on the same dropdown-open path so their
+        // catalogs don't go stale when a server adds or removes models after the
+        // profile was first saved.
+        var anyProfileChanged = false;
+        foreach (var profile in _additionalProfiles.Where(p => !string.IsNullOrEmpty(p.BaseUrl)))
+        {
+            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            if (models is null || !CatalogChanged(models, profile.FetchedModels))
+                continue;
 
-        var changed =
-            models.Count != _fetchedModels.Count
-            || !models.Select(m => m.Id).SequenceEqual(_fetchedModels.Select(m => m.Id));
-        if (changed)
-            SetFetchedModels(models);
+            profile.FetchedModels = models;
+            anyProfileChanged = true;
+        }
+
+        if (anyProfileChanged)
+            PersistAdditionalProfiles(notify: true);
     }
+
+    private static bool CatalogChanged(List<FetchedModel> fetched, IReadOnlyList<FetchedModel> current) =>
+        fetched.Count != current.Count
+        || !fetched.Select(m => m.Id).SequenceEqual(current.Select(m => m.Id));
 
     private IReadOnlyList<PluginSettingOption>? BuildModelOptions()
     {
@@ -488,6 +524,540 @@ public sealed partial class OpenAiCompatiblePlugin
 
         return models.Count > 0 ? models : null;
     }
+
+    // ---- Additional provider profiles ----------------------------------------
+    // The default endpoint above is untouched. Everything below adds extra named
+    // endpoints, each surfaced as its own selectable transcription engine / LLM
+    // provider via OpenAiCompatibleProfileRole and the selection-identity scheme.
+
+    public IReadOnlyList<ITranscriptionEnginePlugin> AdditionalTranscriptionEngines =>
+        _additionalProfiles
+            .Select(p => (ITranscriptionEnginePlugin)new OpenAiCompatibleProfileRole(this, p.Id))
+            .ToList();
+
+    public IReadOnlyList<ILlmProviderPlugin> AdditionalLlmProviders =>
+        _additionalProfiles
+            .Select(p => (ILlmProviderPlugin)new OpenAiCompatibleProfileRole(this, p.Id))
+            .ToList();
+
+    public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
+        [
+            new PluginCollectionDefinition(
+                Key: ProfilesCollectionKey,
+                Label: Loc.L("Settings.ProfilesLabel"),
+                Description: Loc.L("Settings.ProfilesDescription"),
+                ItemFields:
+                [
+                    new PluginSettingDefinition(
+                        "name", Loc.L("Settings.ProfileName"),
+                        Placeholder: Loc.L("Settings.ProfileNamePlaceholder"),
+                        Kind: PluginSettingKind.Text),
+                    new PluginSettingDefinition(
+                        "baseUrl", Loc.L("Settings.BaseUrl"), Placeholder: "http://localhost:11434",
+                        Kind: PluginSettingKind.Text),
+                    new PluginSettingDefinition(
+                        "api-key", Loc.L("Settings.ApiKey"), IsSecret: true,
+                        Description: Loc.L("Settings.ProfileApiKeyDescription"),
+                        Kind: PluginSettingKind.Secret),
+                    new PluginSettingDefinition(
+                        "selectedModel", Loc.L("Settings.TranscriptionModel"),
+                        Description: Loc.L("Settings.ProfileTranscriptionModelDescription"),
+                        Kind: PluginSettingKind.Text),
+                    new PluginSettingDefinition(
+                        "selectedLlmModel", Loc.L("Settings.LlmModel"),
+                        Description: Loc.L("Settings.ProfileLlmModelDescription"),
+                        Kind: PluginSettingKind.Text),
+                    new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
+                ],
+                ItemLabelFieldKey: "name",
+                AddButtonLabel: Loc.L("Settings.AddProfile")
+            ),
+        ];
+
+    public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
+        string collectionKey,
+        CancellationToken ct = default
+    )
+    {
+        if (collectionKey != ProfilesCollectionKey)
+            return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
+
+        IReadOnlyList<PluginCollectionItem> items = _additionalProfiles
+            .Select(p => new PluginCollectionItem(
+                new Dictionary<string, string?>
+                {
+                    ["name"] = p.Name,
+                    ["baseUrl"] = p.BaseUrl,
+                    // Secrets are never echoed back to the UI.
+                    ["api-key"] = null,
+                    ["selectedModel"] = p.SelectedModelId,
+                    ["selectedLlmModel"] = p.SelectedLlmModelId,
+                    ["__id"] = p.Id,
+                }
+            ))
+            .ToList();
+
+        return Task.FromResult(items);
+    }
+
+    public async Task<PluginSettingsValidationResult> SetItemsAsync(
+        string collectionKey,
+        IReadOnlyList<PluginCollectionItem> items,
+        CancellationToken ct = default
+    )
+    {
+        if (collectionKey != ProfilesCollectionKey)
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.UnknownCollection"));
+
+        var previousById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var newProfiles = new List<OpenAiCompatibleProfile>(items.Count);
+        var keyUpdates = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var item in items)
+        {
+            var name = (Get(item, "name") ?? "").Trim();
+            var label = name.Length == 0 ? "(unnamed)" : name;
+
+            var rawUrl = (Get(item, "baseUrl") ?? "").Trim();
+            if (rawUrl.Length == 0)
+                return new PluginSettingsValidationResult(false, $"Profile '{label}': base URL is required.");
+
+            var baseUrl = NormalizeBaseUrl(rawUrl);
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var parsed)
+                || (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
+            {
+                return new PluginSettingsValidationResult(
+                    false, $"Profile '{label}': base URL must be an absolute http:// or https:// URL.");
+            }
+
+            var id = NormalizeProfileId(Get(item, "__id"), seenIds);
+
+            var key = Get(item, "api-key");
+            var keyChanged = !string.IsNullOrWhiteSpace(key);
+            if (keyChanged)
+                keyUpdates[id] = key!.Trim();
+
+            // Preserve the fetched model catalog only when the endpoint is unchanged.
+            // A changed base URL (or updated credentials) can point at a different
+            // server, so drop the stale catalog and let the refetch below repopulate
+            // it — otherwise the profile would keep advertising the previous server's
+            // model IDs to dictation and prompt selection.
+            var hadProfile = previousById.TryGetValue(id, out var prev);
+            var endpointUnchanged = hadProfile
+                && !keyChanged
+                && string.Equals(prev!.BaseUrl, baseUrl, StringComparison.Ordinal);
+
+            newProfiles.Add(new OpenAiCompatibleProfile
+            {
+                Id = id,
+                Name = name.Length == 0 ? "Custom Server" : name,
+                BaseUrl = baseUrl,
+                SelectedModelId = NullIfWhiteSpace(Get(item, "selectedModel")),
+                SelectedLlmModelId = NullIfWhiteSpace(Get(item, "selectedLlmModel")),
+                FetchedModels = endpointUnchanged ? prev!.FetchedModels : [],
+            });
+        }
+
+        // Do the fallible host secret-store writes before swapping the shared
+        // profile set, so a failure here can't leave _additionalProfiles half
+        // updated. Each _additionalApiKeys mutation is paired with its host op,
+        // so the cache stays consistent with the store even on a mid-loop throw.
+        if (_host is not null)
+        {
+            foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
+            {
+                await _host.DeleteSecretAsync(SecretKeyFor(removedId));
+                _additionalApiKeys.Remove(removedId);
+            }
+
+            foreach (var (id, key) in keyUpdates)
+            {
+                await _host.StoreSecretAsync(SecretKeyFor(id), key!);
+                _additionalApiKeys[id] = key;
+            }
+        }
+
+        _additionalProfiles.Clear();
+        _additionalProfiles.AddRange(newProfiles);
+
+        // State is now persisted; the best-effort model fetch below may fail or be
+        // cancelled, but that must not revert the saved profiles.
+        PersistAdditionalProfiles(notify: false);
+
+        // Best-effort: populate model catalogs so prompts/dictation can list each
+        // profile's models. New profiles and profiles whose endpoint changed have an
+        // empty catalog here and get (re)fetched; an unchanged endpoint keeps its
+        // existing catalog and is skipped.
+        foreach (var profile in _additionalProfiles.Where(p => p.FetchedModels.Count == 0))
+        {
+            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            if (models is not null)
+                profile.FetchedModels = models;
+        }
+
+        PersistAdditionalProfiles(notify: true);
+
+        return new PluginSettingsValidationResult(true, $"Saved {_additionalProfiles.Count} profile(s).");
+    }
+
+    internal string ProfileDisplayName(string id) => FindAdditional(id)?.DisplayName ?? "Custom Server";
+
+    internal bool ProfileConfigured(string id) => !string.IsNullOrEmpty(FindAdditional(id)?.BaseUrl);
+
+    internal bool ProfileLlmAvailable(string id) => ProfileConfigured(id) && ProfileLlmModels(id).Count > 0;
+
+    internal string? ProfileSelectedModel(string id) => FindAdditional(id)?.SelectedModelId;
+
+    internal IReadOnlyList<PluginModelInfo> ProfileTranscriptionModels(string id)
+    {
+        var profile = FindAdditional(id);
+        if (profile is null)
+            return [];
+
+        var models = profile.FetchedModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList();
+        if (models.Count == 0 && !string.IsNullOrWhiteSpace(profile.SelectedModelId))
+            return [new PluginModelInfo(profile.SelectedModelId!, profile.SelectedModelId!)];
+
+        return models;
+    }
+
+    internal IReadOnlyList<PluginModelInfo> ProfileLlmModels(string id)
+    {
+        var profile = FindAdditional(id);
+        if (profile is null)
+            return [];
+
+        var models = profile.FetchedModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList();
+        if (models.Count == 0 && !string.IsNullOrWhiteSpace(profile.SelectedLlmModelId))
+            return [new PluginModelInfo(profile.SelectedLlmModelId!, profile.SelectedLlmModelId!)];
+
+        return models;
+    }
+
+    internal void SelectProfileModel(string id, string modelId)
+    {
+        var profile = FindAdditional(id);
+        if (profile is null)
+            return;
+
+        profile.SelectedModelId = string.IsNullOrWhiteSpace(modelId) ? null : modelId.Trim();
+        PersistAdditionalProfiles(notify: false);
+    }
+
+    internal async Task<PluginTranscriptionResult> TranscribeForProfileAsync(
+        string id,
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
+    {
+        var profile = RequireAdditional(id);
+        if (string.IsNullOrEmpty(profile.BaseUrl))
+            throw new InvalidOperationException("Server URL not configured.");
+        if (string.IsNullOrEmpty(profile.SelectedModelId))
+            throw new InvalidOperationException("No transcription model selected.");
+
+        return await OpenAiTranscriptionHelper.TranscribeAsync(
+            _httpClient,
+            profile.BaseUrl,
+            GetProfileApiKey(id) ?? "",
+            profile.SelectedModelId!,
+            wavAudio,
+            language,
+            translate,
+            "verbose_json",
+            ct,
+            prompt
+        );
+    }
+
+    internal async Task<string> ProcessForProfileAsync(
+        string id,
+        string systemPrompt,
+        string userText,
+        string model,
+        CancellationToken ct
+    )
+    {
+        var profile = RequireAdditional(id);
+        if (string.IsNullOrEmpty(profile.BaseUrl))
+            throw new InvalidOperationException("Server URL not configured.");
+
+        var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
+        if (string.IsNullOrEmpty(modelId))
+            throw new InvalidOperationException("No LLM model selected.");
+
+        return await OpenAiChatHelper.SendChatCompletionAsync(
+            _httpClient,
+            profile.BaseUrl,
+            GetProfileApiKey(id) ?? "",
+            modelId,
+            systemPrompt,
+            userText,
+            ct
+        );
+    }
+
+    // Mirrors the default endpoint's streaming behavior for an additional profile:
+    // honors the shared streamResponses toggle and streams token deltas via the
+    // OpenAI chat helper, so prompt actions through a profile don't silently
+    // regress to a single bulk chunk.
+    internal async IAsyncEnumerable<string> ProcessStreamingForProfileAsync(
+        string id,
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        if (!_streamResponses)
+        {
+            yield return await ProcessForProfileAsync(id, systemPrompt, userText, model, ct);
+            yield break;
+        }
+
+        var profile = RequireAdditional(id);
+        if (string.IsNullOrEmpty(profile.BaseUrl))
+            throw new InvalidOperationException("Server URL not configured.");
+
+        var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
+        if (string.IsNullOrEmpty(modelId))
+            throw new InvalidOperationException("No LLM model selected.");
+
+        var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            _httpClient,
+            profile.BaseUrl,
+            GetProfileApiKey(id) ?? "",
+            modelId,
+            systemPrompt,
+            userText,
+            ct
+        );
+
+        await foreach (var delta in source.WithCancellation(ct))
+            yield return delta;
+    }
+
+    private async Task LoadAdditionalProfilesAsync(IPluginHostServices host)
+    {
+        _additionalProfiles.Clear();
+        _additionalApiKeys.Clear();
+
+        var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var profile in stored.Where(p => p is not null))
+        {
+            profile.Id = NormalizeProfileId(profile.Id, seen);
+
+            profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
+            profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl ?? "");
+            profile.SelectedModelId = NullIfWhiteSpace(profile.SelectedModelId);
+            profile.SelectedLlmModelId = NullIfWhiteSpace(profile.SelectedLlmModelId);
+            profile.FetchedModels = (profile.FetchedModels ?? [])
+                .Where(m => !string.IsNullOrWhiteSpace(m.Id))
+                .ToList();
+
+            _additionalProfiles.Add(profile);
+
+            var key = await host.LoadSecretAsync(SecretKeyFor(profile.Id));
+            if (!string.IsNullOrEmpty(key))
+                _additionalApiKeys[profile.Id] = key;
+        }
+    }
+
+    private void PersistAdditionalProfiles(bool notify)
+    {
+        _host?.SetSetting(AdditionalProfilesSettingKey, _additionalProfiles);
+        if (notify)
+            _host?.NotifyCapabilitiesChanged();
+    }
+
+    private async Task<List<FetchedModel>?> FetchModelsForAsync(
+        string? baseUrl,
+        string? apiKey,
+        CancellationToken ct
+    )
+    {
+        if (string.IsNullOrEmpty(baseUrl))
+            return null;
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/v1/models");
+            if (!string.IsNullOrEmpty(apiKey))
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+            using var response = await _httpClient.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(json);
+
+            if (!doc.RootElement.TryGetProperty("data", out var data))
+                return null;
+
+            return data.EnumerateArray()
+                .Select(e => new FetchedModel(
+                    e.GetProperty("id").GetString() ?? "",
+                    e.TryGetProperty("owned_by", out var ob) ? ob.GetString() : null
+                ))
+                .Where(m => !string.IsNullOrEmpty(m.Id))
+                .OrderBy(m => m.Id)
+                .ToList();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? Get(PluginCollectionItem item, string key) =>
+        item.Values.TryGetValue(key, out var value) ? value : null;
+
+    private static string SecretKeyFor(string profileId) => $"api-key.{profileId}";
+
+    private string? GetProfileApiKey(string id) =>
+        _additionalApiKeys.TryGetValue(id, out var key) ? key : null;
+
+    private OpenAiCompatibleProfile? FindAdditional(string id) =>
+        _additionalProfiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));
+
+    private OpenAiCompatibleProfile RequireAdditional(string id) =>
+        FindAdditional(id) ?? throw new ArgumentException($"Unknown OpenAI-compatible profile: {id}", nameof(id));
+
+    private static string NormalizeBaseUrl(string url)
+    {
+        var normalized = url.Trim().TrimEnd('/');
+        if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[..^3];
+        return normalized;
+    }
+
+    // Validates a profile id and adds it to taken. A trimmed id is kept only when
+    // it is non-empty, colon-free (so it round-trips inside plugin:{id}:{model}),
+    // carries the profile prefix, and is not already taken; otherwise a fresh id is
+    // generated. Centralizes the SetItemsAsync and LoadAdditionalProfilesAsync sites
+    // so repaired/normalized ids replace invalid or duplicate ones.
+    private string NormalizeProfileId(string? rawId, ISet<string> taken)
+    {
+        var id = (rawId ?? "").Trim();
+        if (id.Length == 0
+            || id.Contains(':')
+            || !id.StartsWith(ProfileIdPrefix, StringComparison.Ordinal)
+            || taken.Contains(id))
+        {
+            id = CreateProfileId(taken);
+        }
+
+        taken.Add(id);
+        return id;
+    }
+
+    private string CreateProfileId(ISet<string> taken)
+    {
+        string id;
+        do
+        {
+            id = $"{ProfileIdPrefix}{Guid.NewGuid():N}";
+        }
+        while (taken.Contains(id)
+            || _additionalProfiles.Any(p => string.Equals(p.Id, id, StringComparison.Ordinal)));
+
+        return id;
+    }
+
+    private static string? NullIfWhiteSpace(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    // Stateless wrapper that presents one additional profile as a standalone
+    // transcription engine / LLM provider. Its selection identity is the profile
+    // ID; PluginId stays the owner's so host lookups (enable-state, settings)
+    // still resolve to the real plugin.
+    private sealed class OpenAiCompatibleProfileRole(OpenAiCompatiblePlugin owner, string profileId)
+        : ITranscriptionEnginePlugin,
+            ILlmProviderPlugin,
+            ITranscriptionEngineSelectionIdentity,
+            ILlmProviderSelectionIdentity
+    {
+        public string PluginId => owner.PluginId;
+        public string PluginName => owner.PluginName;
+        public string PluginVersion => owner.PluginVersion;
+        public string TranscriptionSelectionId => profileId;
+        public string LlmSelectionId => profileId;
+        public string ProviderId => profileId;
+        public string ProviderDisplayName => owner.ProfileDisplayName(profileId);
+        public bool IsConfigured => owner.ProfileConfigured(profileId);
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => owner.ProfileTranscriptionModels(profileId);
+        public string? SelectedModelId => owner.ProfileSelectedModel(profileId);
+        public bool SupportsTranslation => true;
+        public string ProviderName => owner.ProfileDisplayName(profileId);
+        public bool IsAvailable => owner.ProfileLlmAvailable(profileId);
+        public IReadOnlyList<PluginModelInfo> SupportedModels => owner.ProfileLlmModels(profileId);
+
+        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+
+        public Task DeactivateAsync() => Task.CompletedTask;
+
+        public void SelectModel(string modelId) => owner.SelectProfileModel(profileId, modelId);
+
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio,
+            string? language,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        ) => owner.TranscribeForProfileAsync(profileId, wavAudio, language, translate, prompt, ct);
+
+        public Task<string> ProcessAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        ) => owner.ProcessForProfileAsync(profileId, systemPrompt, userText, model, ct);
+
+        public IAsyncEnumerable<string> ProcessStreamingAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        ) => owner.ProcessStreamingForProfileAsync(profileId, systemPrompt, userText, model, ct);
+
+        public void Dispose() { }
+    }
 }
 
-internal sealed record FetchedModel(string Id, string? OwnedBy);
+/// <summary>Persisted OpenAI-compatible provider profile. API keys are stored separately as secrets.</summary>
+public sealed class OpenAiCompatibleProfile
+{
+    /// <summary>Stable profile identifier (no colons, so it round-trips in plugin model IDs).</summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>Human-readable profile name.</summary>
+    public string Name { get; set; } = "";
+
+    /// <summary>Base server URL without a trailing /v1 suffix.</summary>
+    public string BaseUrl { get; set; } = "";
+
+    /// <summary>Optional default transcription model ID.</summary>
+    public string? SelectedModelId { get; set; }
+
+    /// <summary>Optional default LLM model ID.</summary>
+    public string? SelectedLlmModelId { get; set; }
+
+    /// <summary>Models fetched from the provider. API keys are never stored here.</summary>
+    public List<FetchedModel> FetchedModels { get; set; } = [];
+
+    /// <summary>Display name with a fallback for unnamed profiles.</summary>
+    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? "Custom Server" : Name.Trim();
+}
+
+public sealed record FetchedModel(string Id, string? OwnedBy);

@@ -12,6 +12,15 @@
   "Settings.EnterBaseUrl": "Geben Sie zuerst eine Basis-URL ein.",
   "Settings.CouldNotConnect": "Verbindung zum Server fehlgeschlagen.",
   "Settings.ConnectionOk": "Verbindung OK. {0} Modell(e) abgerufen.",
+  "Settings.ProfilesLabel": "Zusätzliche Anbieterprofile",
+  "Settings.ProfilesDescription": "Zusätzliche OpenAI-kompatible Endpunkte. Jedes Profil erscheint als eigene Transkriptions-Engine und eigener LLM-Anbieter, die Sie beim Diktieren und in Prompts auswählen können. Der Standard-Endpunkt oben bleibt davon unberührt.",
+  "Settings.ProfileName": "Name",
+  "Settings.ProfileNamePlaceholder": "Local Ollama",
+  "Settings.ProfileApiKeyDescription": "Leer lassen, um den aktuellen Schlüssel beizubehalten.",
+  "Settings.ProfileTranscriptionModelDescription": "Optionaler Standard; jedes abgerufene Modell kann pro Workflow gewählt werden.",
+  "Settings.ProfileLlmModelDescription": "Optionaler Standard; Prompts können jedes abgerufene Modell verwenden.",
+  "Settings.AddProfile": "Profil hinzufügen",
+  "Settings.UnknownCollection": "Unbekannte Sammlung.",
   "Manifest.Name": "OpenAI-kompatibel",
   "Manifest.Description": "Mit einem beliebigen OpenAI-kompatiblen Server verbinden (Ollama, LM Studio, vLLM usw.)"
 }

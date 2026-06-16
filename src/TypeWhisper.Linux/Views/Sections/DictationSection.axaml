@@ -170,6 +170,48 @@
                 </Grid>
             </Border>
 
+            <TextBlock Text="{loc:Str Dictation.ModelStorage}"
+                       Classes="group-title" />
+            <Border Classes="settings-panel">
+                <Grid RowDefinitions="Auto,1,Auto">
+                    <Border Grid.Row="0"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto,Auto"
+                              ColumnSpacing="10">
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="{loc:Str Dictation.ModelStorageLocation}"
+                                           Classes="row-label" />
+                                <TextBlock Text="{Binding ModelStoragePath}"
+                                           FontSize="12"
+                                           Foreground="#8A9AAE"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="{loc:Str Dictation.ModelStorageChange}"
+                                    Click="OnChangeModelStorage"
+                                    IsEnabled="{Binding !IsMigratingModelStorage}" />
+                            <Button Grid.Column="2"
+                                    Content="{loc:Str Dictation.ModelStorageReset}"
+                                    Command="{Binding ResetModelStorageCommand}"
+                                    IsVisible="{Binding IsUsingCustomModelStorage}"
+                                    IsEnabled="{Binding !IsMigratingModelStorage}" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="2"
+                            Classes="row"
+                            IsVisible="{Binding ModelStorageStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding ModelStorageStatusText}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </Border>
+                </Grid>
+            </Border>
+
             <TextBlock Text="{loc:Str Dictation.Microphone}"
                        Classes="group-title" />
             <Border Classes="settings-panel">

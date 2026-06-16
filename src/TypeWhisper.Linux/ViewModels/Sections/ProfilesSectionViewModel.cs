@@ -12,6 +12,7 @@ using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Views;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -830,7 +831,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             {
                 ModelOptions.Add(
                     new ProfileModelOption(
-                        ModelManagerService.GetPluginModelId(engine.PluginId, model.Id),
+                        ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model.Id),
                         $"{engine.ProviderDisplayName} — {model.DisplayName}"
                     )
                 );

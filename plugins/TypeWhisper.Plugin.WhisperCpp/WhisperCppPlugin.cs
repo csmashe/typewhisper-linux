@@ -684,7 +684,7 @@ public sealed class WhisperCppPlugin
     {
         var host = _host ?? throw new InvalidOperationException("Plugin is not activated.");
         var model = GetModel(modelId);
-        return Path.Combine(host.PluginDataDirectory, "Models", model.FileName);
+        return Path.Join(host.PluginAssetDirectory, "Models", model.FileName);
     }
 
     private void DisposeFactoryUnsafe()

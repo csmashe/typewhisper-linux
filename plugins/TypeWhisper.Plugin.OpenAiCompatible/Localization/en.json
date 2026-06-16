@@ -12,6 +12,15 @@
   "Settings.EnterBaseUrl": "Enter a base URL first.",
   "Settings.CouldNotConnect": "Could not connect to the server.",
   "Settings.ConnectionOk": "Connection OK. Fetched {0} model(s).",
+  "Settings.ProfilesLabel": "Additional provider profiles",
+  "Settings.ProfilesDescription": "Extra OpenAI-compatible endpoints. Each profile appears as its own transcription engine and LLM provider you can select in dictation and prompts. The default endpoint above is unaffected.",
+  "Settings.ProfileName": "Name",
+  "Settings.ProfileNamePlaceholder": "Local Ollama",
+  "Settings.ProfileApiKeyDescription": "Leave blank to keep the current key.",
+  "Settings.ProfileTranscriptionModelDescription": "Optional default; any fetched model can be chosen per workflow.",
+  "Settings.ProfileLlmModelDescription": "Optional default; prompts can use any fetched model.",
+  "Settings.AddProfile": "Add profile",
+  "Settings.UnknownCollection": "Unknown collection.",
   "Manifest.Name": "OpenAI Compatible",
   "Manifest.Description": "Connect to any OpenAI-compatible server (Ollama, LM Studio, vLLM, etc.)"
 }

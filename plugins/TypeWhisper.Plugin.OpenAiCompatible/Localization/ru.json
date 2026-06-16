@@ -12,6 +12,15 @@
   "Settings.EnterBaseUrl": "Сначала введите базовую URL.",
   "Settings.CouldNotConnect": "Не удалось подключиться к серверу.",
   "Settings.ConnectionOk": "Подключение успешно. Загружено моделей: {0}.",
+  "Settings.ProfilesLabel": "Дополнительные профили провайдеров",
+  "Settings.ProfilesDescription": "Дополнительные OpenAI-совместимые конечные точки. Каждый профиль отображается как отдельный движок транскрипции и провайдер LLM, которые можно выбрать при диктовке и в промптах. Конечная точка по умолчанию выше не затрагивается.",
+  "Settings.ProfileName": "Название",
+  "Settings.ProfileNamePlaceholder": "Local Ollama",
+  "Settings.ProfileApiKeyDescription": "Оставьте пустым, чтобы сохранить текущий ключ.",
+  "Settings.ProfileTranscriptionModelDescription": "Необязательное значение по умолчанию; для каждого рабочего процесса можно выбрать любую загруженную модель.",
+  "Settings.ProfileLlmModelDescription": "Необязательное значение по умолчанию; промпты могут использовать любую загруженную модель.",
+  "Settings.AddProfile": "Добавить профиль",
+  "Settings.UnknownCollection": "Неизвестная коллекция.",
   "Manifest.Name": "OpenAI-совместимый",
   "Manifest.Description": "Подключение к любому OpenAI-совместимому серверу (Ollama, LM Studio, vLLM и т. д.)"
 }
