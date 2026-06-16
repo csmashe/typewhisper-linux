@@ -262,17 +262,33 @@ public sealed class YdotoolSetupHelperTests
             $"tw-path-{Guid.NewGuid():N}"
         );
 
+        // Redirect the helper's hardcoded /etc lookups (udev rule, modules-load
+        // entry) into a temp dir so the tests don't read the host's real /etc —
+        // a machine with TypeWhisper's ydotool setup already installed there
+        // would otherwise make RemoveAsync fail-close on a file it can't delete.
+        // Uses the internal test-only override (not an env var) so the override
+        // never reaches the privileged pkexec scripts in production.
+        private readonly string? _originalSysConf = YdotoolSetupHelper.SysConfDirOverride;
+
+        private readonly string _sysConfDir = Path.Combine(
+            Path.GetTempPath(),
+            $"tw-etc-{Guid.NewGuid():N}"
+        );
+
         public TempEnvironment()
         {
             Directory.CreateDirectory(_pathDir);
+            Directory.CreateDirectory(_sysConfDir);
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _configHome);
             Environment.SetEnvironmentVariable("PATH", _pathDir);
+            YdotoolSetupHelper.SysConfDirOverride = _sysConfDir;
         }
 
         public void Dispose()
         {
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _originalXdg);
             Environment.SetEnvironmentVariable("PATH", _originalPath);
+            YdotoolSetupHelper.SysConfDirOverride = _originalSysConf;
             try
             {
                 Directory.Delete(_configHome, true);
@@ -285,6 +301,15 @@ public sealed class YdotoolSetupHelperTests
             try
             {
                 Directory.Delete(_pathDir, true);
+            }
+            catch
+            {
+                /* best effort */
+            }
+
+            try
+            {
+                Directory.Delete(_sysConfDir, true);
             }
             catch
             {

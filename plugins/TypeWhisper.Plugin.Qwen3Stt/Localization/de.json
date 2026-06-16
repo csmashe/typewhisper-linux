@@ -1,0 +1,10 @@
+{
+  "Settings.BaseUrl": "Basis-URL",
+  "Settings.BaseUrlDescription": "Basis-URL eines OpenAI-kompatiblen Servers.",
+  "Settings.ApiKey": "API-Schlüssel",
+  "Settings.ApiKeyDescription": "Optionales Bearer-Token für den Server.",
+  "Settings.TranscriptionModel": "Transkriptionsmodell",
+  "Settings.ModelDescription": "Wählen Sie das Qwen3 STT-Modell.",
+  "Manifest.Name": "Qwen3 STT",
+  "Manifest.Description": "Qwen3-ASR-Transkription über einen OpenAI-kompatiblen Endpunkt"
+}

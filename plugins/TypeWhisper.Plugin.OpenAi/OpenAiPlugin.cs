@@ -16,7 +16,8 @@ public sealed class OpenAiPlugin
     : ITranscriptionEnginePlugin,
         ILlmProviderPlugin,
         ITtsProviderPlugin,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.openai.com";
     private const string ApiKeySecretName = "api-key";
@@ -737,7 +738,15 @@ public sealed class OpenAiPlugin
     // API key / settings management
 
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -941,28 +950,30 @@ public sealed class OpenAiPlugin
         [
             new(
                 Key: AuthModeSettingName,
-                Label: "Connection method",
-                Description: "Choose how prompt processing connects to OpenAI. "
-                    + "API key uses the OpenAI API; ChatGPT login reuses an existing ChatGPT subscription.",
+                Label: Loc.L("Settings.ConnectionMethod"),
+                Description: Loc.L("Settings.ConnectionMethodDescription"),
                 Options:
                 [
-                    new PluginSettingOption(OpenAiAuthMode.ApiKey.ToStorageValue(), "API key"),
-                    new PluginSettingOption(OpenAiAuthMode.ChatGpt.ToStorageValue(), "ChatGPT login"),
+                    new PluginSettingOption(
+                        OpenAiAuthMode.ApiKey.ToStorageValue(),
+                        Loc.L("Settings.ApiKey")),
+                    new PluginSettingOption(
+                        OpenAiAuthMode.ChatGpt.ToStorageValue(),
+                        Loc.L("Settings.ChatGptLogin")),
                 ],
                 Kind: PluginSettingKind.Dropdown
             ),
             new(
                 Key: ApiKeySecretName,
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Placeholder: "sk-...",
-                Description: "Stored securely and used for OpenAI transcription, LLM, and TTS requests. "
-                    + "Required for transcription and text-to-speech even in ChatGPT login mode."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 Key: SelectedModelSettingName,
-                Label: "Transcription model",
-                Description: "Choose the OpenAI speech-to-text model.",
+                Label: Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.TranscriptionModelDescription"),
                 Options: TranscriptionModelEntries
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList(),
@@ -970,12 +981,12 @@ public sealed class OpenAiPlugin
             ),
             new(
                 Key: SelectedLlmModelSettingName,
-                Label: "LLM model",
+                Label: Loc.L("Settings.LlmModel"),
                 Description: _authMode == OpenAiAuthMode.ChatGpt
-                    ? "ChatGPT login mode uses the supported ChatGPT model list for prompt processing."
+                    ? Loc.L("Settings.LlmModelDescriptionChatGpt")
                     : _fetchedLlmModels.Count > 0
-                        ? $"Showing {_fetchedLlmModels.Count} OpenAI LLM model(s) fetched from the API."
-                        : "Using the default OpenAI model list. Click Validate to test the key and fetch current models.",
+                        ? Loc.L("Settings.LlmModelDescriptionFetched", _fetchedLlmModels.Count)
+                        : Loc.L("Settings.LlmModelDescriptionDefault"),
                 Options: SupportedModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList(),
@@ -983,51 +994,49 @@ public sealed class OpenAiPlugin
             ),
             new(
                 Key: ReasoningEffortSettingName,
-                Label: "Reasoning effort",
-                Description: "Reasoning effort for GPT-5, o-series, and Codex models.",
+                Label: Loc.L("Settings.ReasoningEffort"),
+                Description: Loc.L("Settings.ReasoningEffortDescription"),
                 Options:
                 [
-                    new PluginSettingOption("low", "Low"),
-                    new PluginSettingOption("medium", "Medium"),
-                    new PluginSettingOption("high", "High"),
-                    new PluginSettingOption("xhigh", "X High"),
+                    new PluginSettingOption("low", Loc.L("Settings.ReasoningLow")),
+                    new PluginSettingOption("medium", Loc.L("Settings.ReasoningMedium")),
+                    new PluginSettingOption("high", Loc.L("Settings.ReasoningHigh")),
+                    new PluginSettingOption("xhigh", Loc.L("Settings.ReasoningXHigh")),
                 ],
                 Kind: PluginSettingKind.Dropdown
             ),
             new(
                 Key: TemperatureModeSettingName,
-                Label: "Temperature",
-                Description: "Provider Default uses the recommended value (0.3) for each model. "
-                    + "Custom lets you pick a value below. Only used when the model supports "
-                    + "temperature (no GPT-5 + reasoning).",
+                Label: Loc.L("Settings.Temperature"),
+                Description: Loc.L("Settings.TemperatureDescription"),
                 Options:
                 [
-                    new PluginSettingOption(TemperatureModeProviderDefault, "Provider Default"),
-                    new PluginSettingOption(TemperatureModeCustom, "Custom"),
+                    new PluginSettingOption(
+                        TemperatureModeProviderDefault,
+                        Loc.L("Settings.TemperatureProviderDefault")),
+                    new PluginSettingOption(
+                        TemperatureModeCustom,
+                        Loc.L("Settings.TemperatureCustom")),
                 ],
                 Kind: PluginSettingKind.Dropdown
             ),
             new(
                 Key: TemperatureValueSettingName,
-                Label: "Temperature value",
+                Label: Loc.L("Settings.TemperatureValue"),
                 Placeholder: "0.3",
-                Description: "Sampling temperature 0.0–2.0. Applied when Temperature is set to Custom. "
-                    + "Ignored on models that don't accept the field (e.g. GPT-5 with reasoning).",
+                Description: Loc.L("Settings.TemperatureValueDescription"),
                 Kind: PluginSettingKind.Text
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action and cleanup output token-by-token "
-                    + "as the model generates it, instead of waiting for the full reply. "
-                    + "Applies to the chat-completions models; reasoning models fall back "
-                    + "to a single render.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
             new(
                 Key: SelectedVoiceSettingName,
-                Label: "Text-to-speech voice",
-                Description: "Choose the OpenAI text-to-speech voice.",
+                Label: Loc.L("Settings.Voice"),
+                Description: Loc.L("Settings.VoiceDescription"),
                 Options: AvailableVoices
                     .Select(v => new PluginSettingOption(v.Id, v.DisplayName))
                     .ToList(),
@@ -1035,15 +1044,15 @@ public sealed class OpenAiPlugin
             ),
             new(
                 Key: TtsInstructionsSettingName,
-                Label: "Voice instructions",
-                Placeholder: "Optional",
-                Description: "Optional. Style guidance applied to the text-to-speech voice.",
+                Label: Loc.L("Settings.VoiceInstructions"),
+                Placeholder: Loc.L("Settings.Optional"),
+                Description: Loc.L("Settings.VoiceInstructionsDescription"),
                 Kind: PluginSettingKind.Multiline
             ),
             new(
                 Key: ForgetChatGptLoginSettingName,
-                Label: "Forget ChatGPT login",
-                Description: "When set, the next Validate removes the stored ChatGPT login.",
+                Label: Loc.L("Settings.ForgetChatGptLogin"),
+                Description: Loc.L("Settings.ForgetChatGptLoginDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -1139,18 +1148,18 @@ public sealed class OpenAiPlugin
     private async Task<PluginSettingsValidationResult?> ValidateApiKeyModeAsync(CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         if (!valid)
-            return new PluginSettingsValidationResult(false, "API key is invalid.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
         var models = await RefreshAvailableLlmModelsAsync(ct);
         return new PluginSettingsValidationResult(
             true,
             models.Count > 0
-                ? $"API key is valid. Fetched {models.Count} OpenAI LLM model(s)."
-                : "API key is valid. Using saved/default models."
+                ? Loc.L("Settings.ApiKeyValidFetched", models.Count)
+                : Loc.L("Settings.ApiKeyValidDefault")
         );
     }
 
@@ -1160,7 +1169,7 @@ public sealed class OpenAiPlugin
         {
             await ClearChatGptLoginAsync();
             _forgetChatGptLogin = false;
-            return new PluginSettingsValidationResult(true, "ChatGPT login removed.");
+            return new PluginSettingsValidationResult(true, Loc.L("Settings.ChatGptLoginRemoved"));
         }
 
         if (HasChatGptCredentials)
@@ -1182,9 +1191,7 @@ public sealed class OpenAiPlugin
                 // Surface the failure plus an explicit recovery path the user can take.
                 return new PluginSettingsValidationResult(
                     false,
-                    $"Stored ChatGPT login could not be refreshed: {ex.Message} "
-                        + "Enable \"Forget ChatGPT login\" and re-run Validate to clear the "
-                        + "stored credentials, then sign in again.");
+                    Loc.L("Settings.ChatGptLoginRefreshFailed", ex.Message));
             }
         }
 
@@ -1200,7 +1207,7 @@ public sealed class OpenAiPlugin
         catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException)
         {
             return new PluginSettingsValidationResult(
-                false, $"Could not import existing ChatGPT login: {ex.Message}");
+                false, Loc.L("Settings.ChatGptImportFailed", ex.Message));
         }
 
         try
@@ -1212,8 +1219,7 @@ public sealed class OpenAiPlugin
         {
             return new PluginSettingsValidationResult(
                 false,
-                "Could not start the login listener on port 1455. "
-                    + "Close any application using that port and try again.");
+                Loc.L("Settings.ChatGptLoginPortInUse"));
         }
         catch (Win32Exception ex)
         {
@@ -1223,21 +1229,19 @@ public sealed class OpenAiPlugin
             // would otherwise fault the settings-validation command.
             return new PluginSettingsValidationResult(
                 false,
-                "Could not open a browser for ChatGPT login. "
-                    + "Install xdg-utils or set a default browser and try again."
-                    + $" ({ex.Message})");
+                Loc.L("Settings.ChatGptLoginNoBrowser", ex.Message));
         }
         catch (Exception ex)
             when (ex is InvalidOperationException or HttpRequestException or IOException)
         {
-            return new PluginSettingsValidationResult(false, $"ChatGPT login failed: {ex.Message}");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ChatGptLoginFailed", ex.Message));
         }
     }
 
     private string ChatGptConnectedMessage() =>
         string.IsNullOrWhiteSpace(_oauthPlanType)
-            ? "ChatGPT login connected."
-            : $"ChatGPT login connected. Plan: {_oauthPlanType}.";
+            ? Loc.L("Settings.ChatGptLoginConnected")
+            : Loc.L("Settings.ChatGptLoginConnectedPlan", _oauthPlanType);
 
     private static bool ParseBool(string? value) =>
         string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);

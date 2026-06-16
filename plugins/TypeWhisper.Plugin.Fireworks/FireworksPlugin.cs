@@ -9,7 +9,8 @@ namespace TypeWhisper.Plugin.Fireworks;
 public sealed partial class FireworksPlugin
     : ILlmProviderPlugin,
         IDisposable,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.fireworks.ai";
     private readonly HttpClient _httpClient;
@@ -47,6 +48,16 @@ public sealed partial class FireworksPlugin
 
     public string ProviderName => "Fireworks";
     public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
+
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
     [
@@ -143,16 +154,15 @@ public sealed partial class FireworksPlugin
         [
             new(
                 Key: "apiKey",
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Placeholder: "fw-...",
-                Description: "Required for Fireworks LLM requests."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as it is "
-                    + "generated, instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -197,12 +207,12 @@ public sealed partial class FireworksPlugin
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         return valid
-            ? new PluginSettingsValidationResult(true, "API key is valid.")
-            : new PluginSettingsValidationResult(false, "API key is invalid.");
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
+            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
     }
 
     public void Dispose() => _httpClient.Dispose();

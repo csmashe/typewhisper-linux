@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -1363,12 +1364,21 @@ public class OpenAiPluginTests
         public IPluginLocalization Localization { get; } = new TestPluginLocalization();
     }
 
+    // Resolve from the plugin's real en.json (source tree) so validation
+    // messages come back in English with format args applied — mirroring the
+    // host's PluginLocalization in production, instead of echoing raw keys.
     private sealed class TestPluginLocalization : IPluginLocalization
     {
-        public string CurrentLanguage => "en";
-        public IReadOnlyList<string> AvailableLanguages => ["en"];
-        public string GetString(string key) => key;
-        public string GetString(string key, params object[] args) => string.Format(key, args);
+        private static readonly IPluginLocalization s_en = new PluginLocalization(
+            Path.GetFullPath(
+                Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenAi"),
+                AppContext.BaseDirectory),
+            "en");
+
+        public string CurrentLanguage => s_en.CurrentLanguage;
+        public IReadOnlyList<string> AvailableLanguages => s_en.AvailableLanguages;
+        public string GetString(string key) => s_en.GetString(key);
+        public string GetString(string key, params object[] args) => s_en.GetString(key, args);
     }
 
     private sealed class TestPluginEventBus : IPluginEventBus

@@ -1,0 +1,20 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Создайте персональный API-ключ в Linear Settings > API > Personal API keys.",
+  "Settings.DefaultTeamId": "ID команды по умолчанию",
+  "Settings.DefaultTeamIdDescription": "Обязательно. UUID команды, в которой будут создаваться задачи. После сохранения API-ключа нажмите «Проверить», чтобы загрузить команды.",
+  "Settings.CachedTeamsDescription": "Показано команд Linear из кэша: {0}. Нажмите «Проверить», чтобы обновить.",
+  "Settings.DefaultProjectId": "ID проекта по умолчанию",
+  "Settings.DefaultProjectIdDescription": "Необязательно. Если задано, задачи будут добавляться в этот проект.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.NoTeamsFound": "Команды не найдены. Проверьте API-ключ.",
+  "Settings.TeamsRefreshed": "Найдено команд: {0}. Параметры команд обновлены.",
+  "Settings.ApiKeyNotConfigured": "API-ключ Linear не настроен. Задайте его в настройках плагина.",
+  "Settings.DefaultTeamNotConfigured": "ID команды по умолчанию не настроен. Задайте его в настройках плагина.",
+  "Settings.IssueCreated": "Задача Linear создана: {0}",
+  "Settings.IssueCreateFailed": "Не удалось создать задачу Linear. Подробности в журналах.",
+  "Settings.IssueCreateCancelled": "Создание задачи отменено.",
+  "Settings.IssueCreateError": "Ошибка при создании задачи: {0}",
+  "Manifest.Name": "Linear",
+  "Manifest.Description": "Создание задач Linear из транскрипций"
+}

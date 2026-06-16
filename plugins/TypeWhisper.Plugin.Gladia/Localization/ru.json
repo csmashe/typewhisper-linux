@@ -1,0 +1,8 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции Gladia.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.ModelDescription": "Выберите модель Gladia.",
+  "Manifest.Name": "Gladia",
+  "Manifest.Description": "Движок распознавания речи Gladia"
+}

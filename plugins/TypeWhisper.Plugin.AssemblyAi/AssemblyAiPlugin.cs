@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.AssemblyAi;
 
-public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.assemblyai.com";
 
@@ -200,7 +200,15 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
     }
 
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -243,15 +251,15 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
         [
             new(
                 "api-key",
-                "API key",
+                Loc.L("Settings.ApiKey"),
                 true,
                 "aa...",
-                "Required for AssemblyAI transcription and streaming."
+                Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 "selectedModel",
-                "Transcription model",
-                Description: "Choose the AssemblyAI speech model.",
+                Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
@@ -287,11 +295,11 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         return valid
-            ? new PluginSettingsValidationResult(true, "API key is valid.")
-            : new PluginSettingsValidationResult(false, "API key is invalid.");
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
+            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
     }
 }

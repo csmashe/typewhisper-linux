@@ -9,7 +9,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GemmaLocal;
 
-public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvider
+public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private static readonly IReadOnlyList<GemmaModelDefinition> Models =
     [
@@ -159,10 +159,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         [
             new(
                 Key: "selectedModel",
-                Label: "Model",
-                Description: "Local Gemma model used for LLM processing. "
-                    + "Selecting a model downloads it (if needed) and loads it; "
-                    + "downloads can be several gigabytes and progress is reported to the plugin log.",
+                Label: Loc.L("Settings.Model"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: Models
                     .Select(m => new PluginSettingOption(
                         m.Id,
@@ -172,9 +170,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as the "
-                    + "local model generates it, instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -234,13 +231,13 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     {
         if (string.IsNullOrWhiteSpace(_selectedModelId))
             return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(false, "Select a model first.")
+                new PluginSettingsValidationResult(false, Loc.L("Settings.SelectModel"))
             );
 
         return Task.FromResult<PluginSettingsValidationResult?>(
             _loadedModelId == _selectedModelId
-                ? new PluginSettingsValidationResult(true, "Model loaded and ready.")
-                : new PluginSettingsValidationResult(false, "Model selected but not loaded yet.")
+                ? new PluginSettingsValidationResult(true, Loc.L("Settings.ModelReady"))
+                : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelSelectedNotLoaded"))
         );
     }
 
@@ -369,7 +366,15 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     internal string? SelectedModelId => _selectedModelId;
     internal string? LoadedModelId => _loadedModelId;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     internal IReadOnlyList<GemmaModelDefinition> ModelDefinitions => Models;
 
     internal void SelectModel(string modelId)

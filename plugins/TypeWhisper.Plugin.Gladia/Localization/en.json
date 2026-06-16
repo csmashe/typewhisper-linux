@@ -1,0 +1,8 @@
+{
+  "Settings.ApiKey": "API key",
+  "Settings.ApiKeyDescription": "Required for Gladia transcription.",
+  "Settings.TranscriptionModel": "Transcription model",
+  "Settings.ModelDescription": "Choose the Gladia model.",
+  "Manifest.Name": "Gladia",
+  "Manifest.Description": "Gladia speech-to-text transcription engine"
+}

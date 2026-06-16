@@ -1,0 +1,16 @@
+namespace TypeWhisper.PluginSDK;
+
+/// <summary>
+///     Optional interface for plugins that localize their settings UI. The host
+///     injects an <see cref="IPluginLocalization" /> at load time — before and
+///     independent of activation — so settings metadata (labels, descriptions,
+///     validation messages) resolves even for plugins the user has not enabled
+///     yet. Without it, localization would only be available after activation
+///     (which only happens for enabled plugins), so a disabled plugin's settings
+///     panel would render raw keys like <c>Settings.ApiKey</c>.
+/// </summary>
+public interface IPluginLocalizationAware
+{
+    /// <summary>Supplies the plugin's localization catalog. Called once at load, before activation.</summary>
+    void SetLocalization(IPluginLocalization localization);
+}

@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции ElevenLabs Scribe.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.ModelDescription": "Scribe v2 используется для транскрипции файлов; живая диктовка использует Scribe v2 Realtime.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyValid": "API-ключ действителен.",
+  "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Manifest.Name": "ElevenLabs",
+  "Manifest.Description": "Облачная транскрипция через ElevenLabs Scribe с потоковой передачей WebSocket в реальном времени"
+}

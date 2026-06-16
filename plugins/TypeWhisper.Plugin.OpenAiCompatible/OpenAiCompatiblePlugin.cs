@@ -11,7 +11,8 @@ public sealed partial class OpenAiCompatiblePlugin
     : ITranscriptionEnginePlugin,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
-        IModelCatalogProvider
+        IModelCatalogProvider,
+        IPluginLocalizationAware
 {
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
@@ -200,7 +201,15 @@ public sealed partial class OpenAiCompatiblePlugin
 
     internal string? BaseUrl => _baseUrl;
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     internal string? SelectedTranscriptionModelId => _selectedModelId;
     internal string? SelectedLlmModelId => _selectedLlmModelId;
     internal IReadOnlyList<FetchedModel> FetchedModels => _fetchedModels;
@@ -336,40 +345,38 @@ public sealed partial class OpenAiCompatiblePlugin
         [
             new(
                 "baseUrl",
-                "Base URL",
+                Loc.L("Settings.BaseUrl"),
                 false,
                 "http://localhost:8000",
-                "OpenAI-compatible server base URL."
+                Loc.L("Settings.BaseUrlDescription")
             ),
             new(
                 "api-key",
-                "API key",
+                Loc.L("Settings.ApiKey"),
                 true,
                 null,
-                "Optional bearer token used when calling the server."
+                Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 "selectedModel",
-                "Transcription model",
+                Loc.L("Settings.TranscriptionModel"),
                 Description: _fetchedModels.Count > 0
-                    ? $"Showing {_fetchedModels.Count} fetched model(s)."
-                    : "Click Validate after saving the server settings to fetch available models.",
+                    ? Loc.L("Settings.ModelsFetched", _fetchedModels.Count)
+                    : Loc.L("Settings.ValidateToFetchModels"),
                 Options: BuildModelOptions()
             ),
             new(
                 "selectedLlmModel",
-                "LLM model",
+                Loc.L("Settings.LlmModel"),
                 Description: _fetchedModels.Count > 0
-                    ? $"Showing {_fetchedModels.Count} fetched model(s)."
-                    : "Click Validate after saving the server settings to fetch available models.",
+                    ? Loc.L("Settings.ModelsFetched", _fetchedModels.Count)
+                    : Loc.L("Settings.ValidateToFetchModels"),
                 Options: BuildModelOptions()
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as the "
-                    + "server generates it (works with Ollama, LM Studio, vLLM, etc.), "
-                    + "instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -419,11 +426,11 @@ public sealed partial class OpenAiCompatiblePlugin
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_baseUrl))
-            return new PluginSettingsValidationResult(false, "Enter a base URL first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterBaseUrl"));
 
         var valid = await ValidateConnectionAsync(ct);
         if (!valid)
-            return new PluginSettingsValidationResult(false, "Could not connect to the server.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.CouldNotConnect"));
 
         var models = await FetchModelsAsync(ct) ?? [];
         SetFetchedModels(models, notifyCapabilitiesChanged: false);
@@ -437,7 +444,7 @@ public sealed partial class OpenAiCompatiblePlugin
 
         return new PluginSettingsValidationResult(
             true,
-            $"Connection OK. Fetched {models.Count} model(s)."
+            Loc.L("Settings.ConnectionOk", models.Count)
         );
     }
 

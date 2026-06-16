@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для запросов LLM Cohere.",
+  "Settings.StreamResponses": "Потоковая передача ответов",
+  "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации, не дожидаясь полного ответа.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyValid": "API-ключ действителен.",
+  "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Manifest.Name": "Cohere",
+  "Manifest.Description": "LLM Cohere Command для обработки промптов"
+}

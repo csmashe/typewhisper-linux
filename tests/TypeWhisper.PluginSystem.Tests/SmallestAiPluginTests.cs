@@ -42,10 +42,10 @@ public class SmallestAiPluginTests
         var en = LoadLocalization("en");
         var de = LoadLocalization("de");
 
-        Assert.Equal("API Key", en.GetProperty("Settings.ApiKeyLabel").GetString());
-        Assert.Equal("API-Key", de.GetProperty("Settings.ApiKeyLabel").GetString());
-        Assert.Equal("API-Key gültig!", de.GetProperty("Settings.ApiKeyValid").GetString());
-        Assert.Equal("Ungültiger API-Key", de.GetProperty("Settings.ApiKeyInvalid").GetString());
+        Assert.Equal("API key", en.GetProperty("Settings.ApiKey").GetString());
+        Assert.Equal("API-Schlüssel", de.GetProperty("Settings.ApiKey").GetString());
+        Assert.Equal("API-Schlüssel ist gültig.", de.GetProperty("Settings.ApiKeyValid").GetString());
+        Assert.Equal("API-Schlüssel ist ungültig.", de.GetProperty("Settings.ApiKeyInvalid").GetString());
     }
 
     [Fact]

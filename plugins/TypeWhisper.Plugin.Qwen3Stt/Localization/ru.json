@@ -1,0 +1,10 @@
+{
+  "Settings.BaseUrl": "Базовая URL",
+  "Settings.BaseUrlDescription": "Базовая URL OpenAI-совместимого сервера.",
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Необязательный bearer-токен для сервера.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.ModelDescription": "Выберите модель Qwen3 STT.",
+  "Manifest.Name": "Qwen3 STT",
+  "Manifest.Description": "Транскрипция Qwen3 ASR через OpenAI-совместимый эндпоинт"
+}

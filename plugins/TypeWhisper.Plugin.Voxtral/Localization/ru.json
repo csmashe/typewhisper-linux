@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции Voxtral через Mistral.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.ModelDescription": "Выберите модель Voxtral.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyValid": "API-ключ действителен.",
+  "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Manifest.Name": "Voxtral",
+  "Manifest.Description": "Транскрипция и перевод аудио Voxtral (Mistral)"
+}

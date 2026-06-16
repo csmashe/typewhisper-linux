@@ -1,0 +1,20 @@
+{
+  "Settings.AcceptLicense": "Я понимаю, что веса модели Supertonic 3 лицензируются под OpenRAIL-M.",
+  "Settings.Description": "Supertonic работает локально после скачивания файлов модели. Веса модели лицензируются отдельно под OpenRAIL-M.",
+  "Settings.Voice": "Голос",
+  "Settings.VoiceDescription": "Голос Supertonic (M1–M5 мужские, F1–F5 женские).",
+  "Settings.Speed": "Скорость речи",
+  "Settings.SpeedDescription": "Множитель скорости воспроизведения ({0}–{1}).",
+  "Settings.Quality": "Шаги качества",
+  "Settings.QualityDescription": "Шаги шумоподавления ({0}–{1}); больше — медленнее, но чище.",
+  "Settings.Ready": "Файлы скачаны и готовы.",
+  "Settings.Downloading": "Скачивание...",
+  "Settings.DownloadComplete": "Скачивание завершено. Supertonic TTS готов.",
+  "Settings.DownloadCancelled": "Скачивание отменено.",
+  "Settings.Error": "Ошибка: {0}",
+  "Settings.Summary": "Голос: {0}; скорость {1}; шаги {2}; {3}",
+  "Settings.StatusReady": "готово",
+  "Settings.StatusDownloadRequired": "требуется скачивание",
+  "Manifest.Name": "Supertonic TTS",
+  "Manifest.Description": "Локальный провайдер синтеза речи Supertonic 3. Загружает файлы модели OpenRAIL-M по требованию и выполняет синтез на устройстве с ONNX Runtime."
+}

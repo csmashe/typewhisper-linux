@@ -1,0 +1,20 @@
+{
+  "Settings.Name": "Name",
+  "Settings.Command": "Befehl",
+  "Settings.Shell": "Shell",
+  "Settings.ShellBashDefault": "bash (Standard)",
+  "Settings.Enabled": "Aktiviert",
+  "Settings.Scripts": "Skripte",
+  "Settings.ScriptsDescription": "Shell-Skripte, die der Reihe nach auf das Transkript angewendet werden.",
+  "Settings.AddScript": "Skript hinzufügen",
+  "Settings.UnknownCollection": "Unbekannte Sammlung.",
+  "Settings.Unnamed": "(unbenannt)",
+  "Settings.ScriptNameRequired": "Skript '{0}': Name ist erforderlich.",
+  "Settings.ScriptCommandRequired": "Skript '{0}': Befehl ist erforderlich.",
+  "Settings.ScriptUnknownShell": "Skript '{0}': unbekannte Shell '{1}'.",
+  "Settings.RefuseOverwriteScripts": "Überschreiben von scripts.json wird verweigert — vorhandene Datei konnte nicht gelesen werden: {0}",
+  "Settings.FailedToSaveScripts": "Skripte konnten nicht gespeichert werden: {0}",
+  "Settings.Saved": "Gespeichert.",
+  "Manifest.Name": "Skript-Runner",
+  "Manifest.Description": "Transkriptionen mit eigenen Shell-Skripten verarbeiten"
+}

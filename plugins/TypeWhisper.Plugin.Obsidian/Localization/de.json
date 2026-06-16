@@ -1,0 +1,23 @@
+{
+  "Settings.VaultPath": "Vault-Pfad",
+  "Settings.VaultPathDescription": "Absoluter Pfad zu Ihrem Obsidian-Vault.",
+  "Settings.VaultPathDetectedDescription": "{0} Obsidian-Vault(s) erkannt. Geben Sie bei Bedarf einen Pfad manuell ein.",
+  "Settings.Subfolder": "Unterordner",
+  "Settings.SubfolderDescription": "Ordner innerhalb des Vaults, in dem Notizen gespeichert werden.",
+  "Settings.SaveMode": "Speichermodus",
+  "Settings.SaveModeDescription": "Wählen Sie, ob an eine Tagesnotiz angehängt oder pro Transkription eine Notiz erstellt wird.",
+  "Settings.SaveModeOneNote": "Eine Notiz pro Transkription",
+  "Settings.SaveModeDailyNote": "An Tagesnotiz anhängen",
+  "Settings.FilenameTemplate": "Dateinamenvorlage",
+  "Settings.FilenameTemplateDescription": "Verfügbare Platzhalter: {{date}}, {{time}}, {{app}}.",
+  "Settings.PluginNotActivated": "Plugin nicht aktiviert.",
+  "Settings.PluginNotActivatedShort": "Plugin nicht aktiviert",
+  "Settings.NoVaultConfigured": "Kein Obsidian-Vault konfiguriert. Bitte legen Sie einen Vault-Pfad in den Plugin-Einstellungen fest.",
+  "Settings.VaultPathNotFound": "Vault-Pfad nicht gefunden: {0}",
+  "Settings.SavedTo": "Gespeichert unter {0}",
+  "Settings.EnterVaultPath": "Geben Sie zuerst einen Vault-Pfad ein.",
+  "Settings.VaultDetected": "Vault erkannt: {0}",
+  "Settings.NotAnObsidianVault": "Ordner existiert, ist aber kein Obsidian-Vault (Verzeichnis .obsidian fehlt).",
+  "Manifest.Name": "Obsidian",
+  "Manifest.Description": "Transkriptionen als Notizen in Obsidian speichern"
+}

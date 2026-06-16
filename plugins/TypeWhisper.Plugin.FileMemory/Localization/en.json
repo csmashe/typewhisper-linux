@@ -1,0 +1,4 @@
+{
+  "Manifest.Name": "File Memory",
+  "Manifest.Description": "File-based memory storage for extracted facts"
+}

@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Claude;
 
-public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider
+public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.anthropic.com";
 
@@ -272,7 +272,15 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     internal bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -306,16 +314,15 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         [
             new(
                 Key: "api-key",
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Placeholder: "sk-ant-...",
-                Description: "Required for Claude LLM requests."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as it is "
-                    + "generated, instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -363,14 +370,14 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
             return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(false, "Enter an API key first.")
+                new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"))
             );
 
         var valid = ValidateApiKeyFormat(_apiKey);
         return Task.FromResult<PluginSettingsValidationResult?>(
             valid
-                ? new PluginSettingsValidationResult(true, "API key format looks valid.")
-                : new PluginSettingsValidationResult(false, "API key format is invalid.")
+                ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyFormatValid"))
+                : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyFormatInvalid"))
         );
     }
 }

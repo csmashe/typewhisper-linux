@@ -9,7 +9,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Linear;
 
-public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvider
+public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -33,6 +33,15 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     public string? ActionIcon => "\U0001F4CB";
 
     public IPluginHostServices? Host => _host;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     public string? ApiKey => _apiKey;
     public string? DefaultTeamId => _defaultTeamId;
     public string? DefaultProjectId => _defaultProjectId;
@@ -85,13 +94,13 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         if (string.IsNullOrWhiteSpace(_apiKey))
             return new ActionResult(
                 false,
-                "Linear API key not configured. Please set it in plugin settings."
+                Loc.L("Settings.ApiKeyNotConfigured")
             );
 
         if (string.IsNullOrWhiteSpace(_defaultTeamId))
             return new ActionResult(
                 false,
-                "Default team ID not configured. Please set it in plugin settings."
+                Loc.L("Settings.DefaultTeamNotConfigured")
             );
 
         var title = ExtractTitle(input);
@@ -104,24 +113,24 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             if (issueUrl is not null)
                 return new ActionResult(
                     true,
-                    $"Linear issue created: {title}",
+                    Loc.L("Settings.IssueCreated", title),
                     Url: issueUrl,
                     DisplayDuration: 5.0
                 );
 
             return new ActionResult(
                 false,
-                "Failed to create Linear issue. Check logs for details."
+                Loc.L("Settings.IssueCreateFailed")
             );
         }
         catch (OperationCanceledException)
         {
-            return new ActionResult(false, "Issue creation was cancelled.");
+            return new ActionResult(false, Loc.L("Settings.IssueCreateCancelled"));
         }
         catch (Exception ex)
         {
             _host?.Log(PluginLogLevel.Error, $"Failed to create Linear issue: {ex.Message}");
-            return new ActionResult(false, $"Error creating issue: {ex.Message}");
+            return new ActionResult(false, Loc.L("Settings.IssueCreateError", ex.Message));
         }
     }
 
@@ -468,17 +477,17 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         [
             new(
                 "api-key",
-                "API key",
+                Loc.L("Settings.ApiKey"),
                 true,
                 null,
-                "Generate a personal API key in Linear Settings > API > Personal API keys."
+                Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 "default-team-id",
-                "Default team ID",
+                Loc.L("Settings.DefaultTeamId"),
                 Description: _cachedTeams.Count > 0
-                    ? $"Showing {_cachedTeams.Count} cached Linear team(s). Click Validate to refresh."
-                    : "Required. Team UUID where issues will be created. Click Validate after saving the API key to fetch teams.",
+                    ? Loc.L("Settings.CachedTeamsDescription", _cachedTeams.Count)
+                    : Loc.L("Settings.DefaultTeamIdDescription"),
                 Options: _cachedTeams.Count > 0
                     ? _cachedTeams
                         .Select(t => new PluginSettingOption(t.Id, $"{t.Key} - {t.Name}"))
@@ -487,10 +496,10 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             ),
             new(
                 "default-project-id",
-                "Default project ID",
+                Loc.L("Settings.DefaultProjectId"),
                 false,
                 null,
-                "Optional. Issues will be added to this project when set."
+                Loc.L("Settings.DefaultProjectIdDescription")
             ),
         ];
 
@@ -528,15 +537,15 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var teams = await FetchTeamsAsync(ct);
         if (teams.Count == 0)
-            return new PluginSettingsValidationResult(false, "No teams found. Check your API key.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.NoTeamsFound"));
 
         return new PluginSettingsValidationResult(
             true,
-            $"Found {teams.Count} team(s). Team options refreshed."
+            Loc.L("Settings.TeamsRefreshed", teams.Count)
         );
     }
 

@@ -1,9 +1,11 @@
 {
-  "Settings.Test": "Test",
-  "Settings.Saved": "Saved",
-  "Settings.EnterApiKey": "Please enter an API key first",
-  "Settings.Testing": "Testing...",
-  "Settings.ApiKeyValid": "API key valid!",
-  "Settings.ApiKeyInvalid": "Invalid API key",
-  "Settings.Error": "Error: {0}"
+  "Settings.ApiKey": "API key",
+  "Settings.ApiKeyDescription": "Required for Deepgram transcription and streaming.",
+  "Settings.TranscriptionModel": "Transcription model",
+  "Settings.ModelDescription": "Choose the Deepgram model.",
+  "Settings.EnterApiKey": "Enter an API key first.",
+  "Settings.ApiKeyValid": "API key is valid.",
+  "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Manifest.Name": "Deepgram",
+  "Manifest.Description": "Deepgram Nova transcription engine"
 }

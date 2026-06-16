@@ -426,7 +426,8 @@ public sealed class WebhookService
 public sealed class WebhookPlugin
     : ITypeWhisperPlugin,
         IPluginCollectionSettingsProvider,
-        IPluginDataLocationAware
+        IPluginDataLocationAware,
+        IPluginLocalizationAware
 {
     private IDisposable? _subscription;
     private IPluginHostServices? _host;
@@ -467,6 +468,15 @@ public sealed class WebhookPlugin
     }
 
     public IPluginHostServices? Host => _host;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     private Task OnTranscriptionCompleted(TranscriptionCompletedEvent evt) =>
         Service?.SendWebhooksAsync(evt) ?? Task.CompletedTask;
@@ -488,20 +498,20 @@ public sealed class WebhookPlugin
         [
             new PluginCollectionDefinition(
                 Key: "webhooks",
-                Label: "Webhooks",
-                Description: "HTTP endpoints notified when a transcription completes.",
+                Label: Loc.L("Settings.Webhooks"),
+                Description: Loc.L("Settings.WebhooksDescription"),
                 ItemFields:
                 [
-                    new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
+                    new PluginSettingDefinition("name", Loc.L("Settings.Name"), Kind: PluginSettingKind.Text),
                     new PluginSettingDefinition(
                         "url",
-                        "URL",
+                        Loc.L("Settings.Url"),
                         Placeholder: "https://example.com/hook",
                         Kind: PluginSettingKind.Text
                     ),
                     new PluginSettingDefinition(
                         "method",
-                        "Method",
+                        Loc.L("Settings.Method"),
                         Options:
                         [
                             new PluginSettingOption("POST", "POST"),
@@ -511,25 +521,25 @@ public sealed class WebhookPlugin
                     ),
                     new PluginSettingDefinition(
                         "headers",
-                        "Headers",
-                        Description: "One Name: Value per line.",
+                        Loc.L("Settings.Headers"),
+                        Description: Loc.L("Settings.HeadersDescription"),
                         Kind: PluginSettingKind.Multiline
                     ),
                     new PluginSettingDefinition(
                         "profiles",
-                        "Profile filter",
-                        Description: "One profile name per line; blank = all profiles.",
+                        Loc.L("Settings.ProfileFilter"),
+                        Description: Loc.L("Settings.ProfileFilterDescription"),
                         Kind: PluginSettingKind.Multiline
                     ),
                     new PluginSettingDefinition(
                         "enabled",
-                        "Enabled",
+                        Loc.L("Settings.Enabled"),
                         Kind: PluginSettingKind.Boolean
                     ),
                     new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
                 ],
                 ItemLabelFieldKey: "name",
-                AddButtonLabel: "Add webhook"
+                AddButtonLabel: Loc.L("Settings.AddWebhook")
             ),
         ];
 
@@ -588,7 +598,7 @@ public sealed class WebhookPlugin
     {
         if (collectionKey != "webhooks")
             return Task.FromResult(
-                new PluginSettingsValidationResult(false, "Unknown collection.")
+                new PluginSettingsValidationResult(false, Loc.L("Settings.UnknownCollection"))
             );
 
         var configs = new List<WebhookConfig>(items.Count);
@@ -596,10 +606,10 @@ public sealed class WebhookPlugin
         foreach (var item in items)
         {
             var name = (Get(item, "name") ?? "").Trim();
-            var label = name.Length == 0 ? "(unnamed)" : name;
+            var label = name.Length == 0 ? Loc.L("Settings.Unnamed") : name;
 
             if (name.Length == 0)
-                return Fail(label, "name is required.");
+                return Fail(label, Loc.L("Settings.NameRequired"));
 
             var url = (Get(item, "url") ?? "").Trim();
             if (
@@ -607,18 +617,18 @@ public sealed class WebhookPlugin
                 || (parsedUrl.Scheme != Uri.UriSchemeHttp && parsedUrl.Scheme != Uri.UriSchemeHttps)
                 || string.IsNullOrEmpty(parsedUrl.Host)
             )
-                return Fail(label, "URL must be a valid absolute http:// or https:// URL.");
+                return Fail(label, Loc.L("Settings.UrlInvalid"));
 
             var rawMethod = (Get(item, "method") ?? "").Trim();
             if (
                 !rawMethod.Equals("POST", StringComparison.OrdinalIgnoreCase)
                 && !rawMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase)
             )
-                return Fail(label, "method must be POST or PUT.");
+                return Fail(label, Loc.L("Settings.MethodInvalid"));
             var method = rawMethod.ToUpperInvariant();
 
             var headersText = Get(item, "headers") ?? "";
-            if (!TryParseHeaders(headersText, out var headers, out var headerError))
+            if (!TryParseHeaders(headersText, out var headers, out var headerError, Loc))
                 return Fail(label, headerError);
 
             var enabled = !TryGetBool(item, "enabled", out var parsed) || parsed;
@@ -651,16 +661,16 @@ public sealed class WebhookPlugin
             return Task.FromResult(
                 new PluginSettingsValidationResult(
                     false,
-                    $"Failed to save settings: {ex.Message}"
+                    Loc.L("Settings.FailedToSaveSettings", ex.Message)
                 )
             );
         }
 
-        return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
+        return Task.FromResult(new PluginSettingsValidationResult(true, Loc.L("Settings.Saved")));
 
-        static Task<PluginSettingsValidationResult> Fail(string label, string reason) =>
+        Task<PluginSettingsValidationResult> Fail(string label, string reason) =>
             Task.FromResult(
-                new PluginSettingsValidationResult(false, $"Webhook '{label}': {reason}")
+                new PluginSettingsValidationResult(false, Loc.L("Settings.WebhookLabelReason", label, reason))
             );
     }
 
@@ -687,7 +697,8 @@ public sealed class WebhookPlugin
     internal static bool TryParseHeaders(
         string? text,
         out Dictionary<string, string> headers,
-        out string error
+        out string error,
+        IPluginLocalization? loc = null
     )
     {
         headers = [];
@@ -705,14 +716,14 @@ public sealed class WebhookPlugin
             var colon = line.IndexOf(':');
             if (colon < 0)
             {
-                error = $"header line '{line}' is missing a ':' separator.";
+                error = loc.L("Settings.HeaderMissingSeparator", line);
                 return false;
             }
 
             var key = line[..colon].Trim();
             if (key.Length == 0)
             {
-                error = $"header line '{line}' has an empty name.";
+                error = loc.L("Settings.HeaderEmptyName", line);
                 return false;
             }
 

@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции Soniox.",
+  "Settings.ApiKeyRequired": "Требуется API-ключ.",
+  "Settings.ApiKeyValid": "API-ключ Soniox действителен.",
+  "Settings.ApiKeyInvalid": "Не удалось проверить API-ключ Soniox.",
+  "Manifest.Name": "Soniox",
+  "Manifest.Description": "Движок распознавания речи Soniox"
+}

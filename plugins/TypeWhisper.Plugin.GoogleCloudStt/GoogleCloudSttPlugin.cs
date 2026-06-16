@@ -17,7 +17,8 @@ namespace TypeWhisper.Plugin.GoogleCloudStt;
 // to follow exists.
 public sealed partial class GoogleCloudSttPlugin
     : ITranscriptionEnginePlugin,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string ApiEndpoint = "https://speech.googleapis.com/v1/speech:recognize";
 
@@ -206,6 +207,16 @@ public sealed partial class GoogleCloudSttPlugin
             _ => iso,
         };
 
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+
     internal async Task SetApiKeyAsync(string apiKey)
     {
         _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
@@ -222,11 +233,17 @@ public sealed partial class GoogleCloudSttPlugin
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [
-            new("api-key", "API key", true, null, "Required for Google Cloud Speech-to-Text."),
+            new(
+                "api-key",
+                Loc.L("Settings.ApiKey"),
+                true,
+                null,
+                Loc.L("Settings.ApiKeyDescription")
+            ),
             new(
                 "selectedModel",
-                "Transcription model",
-                Description: "Choose the Google Cloud STT model.",
+                Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: TranscriptionModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()

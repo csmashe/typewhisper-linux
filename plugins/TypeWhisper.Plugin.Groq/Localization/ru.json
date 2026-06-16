@@ -1,0 +1,17 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Хранится надёжно и используется для транскрипции и запросов LLM Groq.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.TranscriptionModelDescription": "Выберите модель транскрипции Groq.",
+  "Settings.LlmModel": "Модель LLM",
+  "Settings.LlmModelFetched": "Показаны модели LLM Groq, загруженные из API: {0}.",
+  "Settings.LlmModelDefault": "Используется стандартный список LLM Groq. Нажмите «Проверить», чтобы проверить ключ и обновить текущие модели.",
+  "Settings.StreamResponses": "Потоковая передача ответов",
+  "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации вместо ожидания полного ответа.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Settings.ApiKeyValidFetchedModels": "API-ключ действителен. Загружено моделей LLM Groq: {0}.",
+  "Settings.ApiKeyValidSavedModels": "API-ключ действителен. Используются сохранённые/стандартные модели LLM.",
+  "Manifest.Name": "Groq",
+  "Manifest.Description": "Транскрипция Groq Whisper и перевод Llama"
+}

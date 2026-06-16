@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для запросов LLM Claude.",
+  "Settings.StreamResponses": "Потоковая передача ответов",
+  "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации, не дожидаясь полного ответа.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyFormatValid": "Формат API-ключа выглядит корректным.",
+  "Settings.ApiKeyFormatInvalid": "Формат API-ключа недействителен.",
+  "Manifest.Name": "Claude",
+  "Manifest.Description": "LLM Anthropic Claude для обработки промптов"
+}

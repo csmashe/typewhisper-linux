@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Obsidian;
 
-public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider
+public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private IPluginHostServices? _host;
     private List<ObsidianVaultInfo> _detectedVaults = [];
@@ -20,6 +20,15 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     public string? ActionIcon => "\ud83d\udcdd";
 
     internal IPluginHostServices? Host => _host;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -37,17 +46,17 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     )
     {
         if (_host is null)
-            return new ActionResult(false, "Plugin not activated");
+            return new ActionResult(false, Loc.L("Settings.PluginNotActivatedShort"));
 
         var vaultPath = _host.GetSetting<string>("vault-path");
         if (string.IsNullOrWhiteSpace(vaultPath))
             return new ActionResult(
                 false,
-                "No Obsidian vault configured. Please set a vault path in the plugin settings."
+                Loc.L("Settings.NoVaultConfigured")
             );
 
         if (!Directory.Exists(vaultPath))
-            return new ActionResult(false, $"Vault path not found: {vaultPath}");
+            return new ActionResult(false, Loc.L("Settings.VaultPathNotFound", vaultPath));
 
         var subfolder = _host.GetSetting<string>("subfolder") ?? "TypeWhisper";
         var dailyNoteMode = _host.GetSetting<bool>("daily-note-mode");
@@ -92,7 +101,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         }
 
         _host.Log(PluginLogLevel.Info, $"Saved transcription to {filePath}");
-        return new ActionResult(true, $"Saved to {filename}");
+        return new ActionResult(true, Loc.L("Settings.SavedTo", filename));
     }
 
     private static string BuildNoteContent(string input, ActionContext context, DateTime now)
@@ -255,35 +264,35 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         [
             new(
                 "vault-path",
-                "Vault path",
+                Loc.L("Settings.VaultPath"),
                 Description: _detectedVaults.Count > 0
-                    ? $"Detected {_detectedVaults.Count} Obsidian vault(s). Enter a path manually if needed."
-                    : "Absolute path to your Obsidian vault.",
+                    ? Loc.L("Settings.VaultPathDetectedDescription", _detectedVaults.Count)
+                    : Loc.L("Settings.VaultPathDescription"),
                 Placeholder: "/path/to/vault"
             ),
             new(
                 "subfolder",
-                "Subfolder",
+                Loc.L("Settings.Subfolder"),
                 false,
                 "TypeWhisper",
-                "Folder within the vault where notes are saved."
+                Loc.L("Settings.SubfolderDescription")
             ),
             new(
                 "daily-note-mode",
-                "Save mode",
-                Description: "Choose whether to append to a daily note or create one note per transcription.",
+                Loc.L("Settings.SaveMode"),
+                Description: Loc.L("Settings.SaveModeDescription"),
                 Options:
                 [
-                    new PluginSettingOption("false", "One note per transcription"),
-                    new PluginSettingOption("true", "Append to daily note"),
+                    new PluginSettingOption("false", Loc.L("Settings.SaveModeOneNote")),
+                    new PluginSettingOption("true", Loc.L("Settings.SaveModeDailyNote")),
                 ]
             ),
             new(
                 "filename-template",
-                "Filename template",
+                Loc.L("Settings.FilenameTemplate"),
                 false,
                 "{{date}} {{time}} Transcription",
-                "Available placeholders: {{date}}, {{time}}, {{app}}."
+                Loc.L("Settings.FilenameTemplateDescription")
             ),
         ];
 
@@ -344,18 +353,18 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     {
         if (_host is null)
             return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(false, "Plugin not activated.")
+                new PluginSettingsValidationResult(false, Loc.L("Settings.PluginNotActivated"))
             );
 
         var vaultPath = _host.GetSetting<string>("vault-path");
         if (string.IsNullOrWhiteSpace(vaultPath))
             return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(false, "Enter a vault path first.")
+                new PluginSettingsValidationResult(false, Loc.L("Settings.EnterVaultPath"))
             );
 
         if (!Directory.Exists(vaultPath))
             return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(false, $"Vault path not found: {vaultPath}")
+                new PluginSettingsValidationResult(false, Loc.L("Settings.VaultPathNotFound", vaultPath))
             );
 
         var obsidianDir = Path.Combine(vaultPath, ".obsidian");
@@ -363,11 +372,11 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
             Directory.Exists(obsidianDir)
                 ? new PluginSettingsValidationResult(
                     true,
-                    $"Vault detected: {Path.GetFileName(vaultPath)}"
+                    Loc.L("Settings.VaultDetected", Path.GetFileName(vaultPath))
                 )
                 : new PluginSettingsValidationResult(
                     false,
-                    "Folder exists but is not an Obsidian vault (missing .obsidian directory)."
+                    Loc.L("Settings.NotAnObsidianVault")
                 )
         );
     }

@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для запросов LLM Gemini.",
+  "Settings.StreamResponses": "Потоковая передача ответов",
+  "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации, не дожидаясь полного ответа.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyValid": "API-ключ действителен.",
+  "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Manifest.Name": "Google Gemini",
+  "Manifest.Description": "LLM-провайдер Google Gemini для действий промптов и перевода"
+}

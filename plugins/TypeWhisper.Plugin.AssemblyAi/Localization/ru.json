@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции и потоковой передачи AssemblyAI.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.ModelDescription": "Выберите речевую модель AssemblyAI.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyValid": "API-ключ действителен.",
+  "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Manifest.Name": "AssemblyAI",
+  "Manifest.Description": "Движок транскрипции AssemblyAI Universal-2"
+}

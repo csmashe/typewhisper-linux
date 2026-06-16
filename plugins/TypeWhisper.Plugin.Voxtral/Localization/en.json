@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "API key",
+  "Settings.ApiKeyDescription": "Required for Voxtral transcription via Mistral.",
+  "Settings.TranscriptionModel": "Transcription model",
+  "Settings.ModelDescription": "Choose the Voxtral model.",
+  "Settings.EnterApiKey": "Enter an API key first.",
+  "Settings.ApiKeyValid": "API key is valid.",
+  "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Manifest.Name": "Voxtral",
+  "Manifest.Description": "Voxtral (Mistral) audio transcription and translation"
+}

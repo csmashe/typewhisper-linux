@@ -1,0 +1,12 @@
+{
+  "Settings.AccountId": "ID аккаунта",
+  "Settings.AccountIdDescription": "Обязательный идентификатор аккаунта Cloudflare.",
+  "Settings.ApiToken": "API-токен",
+  "Settings.ApiTokenDescription": "API-токен Cloudflare с доступом к Workers AI.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.ModelDescription": "Выберите модель Cloudflare ASR.",
+  "Settings.EnterAccountIdAndApiToken": "Сначала введите ID аккаунта и API-токен.",
+  "Settings.CredentialsSaved": "Учётные данные сохранены. Удалённая проверка ещё не реализована.",
+  "Manifest.Name": "Cloudflare ASR",
+  "Manifest.Description": "Движок транскрипции Cloudflare Workers AI Whisper"
+}

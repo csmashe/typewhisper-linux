@@ -139,12 +139,13 @@ public partial class PluginsSectionViewModel : ObservableObject
             .AllPlugins.Select(p =>
             {
                 _pluginById[p.Manifest.Id] = p;
+                var loc = new PluginLocalization(p.PluginDirectory);
                 return new PluginRow(
                     this,
                     p.Manifest.Id,
-                    p.Manifest.Name,
+                    LocalizeManifest(loc, "Manifest.Name", p.Manifest.Name),
                     p.Manifest.Version,
-                    p.Manifest.Description ?? "",
+                    LocalizeManifest(loc, "Manifest.Description", p.Manifest.Description ?? ""),
                     InferCategory(p.Manifest),
                     InferIsLocal(p.Manifest),
                     (
@@ -358,6 +359,17 @@ public partial class PluginsSectionViewModel : ObservableObject
                     ? Loc.Instance["Plugins.EditValuesHint"]
                     : Loc.Instance["Plugins.NoEditableFields"];
         }
+    }
+
+    // Plugin card name/description come from manifest.json (single-language).
+    // Resolve them through the plugin's own catalog so they follow the UI
+    // language, falling back to the manifest literal when the catalog has no
+    // entry (third-party plugins, or keys not yet translated). PluginLocalization
+    // returns the key itself on a miss, so an unchanged key signals "no entry".
+    private static string LocalizeManifest(IPluginLocalization loc, string key, string fallback)
+    {
+        var localized = loc.GetString(key);
+        return string.Equals(localized, key, StringComparison.Ordinal) ? fallback : localized;
     }
 
     // Third-party plugins may not set IsLocal; fall back to known-ID lists then keyword heuristics.

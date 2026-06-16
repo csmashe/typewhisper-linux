@@ -1,0 +1,20 @@
+{
+  "Settings.ApiKey": "API-Schlüssel",
+  "Settings.ApiKeyDescription": "Erstellen Sie einen persönlichen API-Schlüssel in Linear Settings > API > Personal API keys.",
+  "Settings.DefaultTeamId": "Standard-Team-ID",
+  "Settings.DefaultTeamIdDescription": "Erforderlich. Team-UUID, in der Issues erstellt werden. Klicken Sie nach dem Speichern des API-Schlüssels auf Validieren, um Teams abzurufen.",
+  "Settings.CachedTeamsDescription": "{0} zwischengespeicherte Linear-Teams werden angezeigt. Klicken Sie auf Validieren, um zu aktualisieren.",
+  "Settings.DefaultProjectId": "Standard-Projekt-ID",
+  "Settings.DefaultProjectIdDescription": "Optional. Issues werden diesem Projekt hinzugefügt, wenn gesetzt.",
+  "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
+  "Settings.NoTeamsFound": "Keine Teams gefunden. Überprüfen Sie Ihren API-Schlüssel.",
+  "Settings.TeamsRefreshed": "{0} Teams gefunden. Team-Optionen aktualisiert.",
+  "Settings.ApiKeyNotConfigured": "Linear-API-Schlüssel nicht konfiguriert. Bitte legen Sie ihn in den Plugin-Einstellungen fest.",
+  "Settings.DefaultTeamNotConfigured": "Standard-Team-ID nicht konfiguriert. Bitte legen Sie sie in den Plugin-Einstellungen fest.",
+  "Settings.IssueCreated": "Linear-Issue erstellt: {0}",
+  "Settings.IssueCreateFailed": "Linear-Issue konnte nicht erstellt werden. Details in den Protokollen.",
+  "Settings.IssueCreateCancelled": "Issue-Erstellung wurde abgebrochen.",
+  "Settings.IssueCreateError": "Fehler beim Erstellen des Issues: {0}",
+  "Manifest.Name": "Linear",
+  "Manifest.Description": "Linear-Issues aus Transkriptionen erstellen"
+}

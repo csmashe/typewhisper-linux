@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "API-Schlüssel",
+  "Settings.ApiKeyDescription": "Erforderlich für Soniox-Transkription.",
+  "Settings.ApiKeyRequired": "API-Schlüssel erforderlich.",
+  "Settings.ApiKeyValid": "Soniox-API-Schlüssel ist gültig.",
+  "Settings.ApiKeyInvalid": "Soniox-API-Schlüssel konnte nicht überprüft werden.",
+  "Manifest.Name": "Soniox",
+  "Manifest.Description": "Soniox-Sprache-zu-Text-Transkriptions-Engine"
+}

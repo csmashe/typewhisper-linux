@@ -1,0 +1,17 @@
+{
+  "Settings.BaseUrl": "Базовая URL",
+  "Settings.BaseUrlDescription": "Базовая URL OpenAI-совместимого сервера.",
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Необязательный bearer-токен, используемый при обращении к серверу.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.LlmModel": "Модель LLM",
+  "Settings.ModelsFetched": "Показано загруженных моделей: {0}.",
+  "Settings.ValidateToFetchModels": "После сохранения настроек сервера нажмите «Проверить», чтобы загрузить доступные модели.",
+  "Settings.StreamResponses": "Потоковая передача ответов",
+  "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации сервером (работает с Ollama, LM Studio, vLLM и т. д.) вместо ожидания полного ответа.",
+  "Settings.EnterBaseUrl": "Сначала введите базовую URL.",
+  "Settings.CouldNotConnect": "Не удалось подключиться к серверу.",
+  "Settings.ConnectionOk": "Подключение успешно. Загружено моделей: {0}.",
+  "Manifest.Name": "OpenAI-совместимый",
+  "Manifest.Description": "Подключение к любому OpenAI-совместимому серверу (Ollama, LM Studio, vLLM и т. д.)"
+}

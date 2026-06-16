@@ -1,0 +1,18 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Хранится надёжно и используется для транскрипции Reson8. Нажмите «Проверить», чтобы обновить каталог своих моделей.",
+  "Settings.Model": "Модель",
+  "Settings.DefaultModel": "Стандартная модель",
+  "Settings.CustomModelsLoaded": "Загружено своих моделей: {0}. Проверьте для обновления.",
+  "Settings.NoCustomModels": "Своих моделей пока нет — используется стандартная модель. Проверьте, чтобы загрузить свои модели.",
+  "Settings.CustomBaseUrl": "Своя базовая URL",
+  "Settings.CustomBaseUrlDescription": "Дополнительно: для шлюза LiveKit или своего прокси. Оставьте пустым для значения по умолчанию.",
+  "Settings.CustomAuthHeader": "Свой заголовок авторизации",
+  "Settings.CustomAuthHeaderDescription": "Дополнительно: имя заголовка для отправки API-ключа. Оставьте пустым для значения по умолчанию.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.InvalidApiKey": "Недействительный API-ключ Reson8.",
+  "Settings.ApiKeyValidWithModels": "API-ключ действителен. Загружено своих моделей: {0}.",
+  "Settings.ApiKeyValidShort": "API-ключ действителен.",
+  "Manifest.Name": "Reson8",
+  "Manifest.Description": "Облачная транскрипция через API распознавания речи Reson8 с потоковой передачей WebSocket в реальном времени. Требуется API-ключ."
+}
