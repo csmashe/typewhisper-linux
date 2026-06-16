@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -28,7 +29,7 @@ public partial class AboutSection : UserControl
         var file = await topLevel.StorageProvider.SaveFilePickerAsync(
             new FilePickerSaveOptions
             {
-                Title = "Export diagnostics",
+                Title = Loc.Instance["Dialog.ExportDiagnostics"],
                 SuggestedFileName = "typewhisper-diagnostics.json",
                 DefaultExtension = "json",
                 FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
@@ -58,7 +59,7 @@ public partial class AboutSection : UserControl
         var file = await topLevel.StorageProvider.SaveFilePickerAsync(
             new FilePickerSaveOptions
             {
-                Title = "Back up TypeWhisper settings",
+                Title = Loc.Instance["Dialog.BackUpSettings"],
                 SuggestedFileName =
                     $"typewhisper-settings-backup-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
                 DefaultExtension = "zip",
@@ -102,7 +103,7 @@ public partial class AboutSection : UserControl
         var files = await topLevel.StorageProvider.OpenFilePickerAsync(
             new FilePickerOpenOptions
             {
-                Title = "Restore TypeWhisper settings",
+                Title = Loc.Instance["Dialog.RestoreSettings"],
                 AllowMultiple = false,
                 FileTypeFilter = [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
             }

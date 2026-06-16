@@ -468,7 +468,7 @@ public sealed class DictationOrchestrator : IDisposable
                     PartialText = null,
                     LlmResponseText = null,
                     IsRecording = true,
-                    StatusText = "Recording… press the hotkey again to stop.",
+                    StatusText = Localization.Loc.Instance["Dictation.StatusRecording"],
                     ActiveProfileName = null,
                     ActiveAppName = null,
                     SessionStartedAtUtc = DateTime.UtcNow
@@ -901,10 +901,10 @@ public sealed class DictationOrchestrator : IDisposable
                     {
                         IsOverlayVisible = true,
                         ShowFeedback = true,
-                        FeedbackText = "Canceled",
+                        FeedbackText = Localization.Loc.Instance["Overlay.Canceled"],
                         FeedbackIsError = false,
                         IsRecording = false,
-                        StatusText = "Canceled",
+                        StatusText = Localization.Loc.Instance["Overlay.Canceled"],
                         PartialText = null,
                         SessionStartedAtUtc = null
                     }
@@ -936,7 +936,7 @@ public sealed class DictationOrchestrator : IDisposable
                     FeedbackText = null,
                     FeedbackIsError = false,
                     IsRecording = false,
-                    StatusText = "Processing…",
+                    StatusText = Localization.Loc.Instance["Overlay.Processing"],
                     SessionStartedAtUtc = null
                 }
             );
@@ -958,10 +958,10 @@ public sealed class DictationOrchestrator : IDisposable
                     {
                         IsOverlayVisible = true,
                         ShowFeedback = true,
-                        FeedbackText = "Too short",
+                        FeedbackText = Localization.Loc.Instance["Overlay.TooShort"],
                         FeedbackIsError = true,
                         IsRecording = false,
-                        StatusText = "Too short",
+                        StatusText = Localization.Loc.Instance["Overlay.TooShort"],
                         PartialText = null
                     }
                 );
@@ -983,10 +983,10 @@ public sealed class DictationOrchestrator : IDisposable
                     {
                         IsOverlayVisible = true,
                         ShowFeedback = true,
-                        FeedbackText = "No speech detected",
+                        FeedbackText = Localization.Loc.Instance["Overlay.NoSpeech"],
                         FeedbackIsError = true,
                         IsRecording = false,
-                        StatusText = "No speech detected",
+                        StatusText = Localization.Loc.Instance["Overlay.NoSpeech"],
                         PartialText = null
                     }
                 );
@@ -1955,19 +1955,23 @@ public sealed class DictationOrchestrator : IDisposable
         var selectedDevice = ResolveSelectedInputDeviceForMessage();
         if (selectedDevice is null)
         {
-            return "Could not start recording. No microphone input device is available.";
+            return Localization.Loc.Instance["Overlay.RecordStartFailedNoDevice"];
         }
 
-        var baseMessage = $"Could not start recording from '{selectedDevice.Name}'.";
+        var baseMessage = Localization.Loc.Instance.GetString(
+            "Overlay.RecordStartFailedDevice",
+            selectedDevice.Name
+        );
         var detail = ex?.Message;
         if (!string.IsNullOrWhiteSpace(detail))
         {
             baseMessage += $" {detail}.";
         }
 
-        return IsBluetoothDeviceName(selectedDevice.Name)
-            ? $"{baseMessage} Bluetooth headsets must be in a microphone-capable headset profile; switch the device input profile or choose another microphone."
-            : $"{baseMessage} Choose another microphone or check the device input profile.";
+        var suffix = IsBluetoothDeviceName(selectedDevice.Name)
+            ? Localization.Loc.Instance["Overlay.RecordStartFailedBluetooth"]
+            : Localization.Loc.Instance["Overlay.RecordStartFailedGeneric"];
+        return $"{baseMessage} {suffix}";
     }
 
     private AudioInputDevice? ResolveSelectedInputDeviceForMessage()
@@ -2288,7 +2292,7 @@ public sealed class DictationOrchestrator : IDisposable
                 PartialText = null,
                 LlmResponseText = null,
                 IsRecording = false,
-                StatusText = "Ready",
+                StatusText = Localization.Loc.Instance["Overlay.Ready"],
                 ActiveProfileName = null,
                 ActiveAppName = null,
                 SessionStartedAtUtc = null

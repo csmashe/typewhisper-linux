@@ -138,7 +138,7 @@ public sealed class TransformSelectionService
                 FeedbackText = null,
                 FeedbackIsError = false,
                 IsRecording = true,
-                StatusText = "Transform command: speak the edit, then press the hotkey again.",
+                StatusText = Localization.Loc.Instance["Overlay.TransformPrompt"],
                 PartialText = selectedText,
                 ActiveAppName = string.IsNullOrWhiteSpace(processName) ? windowTitle : processName,
                 SessionStartedAtUtc = DateTime.UtcNow
@@ -162,7 +162,7 @@ public sealed class TransformSelectionService
                 ShowFeedback = false,
                 FeedbackText = null,
                 IsRecording = false,
-                StatusText = "Processing transform command...",
+                StatusText = Localization.Loc.Instance["Overlay.TransformProcessing"],
                 PartialText = session.SelectedText,
                 ActiveAppName = string.IsNullOrWhiteSpace(session.ProcessName)
                     ? session.WindowTitle

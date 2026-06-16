@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -28,7 +29,7 @@ public partial class SnippetsSection : UserControl
         var file = await topLevel.StorageProvider.SaveFilePickerAsync(
             new FilePickerSaveOptions
             {
-                Title = "Export snippets",
+                Title = Loc.Instance["Dialog.ExportSnippets"],
                 SuggestedFileName = "typewhisper-snippets.json",
                 DefaultExtension = "json",
                 FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
@@ -58,7 +59,7 @@ public partial class SnippetsSection : UserControl
         var files = await topLevel.StorageProvider.OpenFilePickerAsync(
             new FilePickerOpenOptions
             {
-                Title = "Import snippets",
+                Title = Loc.Instance["Dialog.ImportSnippets"],
                 AllowMultiple = false,
                 FileTypeFilter = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
             }

@@ -144,7 +144,7 @@ public sealed class RecentTranscriptionsService
             InsertionResult.Typed => "Typed recent transcription.",
             InsertionResult.Pasted => "Pasted recent transcription.",
             InsertionResult.CopiedToClipboard => "Copied recent transcription to clipboard.",
-            InsertionResult.NoText => "No recent transcriptions.",
+            InsertionResult.NoText => Localization.Loc.Instance["Overlay.NoRecentTranscriptions"],
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => _commands.GetSnapshot().PasteToolInstallHint,
             InsertionResult.Failed => "Text insertion failed.",

@@ -1,5 +1,6 @@
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services.Setup;
 
@@ -29,7 +30,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     private static string CurrentUser => Environment.UserName;
 
     public string Id => "global-hotkey";
-    public string Title => "Global dictation shortcut";
+    public string Title => Loc.Instance["Setup.GlobalHotkeyTitle"];
     public SetupTaskSeverity Severity => SetupTaskSeverity.Required;
 
     public bool AppliesToThisMachine()
@@ -42,14 +43,14 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         // X11: in-app hook captures global keys with press/release — no group needed.
         if (!IsWayland)
         {
-            return Satisfied("Global shortcut active. Tap toggles; hold for push-to-talk.");
+            return Satisfied(Loc.Instance["Setup.GlobalHotkeyActiveX11"]);
         }
 
         // Wayland: evdev global hotkey requires the input group.
         if (InputGroupCheck.CurrentUserInInputGroup() == true)
         {
             return Satisfied(
-                "Global shortcut active via evdev. Tap toggles; hold for push-to-talk."
+                Loc.Instance["Setup.GlobalHotkeyActiveEvdev"]
             );
         }
 
@@ -60,7 +61,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             return Task.FromResult(
                 new SetupTaskState(
                     SetupTaskStatusKind.Satisfied,
-                    "Added to the input group — log out and back in to activate the shortcut."
+                    Loc.Instance["Setup.GlobalHotkeyAddedRelogin"]
                 )
             );
         }
@@ -68,12 +69,9 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         return Task.FromResult(
             new SetupTaskState(
                 SetupTaskStatusKind.NeedsAction,
-                "Global shortcut needs the input group.",
-                "On Wayland the hotkey reads input devices directly (so it can do "
-                + "hold-to-talk), which requires your user to be in the 'input' group. "
-                + "This adds you with one admin prompt; you then log out and back in once "
-                + "to activate it.",
-                "Add me to the input group",
+                Loc.Instance["Setup.GlobalHotkeyNeedsInputGroup"],
+                Loc.Instance["Setup.GlobalHotkeyNeedsInputGroupHint"],
+                Loc.Instance["Setup.GlobalHotkeyAddMeButton"],
                 $"sudo usermod -aG input {CurrentUser}"
             )
         );
@@ -83,7 +81,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     {
         if (!IsWayland || InputGroupCheck.CurrentUserInInputGroup() == true)
         {
-            return new SetupActionOutcome(true, "Global shortcut already active.");
+            return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyAlreadyActive"]);
         }
 
         var manual = $"sudo usermod -aG input {CurrentUser}";
@@ -91,8 +89,8 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         {
             return new SetupActionOutcome(
                 false,
-                "pkexec is not available to request admin rights.",
-                $"Run this in a terminal instead: {manual}"
+                Loc.Instance["Setup.PkexecUnavailable"],
+                Loc.Instance.GetString("Setup.RunInTerminalInstead", manual)
             );
         }
 
@@ -109,8 +107,8 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         {
             return new SetupActionOutcome(
                 true,
-                "Added to the input group.",
-                "Log out and back in (or reboot) once to activate the global shortcut."
+                Loc.Instance["Setup.GlobalHotkeyAddedToGroup"],
+                Loc.Instance["Setup.GlobalHotkeyReloginToActivate"]
             );
         }
 
@@ -118,15 +116,15 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         {
             return new SetupActionOutcome(
                 false,
-                "Admin authorization was cancelled or denied.",
-                $"You can also run: {manual}"
+                Loc.Instance["Setup.AdminAuthCancelled"],
+                Loc.Instance.GetString("Setup.YouCanAlsoRun", manual)
             );
         }
 
         return new SetupActionOutcome(
             false,
-            $"Could not add you to the input group (exit {result.ExitCode}).",
-            $"Run this in a terminal instead: {manual}"
+            Loc.Instance.GetString("Setup.GlobalHotkeyAddFailed", result.ExitCode),
+            Loc.Instance.GetString("Setup.RunInTerminalInstead", manual)
         );
     }
 

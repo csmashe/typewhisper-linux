@@ -1,3 +1,5 @@
+using TypeWhisper.Linux.Services.Localization;
+
 namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
@@ -19,7 +21,7 @@ public sealed class ActiveWindowSetupTask : ISetupTask
     }
 
     public string Id => "active-window";
-    public string Title => "Active-window detection";
+    public string Title => Loc.Instance["Setup.ActiveWindowTitle"];
     public SetupTaskSeverity Severity => SetupTaskSeverity.Recommended;
 
     public bool AppliesToThisMachine()
@@ -34,7 +36,7 @@ public sealed class ActiveWindowSetupTask : ISetupTask
             return Task.FromResult(
                 new SetupTaskState(
                     SetupTaskStatusKind.Satisfied,
-                    "Window Calls extension installed."
+                    Loc.Instance["Setup.ActiveWindowInstalled"]
                 )
             );
         }
@@ -44,16 +46,15 @@ public sealed class ActiveWindowSetupTask : ISetupTask
             _installPageOpened
                 ? new SetupTaskState(
                     SetupTaskStatusKind.NeedsAction,
-                    "Waiting for the Window Calls extension.",
-                    "Once you've clicked Install in the browser, check it here.",
-                    "Check installation"
+                    Loc.Instance["Setup.ActiveWindowWaiting"],
+                    Loc.Instance["Setup.ActiveWindowWaitingDetail"],
+                    Loc.Instance["Setup.ActiveWindowCheckInstallation"]
                 )
                 : new SetupTaskState(
                     SetupTaskStatusKind.NeedsAction,
-                    "Window Calls GNOME extension not installed.",
-                    "Lets profiles match the focused app/URL. Opens the install page "
-                    + "in your browser; click Install there, then come back and check.",
-                    "Open install page"
+                    Loc.Instance["Setup.ActiveWindowNotInstalled"],
+                    Loc.Instance["Setup.ActiveWindowNotInstalledDetail"],
+                    Loc.Instance["Setup.ActiveWindowOpenInstallPage"]
                 )
         );
     }
@@ -63,7 +64,7 @@ public sealed class ActiveWindowSetupTask : ISetupTask
         // Re-evaluation after this action will mark done if it's now installed.
         if (_helper.IsCurrentlyInstalled())
         {
-            return Task.FromResult(new SetupActionOutcome(true, "Window Calls extension detected."));
+            return Task.FromResult(new SetupActionOutcome(true, Loc.Instance["Setup.ActiveWindowDetected"]));
         }
 
         // D-Bus probe still not responding after install — report honestly, task stays NeedsAction.
@@ -72,9 +73,8 @@ public sealed class ActiveWindowSetupTask : ISetupTask
             return Task.FromResult(
                 new SetupActionOutcome(
                     false,
-                    "Not detected yet.",
-                    "Make sure you clicked Install (and enabled it), then check again. "
-                    + "A GNOME Shell reload / re-login may be needed."
+                    Loc.Instance["Setup.ActiveWindowNotDetectedYet"],
+                    Loc.Instance["Setup.ActiveWindowNotDetectedYetDetail"]
                 )
             );
         }
@@ -85,13 +85,13 @@ public sealed class ActiveWindowSetupTask : ISetupTask
             opened
                 ? new SetupActionOutcome(
                     true,
-                    "Opened the Window Calls install page.",
-                    "Click Install there, then come back and use Check installation."
+                    Loc.Instance["Setup.ActiveWindowOpenedInstallPage"],
+                    Loc.Instance["Setup.ActiveWindowOpenedInstallPageDetail"]
                 )
                 : new SetupActionOutcome(
                     false,
-                    "Could not open the install page.",
-                    "Visit extensions.gnome.org and search for \"Window Calls\"."
+                    Loc.Instance["Setup.ActiveWindowCouldNotOpenInstallPage"],
+                    Loc.Instance["Setup.ActiveWindowCouldNotOpenInstallPageDetail"]
                 )
         );
     }
