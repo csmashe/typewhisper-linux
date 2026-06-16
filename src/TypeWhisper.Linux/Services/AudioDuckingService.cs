@@ -36,7 +36,7 @@ public sealed class AudioDuckingService : IAudioDuckingService
         {
             // pactl has no "get-sink-input-volume" subcommand, so read current
             // volumes by parsing the long `list sink-inputs` output instead.
-            var listing = RunCommand("pactl", "list", "sink-inputs");
+            var listing = CommandRunner.Run("pactl", "list", "sink-inputs");
             if (string.IsNullOrWhiteSpace(listing))
             {
                 return;
@@ -46,7 +46,7 @@ public sealed class AudioDuckingService : IAudioDuckingService
             {
                 _savedVolumes[inputId] = currentVolume;
                 var duckedVolume = ScaleVolume(currentVolume, factor);
-                RunCommand("pactl", "set-sink-input-volume", inputId, duckedVolume);
+                CommandRunner.Run("pactl", "set-sink-input-volume", inputId, duckedVolume);
             }
 
             _isDucked = _savedVolumes.Count > 0;
@@ -70,7 +70,7 @@ public sealed class AudioDuckingService : IAudioDuckingService
         {
             foreach (var (inputId, volume) in _savedVolumes)
             {
-                RunCommand("pactl", "set-sink-input-volume", inputId, volume);
+                CommandRunner.Run("pactl", "set-sink-input-volume", inputId, volume);
             }
         }
         catch (Exception ex)
@@ -92,10 +92,8 @@ public sealed class AudioDuckingService : IAudioDuckingService
     {
         string? currentId = null;
 
-        foreach (var raw in listing.Split('\n'))
+        foreach (var line in listing.Split('\n').Select(raw => raw.Trim()))
         {
-            var line = raw.Trim();
-
             var idMatch = s_sinkInputIdRegex.Match(line);
             if (idMatch.Success)
             {
@@ -134,40 +132,5 @@ public sealed class AudioDuckingService : IAudioDuckingService
 
         var scaled = Math.Clamp(percent * factor, 0f, 150f);
         return $"{scaled.ToString("0.##", CultureInfo.InvariantCulture)}%";
-    }
-
-    private static string? RunCommand(string fileName, params string[] arguments)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo(fileName)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            foreach (var argument in arguments)
-            {
-                psi.ArgumentList.Add(argument);
-            }
-
-            // Force a stable, parseable locale for command output.
-            psi.Environment["LC_ALL"] = "C";
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return null;
-            }
-
-            var stdout = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(1500);
-            return process.ExitCode == 0 ? stdout.Trim() : null;
-        }
-        catch
-        {
-            return null;
-        }
     }
 }

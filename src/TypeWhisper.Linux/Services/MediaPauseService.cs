@@ -21,7 +21,7 @@ public sealed class MediaPauseService : IMediaPauseService
 
         try
         {
-            var players = RunCommand(
+            var players = CommandRunner.Run(
                 "playerctl",
                 "-a",
                 "--format",
@@ -53,7 +53,7 @@ public sealed class MediaPauseService : IMediaPauseService
                     continue;
                 }
 
-                if (RunCommand("playerctl", "-p", parts[0], "pause") is not null)
+                if (CommandRunner.Run("playerctl", "-p", parts[0], "pause") is not null)
                 {
                     _pausedPlayers.Add(parts[0]);
                 }
@@ -77,7 +77,7 @@ public sealed class MediaPauseService : IMediaPauseService
         {
             foreach (var player in _pausedPlayers)
             {
-                RunCommand("playerctl", "-p", player, "play");
+                CommandRunner.Run("playerctl", "-p", player, "play");
             }
         }
         catch (Exception ex)
@@ -87,41 +87,6 @@ public sealed class MediaPauseService : IMediaPauseService
         finally
         {
             _pausedPlayers.Clear();
-        }
-    }
-
-    private static string? RunCommand(string fileName, params string[] arguments)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo(fileName)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            foreach (var argument in arguments)
-            {
-                psi.ArgumentList.Add(argument);
-            }
-
-            // Force a stable, parseable locale for command output.
-            psi.Environment["LC_ALL"] = "C";
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return null;
-            }
-
-            var stdout = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(1500);
-            return process.ExitCode == 0 ? stdout.Trim() : null;
-        }
-        catch
-        {
-            return null;
         }
     }
 }
