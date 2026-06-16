@@ -190,7 +190,7 @@
   "Dictation.DeleteModelFiles": "Modelldateien löschen",
   "Dictation.DeletingModel": "{0} wird gelöscht...",
   "Dictation.DownloadingModel": "{0} wird heruntergeladen...",
-  "Dictation.DuckingLevel": "Absenkungsstärke",
+  "Dictation.DuckingLevel": "Anderen Ton absenken um",
   "Dictation.Engine": "Engine",
   "Dictation.EnterProcessName": "Geben Sie einen App-Prozessnamen ein, bevor Sie eine Einfügestrategie hinzufügen.",
   "Dictation.FixCudaPath": "CUDA-Pfad reparieren",

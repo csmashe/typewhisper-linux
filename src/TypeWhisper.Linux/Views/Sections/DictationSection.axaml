@@ -549,13 +549,13 @@
                             <TextBlock Classes="row-label">
                                 <Run Text="{loc:Str Dictation.DuckingLevel}" />
                                 <Run Text=" " />
-                                <Run Text="{Binding AudioDuckingLevel, StringFormat='{}{0:P0}'}" />
+                                <Run Text="{Binding AudioDuckingReductionPercent, StringFormat='{}{0:0}%'}" />
                             </TextBlock>
-                            <Slider Minimum="0"
-                                    Maximum="0.5"
-                                    TickFrequency="0.05"
+                            <Slider Minimum="20"
+                                    Maximum="90"
+                                    TickFrequency="5"
                                     IsSnapToTickEnabled="True"
-                                    Value="{Binding AudioDuckingLevel}"
+                                    Value="{Binding AudioDuckingReductionPercent}"
                                     Margin="0,12,0,0" />
                         </StackPanel>
                     </Border>

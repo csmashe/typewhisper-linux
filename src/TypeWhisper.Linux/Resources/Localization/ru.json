@@ -190,7 +190,7 @@
   "Dictation.DeleteModelFiles": "Удалить файлы модели",
   "Dictation.DeletingModel": "Удаление {0}...",
   "Dictation.DownloadingModel": "Загрузка {0}...",
-  "Dictation.DuckingLevel": "Уровень приглушения",
+  "Dictation.DuckingLevel": "Приглушать другой звук на",
   "Dictation.Engine": "Движок",
   "Dictation.EnterProcessName": "Укажите имя процесса приложения перед добавлением стратегии вставки.",
   "Dictation.FixCudaPath": "Исправить путь CUDA",

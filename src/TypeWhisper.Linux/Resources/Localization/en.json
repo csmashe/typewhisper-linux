@@ -190,7 +190,7 @@
   "Dictation.DeleteModelFiles": "Delete model files",
   "Dictation.DeletingModel": "Deleting {0}...",
   "Dictation.DownloadingModel": "Downloading {0}...",
-  "Dictation.DuckingLevel": "Ducking level",
+  "Dictation.DuckingLevel": "Reduce other audio by",
   "Dictation.Engine": "Engine",
   "Dictation.EnterProcessName": "Enter an app process name before adding an insertion strategy.",
   "Dictation.FixCudaPath": "Fix CUDA path",

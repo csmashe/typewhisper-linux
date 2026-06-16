@@ -13,6 +13,13 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class AudioDuckingService : IAudioDuckingService
 {
+    // "Sink Input #593" — block header in `pactl list sink-inputs` output.
+    private static readonly Regex s_sinkInputIdRegex = new(
+        @"^Sink Input #(\d+)",
+        RegexOptions.Compiled
+    );
+
+    // First percentage on a "Volume:" line (e.g. "... / 65% / -9.30 dB").
     private static readonly Regex s_volumePercentRegex = new(@"(\d+)%", RegexOptions.Compiled);
 
     private readonly Dictionary<string, string> _savedVolumes = new(StringComparer.Ordinal);
@@ -27,38 +34,19 @@ public sealed class AudioDuckingService : IAudioDuckingService
 
         try
         {
-            var sinkInputs = RunCommand("pactl", "list short sink-inputs");
-            if (string.IsNullOrWhiteSpace(sinkInputs))
+            // pactl has no "get-sink-input-volume" subcommand, so read current
+            // volumes by parsing the long `list sink-inputs` output instead.
+            var listing = CommandRunner.Run("pactl", "list", "sink-inputs");
+            if (string.IsNullOrWhiteSpace(listing))
             {
                 return;
             }
 
-            foreach (
-                var line in sinkInputs.Split(
-                    '\n',
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-                )
-            )
+            foreach (var (inputId, currentVolume) in ParseSinkInputVolumes(listing))
             {
-                var inputId = line.Split(
-                        '\t',
-                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-                    )
-                    .FirstOrDefault();
-                if (string.IsNullOrWhiteSpace(inputId))
-                {
-                    continue;
-                }
-
-                var currentVolume = GetSinkInputVolume(inputId);
-                if (string.IsNullOrWhiteSpace(currentVolume))
-                {
-                    continue;
-                }
-
                 _savedVolumes[inputId] = currentVolume;
                 var duckedVolume = ScaleVolume(currentVolume, factor);
-                RunCommand("pactl", $"set-sink-input-volume {inputId} {duckedVolume}");
+                CommandRunner.Run("pactl", "set-sink-input-volume", inputId, duckedVolume);
             }
 
             _isDucked = _savedVolumes.Count > 0;
@@ -82,7 +70,7 @@ public sealed class AudioDuckingService : IAudioDuckingService
         {
             foreach (var (inputId, volume) in _savedVolumes)
             {
-                RunCommand("pactl", $"set-sink-input-volume {inputId} {volume}");
+                CommandRunner.Run("pactl", "set-sink-input-volume", inputId, volume);
             }
         }
         catch (Exception ex)
@@ -96,16 +84,35 @@ public sealed class AudioDuckingService : IAudioDuckingService
         }
     }
 
-    private static string? GetSinkInputVolume(string inputId)
+    /// <summary>
+    ///     Walks the <c>pactl list sink-inputs</c> output, yielding the first
+    ///     volume percentage of each "Sink Input #N" block.
+    /// </summary>
+    private static IEnumerable<(string Id, string Volume)> ParseSinkInputVolumes(string listing)
     {
-        var output = RunCommand("pactl", $"get-sink-input-volume {inputId}");
-        if (string.IsNullOrWhiteSpace(output))
-        {
-            return null;
-        }
+        string? currentId = null;
 
-        var match = s_volumePercentRegex.Match(output);
-        return match.Success ? match.Groups[1].Value + "%" : null;
+        foreach (var line in listing.Split('\n').Select(raw => raw.Trim()))
+        {
+            var idMatch = s_sinkInputIdRegex.Match(line);
+            if (idMatch.Success)
+            {
+                currentId = idMatch.Groups[1].Value;
+                continue;
+            }
+
+            if (currentId is not null && line.StartsWith("Volume:", StringComparison.Ordinal))
+            {
+                var volMatch = s_volumePercentRegex.Match(line);
+                if (volMatch.Success)
+                {
+                    yield return (currentId, volMatch.Groups[1].Value + "%");
+                }
+
+                // Only the first Volume line per block is relevant.
+                currentId = null;
+            }
+        }
     }
 
     private static string ScaleVolume(string volumePercent, float factor)
@@ -125,34 +132,5 @@ public sealed class AudioDuckingService : IAudioDuckingService
 
         var scaled = Math.Clamp(percent * factor, 0f, 150f);
         return $"{scaled.ToString("0.##", CultureInfo.InvariantCulture)}%";
-    }
-
-    private static string? RunCommand(string fileName, string arguments)
-    {
-        try
-        {
-            using var process = Process.Start(
-                new ProcessStartInfo(fileName, arguments)
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            );
-
-            if (process is null)
-            {
-                return null;
-            }
-
-            var stdout = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(1500);
-            return process.ExitCode == 0 ? stdout.Trim() : null;
-        }
-        catch
-        {
-            return null;
-        }
     }
 }
