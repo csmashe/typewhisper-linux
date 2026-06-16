@@ -89,6 +89,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     public bool SupportsPressRelease => _hotkey.ActiveBackendSupportsPressRelease ?? false;
 
+    public string SupportsPressReleaseText =>
+        Loc.Instance[SupportsPressRelease ? "Common.Yes" : "Common.No"];
+
     // SharpHook on Wayland delivers press+release but only while TypeWhisper has focus,
     // so SupportsPressRelease ≠ global scope — labelling it "Global" would mislead users.
     public string ScopeText
@@ -175,26 +178,14 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public string DesktopInstructions =>
         DesktopName switch
         {
-            "GNOME" =>
-                "Open Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts.\n"
-                + "Add a new entry, paste the command above, and pick the keys you want.",
-            "KDE" => "Open System Settings → Shortcuts → Custom Shortcuts.\n"
-                     + "Edit → New → Global Shortcut → Command/URL, paste the command above, and assign a trigger.",
-            "Hyprland" => "Edit ~/.config/hypr/hyprland.conf and add a bind line, e.g.:\n"
-                          + "  bind = SUPER, SPACE, exec, typewhisper\n"
-                          + "Reload with `hyprctl reload`.",
-            "Sway" => "Edit ~/.config/sway/config and add a bindsym, e.g.:\n"
-                      + "  bindsym $mod+space exec typewhisper\n"
-                      + "Reload with `swaymsg reload`.",
-            "XFCE" => "Open Settings → Keyboard → Application Shortcuts → Add.\n"
-                      + "Paste the command above and choose the key combination when prompted.",
-            "Cinnamon" => "Open System Settings → Keyboard → Shortcuts → Custom Shortcuts.\n"
-                          + "Add a custom shortcut with the command above and bind a key.",
-            "MATE" => "Open System Settings → Keyboard Shortcuts → Add.\n"
-                      + "Paste the command above and assign a key combination.",
-            _ =>
-                "Open your desktop's keyboard settings and add a custom shortcut that runs the command above.\n"
-                + "Bind it to any key combination you like (e.g. Ctrl+Shift+Space)."
+            "GNOME" => Loc.Instance["Shortcuts.DesktopInstructionsGnome"],
+            "KDE" => Loc.Instance["Shortcuts.DesktopInstructionsKde"],
+            "Hyprland" => Loc.Instance["Shortcuts.DesktopInstructionsHyprland"],
+            "Sway" => Loc.Instance["Shortcuts.DesktopInstructionsSway"],
+            "XFCE" => Loc.Instance["Shortcuts.DesktopInstructionsXfce"],
+            "Cinnamon" => Loc.Instance["Shortcuts.DesktopInstructionsCinnamon"],
+            "MATE" => Loc.Instance["Shortcuts.DesktopInstructionsMate"],
+            _ => Loc.Instance["Shortcuts.DesktopInstructionsGeneric"]
         };
 
     private IDeShortcutWriter? ActiveWriter

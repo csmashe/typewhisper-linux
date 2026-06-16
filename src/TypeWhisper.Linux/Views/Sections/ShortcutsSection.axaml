@@ -71,13 +71,13 @@
                         <StackPanel>
                             <TextBlock Text="{loc:Str Shortcuts.Backend}" Classes="row-title" />
                             <TextBlock Classes="row-hint"
-                                       Text="{Binding ActiveBackendDisplayName, StringFormat='Active: {0}'}" />
+                                       Text="{Binding ActiveBackendDisplayName, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusActive}" />
                             <TextBlock Classes="row-hint"
-                                       Text="{Binding SessionType, StringFormat='Display server: {0}'}" />
+                                       Text="{Binding SessionType, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusDisplayServer}" />
                             <TextBlock Classes="row-hint"
-                                       Text="{Binding ScopeText, StringFormat='Capture scope: {0}'}" />
+                                       Text="{Binding ScopeText, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusCaptureScope}" />
                             <TextBlock Classes="row-hint"
-                                       Text="{Binding SupportsPressRelease, StringFormat='Press/release support: {0}'}" />
+                                       Text="{Binding SupportsPressReleaseText, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusPressRelease}" />
                         </StackPanel>
                     </Border>
 
