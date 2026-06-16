@@ -276,7 +276,7 @@
                                                                    Foreground="#D6DEE9" />
                                                     </Border>
                                                     <Border Classes="badge">
-                                                        <TextBlock Text="{Binding TriggerMode}"
+                                                        <TextBlock Text="{Binding TriggerMode, Converter={x:Static loc:LocEnumConverter.Instance}, ConverterParameter=Snippets.TriggerMode}"
                                                                    FontSize="10"
                                                                    Foreground="#D6DEE9" />
                                                     </Border>

@@ -75,3 +75,40 @@ public sealed class LocFormatConverter : IValueConverter
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         BindingOperations.DoNothing;
 }
+
+/// <summary>
+///     Resolves an enum (or any value) to a localized string by appending its
+///     name to the prefix given as the converter parameter. E.g. value
+///     <c>Anywhere</c> with parameter <c>Snippets.TriggerMode</c> →
+///     <c>Snippets.TriggerModeAnywhere</c>. Avoids binding raw enum names.
+/// </summary>
+public sealed class LocEnumConverter : IValueConverter
+{
+    public static readonly LocEnumConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        Loc.Instance[(parameter as string ?? "") + value];
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        BindingOperations.DoNothing;
+}
+
+/// <summary>
+///     Resolves a bool to one of two localized strings whose keys are given as
+///     <c>trueKey|falseKey</c> in the converter parameter. E.g.
+///     <c>Common.Enabled|Common.Disabled</c>.
+/// </summary>
+public sealed class LocBoolConverter : IValueConverter
+{
+    public static readonly LocBoolConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var keys = (parameter as string ?? "").Split('|');
+        var index = value is true ? 0 : 1;
+        return Loc.Instance[index < keys.Length ? keys[index] : ""];
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        BindingOperations.DoNothing;
+}
