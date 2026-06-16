@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción de Gladia.",
+  "Settings.TranscriptionModel": "Modelo de transcripción",
+  "Settings.ModelDescription": "Elige el modelo de Gladia.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin no configurado. Se requiere una clave de API.",
+  "Manifest.Name": "Gladia",
+  "Manifest.Description": "Motor de transcripción de voz a texto de Gladia"
+}

@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción con ElevenLabs Scribe.",
+  "Settings.TranscriptionModel": "Modelo de transcripción",
+  "Settings.ModelDescription": "Scribe v2 se usa para la transcripción de archivos; el dictado en directo usa Scribe v2 Realtime.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.ApiKeyValid": "La clave de API es válida.",
+  "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Manifest.Name": "ElevenLabs",
+  "Manifest.Description": "Transcripción en la nube mediante ElevenLabs Scribe con streaming por WebSocket en tiempo real"
+}

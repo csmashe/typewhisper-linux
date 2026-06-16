@@ -1,0 +1,12 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción de Voxtral a través de Mistral.",
+  "Settings.TranscriptionModel": "Modelo de transcripción",
+  "Settings.ModelDescription": "Elige el modelo de Voxtral.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.ApiKeyValid": "La clave de API es válida.",
+  "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Settings.NotConfiguredMistralApiKeyRequired": "Plugin no configurado. Se necesita la clave de API de Mistral.",
+  "Manifest.Name": "Voxtral",
+  "Manifest.Description": "Transcripción y traducción de audio de Voxtral (Mistral)"
+}

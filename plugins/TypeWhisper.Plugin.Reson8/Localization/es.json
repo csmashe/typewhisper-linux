@@ -1,0 +1,19 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Se almacena de forma segura y se usa para la transcripción de Reson8. Valida para actualizar el catálogo de modelos personalizados.",
+  "Settings.Model": "Modelo",
+  "Settings.DefaultModel": "Modelo predeterminado",
+  "Settings.CustomModelsLoaded": "{0} modelo(s) personalizado(s) cargado(s). Valida para actualizar.",
+  "Settings.NoCustomModels": "Aún no hay modelos personalizados — se usa el modelo predeterminado. Valida para obtener los modelos personalizados.",
+  "Settings.CustomBaseUrl": "URL base personalizada",
+  "Settings.CustomBaseUrlDescription": "Avanzado: para una puerta de enlace de LiveKit o un proxy personalizado. Déjalo en blanco para usar el valor predeterminado.",
+  "Settings.CustomAuthHeader": "Encabezado de autenticación personalizado",
+  "Settings.CustomAuthHeaderDescription": "Avanzado: nombre del encabezado que se usa para enviar la clave de API. Déjalo en blanco para usar el valor predeterminado.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.InvalidApiKey": "Clave de API de Reson8 no válida.",
+  "Settings.ApiKeyValidWithModels": "Clave de API válida. {0} modelo(s) personalizado(s) cargado(s).",
+  "Settings.ApiKeyValidShort": "Clave de API válida.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin no configurado. Se requiere una clave de API.",
+  "Manifest.Name": "Reson8",
+  "Manifest.Description": "Transcripción en la nube mediante la API de voz a texto de Reson8 con streaming por WebSocket en tiempo real. Requiere clave de API."
+}

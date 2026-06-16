@@ -1,0 +1,12 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para las solicitudes al LLM de Claude.",
+  "Settings.StreamResponses": "Transmitir respuestas",
+  "Settings.StreamResponsesDescription": "Muestra la salida de la acción del prompt token a token a medida que se genera, en lugar de esperar a la respuesta completa.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.ApiKeyFormatValid": "El formato de la clave de API parece válido.",
+  "Settings.ApiKeyFormatInvalid": "El formato de la clave de API no es válido.",
+  "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
+  "Manifest.Name": "Claude",
+  "Manifest.Description": "LLM Claude de Anthropic para el procesamiento de prompts"
+}

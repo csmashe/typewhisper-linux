@@ -1,0 +1,10 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción y la transmisión de Smallest AI Pulse.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.ApiKeyValid": "La clave de API es válida.",
+  "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Settings.NotConfiguredApiKeyRequired": "El plugin no está configurado. Se requiere una clave de API.",
+  "Manifest.Name": "Smallest AI Pulse",
+  "Manifest.Description": "Motor de transcripción de voz a texto Smallest AI Pulse"
+}

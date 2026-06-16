@@ -1,0 +1,10 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción de Soniox.",
+  "Settings.ApiKeyRequired": "Se requiere la clave de API.",
+  "Settings.ApiKeyValid": "La clave de API de Soniox es válida.",
+  "Settings.ApiKeyInvalid": "No se pudo verificar la clave de API de Soniox.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin no configurado. Se requiere la clave de API.",
+  "Manifest.Name": "Soniox",
+  "Manifest.Description": "Motor de transcripción de voz a texto de Soniox"
+}

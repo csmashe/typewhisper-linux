@@ -1,0 +1,11 @@
+{
+  "Settings.BaseUrl": "URL base",
+  "Settings.BaseUrlDescription": "URL base de un servidor compatible con OpenAI.",
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Token de portador opcional para el servidor.",
+  "Settings.TranscriptionModel": "Modelo de transcripción",
+  "Settings.ModelDescription": "Elige el modelo Qwen3 STT.",
+  "Settings.NotConfiguredBaseUrlRequired": "Plugin no configurado. Se requiere la URL base.",
+  "Manifest.Name": "Qwen3 STT",
+  "Manifest.Description": "Transcripción Qwen3 ASR mediante un endpoint compatible con OpenAI"
+}

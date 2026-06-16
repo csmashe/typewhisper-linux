@@ -1,0 +1,18 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Se almacena de forma segura y se utiliza tanto para la transcripción de Groq como para las solicitudes de LLM.",
+  "Settings.TranscriptionModel": "Modelo de transcripción",
+  "Settings.TranscriptionModelDescription": "Elige el modelo de transcripción de Groq.",
+  "Settings.LlmModel": "Modelo de LLM",
+  "Settings.LlmModelFetched": "Mostrando {0} modelo(s) de LLM de Groq obtenido(s) de la API.",
+  "Settings.LlmModelDefault": "Se está usando la lista de LLM predeterminada de Groq. Haz clic en Validar para probar la clave y actualizar los modelos actuales.",
+  "Settings.StreamResponses": "Transmitir respuestas",
+  "Settings.StreamResponsesDescription": "Muestra la salida de la acción del prompt token a token a medida que se genera, en lugar de esperar a la respuesta completa.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Settings.ApiKeyValidFetchedModels": "La clave de API es válida. Se obtuvieron {0} modelo(s) de LLM de Groq.",
+  "Settings.ApiKeyValidSavedModels": "La clave de API es válida. Se están usando los modelos de LLM guardados o predeterminados.",
+  "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
+  "Manifest.Name": "Groq",
+  "Manifest.Description": "Transcripción Groq Whisper y traducción Llama"
+}
