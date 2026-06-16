@@ -131,7 +131,7 @@
                              PlaceholderText="{loc:Str Dictionary.SearchPlaceholder}"
                              IsVisible="{Binding ShowSearchBox}" />
                     <TextBlock Grid.Column="1"
-                               Text="{Binding EntryCount, StringFormat='{}{0} Entries'}"
+                               Text="{Binding EntryCount, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Dictionary.EntriesCount}"
                                VerticalAlignment="Center"
                                Foreground="#8A9AAE"
                                FontSize="12" />

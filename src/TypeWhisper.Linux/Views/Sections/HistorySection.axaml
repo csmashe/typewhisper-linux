@@ -264,7 +264,7 @@
                                                                         Text="{Binding Record.Timestamp, StringFormat='{}{0:MM/dd/yyyy HH:mm}'}" />
                                                                     <Run Text=" · " />
                                                                     <Run
-                                                                        Text="{Binding Record.WordCount, StringFormat='{}{0} words'}" />
+                                                                        Text="{Binding Record.WordCount, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=History.WordsCount}" />
                                                                 </TextBlock>
                                                                 <TextBlock Foreground="#8A9AAE"
                                                                            FontSize="11"

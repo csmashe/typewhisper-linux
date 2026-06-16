@@ -108,9 +108,9 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock FontSize="11"
                                                Foreground="#8A9AAE">
-                                        <Run Text="{Binding ProcessNames.Count, StringFormat='{}{0} app rule(s)'}" />
+                                        <Run Text="{Binding ProcessNames.Count, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.AppRulesCount}" />
                                         <Run Text=" · " />
-                                        <Run Text="{Binding UrlPatterns.Count, StringFormat='{}{0} URL rule(s)'}" />
+                                        <Run Text="{Binding UrlPatterns.Count, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.UrlRulesCount}" />
                                     </TextBlock>
                                 </StackPanel>
                                 <ToggleSwitch Grid.Column="2"

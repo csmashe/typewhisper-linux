@@ -52,3 +52,20 @@ public sealed class LocKeyConverter : IValueConverter
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();
 }
+
+/// <summary>
+///     Localized replacement for XAML <c>StringFormat</c>: formats the bound
+///     value into the localized template named by the converter parameter.
+///     Usage: <c>{Binding Count, Converter={x:Static loc:LocFormatConverter.Instance},
+///     ConverterParameter=History.WordsCount}</c> with template "{0} words".
+/// </summary>
+public sealed class LocFormatConverter : IValueConverter
+{
+    public static readonly LocFormatConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        Loc.Instance.GetString(parameter as string ?? "", value);
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
