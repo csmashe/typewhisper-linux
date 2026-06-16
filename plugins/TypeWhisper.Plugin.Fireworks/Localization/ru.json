@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
   "Settings.ApiKeyValid": "API-ключ действителен.",
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
   "Manifest.Name": "Fireworks",
   "Manifest.Description": "Быстрый вывод LLM Fireworks AI"
 }

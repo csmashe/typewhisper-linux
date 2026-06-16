@@ -91,7 +91,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
             throw new InvalidOperationException("Smallest AI Pulse does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         using var request = new HttpRequestMessage(HttpMethod.Post, BuildPulseUri(language, includeWordTimestamps: true));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
@@ -112,7 +112,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         return await SmallestAiStreamingSession.ConnectAsync(_apiKey!, NormalizeLanguage(language), ct);
     }

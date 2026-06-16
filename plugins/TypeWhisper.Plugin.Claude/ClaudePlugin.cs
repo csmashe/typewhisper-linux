@@ -65,7 +65,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var requestBody = new
         {
@@ -122,7 +122,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var requestBody = new
         {

@@ -43,6 +43,8 @@
   "Settings.ChatGptLoginFailed": "ChatGPT login failed: {0}",
   "Settings.ChatGptLoginConnected": "ChatGPT login connected.",
   "Settings.ChatGptLoginConnectedPlan": "ChatGPT login connected. Plan: {0}.",
+  "Settings.ApiKeyNotConfigured": "API key not configured",
+  "Settings.ChatGptLoginNotConfigured": "ChatGPT login is not configured.",
   "Manifest.Name": "OpenAI / ChatGPT",
   "Manifest.Description": "OpenAI transcription, ChatGPT/OpenAI prompt processing, and text-to-speech. Use an API key for STT/TTS or ChatGPT login for prompts."
 }

@@ -22,6 +22,8 @@
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
   "Settings.ApiKeyValidFetched": "API-ключ действителен. Загружено моделей LLM: {0} и голосов: {1}.",
   "Settings.ApiKeyValidSaved": "API-ключ действителен. Используются сохранённые/стандартные модели и голоса.",
+  "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
+  "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
   "Manifest.Name": "xAI / Grok",
   "Manifest.Description": "Облачный LLM, распознавание речи и синтез речи через API xAI Grok. Требуется API-ключ xAI."
 }

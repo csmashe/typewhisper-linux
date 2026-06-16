@@ -43,6 +43,8 @@
   "Settings.ChatGptLoginFailed": "Не удалось войти в ChatGPT: {0}",
   "Settings.ChatGptLoginConnected": "Вход ChatGPT выполнен.",
   "Settings.ChatGptLoginConnectedPlan": "Вход ChatGPT выполнен. Тариф: {0}.",
+  "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
+  "Settings.ChatGptLoginNotConfigured": "Вход в ChatGPT не настроен.",
   "Manifest.Name": "OpenAI / ChatGPT",
   "Manifest.Description": "Транскрипция OpenAI, обработка промптов ChatGPT/OpenAI и синтез речи. Используйте API-ключ для STT/TTS или вход ChatGPT для промптов."
 }

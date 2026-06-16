@@ -250,7 +250,7 @@ public sealed class OpenAiPlugin
                 + "ChatGPT login can't authenticate the realtime endpoint."
             );
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
         if (_selectedModelId != OpenAiRealtimeStreamingSession.ModelId)
             throw new NotSupportedException(
                 "Select GPT Realtime Whisper to use OpenAI realtime streaming."
@@ -306,7 +306,7 @@ public sealed class OpenAiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         if (UsesResponsesApi(modelId))
         {
@@ -358,7 +358,7 @@ public sealed class OpenAiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
@@ -403,7 +403,7 @@ public sealed class OpenAiPlugin
     public async Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var text = request.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
@@ -831,7 +831,7 @@ public sealed class OpenAiPlugin
         }
 
         if (string.IsNullOrWhiteSpace(_oauthRefreshToken))
-            throw new InvalidOperationException("ChatGPT login is not configured.");
+            throw new InvalidOperationException(Loc.L("Settings.ChatGptLoginNotConfigured"));
 
         var refreshed = await OpenAiOAuthClient.RefreshTokenAsync(_httpClient, _oauthRefreshToken, ct);
         await StoreOAuthTokensAsync(refreshed, _oauthAccountId);

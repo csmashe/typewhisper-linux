@@ -4,6 +4,7 @@
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
   "Manifest.Name": "Smallest AI Pulse",
   "Manifest.Description": "Smallest AI Pulse speech-to-text transcription engine"
 }

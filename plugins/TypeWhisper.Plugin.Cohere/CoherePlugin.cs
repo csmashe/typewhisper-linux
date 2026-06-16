@@ -66,7 +66,7 @@ public sealed partial class CoherePlugin : ILlmProviderPlugin, IDisposable, IPlu
     )
     {
         if (!IsAvailable)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
@@ -93,7 +93,7 @@ public sealed partial class CoherePlugin : ILlmProviderPlugin, IDisposable, IPlu
         }
 
         if (!IsAvailable)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,

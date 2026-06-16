@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyFormatValid": "API-Schlüsselformat sieht gültig aus.",
   "Settings.ApiKeyFormatInvalid": "API-Schlüsselformat ist ungültig.",
+  "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
   "Manifest.Name": "Claude",
   "Manifest.Description": "Anthropic Claude LLM für die Prompt-Verarbeitung"
 }

@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
   "Manifest.Name": "Fireworks",
   "Manifest.Description": "Schnelle LLM-Inferenz von Fireworks AI"
 }

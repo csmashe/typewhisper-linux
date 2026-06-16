@@ -3,6 +3,7 @@
   "Settings.ApiKeyDescription": "Required for Speechmatics transcription.",
   "Settings.TranscriptionModel": "Transcription model",
   "Settings.ModelDescription": "Choose the Speechmatics model.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
   "Manifest.Name": "Speechmatics",
   "Manifest.Description": "Speechmatics speech-to-text transcription engine"
 }

@@ -13,6 +13,7 @@
   "Settings.InvalidApiKey": "Недействительный API-ключ Reson8.",
   "Settings.ApiKeyValidWithModels": "API-ключ действителен. Загружено своих моделей: {0}.",
   "Settings.ApiKeyValidShort": "API-ключ действителен.",
+  "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
   "Manifest.Name": "Reson8",
   "Manifest.Description": "Облачная транскрипция через API распознавания речи Reson8 с потоковой передачей WebSocket в реальном времени. Требуется API-ключ."
 }

@@ -3,6 +3,7 @@
   "Settings.ApiKeyDescription": "Требуется для транскрипции Gladia.",
   "Settings.TranscriptionModel": "Модель транскрипции",
   "Settings.ModelDescription": "Выберите модель Gladia.",
+  "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
   "Manifest.Name": "Gladia",
   "Manifest.Description": "Движок распознавания речи Gladia"
 }

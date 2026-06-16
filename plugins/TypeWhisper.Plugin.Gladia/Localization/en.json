@@ -3,6 +3,7 @@
   "Settings.ApiKeyDescription": "Required for Gladia transcription.",
   "Settings.TranscriptionModel": "Transcription model",
   "Settings.ModelDescription": "Choose the Gladia model.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
   "Manifest.Name": "Gladia",
   "Manifest.Description": "Gladia speech-to-text transcription engine"
 }

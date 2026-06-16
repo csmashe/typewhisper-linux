@@ -12,6 +12,7 @@
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
   "Settings.ApiKeyValidFetchedModels": "API-ключ действителен. Загружено моделей LLM Groq: {0}.",
   "Settings.ApiKeyValidSavedModels": "API-ключ действителен. Используются сохранённые/стандартные модели LLM.",
+  "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
   "Manifest.Name": "Groq",
   "Manifest.Description": "Транскрипция Groq Whisper и перевод Llama"
 }

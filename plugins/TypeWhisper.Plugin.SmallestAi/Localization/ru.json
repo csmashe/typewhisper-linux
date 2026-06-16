@@ -4,6 +4,7 @@
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
   "Settings.ApiKeyValid": "API-ключ действителен.",
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
   "Manifest.Name": "Smallest AI Pulse",
   "Manifest.Description": "Движок распознавания речи Smallest AI Pulse"
 }

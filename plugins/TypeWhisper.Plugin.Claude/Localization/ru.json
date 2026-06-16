@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
   "Settings.ApiKeyFormatValid": "Формат API-ключа выглядит корректным.",
   "Settings.ApiKeyFormatInvalid": "Формат API-ключа недействителен.",
+  "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
   "Manifest.Name": "Claude",
   "Manifest.Description": "LLM Anthropic Claude для обработки промптов"
 }

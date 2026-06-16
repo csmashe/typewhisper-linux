@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Settings.NotConfiguredMistralApiKeyRequired": "Plugin nicht konfiguriert. Mistral-API-Schlüssel erforderlich.",
   "Manifest.Name": "Voxtral",
   "Manifest.Description": "Voxtral (Mistral) Audiotranskription und Übersetzung"
 }

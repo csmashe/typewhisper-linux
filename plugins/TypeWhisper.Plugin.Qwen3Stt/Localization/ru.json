@@ -5,6 +5,7 @@
   "Settings.ApiKeyDescription": "Необязательный bearer-токен для сервера.",
   "Settings.TranscriptionModel": "Модель транскрипции",
   "Settings.ModelDescription": "Выберите модель Qwen3 STT.",
+  "Settings.NotConfiguredBaseUrlRequired": "Плагин не настроен. Требуется базовая URL.",
   "Manifest.Name": "Qwen3 STT",
   "Manifest.Description": "Транскрипция Qwen3 ASR через OpenAI-совместимый эндпоинт"
 }

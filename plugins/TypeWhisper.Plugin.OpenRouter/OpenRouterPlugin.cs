@@ -145,7 +145,7 @@ public sealed class OpenRouterPlugin
             throw new InvalidOperationException("OpenRouter STT does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         var modelId = _selectedTranscriptionModelId ?? TranscriptionModels.First().Id;
         return await SendAudioTranscriptionAsync(modelId, wavAudio, NormalizeLanguage(language), ct);
@@ -164,7 +164,7 @@ public sealed class OpenRouterPlugin
     public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
     {
         if (!IsAvailable)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? _selectedLlmModelId ?? SupportedModels.First().Id
@@ -186,7 +186,7 @@ public sealed class OpenRouterPlugin
         }
 
         if (!IsAvailable)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? _selectedLlmModelId ?? SupportedModels.First().Id

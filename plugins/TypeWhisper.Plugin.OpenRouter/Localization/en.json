@@ -21,6 +21,8 @@
   "Settings.FetchedLlmModels": "Fetched {0} LLM model(s).",
   "Settings.FetchedTranscriptionModels": "Fetched {0} transcription model(s).",
   "Settings.RemainingCredits": "Remaining credits: {0}.",
+  "Settings.ApiKeyNotConfigured": "API key not configured",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
   "Manifest.Name": "OpenRouter",
   "Manifest.Description": "Access LLMs and speech-to-text models from OpenAI, Anthropic, Meta, Google and more via OpenRouter. Shows model pricing and account balance. Requires API key."
 }

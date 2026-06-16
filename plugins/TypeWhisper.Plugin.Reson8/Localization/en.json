@@ -13,6 +13,7 @@
   "Settings.InvalidApiKey": "Invalid Reson8 API key.",
   "Settings.ApiKeyValidWithModels": "API key valid. {0} custom model(s) loaded.",
   "Settings.ApiKeyValidShort": "API key valid.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
   "Manifest.Name": "Reson8",
   "Manifest.Description": "Cloud transcription via Reson8 speech-to-text API with real-time WebSocket streaming. Requires API key."
 }

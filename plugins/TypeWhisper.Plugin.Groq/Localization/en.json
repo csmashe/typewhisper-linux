@@ -12,6 +12,7 @@
   "Settings.ApiKeyInvalid": "API key is invalid.",
   "Settings.ApiKeyValidFetchedModels": "API key is valid. Fetched {0} Groq LLM model(s).",
   "Settings.ApiKeyValidSavedModels": "API key is valid. Using saved/default LLM models.",
+  "Settings.ApiKeyNotConfigured": "API key not configured",
   "Manifest.Name": "Groq",
   "Manifest.Description": "Groq Whisper transcription and Llama translation"
 }

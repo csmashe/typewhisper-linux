@@ -12,6 +12,7 @@
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.ApiKeyValidFetchedModels": "API-Schlüssel ist gültig. {0} Groq-LLM-Modell(e) geladen.",
   "Settings.ApiKeyValidSavedModels": "API-Schlüssel ist gültig. Gespeicherte/Standard-LLM-Modelle werden verwendet.",
+  "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
   "Manifest.Name": "Groq",
   "Manifest.Description": "Groq-Whisper-Transkription und Llama-Übersetzung"
 }

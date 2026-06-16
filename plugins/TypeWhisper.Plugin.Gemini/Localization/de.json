@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
   "Manifest.Name": "Google Gemini",
   "Manifest.Description": "Google-Gemini-LLM-Anbieter für Prompt-Aktionen und Übersetzung"
 }

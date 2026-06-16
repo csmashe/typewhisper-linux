@@ -13,6 +13,7 @@
   "Settings.InvalidApiKey": "Ungültiger Reson8-API-Schlüssel.",
   "Settings.ApiKeyValidWithModels": "API-Schlüssel gültig. {0} eigene(s) Modell(e) geladen.",
   "Settings.ApiKeyValidShort": "API-Schlüssel gültig.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
   "Manifest.Name": "Reson8",
   "Manifest.Description": "Cloud-Transkription über die Reson8-Sprache-zu-Text-API mit Echtzeit-WebSocket-Streaming. Erfordert API-Schlüssel."
 }

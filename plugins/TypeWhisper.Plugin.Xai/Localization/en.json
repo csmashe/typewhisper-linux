@@ -22,6 +22,8 @@
   "Settings.ApiKeyInvalid": "API key is invalid.",
   "Settings.ApiKeyValidFetched": "API key is valid. Fetched {0} LLM model(s) and {1} voice(s).",
   "Settings.ApiKeyValidSaved": "API key is valid. Using saved/default models and voices.",
+  "Settings.ApiKeyNotConfigured": "API key not configured",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
   "Manifest.Name": "xAI / Grok",
   "Manifest.Description": "Cloud LLM, speech-to-text, and text-to-speech via xAI Grok APIs. Requires an xAI API key."
 }

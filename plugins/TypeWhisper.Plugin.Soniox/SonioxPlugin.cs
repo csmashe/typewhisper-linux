@@ -94,7 +94,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         return await SonioxStreamingSession.ConnectAsync(_apiKey!, language, ct);
     }
@@ -121,7 +121,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         // out partway through the multi-request async flow below.
         var apiKey = _apiKey;
         if (string.IsNullOrEmpty(apiKey))
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         string? fileId = null;
         string? transcriptionId = null;

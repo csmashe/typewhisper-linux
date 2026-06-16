@@ -54,7 +54,7 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
         return await AssemblyAiStreamingSession.ConnectAsync(_apiKey!, language, ct);
     }
 

@@ -138,7 +138,7 @@ public sealed class XaiPlugin
             throw new InvalidOperationException("xAI STT does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         using var form = new MultipartFormDataContent();
         var normalizedLanguage = NormalizeLanguage(language);
@@ -164,7 +164,7 @@ public sealed class XaiPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         // Run through the same normalization the batch TranscribeAsync uses
         // so a setting value like " de " or "auto" doesn't propagate into the
@@ -185,7 +185,7 @@ public sealed class XaiPlugin
     public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? _selectedLlmModelId ?? SupportedModels.First().Id
@@ -207,7 +207,7 @@ public sealed class XaiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? _selectedLlmModelId ?? SupportedModels.First().Id
@@ -252,7 +252,7 @@ public sealed class XaiPlugin
     public async Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var text = request.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))

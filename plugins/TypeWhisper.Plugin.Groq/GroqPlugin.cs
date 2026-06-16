@@ -156,7 +156,7 @@ public sealed partial class GroqPlugin
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = ResolveLlmModelId(string.IsNullOrWhiteSpace(model) ? null : model);
         return await OpenAiChatHelper.SendChatCompletionAsync(
@@ -184,7 +184,7 @@ public sealed partial class GroqPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = ResolveLlmModelId(string.IsNullOrWhiteSpace(model) ? null : model);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(

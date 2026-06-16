@@ -65,7 +65,7 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. Base URL required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredBaseUrlRequired"));
 
         if (translate)
             throw new NotSupportedException(

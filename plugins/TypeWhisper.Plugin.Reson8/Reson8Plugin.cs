@@ -112,7 +112,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
         using var request = new HttpRequestMessage(
@@ -143,7 +143,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         try
         {
@@ -191,7 +191,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         return await Reson8StreamingSession.ConnectAsync(
             _apiKey!,
@@ -516,13 +516,13 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             ? property.GetString()
             : null;
 
-    private static void ThrowForApiError(HttpStatusCode statusCode, string json)
+    private void ThrowForApiError(HttpStatusCode statusCode, string json)
     {
         var message = ExtractApiError(json);
         switch (statusCode)
         {
             case HttpStatusCode.Unauthorized:
-                throw new UnauthorizedAccessException("Invalid Reson8 API key.");
+                throw new UnauthorizedAccessException(Loc.L("Settings.InvalidApiKey"));
             case HttpStatusCode.NotFound:
                 throw new KeyNotFoundException($"Reson8 custom model not found: {message}");
             case HttpStatusCode.RequestEntityTooLarge:

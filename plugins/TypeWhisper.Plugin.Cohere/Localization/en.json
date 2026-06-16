@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Settings.ApiKeyNotConfigured": "API key not configured",
   "Manifest.Name": "Cohere",
   "Manifest.Description": "Cohere Command LLM for prompt processing"
 }

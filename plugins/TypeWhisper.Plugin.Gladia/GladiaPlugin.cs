@@ -57,7 +57,7 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         return await GladiaStreamingSession.ConnectAsync(_httpClient, _apiKey!, language, ct);
     }
@@ -79,7 +79,7 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         using var content = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(wavAudio);

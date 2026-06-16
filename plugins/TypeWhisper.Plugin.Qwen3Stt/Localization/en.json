@@ -5,6 +5,7 @@
   "Settings.ApiKeyDescription": "Optional bearer token for the server.",
   "Settings.TranscriptionModel": "Transcription model",
   "Settings.ModelDescription": "Choose the Qwen3 STT model.",
+  "Settings.NotConfiguredBaseUrlRequired": "Plugin not configured. Base URL required.",
   "Manifest.Name": "Qwen3 STT",
   "Manifest.Description": "Qwen3 ASR transcription via OpenAI-compatible endpoint"
 }

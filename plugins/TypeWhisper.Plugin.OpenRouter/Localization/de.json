@@ -21,6 +21,8 @@
   "Settings.FetchedLlmModels": "{0} LLM-Modell(e) geladen.",
   "Settings.FetchedTranscriptionModels": "{0} Transkriptionsmodell(e) geladen.",
   "Settings.RemainingCredits": "Verbleibendes Guthaben: {0}.",
+  "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
   "Manifest.Name": "OpenRouter",
   "Manifest.Description": "Zugriff auf LLMs und Sprache-zu-Text-Modelle von OpenAI, Anthropic, Meta, Google und mehr über OpenRouter. Zeigt Modellpreise und Kontostand. Erfordert API-Schlüssel."
 }

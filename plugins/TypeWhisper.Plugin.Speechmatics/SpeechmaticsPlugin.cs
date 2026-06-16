@@ -54,7 +54,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         // Speechmatics v2 requires an explicit language code; it has no automatic
         // language detection. The host maps an "auto" profile to null before calling
@@ -88,7 +88,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         // Speechmatics v2 requires an explicit language code; it has no automatic
         // language detection. Reject null/empty/"auto" rather than silently

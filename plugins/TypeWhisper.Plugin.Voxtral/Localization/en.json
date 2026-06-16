@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Settings.NotConfiguredMistralApiKeyRequired": "Plugin not configured. Mistral API key required.",
   "Manifest.Name": "Voxtral",
   "Manifest.Description": "Voxtral (Mistral) audio transcription and translation"
 }

@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
   "Manifest.Name": "AssemblyAI",
   "Manifest.Description": "AssemblyAI-Universal-2-Transkriptions-Engine"
 }

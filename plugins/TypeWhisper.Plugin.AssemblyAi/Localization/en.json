@@ -6,6 +6,7 @@
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
   "Manifest.Name": "AssemblyAI",
   "Manifest.Description": "AssemblyAI Universal-2 transcription engine"
 }

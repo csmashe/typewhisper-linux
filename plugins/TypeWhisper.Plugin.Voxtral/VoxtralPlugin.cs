@@ -61,7 +61,7 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. Mistral API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredMistralApiKeyRequired"));
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,

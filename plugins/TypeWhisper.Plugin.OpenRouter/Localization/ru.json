@@ -21,6 +21,8 @@
   "Settings.FetchedLlmModels": "Загружено моделей LLM: {0}.",
   "Settings.FetchedTranscriptionModels": "Загружено моделей транскрипции: {0}.",
   "Settings.RemainingCredits": "Остаток средств: {0}.",
+  "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
+  "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
   "Manifest.Name": "OpenRouter",
   "Manifest.Description": "Доступ к LLM и моделям распознавания речи от OpenAI, Anthropic, Meta, Google и других через OpenRouter. Показывает цены моделей и баланс счёта. Требуется API-ключ."
 }

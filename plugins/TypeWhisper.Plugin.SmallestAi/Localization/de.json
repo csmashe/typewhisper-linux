@@ -4,6 +4,7 @@
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
   "Manifest.Name": "Smallest AI Pulse",
   "Manifest.Description": "Smallest-AI-Pulse-Sprache-zu-Text-Transkriptions-Engine"
 }

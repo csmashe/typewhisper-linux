@@ -72,7 +72,7 @@ public sealed partial class GoogleCloudSttPlugin
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         // Google STT's LINEAR16 encoding wants raw PCM, not a WAV container —
         // strip the standard 44-byte header. (TypeWhisper always emits the

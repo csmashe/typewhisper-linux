@@ -4,6 +4,7 @@
   "Settings.ApiKeyRequired": "Требуется API-ключ.",
   "Settings.ApiKeyValid": "API-ключ Soniox действителен.",
   "Settings.ApiKeyInvalid": "Не удалось проверить API-ключ Soniox.",
+  "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
   "Manifest.Name": "Soniox",
   "Manifest.Description": "Движок распознавания речи Soniox"
 }

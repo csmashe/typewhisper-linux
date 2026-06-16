@@ -549,7 +549,7 @@ public class XaiPluginTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             sut.StartStreamingAsync(language: null, CancellationToken.None));
 
-        Assert.Contains("API key required", ex.Message);
+        Assert.Contains("Settings.NotConfiguredApiKeyRequired", ex.Message);
     }
 
     [Fact]

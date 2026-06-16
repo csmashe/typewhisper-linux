@@ -43,6 +43,8 @@
   "Settings.ChatGptLoginFailed": "ChatGPT-Anmeldung fehlgeschlagen: {0}",
   "Settings.ChatGptLoginConnected": "ChatGPT-Anmeldung verbunden.",
   "Settings.ChatGptLoginConnectedPlan": "ChatGPT-Anmeldung verbunden. Tarif: {0}.",
+  "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
+  "Settings.ChatGptLoginNotConfigured": "ChatGPT-Anmeldung ist nicht konfiguriert.",
   "Manifest.Name": "OpenAI / ChatGPT",
   "Manifest.Description": "OpenAI-Transkription, ChatGPT/OpenAI-Prompt-Verarbeitung und Text-to-Speech. API-Schlüssel für STT/TTS oder ChatGPT-Anmeldung für Prompts verwenden."
 }

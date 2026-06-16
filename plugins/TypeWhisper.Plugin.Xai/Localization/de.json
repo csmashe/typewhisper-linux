@@ -22,6 +22,8 @@
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.ApiKeyValidFetched": "API-Schlüssel ist gültig. {0} LLM-Modell(e) und {1} Stimme(n) geladen.",
   "Settings.ApiKeyValidSaved": "API-Schlüssel ist gültig. Gespeicherte/Standard-Modelle und -Stimmen werden verwendet.",
+  "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
   "Manifest.Name": "xAI / Grok",
   "Manifest.Description": "Cloud-LLM, Sprache-zu-Text und Text-to-Speech über die xAI-Grok-APIs. Erfordert einen xAI-API-Schlüssel."
 }
