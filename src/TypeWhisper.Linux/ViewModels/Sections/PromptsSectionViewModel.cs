@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -371,19 +372,17 @@ public partial class PromptsSectionViewModel : ObservableObject
                 var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
             )
             {
-                var plugin = _pluginManager.AllPlugins.FirstOrDefault(candidate =>
-                    ReferenceEquals(candidate.Instance, provider)
-                );
-                if (plugin is null)
-                {
-                    continue;
-                }
-
+                // Use the provider's selection ID rather than mapping back to a loaded
+                // plugin by reference — additional provider roles (e.g. OpenAI-compatible
+                // profiles) are not themselves plugin instances, so a ReferenceEquals
+                // lookup would skip them. For normal plugins the selection ID is the
+                // plugin/manifest ID, so existing selections are unchanged.
+                var selectionId = provider.GetLlmSelectionId();
                 foreach (var model in provider.SupportedModels)
                 {
                     resolvedOptions.Add(
                         new ProviderOption(
-                            $"plugin:{plugin.Manifest.Id}:{model.Id}",
+                            $"plugin:{selectionId}:{model.Id}",
                             $"{provider.ProviderName} / {model.DisplayName}"
                         )
                     );

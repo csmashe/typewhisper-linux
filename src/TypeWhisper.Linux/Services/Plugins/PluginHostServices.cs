@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -25,6 +26,7 @@ public sealed class PluginHostServices : IPluginHostServices
     private readonly PluginLocalization _localization;
     private readonly Action? _onCapabilitiesChanged;
     private readonly string _pluginDataDirectory;
+    private readonly ISettingsService? _settings;
 
     private readonly string _pluginId;
     private readonly IProfileService _profiles;
@@ -39,6 +41,7 @@ public sealed class PluginHostServices : IPluginHostServices
         IActiveWindowService activeWindow,
         IPluginEventBus eventBus,
         IProfileService profiles,
+        ISettingsService? settings = null,
         Action? onCapabilitiesChanged = null
     )
     {
@@ -46,6 +49,7 @@ public sealed class PluginHostServices : IPluginHostServices
         _activeWindow = activeWindow;
         EventBus = eventBus;
         _profiles = profiles;
+        _settings = settings;
         _onCapabilitiesChanged = onCapabilitiesChanged;
         _localization = new PluginLocalization(pluginDirectory);
         _pluginDataDirectory = Path.Combine(TypeWhisperEnvironment.PluginDataPath, pluginId);
@@ -58,6 +62,20 @@ public sealed class PluginHostServices : IPluginHostServices
         {
             Directory.CreateDirectory(_pluginDataDirectory);
             return _pluginDataDirectory;
+        }
+    }
+
+    // Large model/runtime assets follow the user-configured storage path when set;
+    // falls back to PluginDataDirectory (under AppData) when no custom path is configured
+    // or no settings service was provided.
+    public string PluginAssetDirectory
+    {
+        get
+        {
+            if (_settings is null)
+                return PluginDataDirectory;
+
+            return LocalModelStorageService.ResolveAvailablePluginAssetDirectory(_settings.Current, _pluginId);
         }
     }
 

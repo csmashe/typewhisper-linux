@@ -599,10 +599,10 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     }
 
     private string GetModelDirectory(string modelId) =>
-        Path.Combine(_host?.PluginDataDirectory ?? ".", "Models", modelId);
+        Path.Join(_host?.PluginAssetDirectory ?? ".", "Models", modelId);
 
     private string GetModelFilePath(string modelId, string fileName) =>
-        Path.Combine(GetModelDirectory(modelId), fileName);
+        Path.Join(GetModelDirectory(modelId), fileName);
 
     private static GemmaModelDefinition GetModelDefinition(string modelId) =>
         Models.FirstOrDefault(m => m.Id == modelId)

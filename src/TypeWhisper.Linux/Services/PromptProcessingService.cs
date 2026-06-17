@@ -199,9 +199,11 @@ public sealed class PromptProcessingService
 
         var pluginId = parts[1];
         var modelId = parts[2];
-        var plugin = _pluginManager.GetPlugin(pluginId)?.Instance;
+        // Match by LLM selection ID so additional provider roles (OpenAI-compatible
+        // profiles) resolve too. For normal plugins the selection ID equals the
+        // plugin/manifest ID, so previously-saved selections keep resolving.
         var provider = _pluginManager.LlmProviders.FirstOrDefault(candidate =>
-            ReferenceEquals(candidate, plugin) && candidate.IsAvailable
+            candidate.GetLlmSelectionId() == pluginId && candidate.IsAvailable
         );
 
         return provider is null ? (null, string.Empty) : (provider, modelId);

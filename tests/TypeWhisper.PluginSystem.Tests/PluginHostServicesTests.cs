@@ -100,7 +100,7 @@ public class PluginHostServicesTests : IDisposable
             _activeWindow.Object,
             _eventBus.Object,
             _profiles.Object,
-            onCapabilitiesChanged
+            onCapabilitiesChanged: onCapabilitiesChanged
         );
     }
 }
