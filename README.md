@@ -20,7 +20,7 @@ The Linux branch currently includes:
 - Drag-and-drop file transcription with batch queues, watch folders, and `ffmpeg`-based import when available
 - Session recording to WAV with optional transcript sidecar text files
 - Searchable history, recent transcriptions, dictionary corrections and term packs, snippets, and profiles
-- Configurable dictation overlay with selectable Indicator, Waveform, and Text widgets, including a live audio-level waveform visualization
+- Configurable dictation overlay with two content slots, each showing one of several widgets (indicator, timer, waveform, clock, profile, hotkey mode, app name), including a live audio-level waveform visualization
 - Tray integration and XDG autostart support
 - Settings backup and restore
 - Local HTTP API and installable CLI for desktop automation
@@ -34,7 +34,7 @@ This branch contains Linux-specific work that is not part of the original branch
 - Linux desktop integration through Avalonia, XDG autostart, Linux tray behavior, and a user-level desktop launcher
 - Wayland global hotkey detection via an evdev backend that reads `/dev/input/event*` directly, so the configured shortcut fires regardless of which window has focus; falls back to the XDG portal and then focused-only SharpHook when the evdev path is unavailable. Enabled by default, requires the current user to be in the `input` group, and can be turned off from Settings → Shortcuts to keep focused-only behavior
 - A Shortcuts settings panel with per-desktop shortcut writers (GNOME, KDE, Hyprland, Sway) and a one-click auto-setup flow, so the configured TypeWhisper hotkey is registered with the active desktop environment without hand-editing config files
-- Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `canberra-gtk-play`, or CUDA runtime libraries
+- Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `pw-play`/`paplay`/`aplay`, or CUDA runtime libraries
 - Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
 - Linux session audio handling for dictation, file transcription, and recorder workflows
 - Optional transcription cleanup pipeline with `Light` (deterministic), `Medium`, and `High` levels — Medium/High route through the configured LLM provider and degrade to Light when no provider is available
@@ -81,7 +81,7 @@ This branch contains Linux-specific work that is not part of the original branch
 
 Some Linux dictation features depend on external desktop tools:
 
-- Sound feedback uses `canberra-gtk-play`
+- Sound feedback uses `pw-play`, `paplay`, or `aplay` (the first available PCM player)
 - Audio ducking uses `pactl`
 - Media pause uses `playerctl`
 - Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session. On wlroots compositors (Hyprland, Sway) `wtype` is tried first; on GNOME and KDE Wayland — which omit the wtype virtual-keyboard protocol — `ydotool` is tried first instead, with `wtype` and `xdotool` as later fallbacks. X11 sessions use `xdotool`.
@@ -103,7 +103,7 @@ The Advanced page exposes:
 
 - History retention mode — `Duration` (default 90 days), `Forever`, or `Until app closes`
 - `Save to history` toggle for runs you do not want stored
-- Model auto-unload after a configurable idle timeout (`0` disables the auto-unload)
+- Model auto-unload after a selectable idle period — `Never`, 30 seconds, 1 minute, 5 minutes, or 15 minutes (`Never` keeps the model loaded)
 - Memory enable toggle, gated on having both a memory storage plugin and an available LLM provider
 - Spoken feedback toggle, provider selection (defaults to the bundled Linux system TTS), and voice selection per provider
 
@@ -220,7 +220,7 @@ the walker reached the address bar but didn't recognise it.
 - Optional desktop helpers:
   - `pactl` for audio ducking
   - `playerctl` for media pause during recording
-  - `canberra-gtk-play` for sound feedback
+  - `pw-play`, `paplay`, or `aplay` for sound feedback
   - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
   - `xclip` (X11 clipboard) and `wl-copy`/`wl-paste` (Wayland clipboard) for clipboard-backed auto-paste
   - `wtype` (wlroots Wayland: Hyprland, Sway) and `ydotool` (GNOME / KDE Wayland, where wtype is unavailable) for Wayland keyboard input; `xdotool` as a fallback on X11 and XWayland apps. `ydotool` requires its daemon to be running and the current user to be in the `input` group
@@ -292,7 +292,7 @@ Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linu
 | Fedora / RHEL `.rpm` | `typewhisper-<version>-1.x86_64.rpm` | `/opt/typewhisper` with `/usr/bin/typewhisper` wrapper | `sudo dnf install ./typewhisper-<version>-1.x86_64.rpm`. Recommends `pulseaudio-libs`, `pulseaudio-utils`, `playerctl`, `xdotool`. |
 | Tarball | `typewhisper-linux-x64-<version>.tar.gz` | User-local: `~/.local/share/TypeWhisper` + `~/.local/bin/typewhisper` symlink | No root required. Extract, then `./install.sh` (or `./install.sh --uninstall` to remove). |
 
-All four formats bundle the self-contained .NET runtime and the Linux plugins — `.NET 10 SDK` is only needed if you're building from source. Optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `wl-copy`/`xclip`, `canberra-gtk-play`, `espeak-ng`) are still installed via your distro; see *Linux Requirements* above.
+All four formats bundle the self-contained .NET runtime and the Linux plugins — `.NET 10 SDK` is only needed if you're building from source. Optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `wl-copy`/`xclip`, `pw-play`/`paplay`/`aplay`, `espeak-ng`) are still installed via your distro; see *Linux Requirements* above.
 
 The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayland global hotkeys (`input`-group membership for the evdev backend) still need their per-distro setup steps regardless of which package format you install.
 
@@ -360,7 +360,7 @@ The Linux app includes a local HTTP API for integrations and automation. Configu
 
 - `Enable local API`
 - `Port`, defaulting to `9876`
-- Optional bearer token, when configured
+- An auto-generated bearer token, shown read-only, that API clients must present
 
 When enabled, TypeWhisper listens on `http://localhost:<port>/`.
 
