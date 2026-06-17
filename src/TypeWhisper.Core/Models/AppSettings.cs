@@ -64,7 +64,7 @@ public record AppSettings
     // Audio features
     public bool WhisperModeEnabled { get; init; }
     public bool AudioDuckingEnabled { get; init; }
-    public float AudioDuckingLevel { get; init; } = 0.2f;
+    public float AudioDuckingLevel { get; init; } = 0.4f;
     public bool PauseMediaDuringRecording { get; init; }
     public bool SoundFeedbackEnabled { get; init; } = true;
     public bool TranscribeShortQuietClipsAggressively { get; init; }
