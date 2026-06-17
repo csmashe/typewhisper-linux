@@ -38,6 +38,9 @@ public partial class AppearanceSectionViewModel : ObservableObject
         _settings = settings;
         Refresh(settings.Current);
         _settings.SettingsChanged += Refresh;
+        // Option labels and the localized status/preview getters are resolved into
+        // strings, so re-resolve them when the UI language changes at runtime.
+        Loc.Instance.LanguageChanged += OnLanguageChanged;
     }
 
     /// <summary>
@@ -57,20 +60,20 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     public IReadOnlyList<OverlayPositionOption> OverlayPositions { get; } =
     [
-        new(OverlayPosition.Top, Loc.Instance["Appearance.PositionTop"]),
-        new(OverlayPosition.Bottom, Loc.Instance["Appearance.PositionBottom"])
+        new(OverlayPosition.Top, "Appearance.PositionTop"),
+        new(OverlayPosition.Bottom, "Appearance.PositionBottom")
     ];
 
     public IReadOnlyList<OverlayWidgetOption> OverlayWidgets { get; } =
     [
-        new(OverlayWidget.None, Loc.Instance["Appearance.WidgetNone"]),
-        new(OverlayWidget.Indicator, Loc.Instance["Appearance.WidgetIndicator"]),
-        new(OverlayWidget.Timer, Loc.Instance["Appearance.WidgetTimer"]),
-        new(OverlayWidget.Waveform, Loc.Instance["Appearance.WidgetWaveform"]),
-        new(OverlayWidget.Clock, Loc.Instance["Appearance.WidgetClock"]),
-        new(OverlayWidget.Profile, Loc.Instance["Appearance.WidgetProfile"]),
-        new(OverlayWidget.HotkeyMode, Loc.Instance["Appearance.WidgetHotkeyMode"]),
-        new(OverlayWidget.AppName, Loc.Instance["Appearance.WidgetAppName"])
+        new(OverlayWidget.None, "Appearance.WidgetNone"),
+        new(OverlayWidget.Indicator, "Appearance.WidgetIndicator"),
+        new(OverlayWidget.Timer, "Appearance.WidgetTimer"),
+        new(OverlayWidget.Waveform, "Appearance.WidgetWaveform"),
+        new(OverlayWidget.Clock, "Appearance.WidgetClock"),
+        new(OverlayWidget.Profile, "Appearance.WidgetProfile"),
+        new(OverlayWidget.HotkeyMode, "Appearance.WidgetHotkeyMode"),
+        new(OverlayWidget.AppName, "Appearance.WidgetAppName")
     ];
 
     public string PreviewBubbleAutoHideSecondsText =>
@@ -107,6 +110,27 @@ public partial class AppearanceSectionViewModel : ObservableObject
         }
 
         _settings.Save(_settings.Current with { OverlayCustomLeft = null, OverlayCustomTop = null });
+    }
+
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        foreach (var option in OverlayPositions)
+        {
+            option.RefreshDisplayName();
+        }
+
+        foreach (var option in OverlayWidgets)
+        {
+            option.RefreshDisplayName();
+        }
+
+        // The remaining localized labels in this view are computed getters bound
+        // via {Binding}, so nudge them to re-read from Loc in the new language.
+        OnPropertyChanged(nameof(NotificationBodyPreview));
+        OnPropertyChanged(nameof(PreviewBubbleAutoHideSecondsText));
+        OnPropertyChanged(nameof(OverlayPositionStatusText));
+        OnPropertyChanged(nameof(PreviewLeftText));
+        OnPropertyChanged(nameof(PreviewRightText));
     }
 
     private void Refresh(AppSettings settings)
@@ -211,6 +235,23 @@ public partial class AppearanceSectionViewModel : ObservableObject
     }
 }
 
-public sealed record OverlayPositionOption(OverlayPosition Value, string DisplayName);
+// Stores the localization key (not the resolved string) so DisplayName can be
+// re-resolved on a live UI-language switch. Item instances stay stable, so the
+// ComboBox selection is preserved — only the rendered text changes.
+public sealed partial class OverlayPositionOption(OverlayPosition value, string displayNameKey)
+    : ObservableObject
+{
+    public OverlayPosition Value { get; } = value;
+    public string DisplayName => Loc.Instance[displayNameKey];
 
-public sealed record OverlayWidgetOption(OverlayWidget Value, string DisplayName);
+    public void RefreshDisplayName() => OnPropertyChanged(nameof(DisplayName));
+}
+
+public sealed partial class OverlayWidgetOption(OverlayWidget value, string displayNameKey)
+    : ObservableObject
+{
+    public OverlayWidget Value { get; } = value;
+    public string DisplayName => Loc.Instance[displayNameKey];
+
+    public void RefreshDisplayName() => OnPropertyChanged(nameof(DisplayName));
+}

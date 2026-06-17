@@ -92,6 +92,9 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         // versions of the app (DashboardSelectedPeriod is an unvalidated int).
         _selectedRange = ReadSelectedRange(settings.Current.DashboardSelectedPeriod);
         _history.RecordsChanged += OnRecordsChanged;
+        // The localized labels (InsertedBreakdownLabel) and TopApps rows (Summary)
+        // are resolved into stored strings, so rebuild them on a live language switch.
+        Loc.Instance.LanguageChanged += OnLanguageChanged;
         _ = InitializeAsync();
     }
 
@@ -104,6 +107,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     {
         _disposed = true;
         _history.RecordsChanged -= OnRecordsChanged;
+        Loc.Instance.LanguageChanged -= OnLanguageChanged;
     }
 
     partial void OnSelectedRangeChanged(TimeRange value)
@@ -146,6 +150,10 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
             Dispatcher.UIThread.Post(Refresh);
         }
     }
+
+    // LanguageChanged is raised on the UI thread (from the settings binding), so
+    // Refresh can run directly and re-resolve the localized labels/rows in place.
+    private void OnLanguageChanged(object? sender, EventArgs e) => Refresh();
 
     private void Refresh()
     {

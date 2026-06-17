@@ -108,6 +108,9 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         _settings.SettingsChanged += settingsValue =>
             Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
         _watchFolder.StateChanged += (_, _) => Dispatcher.UIThread.Post(SyncWatchFolderState);
+        // Item status texts and the queue summary are resolved into stored strings,
+        // so re-resolve them when the user switches UI language at runtime.
+        Loc.Instance.LanguageChanged += (_, _) => OnLanguageChanged();
 
         if (WatchFolderAutoStart && HasWatchFolderPath)
         {
@@ -430,6 +433,17 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                 RefreshSelectedItemResult();
             }
         });
+    }
+
+    private void OnLanguageChanged()
+    {
+        foreach (var item in Items)
+        {
+            item.RefreshLocalizedText();
+        }
+
+        // Also re-resolves the section-level summary / "drag or select files" text.
+        RefreshStatusText();
     }
 
     private void RefreshStatusText()
