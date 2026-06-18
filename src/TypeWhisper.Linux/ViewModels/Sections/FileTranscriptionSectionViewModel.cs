@@ -444,6 +444,12 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
 
         // Also re-resolves the section-level summary / "drag or select files" text.
         RefreshStatusText();
+
+        // The remaining localized labels are computed getters bound via {Binding},
+        // so nudge them to re-read from Loc in the new language.
+        OnPropertyChanged(nameof(ImporterUnavailableReason));
+        OnPropertyChanged(nameof(WatchFolderOutputPathDisplay));
+        OnPropertyChanged(nameof(WatchFolderStatusText));
     }
 
     private void RefreshStatusText()
