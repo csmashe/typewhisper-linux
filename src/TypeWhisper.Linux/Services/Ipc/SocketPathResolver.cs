@@ -36,13 +36,13 @@ internal static class SocketPathResolver
         var xdg = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         if (!string.IsNullOrEmpty(xdg) && Directory.Exists(xdg))
         {
-            var dir = Path.Combine(xdg, "typewhisper");
+            var dir = Path.Join(xdg, "typewhisper");
             try
             {
                 Directory.CreateDirectory(dir);
                 // Explicit chmod is cheap insurance against odd umasks.
                 TryChmod(dir, 0b111_000_000); // 0700
-                return Path.Combine(dir, SocketFileName);
+                return Path.Join(dir, SocketFileName);
             }
             catch (Exception ex)
             {

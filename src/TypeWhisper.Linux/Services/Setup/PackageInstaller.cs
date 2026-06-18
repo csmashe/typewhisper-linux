@@ -179,12 +179,9 @@ public sealed class PackageInstaller
             }
         }
 
-        foreach (var manager in tokens.Select(MapDistroToManager))
+        foreach (var manager in tokens.Select(MapDistroToManager).OfType<string>())
         {
-            if (manager is not null)
-            {
-                yield return manager;
-            }
+            yield return manager;
         }
     }
 

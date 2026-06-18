@@ -162,8 +162,8 @@ public sealed class CliInstallService
         var baseDirectory = AppContext.BaseDirectory;
         var candidates = new[]
         {
-            Path.Combine(baseDirectory, "Cli", CliFileName),
-            Path.Combine(baseDirectory, "..", "TypeWhisper.Cli", CliFileName), Path.Combine(
+            Path.Join(baseDirectory, "Cli", CliFileName),
+            Path.Join(baseDirectory, "..", "TypeWhisper.Cli", CliFileName), Path.Join(
                 baseDirectory,
                 "..",
                 "..",
@@ -175,7 +175,7 @@ public sealed class CliInstallService
                 "net10.0",
                 CliFileName
             ),
-            Path.Combine(
+            Path.Join(
                 baseDirectory,
                 "..",
                 "..",

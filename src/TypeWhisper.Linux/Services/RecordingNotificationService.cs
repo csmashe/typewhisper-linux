@@ -104,14 +104,7 @@ public sealed partial class RecordingNotificationService : IDisposable
             generation = ++_generation;
         }
 
-        if (state.IsRecording)
-        {
-            _ = ShowAsync(generation);
-        }
-        else
-        {
-            _ = CloseAsync(generation);
-        }
+        _ = state.IsRecording ? ShowAsync(generation) : CloseAsync(generation);
     }
 
     private async Task ShowAsync(uint generation)
