@@ -173,6 +173,30 @@ public sealed class WhisperCppPlugin
             99,
             false
         ),
+        // Full large-v3 (32-layer decoder, not turbo's distilled 4-layer) garbles
+        // far less on short cue words; fits a 1070's 8 GB VRAM under NVIDIA CUDA.
+        new(
+            "large-v3",
+            "Large V3",
+            GgmlType.LargeV3,
+            QuantizationType.NoQuantization,
+            "ggml-large-v3.bin",
+            "~3.1 GB",
+            3095,
+            99,
+            false
+        ),
+        new(
+            "large-v3-q5_0",
+            "Large V3 (Q5_0)",
+            GgmlType.LargeV3,
+            QuantizationType.Q5_0,
+            "ggml-large-v3-q5_0.bin",
+            "~1.1 GB",
+            1081,
+            99,
+            false
+        ),
     ];
 
     private readonly SemaphoreSlim _gate = new(1, 1);
