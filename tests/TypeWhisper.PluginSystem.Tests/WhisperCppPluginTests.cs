@@ -109,8 +109,9 @@ public class WhisperCppPluginTests
         var root = Path.Join(Path.GetTempPath(), "tw-whisper-cuda-" + Guid.NewGuid().ToString("N"));
         var installer = new WhisperCudaRuntimeInstaller(root, http);
 
-        // Replicates Whisper.net's NativeLibraryLoader path arithmetic for linux-x64.
-        var loaderSearchDir = Path.Combine(
+        // Mirrors the directory Whisper.net's NativeLibraryLoader searches for
+        // linux-x64: LibraryPath's parent + runtimes/cuda/linux-x64.
+        var loaderSearchDir = Path.Join(
             Path.GetDirectoryName(installer.LibraryPath)!,
             "runtimes",
             "cuda",
@@ -150,7 +151,7 @@ public class WhisperCppPluginTests
     {
         var testDir = Path.GetDirectoryName(thisFile)!;
         return Path.GetFullPath(
-            Path.Combine(
+            Path.Join(
                 testDir, "..", "..",
                 "plugins", "TypeWhisper.Plugin.WhisperCpp",
                 "TypeWhisper.Plugin.WhisperCpp.csproj"));
