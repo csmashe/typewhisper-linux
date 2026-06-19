@@ -1,0 +1,20 @@
+{
+  "Settings.Name": "Имя",
+  "Settings.Command": "Команда",
+  "Settings.Shell": "Оболочка",
+  "Settings.ShellBashDefault": "bash (по умолчанию)",
+  "Settings.Enabled": "Включено",
+  "Settings.Scripts": "Скрипты",
+  "Settings.ScriptsDescription": "Скрипты оболочки, применяемые к транскрипту по порядку.",
+  "Settings.AddScript": "Добавить скрипт",
+  "Settings.UnknownCollection": "Неизвестная коллекция.",
+  "Settings.Unnamed": "(без имени)",
+  "Settings.ScriptNameRequired": "Скрипт '{0}': требуется имя.",
+  "Settings.ScriptCommandRequired": "Скрипт '{0}': требуется команда.",
+  "Settings.ScriptUnknownShell": "Скрипт '{0}': неизвестная оболочка '{1}'.",
+  "Settings.RefuseOverwriteScripts": "Перезапись scripts.json отклонена — не удалось прочитать существующий файл: {0}",
+  "Settings.FailedToSaveScripts": "Не удалось сохранить скрипты: {0}",
+  "Settings.Saved": "Сохранено.",
+  "Manifest.Name": "Запуск скриптов",
+  "Manifest.Description": "Обработка транскрипций пользовательскими скриптами оболочки"
+}

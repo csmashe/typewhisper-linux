@@ -11,6 +11,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Ipc;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -48,6 +49,15 @@ public class App : Application
             var settings = services.GetRequiredService<ISettingsService>();
             settings.Load();
             BootTrace.Stage("settings.Load");
+
+            // Interface language: snapshot the real OS locale BEFORE any
+            // override (so "Auto (System)" can restore it), load the JSON
+            // catalogs, then apply the saved preference. Must run before
+            // MainWindow is built so the first render is in the right language.
+            Loc.SystemLanguage = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            Loc.Instance.Initialize();
+            Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(settings.Current.UiLanguage);
+            BootTrace.Stage("Loc.Initialize");
 
             // Tray must be initialized before MainWindow so IsTrayAvailable is set when
             // GeneralSection's close-to-tray binding latches (the probe raises no PropertyChanged).

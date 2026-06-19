@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -33,7 +34,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     private string _newTrigger = "";
 
     [ObservableProperty]
-    private string _selectedTagFilter = "All tags";
+    private string _selectedTagFilter = Loc.Instance["Snippets.AllTags"];
 
     [ObservableProperty]
     private SnippetTriggerMode _selectedTriggerMode = SnippetTriggerMode.Anywhere;
@@ -53,20 +54,25 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     }
 
     public ObservableCollection<Snippet> FilteredSnippets { get; } = [];
-    public ObservableCollection<string> AvailableTags { get; } = ["All tags"];
+    public ObservableCollection<string> AvailableTags { get; } = [Loc.Instance["Snippets.AllTags"]];
 
     public int SnippetCount => _snippets.Snippets.Count;
     public int EnabledSnippetCount => _snippets.Snippets.Count(snippet => snippet.IsEnabled);
-    public string SummaryText => $"{SnippetCount} snippets, {EnabledSnippetCount} enabled";
+    public string SummaryText =>
+        Loc.Instance.GetString("Snippets.SummaryText", SnippetCount, EnabledSnippetCount);
     public bool ShowEmptyState => FilteredSnippets.Count == 0;
     public bool ShowSnippetList => FilteredSnippets.Count > 0;
 
     public bool HasSelectedTagFilter =>
-        !string.Equals(SelectedTagFilter, "All tags", StringComparison.Ordinal);
+        !string.Equals(SelectedTagFilter, Loc.Instance["Snippets.AllTags"], StringComparison.Ordinal);
 
     public bool IsEditingExisting => !string.IsNullOrWhiteSpace(EditingSnippetId);
-    public string EditorTitle => IsEditingExisting ? "Edit snippet" : "New snippet";
-    public string EditorSaveText => IsEditingExisting ? "Save changes" : "Create snippet";
+    public string EditorTitle =>
+        IsEditingExisting ? Loc.Instance["Snippets.EditSnippet"] : Loc.Instance["Snippets.NewSnippet"];
+    public string EditorSaveText =>
+        IsEditingExisting
+            ? Loc.Instance["Snippets.SaveChanges"]
+            : Loc.Instance["Snippets.CreateSnippet"];
     public string PreviewText => _snippets.PreviewReplacement(NewReplacement);
     public bool ShowPreview => !string.IsNullOrWhiteSpace(NewReplacement);
     public bool HasConflictWarning => !string.IsNullOrWhiteSpace(ConflictWarningText);
@@ -74,8 +80,8 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 
     public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
     [
-        new(SnippetTriggerMode.Anywhere, "Anywhere"),
-        new(SnippetTriggerMode.ExactPhrase, "Exact phrase")
+        new(SnippetTriggerMode.Anywhere, Loc.Instance["Snippets.TriggerModeAnywhere"]),
+        new(SnippetTriggerMode.ExactPhrase, Loc.Instance["Snippets.TriggerModeExactPhrase"])
     ];
 
     public void Dispose()
@@ -126,7 +132,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ClearTagFilter()
     {
-        SelectedTagFilter = "All tags";
+        SelectedTagFilter = Loc.Instance["Snippets.AllTags"];
     }
 
     [RelayCommand]
@@ -277,15 +283,22 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 
         return conflict switch
         {
-            { EntryType: DictionaryEntryType.Term } =>
-                $"This trigger matches an enabled dictionary term: {conflict.Original}.",
+            { EntryType: DictionaryEntryType.Term } => Loc.Instance.GetString(
+                "Snippets.ConflictTerm",
+                conflict.Original
+            ),
             {
                     EntryType: DictionaryEntryType.Correction,
                     Replacement: { Length: > 0 } replacement
-                } =>
-                $"This trigger matches a dictionary correction: {conflict.Original} -> {replacement}.",
-            { EntryType: DictionaryEntryType.Correction } =>
-                $"This trigger matches a dictionary correction: {conflict.Original}.",
+                } => Loc.Instance.GetString(
+                "Snippets.ConflictCorrectionReplacement",
+                conflict.Original,
+                replacement
+            ),
+            { EntryType: DictionaryEntryType.Correction } => Loc.Instance.GetString(
+                "Snippets.ConflictCorrection",
+                conflict.Original
+            ),
             _ => ""
         };
     }
@@ -294,13 +307,14 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     {
         var current = SelectedTagFilter;
         AvailableTags.Clear();
-        AvailableTags.Add("All tags");
+        AvailableTags.Add(Loc.Instance["Snippets.AllTags"]);
         foreach (var tag in _snippets.AllTags)
         {
             AvailableTags.Add(tag);
         }
 
-        SelectedTagFilter = AvailableTags.Contains(current) ? current : "All tags";
+        SelectedTagFilter =
+            AvailableTags.Contains(current) ? current : Loc.Instance["Snippets.AllTags"];
     }
 
     private static IReadOnlyList<string> ParseProfileIds(string value)

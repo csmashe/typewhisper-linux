@@ -1,0 +1,9 @@
+{
+  "Settings.NoSpeechThreshold": "Umbral de ausencia de voz",
+  "Settings.NoSpeechThresholdDescription": "0.0 a 1.0. Los segmentos cuya probabilidad de ausencia de voz supere este valor se descartan para que las pausas en silencio no se transcriban como frases alucinadas (a menudo \"Gracias.\"). Más bajo = filtrado más agresivo. El valor predeterminado 0.6 coincide con el predeterminado de whisper.cpp. Déjalo en blanco para usar el valor predeterminado.",
+  "Settings.UsingDefaultThreshold": "Usando el umbral predeterminado {0}.",
+  "Settings.ThresholdSet": "Umbral establecido en {0}.",
+  "Settings.ThresholdInvalid": "El umbral de ausencia de voz debe ser un número entre 0.0 y 1.0.",
+  "Manifest.Name": "whisper.cpp (Local)",
+  "Manifest.Description": "Transcripción sin conexión mediante whisper.cpp usando Whisper.net"
+}

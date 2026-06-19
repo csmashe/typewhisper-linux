@@ -12,7 +12,8 @@ namespace TypeWhisper.Plugin.OpenRouter;
 public sealed class OpenRouterPlugin
     : ITranscriptionEnginePlugin,
         ILlmProviderPlugin,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://openrouter.ai/api";
     private const string ApiKeySecretName = "api-key";
@@ -144,7 +145,7 @@ public sealed class OpenRouterPlugin
             throw new InvalidOperationException("OpenRouter STT does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         var modelId = _selectedTranscriptionModelId ?? TranscriptionModels.First().Id;
         return await SendAudioTranscriptionAsync(modelId, wavAudio, NormalizeLanguage(language), ct);
@@ -163,7 +164,7 @@ public sealed class OpenRouterPlugin
     public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
     {
         if (!IsAvailable)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? _selectedLlmModelId ?? SupportedModels.First().Id
@@ -185,7 +186,7 @@ public sealed class OpenRouterPlugin
         }
 
         if (!IsAvailable)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? _selectedLlmModelId ?? SupportedModels.First().Id
@@ -213,7 +214,15 @@ public sealed class OpenRouterPlugin
     // API key / catalog management
 
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     internal IReadOnlyList<OpenRouterFetchedModel> FetchedTranscriptionModels => _fetchedTranscriptionModels;
     internal string? SelectedLlmModelId => _selectedLlmModelId;
     internal IReadOnlyList<OpenRouterFetchedModel> FetchedModels => _fetchedModels;
@@ -748,18 +757,17 @@ public sealed class OpenRouterPlugin
         [
             new(
                 Key: ApiKeySecretName,
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Placeholder: "sk-or-...",
-                Description: "Stored securely. Required for OpenRouter LLM and transcription requests. "
-                    + "Validate to refresh the dynamic model catalogs and check remaining credits."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 Key: SelectedTranscriptionModelSettingName,
-                Label: "Transcription model",
+                Label: Loc.L("Settings.TranscriptionModel"),
                 Description: _fetchedTranscriptionModels.Count > 0
-                    ? $"Showing {_fetchedTranscriptionModels.Count} OpenRouter speech-to-text model(s) fetched from the API."
-                    : "Using the default OpenRouter transcription model list. Validate to fetch the live catalog.",
+                    ? Loc.L("Settings.TranscriptionModelFetched", _fetchedTranscriptionModels.Count)
+                    : Loc.L("Settings.TranscriptionModelDefault"),
                 Options: TranscriptionModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList(),
@@ -767,10 +775,10 @@ public sealed class OpenRouterPlugin
             ),
             new(
                 Key: SelectedLlmModelSettingName,
-                Label: "LLM model",
+                Label: Loc.L("Settings.LlmModel"),
                 Description: _fetchedModels.Count > 0
-                    ? $"Showing {_fetchedModels.Count} OpenRouter LLM model(s) fetched from the API."
-                    : "Using the default OpenRouter LLM list. Validate to fetch all available models.",
+                    ? Loc.L("Settings.LlmModelFetched", _fetchedModels.Count)
+                    : Loc.L("Settings.LlmModelDefault"),
                 Options: SupportedModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList(),
@@ -778,28 +786,26 @@ public sealed class OpenRouterPlugin
             ),
             new(
                 Key: TemperatureModeSettingName,
-                Label: "Temperature",
-                Description: "Provider Default leaves the temperature unset (each OpenRouter model uses its own default). "
-                    + "Custom lets you pick a value below.",
+                Label: Loc.L("Settings.Temperature"),
+                Description: Loc.L("Settings.TemperatureModeDescription"),
                 Options:
                 [
-                    new PluginSettingOption(TemperatureModeProviderDefault, "Provider Default"),
-                    new PluginSettingOption(TemperatureModeCustom, "Custom"),
+                    new PluginSettingOption(TemperatureModeProviderDefault, Loc.L("Settings.TemperatureProviderDefault")),
+                    new PluginSettingOption(TemperatureModeCustom, Loc.L("Settings.TemperatureCustom")),
                 ],
                 Kind: PluginSettingKind.Dropdown
             ),
             new(
                 Key: TemperatureValueSettingName,
-                Label: "Temperature value",
+                Label: Loc.L("Settings.TemperatureValue"),
                 Placeholder: "0.3",
-                Description: "Sampling temperature 0.0–2.0. Applied when Temperature is set to Custom.",
+                Description: Loc.L("Settings.TemperatureDescription"),
                 Kind: PluginSettingKind.Text
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as it is "
-                    + "generated, instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -870,11 +876,11 @@ public sealed class OpenRouterPlugin
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         if (!valid)
-            return new PluginSettingsValidationResult(false, "API key is invalid.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
         var llmModels = await FetchModelsAsync(ct);
         if (llmModels.Count > 0)
@@ -886,15 +892,16 @@ public sealed class OpenRouterPlugin
 
         var credits = await FetchCreditsAsync(ct);
 
-        var parts = new List<string> { "API key is valid." };
+        var parts = new List<string> { Loc.L("Settings.ApiKeyValid") };
         if (llmModels.Count > 0)
-            parts.Add($"Fetched {llmModels.Count} LLM model(s).");
+            parts.Add(Loc.L("Settings.FetchedLlmModels", llmModels.Count));
         if (transcriptionModels.Count > 0)
-            parts.Add($"Fetched {transcriptionModels.Count} transcription model(s).");
+            parts.Add(Loc.L("Settings.FetchedTranscriptionModels", transcriptionModels.Count));
         if (credits is { } remaining)
         {
-            parts.Add(FormattableString.Invariant(
-                $"Remaining credits: ${remaining:0.00}."));
+            parts.Add(Loc.L(
+                "Settings.RemainingCredits",
+                FormattableString.Invariant($"${remaining:0.00}")));
         }
 
         return new PluginSettingsValidationResult(true, string.Join(" ", parts));

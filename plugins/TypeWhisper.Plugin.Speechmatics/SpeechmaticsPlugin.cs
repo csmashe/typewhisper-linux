@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Speechmatics;
 
-public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://asr.api.speechmatics.com/v2";
 
@@ -54,7 +54,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         // Speechmatics v2 requires an explicit language code; it has no automatic
         // language detection. The host maps an "auto" profile to null before calling
@@ -88,7 +88,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         // Speechmatics v2 requires an explicit language code; it has no automatic
         // language detection. Reject null/empty/"auto" rather than silently
@@ -274,6 +274,16 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         _httpClient.Dispose();
     }
 
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+
     internal async Task SetApiKeyAsync(string apiKey)
     {
         _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
@@ -290,11 +300,17 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [
-            new("api-key", "API key", true, null, "Required for Speechmatics transcription."),
+            new(
+                "api-key",
+                Loc.L("Settings.ApiKey"),
+                true,
+                null,
+                Loc.L("Settings.ApiKeyDescription")
+            ),
             new(
                 "selectedModel",
-                "Transcription model",
-                Description: "Choose the Speechmatics model.",
+                Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];

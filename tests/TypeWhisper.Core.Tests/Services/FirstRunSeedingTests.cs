@@ -9,7 +9,7 @@ public class FirstRunSeedingTests : IDisposable
 
     public FirstRunSeedingTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), "tw-seed-" + Guid.NewGuid().ToString("N"));
+        _dir = Path.Join(Path.GetTempPath(), "tw-seed-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
     }
 
@@ -21,7 +21,7 @@ public class FirstRunSeedingTests : IDisposable
         }
     }
 
-    private string FreshPath(string name) => Path.Combine(_dir, name);
+    private string FreshPath(string name) => Path.Join(_dir, name);
 
     [Fact]
     public void PromptAction_SeedsDisabledCleanupActionOnFirstRun()

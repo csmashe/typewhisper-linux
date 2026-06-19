@@ -1,0 +1,23 @@
+{
+  "Settings.VaultPath": "Ruta del vault",
+  "Settings.VaultPathDescription": "Ruta absoluta a tu vault de Obsidian.",
+  "Settings.VaultPathDetectedDescription": "Se detectaron {0} vault(s) de Obsidian. Introduce una ruta manualmente si lo necesitas.",
+  "Settings.Subfolder": "Subcarpeta",
+  "Settings.SubfolderDescription": "Carpeta dentro del vault donde se guardan las notas.",
+  "Settings.SaveMode": "Modo de guardado",
+  "Settings.SaveModeDescription": "Elige si añadir a una nota diaria o crear una nota por cada transcripción.",
+  "Settings.SaveModeOneNote": "Una nota por transcripción",
+  "Settings.SaveModeDailyNote": "Añadir a la nota diaria",
+  "Settings.FilenameTemplate": "Plantilla de nombre de archivo",
+  "Settings.FilenameTemplateDescription": "Marcadores disponibles: {{date}}, {{time}}, {{app}}.",
+  "Settings.PluginNotActivated": "Plugin no activado.",
+  "Settings.PluginNotActivatedShort": "Plugin no activado",
+  "Settings.NoVaultConfigured": "No hay ningún vault de Obsidian configurado. Configura una ruta de vault en los ajustes del plugin.",
+  "Settings.VaultPathNotFound": "No se encontró la ruta del vault: {0}",
+  "Settings.SavedTo": "Guardado en {0}",
+  "Settings.EnterVaultPath": "Introduce primero una ruta de vault.",
+  "Settings.VaultDetected": "Vault detectado: {0}",
+  "Settings.NotAnObsidianVault": "La carpeta existe, pero no es un vault de Obsidian (falta el directorio .obsidian).",
+  "Manifest.Name": "Obsidian",
+  "Manifest.Description": "Guarda las transcripciones como notas en Obsidian"
+}

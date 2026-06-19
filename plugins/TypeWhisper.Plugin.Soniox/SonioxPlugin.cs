@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Soniox;
 
-public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     internal const string DefaultModelId = "default";
 
@@ -94,7 +94,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         return await SonioxStreamingSession.ConnectAsync(_apiKey!, language, ct);
     }
@@ -121,7 +121,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         // out partway through the multi-request async flow below.
         var apiKey = _apiKey;
         if (string.IsNullOrEmpty(apiKey))
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         string? fileId = null;
         string? transcriptionId = null;
@@ -146,9 +146,9 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         [
             new(
                 "api-key",
-                "API key",
+                Loc.L("Settings.ApiKey"),
                 IsSecret: true,
-                Description: "Required for Soniox transcription."),
+                Description: Loc.L("Settings.ApiKeyDescription")),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -172,17 +172,27 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(_apiKey))
-            return new PluginSettingsValidationResult(false, "API key required.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyRequired"));
 
         var ok = await ValidateApiKeyAsync(_apiKey, ct);
         return ok
-            ? new PluginSettingsValidationResult(true, "Soniox API key is valid.")
-            : new PluginSettingsValidationResult(false, "Soniox API key could not be verified.");
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
+            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
     }
 
     // Settings support
 
     internal string? ApiKey => _apiKey;
+
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {

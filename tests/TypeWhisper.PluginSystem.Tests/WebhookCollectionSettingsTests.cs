@@ -115,11 +115,32 @@ public class WebhookCollectionSettingsTests : IDisposable
         Assert.Equal(before, after);
     }
 
-    [Fact]
-    public async Task ValidationFailure_FtpUrl_FailsWithWebhookNameInMessage()
+    // Validation messages are now localized via the host. Activate the plugin
+    // with a host whose Localization resolves the plugin's real en.json so the
+    // embedded webhook name / reason appears in the failure message, exactly as
+    // it does in production.
+    private async Task<WebhookPlugin> ActivatedPluginAsync()
     {
         var plugin = new WebhookPlugin();
         plugin.SetDataDirectory(_tempDir);
+
+        var pluginDir = Path.GetFullPath(
+            Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.Webhook"),
+            AppContext.BaseDirectory
+        );
+        var host = new Mock<IPluginHostServices>();
+        host.SetupGet(h => h.EventBus).Returns(Mock.Of<IPluginEventBus>());
+        host.SetupGet(h => h.PluginDataDirectory).Returns(_tempDir);
+        host.SetupGet(h => h.Localization).Returns(new PluginLocalization(pluginDir, "en"));
+
+        await plugin.ActivateAsync(host.Object);
+        return plugin;
+    }
+
+    [Fact]
+    public async Task ValidationFailure_FtpUrl_FailsWithWebhookNameInMessage()
+    {
+        var plugin = await ActivatedPluginAsync();
 
         var bad = await plugin.SetItemsAsync(
             CollectionKey,
@@ -133,8 +154,7 @@ public class WebhookCollectionSettingsTests : IDisposable
     [Fact]
     public async Task ValidationFailure_BadMethod_Fails()
     {
-        var plugin = new WebhookPlugin();
-        plugin.SetDataDirectory(_tempDir);
+        var plugin = await ActivatedPluginAsync();
 
         var bad = await plugin.SetItemsAsync(CollectionKey, [Item("MethodHook", method: "DELETE")]);
 
@@ -145,8 +165,7 @@ public class WebhookCollectionSettingsTests : IDisposable
     [Fact]
     public async Task ValidationFailure_MalformedHeaderLine_Fails()
     {
-        var plugin = new WebhookPlugin();
-        plugin.SetDataDirectory(_tempDir);
+        var plugin = await ActivatedPluginAsync();
 
         var bad = await plugin.SetItemsAsync(
             CollectionKey,

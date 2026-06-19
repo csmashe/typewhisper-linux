@@ -1,0 +1,20 @@
+{
+  "Settings.ApiKey": "API key",
+  "Settings.ApiKeyDescription": "Generate a personal API key in Linear Settings > API > Personal API keys.",
+  "Settings.DefaultTeamId": "Default team ID",
+  "Settings.DefaultTeamIdDescription": "Required. Team UUID where issues will be created. Click Validate after saving the API key to fetch teams.",
+  "Settings.CachedTeamsDescription": "Showing {0} cached Linear team(s). Click Validate to refresh.",
+  "Settings.DefaultProjectId": "Default project ID",
+  "Settings.DefaultProjectIdDescription": "Optional. Issues will be added to this project when set.",
+  "Settings.EnterApiKey": "Enter an API key first.",
+  "Settings.NoTeamsFound": "No teams found. Check your API key.",
+  "Settings.TeamsRefreshed": "Found {0} team(s). Team options refreshed.",
+  "Settings.ApiKeyNotConfigured": "Linear API key not configured. Please set it in plugin settings.",
+  "Settings.DefaultTeamNotConfigured": "Default team ID not configured. Please set it in plugin settings.",
+  "Settings.IssueCreated": "Linear issue created: {0}",
+  "Settings.IssueCreateFailed": "Failed to create Linear issue. Check logs for details.",
+  "Settings.IssueCreateCancelled": "Issue creation was cancelled.",
+  "Settings.IssueCreateError": "Error creating issue: {0}",
+  "Manifest.Name": "Linear",
+  "Manifest.Description": "Create Linear issues from transcriptions"
+}

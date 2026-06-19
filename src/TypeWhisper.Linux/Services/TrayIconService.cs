@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Platform;
 using System.Diagnostics;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -159,13 +160,13 @@ public sealed class TrayIconService : IDisposable
     {
         var menu = new NativeMenu();
 
-        var dictate = new NativeMenuItem("Toggle Dictation");
+        var dictate = new NativeMenuItem(Loc.Instance["Tray.ToggleDictation"]);
         dictate.Click += (_, _) => DictationToggleRequested?.Invoke(this, EventArgs.Empty);
 
-        var settings = new NativeMenuItem("Settings…");
+        var settings = new NativeMenuItem(Loc.Instance["Tray.Settings"]);
         settings.Click += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
 
-        var exit = new NativeMenuItem("Exit");
+        var exit = new NativeMenuItem(Loc.Instance["Tray.Exit"]);
         exit.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
 
         menu.Add(dictate);

@@ -1,0 +1,9 @@
+{
+  "Settings.NoSpeechThreshold": "No-speech threshold",
+  "Settings.NoSpeechThresholdDescription": "0.0 to 1.0. Segments whose no-speech probability exceeds this value are dropped so silent gaps don't get transcribed as hallucinated phrases (commonly \"Thank you.\"). Lower = more aggressive filtering. Default 0.6 matches whisper.cpp's own default. Leave blank to use the default.",
+  "Settings.UsingDefaultThreshold": "Using default threshold {0}.",
+  "Settings.ThresholdSet": "Threshold set to {0}.",
+  "Settings.ThresholdInvalid": "No-speech threshold must be a number between 0.0 and 1.0.",
+  "Manifest.Name": "whisper.cpp (Local)",
+  "Manifest.Description": "Offline transcription via whisper.cpp using Whisper.net"
+}

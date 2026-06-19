@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -138,12 +139,13 @@ public partial class PluginsSectionViewModel : ObservableObject
             .AllPlugins.Select(p =>
             {
                 _pluginById[p.Manifest.Id] = p;
+                var loc = new PluginLocalization(p.PluginDirectory);
                 return new PluginRow(
                     this,
                     p.Manifest.Id,
-                    p.Manifest.Name,
+                    LocalizeManifest(loc, "Manifest.Name", p.Manifest.Name),
                     p.Manifest.Version,
-                    p.Manifest.Description ?? "",
+                    LocalizeManifest(loc, "Manifest.Description", p.Manifest.Description ?? ""),
                     InferCategory(p.Manifest),
                     InferIsLocal(p.Manifest),
                     (
@@ -178,14 +180,14 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         OnPropertyChanged(nameof(HasLoadFailures));
 
-        Summary = $"{plugins.Count} plugin(s) loaded";
+        Summary = Loc.Instance.GetString("Plugins.SummaryLoaded", plugins.Count);
         if (LoadFailures.Count > 0)
         {
-            Summary += $" · {LoadFailures.Count} failed to load";
+            Summary += Loc.Instance.GetString("Plugins.SummaryFailed", LoadFailures.Count);
         }
 
         var enabledCount = plugins.Count(p => p.IsEnabled);
-        HeaderSummary = $"{plugins.Count} installed, {enabledCount} enabled";
+        HeaderSummary = Loc.Instance.GetString("Plugins.HeaderSummary", plugins.Count, enabledCount);
 
         if (expandedPluginId is null)
         {
@@ -268,7 +270,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             }
         }
 
-        row.Status = "Settings saved.";
+        row.Status = Loc.Instance["Plugins.SettingsSaved"];
     }
 
     [RelayCommand]
@@ -290,7 +292,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         var result = await provider.ValidateAsync();
-        row.Status = result?.Message ?? "No validation available.";
+        row.Status = result?.Message ?? Loc.Instance["Plugins.NoValidationAvailable"];
         await LoadPluginSettingsAsync(row, true);
     }
 
@@ -303,7 +305,7 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         if (!_pluginById.TryGetValue(row.Id, out var loaded))
         {
-            row.Status = "Unable to load plugin settings.";
+            row.Status = Loc.Instance["Plugins.UnableToLoadSettings"];
             return;
         }
 
@@ -312,7 +314,7 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         if (flatProvider is null && collectionProvider is null)
         {
-            row.Status = "This plugin does not expose host-neutral settings yet.";
+            row.Status = Loc.Instance["Plugins.NoHostNeutralSettings"];
             return;
         }
 
@@ -354,9 +356,20 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             row.Status =
                 hasFlatFields || hasCollections
-                    ? "Edit the values below and click Save."
-                    : "This plugin exposes a settings provider, but no editable fields.";
+                    ? Loc.Instance["Plugins.EditValuesHint"]
+                    : Loc.Instance["Plugins.NoEditableFields"];
         }
+    }
+
+    // Plugin card name/description come from manifest.json (single-language).
+    // Resolve them through the plugin's own catalog so they follow the UI
+    // language, falling back to the manifest literal when the catalog has no
+    // entry (third-party plugins, or keys not yet translated). PluginLocalization
+    // returns the key itself on a miss, so an unchanged key signals "no entry".
+    private static string LocalizeManifest(IPluginLocalization loc, string key, string fallback)
+    {
+        var localized = loc.GetString(key);
+        return string.Equals(localized, key, StringComparison.Ordinal) ? fallback : localized;
     }
 
     // Third-party plugins may not set IsLocal; fall back to known-ID lists then keyword heuristics.
@@ -498,7 +511,7 @@ public partial class PluginRow : ObservableObject
     private bool _isExpanded;
 
     [ObservableProperty]
-    private string _status = "Expand to edit plugin settings.";
+    private string _status = Loc.Instance["Plugins.ExpandToEdit"];
 
     public PluginRow(
         PluginsSectionViewModel? owner,
@@ -535,8 +548,10 @@ public partial class PluginRow : ObservableObject
     public string CategoryLabel { get; }
     public int CategorySortOrder { get; }
     private bool IsLocal { get; }
-    public string LocationBadge => IsLocal ? "Local" : "Cloud";
-    public string StatusBadge => IsEnabled ? "Enabled" : "Disabled";
+    public string LocationBadge =>
+        IsLocal ? Loc.Instance["Plugins.BadgeLocal"] : Loc.Instance["Plugins.BadgeCloud"];
+    public string StatusBadge =>
+        IsEnabled ? Loc.Instance["Plugins.BadgeEnabled"] : Loc.Instance["Plugins.BadgeDisabled"];
     public string LocationBadgeBackground => IsLocal ? "#1B2F24" : "#1A3453";
     public string LocationBadgeBorder => IsLocal ? "#2F5E45" : "#2E5B89";
     public string LocationBadgeForeground => IsLocal ? "#D8F3E5" : "#D6E7FF";
@@ -701,12 +716,20 @@ internal static class PluginCategories
     {
         return Normalize(rawCategory) switch
         {
-            "transcription" => new PluginCategoryInfo("transcription", "Transcription Engines", 0),
-            "llm" => new PluginCategoryInfo("llm", "LLM Providers", 1),
-            "post-processing" => new PluginCategoryInfo("post-processing", "Post-Processors", 2),
-            "action" => new PluginCategoryInfo("action", "Actions", 3),
-            "memory" => new PluginCategoryInfo("memory", "Memory", 4),
-            _ => new PluginCategoryInfo("utility", "Utilities", 5)
+            "transcription" => new PluginCategoryInfo(
+                "transcription",
+                Loc.Instance["Plugins.CategoryTranscription"],
+                0
+            ),
+            "llm" => new PluginCategoryInfo("llm", Loc.Instance["Plugins.CategoryLlm"], 1),
+            "post-processing" => new PluginCategoryInfo(
+                "post-processing",
+                Loc.Instance["Plugins.CategoryPostProcessing"],
+                2
+            ),
+            "action" => new PluginCategoryInfo("action", Loc.Instance["Plugins.CategoryAction"], 3),
+            "memory" => new PluginCategoryInfo("memory", Loc.Instance["Plugins.CategoryMemory"], 4),
+            _ => new PluginCategoryInfo("utility", Loc.Instance["Plugins.CategoryUtility"], 5)
         };
     }
 

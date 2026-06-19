@@ -11,7 +11,8 @@ public sealed class XaiPlugin
     : ITranscriptionEnginePlugin,
         ILlmProviderPlugin,
         ITtsProviderPlugin,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.x.ai";
     private const string ApiKeySecretName = "api-key";
@@ -137,7 +138,7 @@ public sealed class XaiPlugin
             throw new InvalidOperationException("xAI STT does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         using var form = new MultipartFormDataContent();
         var normalizedLanguage = NormalizeLanguage(language);
@@ -163,7 +164,7 @@ public sealed class XaiPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         // Run through the same normalization the batch TranscribeAsync uses
         // so a setting value like " de " or "auto" doesn't propagate into the
@@ -184,7 +185,7 @@ public sealed class XaiPlugin
     public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? _selectedLlmModelId ?? SupportedModels.First().Id
@@ -206,7 +207,7 @@ public sealed class XaiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? _selectedLlmModelId ?? SupportedModels.First().Id
@@ -251,7 +252,7 @@ public sealed class XaiPlugin
     public async Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var text = request.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
@@ -287,7 +288,15 @@ public sealed class XaiPlugin
     // Settings support
 
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     internal string? SelectedLlmModelId => _selectedLlmModelId;
     internal IReadOnlyList<XaiFetchedModel> FetchedLlmModels => _fetchedLlmModels;
     internal IReadOnlyList<XaiFetchedVoice> FetchedVoices => _fetchedVoices;
@@ -638,63 +647,62 @@ public sealed class XaiPlugin
         [
             new(
                 Key: ApiKeySecretName,
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Placeholder: "xai-...",
-                Description: "Stored securely and used for xAI / Grok STT, LLM, and TTS requests."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 Key: SelectedModelSettingName,
-                Label: "Transcription model",
-                Description: "Choose the xAI speech-to-text model.",
+                Label: Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.TranscriptionModelDescription"),
                 Options: SttModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
             new(
                 Key: SelectedLlmModelSettingName,
-                Label: "LLM model",
+                Label: Loc.L("Settings.LlmModel"),
                 Description: _fetchedLlmModels.Count > 0
-                    ? $"Showing {_fetchedLlmModels.Count} xAI LLM model(s) fetched from the API."
-                    : "Using the default xAI model list. Click Validate to test the key and fetch current models.",
+                    ? Loc.L("Settings.LlmModelFetched", _fetchedLlmModels.Count)
+                    : Loc.L("Settings.LlmModelDefault"),
                 Options: SupportedModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as it is "
-                    + "generated, instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
             new(
                 Key: SelectedVoiceSettingName,
-                Label: "TTS voice",
+                Label: Loc.L("Settings.Voice"),
                 Description: _fetchedVoices.Count > 0
-                    ? $"Showing {_fetchedVoices.Count} xAI voice(s) fetched from the API."
-                    : "Using the default xAI voices. Click Validate to test the key and fetch available voices.",
+                    ? Loc.L("Settings.VoiceFetched", _fetchedVoices.Count)
+                    : Loc.L("Settings.VoiceDefault"),
                 Options: AvailableVoices
                     .Select(v => new PluginSettingOption(v.Id, v.DisplayName))
                     .ToList()
             ),
             new(
                 Key: CustomVoiceIdSettingName,
-                Label: "Custom voice ID",
-                Placeholder: "Optional",
-                Description: "Optional. When set, it overrides the selected voice.",
+                Label: Loc.L("Settings.CustomVoiceId"),
+                Placeholder: Loc.L("Settings.Optional"),
+                Description: Loc.L("Settings.CustomVoiceIdDescription"),
                 Kind: PluginSettingKind.Text
             ),
             new(
                 Key: TtsLowLatencySettingName,
-                Label: "Low latency",
-                Description: "Optimize TTS playback for lower latency over quality.",
+                Label: Loc.L("Settings.LowLatency"),
+                Description: Loc.L("Settings.LowLatencyDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
             new(
                 Key: TtsTextNormalizationSettingName,
-                Label: "Text normalization",
-                Description: "Normalize numbers and symbols before speaking.",
+                Label: Loc.L("Settings.TextNormalization"),
+                Description: Loc.L("Settings.TextNormalizationDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -753,11 +761,11 @@ public sealed class XaiPlugin
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         if (!valid)
-            return new PluginSettingsValidationResult(false, "API key is invalid.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
         var models = await FetchLlmModelsAsync(ct);
         if (models.Count > 0)
@@ -770,8 +778,8 @@ public sealed class XaiPlugin
         return new PluginSettingsValidationResult(
             true,
             models.Count > 0 || voices.Count > 0
-                ? $"API key is valid. Fetched {models.Count} LLM model(s) and {voices.Count} voice(s)."
-                : "API key is valid. Using saved/default models and voices."
+                ? Loc.L("Settings.ApiKeyValidFetched", models.Count, voices.Count)
+                : Loc.L("Settings.ApiKeyValidSaved")
         );
     }
 

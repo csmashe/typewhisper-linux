@@ -743,8 +743,8 @@ public sealed record LinuxCapabilitySnapshot(
 
     public string ClipboardStatus =>
         HasClipboardTool
-            ? $"{ClipboardToolName} available"
-            : $"Install {ClipboardToolName} to enable clipboard insertion.";
+            ? Localization.Loc.Instance.GetString("TextInsertion.ClipboardAvailable", ClipboardToolName)
+            : Localization.Loc.Instance.GetString("TextInsertion.ClipboardInstallHint", ClipboardToolName);
 
     public string PasteStatus =>
         SessionType == "Wayland"
@@ -767,7 +767,7 @@ public sealed record LinuxCapabilitySnapshot(
             : "Install xdotool to enable automatic paste.";
 
     public string CudaStatus =>
-        CanUseCuda ? "CUDA available"
-        : HasCudaGpu ? "NVIDIA GPU detected, but CUDA 12 runtime libraries are missing."
-        : "No NVIDIA GPU/driver detected.";
+        CanUseCuda ? Localization.Loc.Instance["Dictation.CudaStatusAvailable"]
+        : HasCudaGpu ? Localization.Loc.Instance["Dictation.CudaStatusRuntimeMissing"]
+        : Localization.Loc.Instance["Dictation.CudaStatusNoGpu"];
 }

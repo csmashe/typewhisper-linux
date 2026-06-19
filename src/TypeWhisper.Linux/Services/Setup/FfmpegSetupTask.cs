@@ -1,3 +1,5 @@
+using TypeWhisper.Linux.Services.Localization;
+
 namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
@@ -17,7 +19,7 @@ public sealed class FfmpegSetupTask : ISetupTask
     }
 
     public string Id => "ffmpeg";
-    public string Title => "Audio conversion (ffmpeg)";
+    public string Title => Loc.Instance["Setup.FfmpegTitle"];
     public SetupTaskSeverity Severity => SetupTaskSeverity.Recommended;
 
     public bool AppliesToThisMachine()
@@ -30,16 +32,19 @@ public sealed class FfmpegSetupTask : ISetupTask
         if (_commands.GetSnapshot().HasFfmpeg)
         {
             return Task.FromResult(
-                new SetupTaskState(SetupTaskStatusKind.Satisfied, "ffmpeg available.")
+                new SetupTaskState(
+                    SetupTaskStatusKind.Satisfied,
+                    Loc.Instance.GetString("Setup.PackageAvailable", "ffmpeg")
+                )
             );
         }
 
         return Task.FromResult(
             new SetupTaskState(
                 SetupTaskStatusKind.NeedsAction,
-                "ffmpeg is not installed.",
-                "Broadens the set of audio/video formats you can transcribe from a file.",
-                "Install ffmpeg",
+                Loc.Instance.GetString("Setup.PackageNotInstalled", "ffmpeg"),
+                Loc.Instance["Setup.FfmpegHint"],
+                Loc.Instance.GetString("Setup.InstallPackage", "ffmpeg"),
                 _installer.BuildSudoCommand(new[] { "ffmpeg" })
             )
         );

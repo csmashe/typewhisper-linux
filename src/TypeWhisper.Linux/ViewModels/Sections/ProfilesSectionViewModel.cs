@@ -9,6 +9,7 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Views;
 using TypeWhisper.PluginSDK;
@@ -103,7 +104,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private MatchResult _lastMatchResult = MatchResult.NoMatch;
 
     [ObservableProperty]
-    private string _matchedProfileName = "No profile";
+    private string _matchedProfileName = Loc.Instance["Profiles.NoProfile"];
 
     [ObservableProperty]
     private string _processNameInput = "";
@@ -184,29 +185,29 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     public ObservableCollection<ProfileStylePresetOption> StylePresetOptions { get; } =
     [
-        new(ProfileStylePreset.Raw, "Raw"),
-        new(ProfileStylePreset.Clean, "Clean"),
-        new(ProfileStylePreset.Concise, "Concise"),
-        new(ProfileStylePreset.FormalEmail, "Formal email"),
-        new(ProfileStylePreset.CasualMessage, "Casual message"),
-        new(ProfileStylePreset.Developer, "Developer"),
-        new(ProfileStylePreset.TerminalSafe, "Terminal-safe"),
-        new(ProfileStylePreset.MeetingNotes, "Meeting notes")
+        new(ProfileStylePreset.Raw, Loc.Instance["Profiles.StylePresetRaw"]),
+        new(ProfileStylePreset.Clean, Loc.Instance["Profiles.StylePresetClean"]),
+        new(ProfileStylePreset.Concise, Loc.Instance["Profiles.StylePresetConcise"]),
+        new(ProfileStylePreset.FormalEmail, Loc.Instance["Profiles.StylePresetFormalEmail"]),
+        new(ProfileStylePreset.CasualMessage, Loc.Instance["Profiles.StylePresetCasualMessage"]),
+        new(ProfileStylePreset.Developer, Loc.Instance["Profiles.StylePresetDeveloper"]),
+        new(ProfileStylePreset.TerminalSafe, Loc.Instance["Profiles.StylePresetTerminalSafe"]),
+        new(ProfileStylePreset.MeetingNotes, Loc.Instance["Profiles.StylePresetMeetingNotes"])
     ];
 
     public ObservableCollection<ProfileHotkeyBehaviorOption> HotkeyBehaviorOptions { get; } =
     [
-        new(ProfileHotkeyBehavior.StartDictation, "Start dictation"),
-        new(ProfileHotkeyBehavior.ProcessSelectedText, "Process selected text")
+        new(ProfileHotkeyBehavior.StartDictation, Loc.Instance["Profiles.HotkeyBehaviorStartDictation"]),
+        new(ProfileHotkeyBehavior.ProcessSelectedText, Loc.Instance["Profiles.HotkeyBehaviorProcessSelectedText"])
     ];
 
     public ObservableCollection<NullableCleanupLevelOption> CleanupOverrideOptions { get; } =
     [
-        new(null, "Use style preset"),
-        new(CleanupLevel.None, "None"),
-        new(CleanupLevel.Light, "Light"),
-        new(CleanupLevel.Medium, "Medium"),
-        new(CleanupLevel.High, "High")
+        new(null, Loc.Instance["Profiles.CleanupUseStylePreset"]),
+        new(CleanupLevel.None, Loc.Instance["Profiles.CleanupNone"]),
+        new(CleanupLevel.Light, Loc.Instance["Profiles.CleanupLight"]),
+        new(CleanupLevel.Medium, Loc.Instance["Profiles.CleanupMedium"]),
+        new(CleanupLevel.High, Loc.Instance["Profiles.CleanupHigh"])
     ];
 
     public ObservableCollection<string> ProcessNameChips { get; } = [];
@@ -238,17 +239,25 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public bool HasSelectedProfile => SelectedProfile is not null;
     public int ProfileCount => Profiles.Count;
     public int EnabledProfileCount => Profiles.Count(static profile => profile.IsEnabled);
-    public string Summary => $"{ProfileCount} profile(s), {EnabledProfileCount} enabled";
+    public string Summary =>
+        Loc.Instance.GetString("Profiles.Summary", ProfileCount, EnabledProfileCount);
 
     public string SelectedProfileSummary =>
         SelectedProfile is null
-            ? "Select a profile from the list or create a new one."
-            : $"{ProcessNameChips.Count} app rule(s), {UrlPatternChips.Count} URL rule(s)";
+            ? Loc.Instance["Profiles.SelectProfileHint"]
+            : Loc.Instance.GetString(
+                "Profiles.RulesSummary",
+                ProcessNameChips.Count,
+                UrlPatternChips.Count
+            );
 
-    public string SelectedProfileDisplayName => SelectedProfile?.Name ?? "No profile";
+    public string SelectedProfileDisplayName =>
+        SelectedProfile?.Name ?? Loc.Instance["Profiles.NoProfile"];
 
     public string MatchStatusText =>
-        HasMatchedProfile ? $"Matches {MatchedProfileName}" : "No active match";
+        HasMatchedProfile
+            ? Loc.Instance.GetString("Profiles.Matches", MatchedProfileName)
+            : Loc.Instance["Profiles.NoActiveMatch"];
 
     public bool ShowLiveContextProfileHint => !HasSelectedProfile;
 
@@ -262,10 +271,15 @@ public partial class ProfilesSectionViewModel : ObservableObject
         !string.IsNullOrWhiteSpace(CurrentWindowTitle) && CurrentWindowTitle != "-";
 
     public string CurrentUrlPattern => TryExtractUrlPattern(CurrentUrl);
-    public string EditIsEnabledStatusText => EditIsEnabled ? "On" : "Off";
+    public string EditIsEnabledStatusText =>
+        EditIsEnabled ? Loc.Instance["Common.On"] : Loc.Instance["Common.Off"];
 
     public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; } =
-        [new(null, "Use global default"), new(true, "Enabled"), new(false, "Disabled")];
+    [
+        new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
+        new(true, Loc.Instance["Common.Enabled"]),
+        new(false, Loc.Instance["Common.Disabled"])
+    ];
 
     public TranslationTargetOption? SelectedTranslationTargetOption
     {
@@ -809,7 +823,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     {
         var selected = EditModelId;
         ModelOptions.Clear();
-        ModelOptions.Add(new ProfileModelOption(null, "Use global default"));
+        ModelOptions.Add(new ProfileModelOption(null, Loc.Instance["Profiles.UseGlobalDefault"]));
 
         foreach (var engine in _pluginManager.TranscriptionEngines)
         {
@@ -831,7 +845,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     {
         var selected = EditPromptActionId;
         PromptActionOptions.Clear();
-        PromptActionOptions.Add(new PromptActionOption(null, "No prompt action"));
+        PromptActionOptions.Add(new PromptActionOption(null, Loc.Instance["Profiles.NoPromptAction"]));
 
         foreach (
             var action in _promptActions
@@ -889,7 +903,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         _lastMatchResult = _profiles.MatchProfile(processName, url);
         HasMatchedProfile = _lastMatchResult.Profile is not null;
-        MatchedProfileName = _lastMatchResult.Profile?.Name ?? "No profile";
+        MatchedProfileName = _lastMatchResult.Profile?.Name ?? Loc.Instance["Profiles.NoProfile"];
 
         WaylandDetectionWarning = _failureTracker.ShouldShowPersistentBanner
             ? _failureTracker.LastFailureReason
@@ -936,16 +950,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
 
         var message =
-            "TypeWhisper will make the following changes to enable URL-based profile rules on Wayland:\n\n"
+            Loc.Instance["Profiles.BrowserSetupIntro"]
+            + "\n\n"
             + string.Join("\n\n", actions)
-            + "\n\nAll changes are user-local and can be reverted from this panel. "
-            + "Fully quit and relaunch the affected browsers afterward to pick up the changes.";
+            + "\n\n"
+            + Loc.Instance["Profiles.BrowserSetupOutro"];
 
         var dialog = new MessageDialogWindow();
         var confirmed = await dialog.ShowConfirmationAsync(
-            "Enable browser URL detection",
+            Loc.Instance["Profiles.EnableBrowserUrlDetection"],
             message,
-            "Apply changes"
+            Loc.Instance["Profiles.ApplyChanges"]
         );
 
         if (!confirmed)
@@ -957,7 +972,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         // Re-evaluate panel state: Enable should disappear and Revert should appear together.
         RefreshBrowserAccessibilityStatus();
         BrowserAccessibilityStatusMessage = result.Success
-            ? $"{result.Message} Restart your browsers (or log out + back in) for the change to take effect."
+            ? Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message)
             : $"{result.Message} {result.Detail}";
     }
 
@@ -977,25 +992,19 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         if (status.IsFullyConfigured)
         {
-            BrowserAccessibilityStatusMessage =
-                "Browser accessibility is configured. If URL detection still fails, restart the browser.";
+            BrowserAccessibilityStatusMessage = Loc.Instance["Profiles.BrowserStatusConfigured"];
             CanEnableBrowserAccessibility = false;
         }
         else if (hasAnyInstall)
         {
             // Partial state: new browser installed after Enable, or a multi-profile/launcher
             // piece was missed. The confirmation dialog lists only the missing pieces.
-            BrowserAccessibilityStatusMessage =
-                "Browser accessibility is partially configured — at least one browser, profile, or launcher "
-                + "still needs setup. Click Enable to finish (the confirmation dialog will list only what's missing), "
-                + "or Revert to undo everything TypeWhisper installed.";
+            BrowserAccessibilityStatusMessage = Loc.Instance["Profiles.BrowserStatusPartial"];
             CanEnableBrowserAccessibility = true;
         }
         else
         {
-            BrowserAccessibilityStatusMessage =
-                "URL-based profile rules require enabling browser accessibility. "
-                + "Click below to see exactly what TypeWhisper will change.";
+            BrowserAccessibilityStatusMessage = Loc.Instance["Profiles.BrowserStatusDisabled"];
             CanEnableBrowserAccessibility = true;
         }
 
@@ -1016,17 +1025,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
 
         var message =
-            "TypeWhisper will revert the following browser-accessibility changes:\n\n"
+            Loc.Instance["Profiles.BrowserRevertIntro"]
+            + "\n\n"
             + string.Join("\n\n", actions)
-            + "\n\nFirefox prefs.js entries you set yourself via about:config will be left alone — "
-            + "this only removes the changes TypeWhisper made. "
-            + "Fully restart the affected browsers afterward to drop the previous settings.";
+            + "\n\n"
+            + Loc.Instance["Profiles.BrowserRevertOutro"];
 
         var dialog = new MessageDialogWindow();
         var confirmed = await dialog.ShowConfirmationAsync(
-            "Revert browser URL detection",
+            Loc.Instance["Profiles.RevertBrowserUrlDetection"],
             message,
-            "Revert"
+            Loc.Instance["Common.Revert"]
         );
 
         if (!confirmed)
@@ -1036,7 +1045,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         var result = await _browserSetup.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
         BrowserAccessibilityStatusMessage = result.Success
-            ? $"{result.Message} Restart your browsers for the change to take effect."
+            ? Loc.Instance.GetString("Profiles.BrowserRevertSuccess", result.Message)
             : $"{result.Message} {result.Detail}";
         RefreshBrowserAccessibilityStatus();
     }

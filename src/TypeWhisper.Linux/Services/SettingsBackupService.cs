@@ -304,7 +304,7 @@ public sealed class SettingsBackupService
 
         var fullRoot = Path.GetFullPath(rootPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var destination = Path.GetFullPath(Path.Combine(fullRoot, normalized));
+        var destination = Path.GetFullPath(Path.Join(fullRoot, normalized));
         if (
             !destination.StartsWith(
                 fullRoot + Path.DirectorySeparatorChar,

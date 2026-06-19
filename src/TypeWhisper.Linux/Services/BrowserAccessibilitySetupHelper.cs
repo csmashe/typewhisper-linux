@@ -569,13 +569,13 @@ public sealed class BrowserAccessibilitySetupHelper
         // success while user.js never reaches the browser's actual profile.
         var roots = new[]
         {
-            Path.Combine(home, ".mozilla", "firefox"), Path.Combine(home, ".config", "mozilla", "firefox"),
-            Path.Combine(home, "snap", "firefox", "common", ".mozilla", "firefox"),
-            Path.Combine(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
-            Path.Combine(home, ".var", "app", "app.zen_browser.zen", ".zen"),
-            Path.Combine(home, ".var", "app", "io.github.zen_browser.zen", ".zen"), Path.Combine(home, ".zen"),
-            Path.Combine(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
-            Path.Combine(home, ".librewolf")
+            Path.Join(home, ".mozilla", "firefox"), Path.Join(home, ".config", "mozilla", "firefox"),
+            Path.Join(home, "snap", "firefox", "common", ".mozilla", "firefox"),
+            Path.Join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
+            Path.Join(home, ".var", "app", "app.zen_browser.zen", ".zen"),
+            Path.Join(home, ".var", "app", "io.github.zen_browser.zen", ".zen"), Path.Join(home, ".zen"),
+            Path.Join(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
+            Path.Join(home, ".librewolf")
         };
         foreach (var root in roots)
         {

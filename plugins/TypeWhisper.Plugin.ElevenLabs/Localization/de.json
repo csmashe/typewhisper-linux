@@ -1,12 +1,11 @@
 {
-  "Settings.Test": "Testen",
-  "Settings.Saved": "Gespeichert",
-  "Settings.EnterApiKey": "Bitte zuerst einen API-Key eingeben",
-  "Settings.ApiKeyHint": "Wird sicher gespeichert und fuer ElevenLabs-Scribe-Transkription verwendet.",
-  "Settings.Testing": "Teste...",
-  "Settings.ApiKeyValid": "API-Key gueltig!",
-  "Settings.ApiKeyInvalid": "Ungueltiger API-Key",
-  "Settings.TranscriptionModel": "Transkriptions-Modell",
-  "Settings.ModelHint": "Scribe v2 wird fuer Datei-Transkription verwendet; Live-Diktat nutzt Scribe v2 Realtime.",
-  "Settings.Error": "Fehler: {0}"
+  "Settings.ApiKey": "API-Schlüssel",
+  "Settings.ApiKeyDescription": "Erforderlich für ElevenLabs-Scribe-Transkription.",
+  "Settings.TranscriptionModel": "Transkriptionsmodell",
+  "Settings.ModelDescription": "Scribe v2 wird für die Datei-Transkription verwendet; Live-Diktat nutzt Scribe v2 Realtime.",
+  "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
+  "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
+  "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Manifest.Name": "ElevenLabs",
+  "Manifest.Description": "Cloud-Transkription über ElevenLabs Scribe mit Echtzeit-WebSocket-Streaming"
 }

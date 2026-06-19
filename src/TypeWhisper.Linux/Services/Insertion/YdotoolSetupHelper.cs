@@ -14,7 +14,21 @@ namespace TypeWhisper.Linux.Services.Insertion;
 /// </summary>
 public sealed class YdotoolSetupHelper
 {
-    private const string UdevRulePath = "/etc/udev/rules.d/60-ydotool.rules";
+    // System config dir holding the udev rule + modules-load entry. Always /etc
+    // in production. Tests redirect it via SysConfDirOverride so SetUpAsync /
+    // RemoveAsync stay hermetic instead of reading or writing the host's real
+    // /etc (where a developer's actual ydotool setup would otherwise leak in).
+    //
+    // Deliberately NOT environment-controlled: these paths are interpolated into
+    // privileged `pkexec /bin/sh` scripts (the udev rule + modules-load writes
+    // and the removal `rm`), so an env-settable value would be a root
+    // command-injection / breakage surface. The override is internal, so only
+    // the in-process test (via InternalsVisibleTo) can set it.
+    internal static string? SysConfDirOverride { get; set; }
+
+    private static string SysConfDir => SysConfDirOverride ?? "/etc";
+
+    private static string UdevRulePath => Path.Join(SysConfDir, "udev/rules.d/60-ydotool.rules");
 
     // Marker used by RemoveAsync to confirm we own the file before
     // deleting it — without this we could nuke a rule a user or distro
@@ -41,7 +55,7 @@ public sealed class YdotoolSetupHelper
     // now (modprobe, in the pkexec script) and persisting it across reboots via
     // modules-load.d so the device is present for udev to apply the rule to on
     // every boot.
-    private const string ModulesLoadPath = "/etc/modules-load.d/uinput.conf";
+    private static string ModulesLoadPath => Path.Join(SysConfDir, "modules-load.d/uinput.conf");
 
     private const string ModulesLoadContent =
         "# "

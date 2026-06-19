@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.PluginsSection"
              x:DataType="vm:PluginsSectionViewModel">
     <UserControl.Resources>
@@ -85,11 +86,11 @@
             <Border Classes="panel"
                     Padding="18,14">
                 <StackPanel Spacing="4">
-                    <TextBlock Text="Extensions"
+                    <TextBlock Text="{loc:Str Plugins.Extensions}"
                                FontSize="16"
                                FontWeight="SemiBold" />
                     <TextBlock
-                        Text="Plugins extend TypeWhisper with additional transcription engines, LLM providers, and post-processing."
+                        Text="{loc:Str Plugins.ExtensionsSubtitle}"
                         FontSize="12.5"
                         TextWrapping="Wrap"
                         Foreground="#8A9AAE" />
@@ -107,7 +108,7 @@
                                 <TextBlock Text="⌘"
                                            FontSize="14"
                                            Foreground="#D6DEE9" />
-                                <TextBlock Text="Installed"
+                                <TextBlock Text="{loc:Str Plugins.Installed}"
                                            FontWeight="SemiBold" />
                             </StackPanel>
                             <Border Background="#2196F3"
@@ -134,7 +135,7 @@
                             Padding="14,10"
                             IsVisible="{Binding HasLoadFailures}">
                         <StackPanel Spacing="8">
-                            <TextBlock Text="Plugin load failures"
+                            <TextBlock Text="{loc:Str Plugins.LoadFailures}"
                                        FontWeight="SemiBold"
                                        Foreground="#FFF0B8" />
                             <ItemsControl ItemsSource="{Binding LoadFailures}">
@@ -308,17 +309,17 @@
                                                                                                             VerticalAlignment="Center" />
                                                                                                         <Button
                                                                                                             Grid.Column="1"
-                                                                                                            Content="Up"
+                                                                                                            Content="{loc:Str Common.Up}"
                                                                                                             Command="{Binding OwnerCollection.MoveUpCommand}"
                                                                                                             CommandParameter="{Binding}" />
                                                                                                         <Button
                                                                                                             Grid.Column="2"
-                                                                                                            Content="Down"
+                                                                                                            Content="{loc:Str Common.Down}"
                                                                                                             Command="{Binding OwnerCollection.MoveDownCommand}"
                                                                                                             CommandParameter="{Binding}" />
                                                                                                         <Button
                                                                                                             Grid.Column="3"
-                                                                                                            Content="Remove"
+                                                                                                            Content="{loc:Str Common.Remove}"
                                                                                                             Command="{Binding OwnerCollection.RemoveItemCommand}"
                                                                                                             CommandParameter="{Binding}" />
                                                                                                     </Grid>
@@ -345,11 +346,11 @@
                                                                             HorizontalAlignment="Right"
                                                                             Spacing="8"
                                                                             Margin="0,0,0,14">
-                                                                    <Button Content="Save"
+                                                                    <Button Content="{loc:Str Common.Save}"
                                                                             Command="{Binding Owner.SaveSettingsCommand}"
                                                                             CommandParameter="{Binding}"
                                                                             IsEnabled="{Binding CanEditSettings}" />
-                                                                    <Button Content="Validate"
+                                                                    <Button Content="{loc:Str Plugins.Validate}"
                                                                             Command="{Binding Owner.ValidateSettingsCommand}"
                                                                             CommandParameter="{Binding}"
                                                                             IsEnabled="{Binding CanValidateSettings}" />

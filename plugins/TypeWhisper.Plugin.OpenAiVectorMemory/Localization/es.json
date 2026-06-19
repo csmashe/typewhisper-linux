@@ -1,0 +1,8 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Clave de API de OpenAI utilizada para generar embeddings para la memoria vectorial.",
+  "Settings.EnterApiKey": "Primero introduce una clave de API.",
+  "Settings.ApiKeyConfigured": "Clave de API configurada.",
+  "Manifest.Name": "Memoria vectorial de OpenAI",
+  "Manifest.Description": "Almacenamiento de memoria basado en vectores con embeddings de OpenAI"
+}

@@ -1,0 +1,20 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Genera una clave de API personal en Linear Settings > API > Personal API keys.",
+  "Settings.DefaultTeamId": "ID de equipo predeterminado",
+  "Settings.DefaultTeamIdDescription": "Obligatorio. UUID del equipo donde se crearán las issues. Pulsa Validar después de guardar la clave de API para obtener los equipos.",
+  "Settings.CachedTeamsDescription": "Mostrando {0} equipo(s) de Linear en caché. Pulsa Validar para actualizar.",
+  "Settings.DefaultProjectId": "ID de proyecto predeterminado",
+  "Settings.DefaultProjectIdDescription": "Opcional. Las issues se añadirán a este proyecto cuando esté definido.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.NoTeamsFound": "No se encontraron equipos. Comprueba tu clave de API.",
+  "Settings.TeamsRefreshed": "Se encontraron {0} equipo(s). Opciones de equipo actualizadas.",
+  "Settings.ApiKeyNotConfigured": "La clave de API de Linear no está configurada. Configúrala en los ajustes del plugin.",
+  "Settings.DefaultTeamNotConfigured": "El ID de equipo predeterminado no está configurado. Configúralo en los ajustes del plugin.",
+  "Settings.IssueCreated": "Issue de Linear creada: {0}",
+  "Settings.IssueCreateFailed": "No se pudo crear la issue de Linear. Consulta los registros para más detalles.",
+  "Settings.IssueCreateCancelled": "Se canceló la creación de la issue.",
+  "Settings.IssueCreateError": "Error al crear la issue: {0}",
+  "Manifest.Name": "Linear",
+  "Manifest.Description": "Crea issues de Linear a partir de transcripciones"
+}

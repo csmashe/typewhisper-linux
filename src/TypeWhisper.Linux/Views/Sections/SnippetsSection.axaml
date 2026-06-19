@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.SnippetsSection"
              x:DataType="vm:SnippetsSectionViewModel">
     <UserControl.Styles>
@@ -37,7 +38,7 @@
             <Grid ColumnDefinitions="*,Auto,Auto,Auto"
                   ColumnSpacing="8">
                 <StackPanel Margin="0,0,18,0">
-                    <TextBlock Text="Snippets"
+                    <TextBlock Text="{loc:Str Snippets.Title}"
                                FontSize="16"
                                FontWeight="SemiBold"
                                Margin="0,0,0,4" />
@@ -46,12 +47,12 @@
                                Foreground="#8A9AAE"
                                Margin="0,0,0,4" />
                     <TextBlock
-                        Text="Placeholders: {date}, {time}, {datetime}, {day}, {year}, {clipboard}, {date:FORMAT}"
+                        Text="{loc:Str Snippets.PlaceholdersHint}"
                         FontSize="11.5"
                         Foreground="#8A9AAE"
                         TextWrapping="Wrap"
                         Margin="0,0,0,4" />
-                    <TextBlock Text="Double-click a row to edit it. Use tags to keep reusable phrases organized."
+                    <TextBlock Text="{loc:Str Snippets.EditHint}"
                                FontSize="11.5"
                                Foreground="#8A9AAE"
                                TextWrapping="Wrap" />
@@ -59,15 +60,15 @@
 
                 <Button Grid.Column="1"
                         Classes="toolbar-button"
-                        Content="Import"
+                        Content="{loc:Str Common.Import}"
                         Click="OnImport" />
                 <Button Grid.Column="2"
                         Classes="toolbar-button"
-                        Content="Export"
+                        Content="{loc:Str Common.Export}"
                         Click="OnExport" />
                 <Button Grid.Column="3"
                         Classes="toolbar-button"
-                        Content="+ New"
+                        Content="{loc:Str Common.New}"
                         Command="{Binding BeginCreateCommand}"
                         Background="#2196F3"
                         BorderBrush="#2196F3"
@@ -92,10 +93,10 @@
                       ColumnSpacing="10">
                     <TextBox Grid.Column="0"
                              Text="{Binding NewTrigger}"
-                             PlaceholderText="Trigger" />
+                             PlaceholderText="{loc:Str Snippets.TriggerPlaceholder}" />
                     <TextBox Grid.Column="1"
                              Text="{Binding NewReplacement}"
-                             PlaceholderText="Replacement text" />
+                             PlaceholderText="{loc:Str Snippets.ReplacementPlaceholder}" />
                     <ComboBox Grid.Column="2"
                               ItemsSource="{Binding TriggerModeOptions}"
                               SelectedValue="{Binding SelectedTriggerMode}"
@@ -114,12 +115,12 @@
                       Margin="0,10,0,0">
                     <TextBox Grid.Column="0"
                              Text="{Binding NewTags}"
-                             PlaceholderText="Tags" />
+                             PlaceholderText="{loc:Str Snippets.TagsPlaceholder}" />
                     <TextBox Grid.Column="1"
                              Text="{Binding NewProfileIds}"
-                             PlaceholderText="Profile IDs" />
+                             PlaceholderText="{loc:Str Snippets.ProfileIdsPlaceholder}" />
                     <CheckBox Grid.Column="2"
-                              Content="Case sensitive"
+                              Content="{loc:Str Snippets.CaseSensitive}"
                               IsChecked="{Binding CaseSensitive}"
                               VerticalAlignment="Center" />
                     <StackPanel Grid.Column="3"
@@ -133,7 +134,7 @@
                                 Foreground="White"
                                 MinWidth="118"
                                 Padding="14,8" />
-                        <Button Content="Cancel"
+                        <Button Content="{loc:Str Common.Cancel}"
                                 Command="{Binding CancelEditCommand}"
                                 MinWidth="82"
                                 Padding="14,8" />
@@ -149,7 +150,7 @@
                         Margin="0,12,0,0"
                         IsVisible="{Binding ShowPreview}">
                     <StackPanel Spacing="5">
-                        <TextBlock Text="Preview"
+                        <TextBlock Text="{loc:Str Snippets.Preview}"
                                    FontSize="11"
                                    FontWeight="SemiBold"
                                    Foreground="#8A9AAE" />
@@ -186,7 +187,7 @@
                     <Grid ColumnDefinitions="Auto,Auto,Auto,*"
                           ColumnSpacing="10">
                         <TextBlock Grid.Column="0"
-                                   Text="Tag filter:"
+                                   Text="{loc:Str Snippets.TagFilter}"
                                    FontSize="12"
                                    Foreground="#8A9AAE"
                                    VerticalAlignment="Center" />
@@ -195,7 +196,7 @@
                                   ItemsSource="{Binding AvailableTags}"
                                   SelectedItem="{Binding SelectedTagFilter}" />
                         <Button Grid.Column="2"
-                                Content="All tags"
+                                Content="{loc:Str Snippets.AllTags}"
                                 Command="{Binding ClearTagFilterCommand}"
                                 IsVisible="{Binding HasSelectedTagFilter}" />
                     </Grid>
@@ -211,19 +212,19 @@
                                    Foreground="#8A9AAE"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,12" />
-                        <TextBlock Text="No snippets yet."
+                        <TextBlock Text="{loc:Str Snippets.EmptyTitle}"
                                    FontSize="16"
                                    FontWeight="SemiBold"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8" />
                         <TextBlock
-                            Text="Create short triggers that expand into longer text automatically after transcription."
+                            Text="{loc:Str Snippets.EmptySubtitle}"
                             FontSize="12.5"
                             Foreground="#8A9AAE"
                             TextAlignment="Center"
                             TextWrapping="Wrap"
                             Margin="0,0,0,18" />
-                        <Button Content="+ Create first snippet"
+                        <Button Content="{loc:Str Snippets.CreateFirst}"
                                 Command="{Binding BeginCreateCommand}"
                                 HorizontalAlignment="Center"
                                 Padding="16,8"
@@ -275,7 +276,7 @@
                                                                    Foreground="#D6DEE9" />
                                                     </Border>
                                                     <Border Classes="badge">
-                                                        <TextBlock Text="{Binding TriggerMode}"
+                                                        <TextBlock Text="{Binding TriggerMode, Converter={x:Static loc:LocEnumConverter.Instance}, ConverterParameter=Snippets.TriggerMode}"
                                                                    FontSize="10"
                                                                    Foreground="#D6DEE9" />
                                                     </Border>
@@ -294,13 +295,13 @@
                                             </StackPanel>
 
                                             <Button Grid.Column="3"
-                                                    Content="Edit"
+                                                    Content="{loc:Str Common.Edit}"
                                                     Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).BeginEditCommand}"
                                                     CommandParameter="{Binding}"
                                                     Padding="12,6"
                                                     VerticalAlignment="Center" />
                                             <Button Grid.Column="4"
-                                                    Content="Delete"
+                                                    Content="{loc:Str Common.Delete}"
                                                     Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).DeleteCommand}"
                                                     CommandParameter="{Binding}"
                                                     Padding="12,6"

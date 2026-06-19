@@ -3,6 +3,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -78,7 +79,7 @@ public partial class HistorySection : UserControl
         var file = await topLevel.StorageProvider.SaveFilePickerAsync(
             new FilePickerSaveOptions
             {
-                Title = "Export history",
+                Title = Loc.Instance["Dialog.ExportHistory"],
                 SuggestedFileName = $"typewhisper-history-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
                 DefaultExtension = "txt",
                 FileTypeChoices =

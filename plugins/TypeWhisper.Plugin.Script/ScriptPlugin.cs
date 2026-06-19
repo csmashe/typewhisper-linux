@@ -403,7 +403,8 @@ public sealed class ScriptService
 public sealed class ScriptPlugin
     : IPostProcessorPlugin,
         IPluginCollectionSettingsProvider,
-        IPluginDataLocationAware
+        IPluginDataLocationAware,
+        IPluginLocalizationAware
 {
     private const string ScriptsCollectionKey = "scripts";
 
@@ -419,6 +420,16 @@ public sealed class ScriptPlugin
     public int Priority => 400;
 
     public ScriptService? Service { get; private set; }
+
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -453,21 +464,21 @@ public sealed class ScriptPlugin
     {
         var itemFields = new PluginSettingDefinition[]
         {
-            new("name", "Name", Kind: PluginSettingKind.Text),
-            new("command", "Command", Kind: PluginSettingKind.Multiline),
+            new("name", Loc.L("Settings.Name"), Kind: PluginSettingKind.Text),
+            new("command", Loc.L("Settings.Command"), Kind: PluginSettingKind.Multiline),
             new(
                 "shell",
-                "Shell",
+                Loc.L("Settings.Shell"),
                 Kind: PluginSettingKind.Dropdown,
                 Options:
                 [
-                    new PluginSettingOption("", "bash (default)"),
+                    new PluginSettingOption("", Loc.L("Settings.ShellBashDefault")),
                     new PluginSettingOption("bash", "bash"),
                     new PluginSettingOption("sh", "sh"),
                     new PluginSettingOption("pwsh", "PowerShell"),
                 ]
             ),
-            new("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
+            new("enabled", Loc.L("Settings.Enabled"), Kind: PluginSettingKind.Boolean),
             new("__id", "__id", Kind: PluginSettingKind.Text),
         };
 
@@ -475,11 +486,11 @@ public sealed class ScriptPlugin
         [
             new PluginCollectionDefinition(
                 ScriptsCollectionKey,
-                "Scripts",
-                "Shell scripts run on the transcript, in order.",
+                Loc.L("Settings.Scripts"),
+                Loc.L("Settings.ScriptsDescription"),
                 itemFields,
                 ItemLabelFieldKey: "name",
-                AddButtonLabel: "Add script"
+                AddButtonLabel: Loc.L("Settings.AddScript")
             ),
         ];
     }
@@ -539,7 +550,7 @@ public sealed class ScriptPlugin
     {
         if (!string.Equals(collectionKey, ScriptsCollectionKey, StringComparison.Ordinal))
             return Task.FromResult(
-                new PluginSettingsValidationResult(false, "Unknown collection.")
+                new PluginSettingsValidationResult(false, Loc.L("Settings.UnknownCollection"))
             );
 
         var entries = new List<ScriptEntry>(items.Count);
@@ -552,13 +563,13 @@ public sealed class ScriptPlugin
 
             var name = (rawName ?? "").Trim();
             var command = (rawCommand ?? "").Trim();
-            var displayName = name.Length == 0 ? "(unnamed)" : name;
+            var displayName = name.Length == 0 ? Loc.L("Settings.Unnamed") : name;
 
             if (name.Length == 0)
                 return Task.FromResult(
                     new PluginSettingsValidationResult(
                         false,
-                        $"Script '{displayName}': name is required."
+                        Loc.L("Settings.ScriptNameRequired", displayName)
                     )
                 );
 
@@ -566,7 +577,7 @@ public sealed class ScriptPlugin
                 return Task.FromResult(
                     new PluginSettingsValidationResult(
                         false,
-                        $"Script '{displayName}': command is required."
+                        Loc.L("Settings.ScriptCommandRequired", displayName)
                     )
                 );
 
@@ -575,7 +586,7 @@ public sealed class ScriptPlugin
                 return Task.FromResult(
                     new PluginSettingsValidationResult(
                         false,
-                        $"Script '{displayName}': unknown shell '{rawShell}'."
+                        Loc.L("Settings.ScriptUnknownShell", displayName, rawShell ?? "")
                     )
                 );
 
@@ -624,7 +635,7 @@ public sealed class ScriptPlugin
                     return Task.FromResult(
                         new PluginSettingsValidationResult(
                             false,
-                            $"Refusing to overwrite scripts.json — existing file could not be read: {ex.Message}"
+                            Loc.L("Settings.RefuseOverwriteScripts", ex.Message)
                         )
                     );
                 }
@@ -637,12 +648,12 @@ public sealed class ScriptPlugin
             return Task.FromResult(
                 new PluginSettingsValidationResult(
                     false,
-                    $"Failed to save scripts: {ex.Message}"
+                    Loc.L("Settings.FailedToSaveScripts", ex.Message)
                 )
             );
         }
 
-        return Task.FromResult(new PluginSettingsValidationResult(true, "Saved."));
+        return Task.FromResult(new PluginSettingsValidationResult(true, Loc.L("Settings.Saved")));
     }
 
     private string ResolveDataDir() =>

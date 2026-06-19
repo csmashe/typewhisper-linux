@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:svc="using:TypeWhisper.Linux.Services"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.AdvancedSection"
              x:DataType="vm:AdvancedSectionViewModel">
     <UserControl.Styles>
@@ -23,7 +24,7 @@
         <StackPanel Margin="28"
                     MaxWidth="980"
                     Spacing="18">
-            <TextBlock Text="Memory"
+            <TextBlock Text="{loc:Str Advanced.Memory}"
                        Classes="section-title" />
 
             <Border Classes="panel">
@@ -31,7 +32,7 @@
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
-                            <TextBlock Text="Enable memory"
+                            <TextBlock Text="{loc:Str Advanced.EnableMemory}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
@@ -52,7 +53,7 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="Recording"
+            <TextBlock Text="{loc:Str Advanced.Recording}"
                        Classes="section-title" />
 
             <Border Classes="panel">
@@ -60,7 +61,7 @@
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Auto-unload model"
+                            <TextBlock Text="{loc:Str Advanced.AutoUnloadModel}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
@@ -81,7 +82,7 @@
                     <Border Grid.Row="2" Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
-                            <TextBlock Text="Spoken feedback"
+                            <TextBlock Text="{loc:Str Advanced.SpokenFeedback}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
@@ -96,7 +97,7 @@
                     <Border Grid.Row="4" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Spoken feedback provider"
+                            <TextBlock Text="{loc:Str Advanced.SpokenFeedbackProvider}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
@@ -118,7 +119,7 @@
                     <Border Grid.Row="6" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Voice"
+                            <TextBlock Text="{loc:Str Advanced.Voice}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
@@ -146,7 +147,7 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="Data"
+            <TextBlock Text="{loc:Str Advanced.Data}"
                        Classes="section-title" />
 
             <Border Classes="panel">
@@ -154,7 +155,7 @@
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
-                            <TextBlock Text="Save transcriptions to history"
+                            <TextBlock Text="{loc:Str Advanced.SaveToHistory}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
@@ -168,7 +169,7 @@
                     <Border Grid.Row="2" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="History retention"
+                            <TextBlock Text="{loc:Str Advanced.HistoryRetention}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
@@ -188,7 +189,7 @@
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
-                        <TextBlock Text="When history is disabled, transcriptions are still inserted but not stored."
+                        <TextBlock Text="{loc:Str Advanced.HistoryDisabledHint}"
                                    FontSize="12"
                                    Foreground="#8A9AAE" />
                     </Border>

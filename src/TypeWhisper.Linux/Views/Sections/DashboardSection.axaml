@@ -4,6 +4,7 @@
              xmlns:shellvm="using:TypeWhisper.Linux.ViewModels"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.DashboardSection"
              x:DataType="vm:DashboardSectionViewModel">
     <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -23,10 +24,10 @@
                         Margin="28"
                         Spacing="0">
                 <StackPanel Spacing="8" Margin="0,0,0,20">
-                    <TextBlock Text="Dashboard"
+                    <TextBlock Text="{loc:Str Dashboard.Title}"
                                FontSize="24"
                                FontWeight="SemiBold" />
-                    <TextBlock Text="Your usage, recent activity, and the quickest path back into dictation."
+                    <TextBlock Text="{loc:Str Dashboard.Subtitle}"
                                FontSize="13"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                 </StackPanel>
@@ -42,10 +43,10 @@
                     Padding="18">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Statistics"
+                        <TextBlock Text="{loc:Str Dashboard.Statistics}"
                                    FontSize="16"
                                    FontWeight="SemiBold" />
-                        <TextBlock Text="Switch the time range to compare your writing activity."
+                        <TextBlock Text="{loc:Str Dashboard.StatisticsHint}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
@@ -54,17 +55,17 @@
                                 Orientation="Horizontal"
                                 Spacing="6"
                                 VerticalAlignment="Center">
-                        <ToggleButton Content="Weekly"
+                        <ToggleButton Content="{loc:Str Dashboard.RangeWeekly}"
                                       IsChecked="{Binding SelectedRange, Mode=OneWay,
                                                           ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.Weekly},
                                                           Converter={x:Static local:EnumBoolConverter.Instance}}"
                                       Command="{Binding ShowWeeklyCommand}" />
-                        <ToggleButton Content="Month"
+                        <ToggleButton Content="{loc:Str Dashboard.RangeMonth}"
                                       IsChecked="{Binding SelectedRange, Mode=OneWay,
                                                           ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.Month},
                                                           Converter={x:Static local:EnumBoolConverter.Instance}}"
                                       Command="{Binding ShowMonthCommand}" />
-                        <ToggleButton Content="All Time"
+                        <ToggleButton Content="{loc:Str Dashboard.RangeAllTime}"
                                       IsChecked="{Binding SelectedRange, Mode=OneWay,
                                                           ConverterParameter={x:Static vm:DashboardSectionViewModel+TimeRange.AllTime},
                                                           Converter={x:Static local:EnumBoolConverter.Instance}}"
@@ -94,7 +95,7 @@
                                    FontSize="32"
                                    FontWeight="Bold"
                                    HorizontalAlignment="Center" />
-                        <TextBlock Text="Words"
+                        <TextBlock Text="{loc:Str Dashboard.Words}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
@@ -118,7 +119,7 @@
                                    FontSize="32"
                                    FontWeight="Bold"
                                    HorizontalAlignment="Center" />
-                        <TextBlock Text="Ø WPM"
+                        <TextBlock Text="{loc:Str Dashboard.Wpm}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
@@ -142,7 +143,7 @@
                                    FontSize="32"
                                    FontWeight="Bold"
                                    HorizontalAlignment="Center" />
-                        <TextBlock Text="Apps"
+                        <TextBlock Text="{loc:Str Dashboard.Apps}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
@@ -165,7 +166,7 @@
                                    FontSize="32"
                                    FontWeight="Bold"
                                    HorizontalAlignment="Center" />
-                        <TextBlock Text="Saved"
+                        <TextBlock Text="{loc:Str Dashboard.Saved}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
@@ -185,7 +186,7 @@
                 <Grid ColumnDefinitions="*,*"
                       ColumnSpacing="18">
                     <StackPanel Spacing="10">
-                        <TextBlock Text="Insights"
+                        <TextBlock Text="{loc:Str Dashboard.Insights}"
                                    FontSize="16"
                                    FontWeight="SemiBold" />
                         <Grid ColumnDefinitions="*,*"
@@ -199,7 +200,7 @@
                                     <TextBlock Text="{Binding AverageWordsPerDictationLabel}"
                                                FontSize="24"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Avg words / dictation"
+                                    <TextBlock Text="{loc:Str Dashboard.AvgWordsPerDictation}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -214,13 +215,13 @@
                                     <TextBlock Text="{Binding AverageDurationLabel}"
                                                FontSize="24"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Avg duration"
+                                    <TextBlock Text="{loc:Str Dashboard.AvgDuration}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
                             </Border>
                         </Grid>
-                        <TextBlock Text="Insertion reliability"
+                        <TextBlock Text="{loc:Str Dashboard.InsertionReliability}"
                                    FontSize="13"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,0" />
@@ -237,7 +238,7 @@
                                     <TextBlock Text="{Binding InsertionSuccessRateLabel}"
                                                FontSize="20"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Inserted"
+                                    <TextBlock Text="{loc:Str Dashboard.Inserted}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -252,7 +253,7 @@
                                     <TextBlock Text="{Binding ClipboardFallbackCountLabel}"
                                                FontSize="20"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Clipboard fallback"
+                                    <TextBlock Text="{loc:Str Dashboard.ClipboardFallback}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -283,7 +284,7 @@
                                     <TextBlock Text="{Binding FailedInsertionCountLabel}"
                                                FontSize="20"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Failed"
+                                    <TextBlock Text="{loc:Str Dashboard.Failed}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -293,10 +294,10 @@
 
                     <StackPanel Grid.Column="1"
                                 Spacing="8">
-                        <TextBlock Text="Top apps"
+                        <TextBlock Text="{loc:Str Dashboard.TopApps}"
                                    FontSize="16"
                                    FontWeight="SemiBold" />
-                        <TextBlock Text="No app usage in this period."
+                        <TextBlock Text="{loc:Str Dashboard.NoAppUsage}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    IsVisible="{Binding !HasTopApps}" />
@@ -319,7 +320,7 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock Text="Writing assists"
+                        <TextBlock Text="{loc:Str Dashboard.WritingAssists}"
                                    FontSize="13"
                                    FontWeight="SemiBold"
                                    Margin="0,12,0,0" />
@@ -336,7 +337,7 @@
                                     <TextBlock Text="{Binding CleanupAppliedCountLabel}"
                                                FontSize="20"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Cleanups"
+                                    <TextBlock Text="{loc:Str Dashboard.Cleanups}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -351,7 +352,7 @@
                                     <TextBlock Text="{Binding SnippetAppliedCountLabel}"
                                                FontSize="20"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Snippets"
+                                    <TextBlock Text="{loc:Str Dashboard.Snippets}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -366,7 +367,7 @@
                                     <TextBlock Text="{Binding DictionaryCorrectionAppliedCountLabel}"
                                                FontSize="20"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Corrections"
+                                    <TextBlock Text="{loc:Str Dashboard.Corrections}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -382,7 +383,7 @@
                                     <TextBlock Text="{Binding PromptActionAppliedCountLabel}"
                                                FontSize="20"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Prompt actions"
+                                    <TextBlock Text="{loc:Str Dashboard.PromptActions}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -397,7 +398,7 @@
                                     <TextBlock Text="{Binding TranslationAppliedCountLabel}"
                                                FontSize="20"
                                                FontWeight="SemiBold" />
-                                    <TextBlock Text="Translations"
+                                    <TextBlock Text="{loc:Str Dashboard.Translations}"
                                                FontSize="11"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
@@ -408,7 +409,7 @@
             </Border>
 
             <TextBlock Grid.Row="4"
-                       Text="Activity"
+                       Text="{loc:Str Dashboard.Activity}"
                        MaxWidth="860"
                        Margin="28,0,28,12"
                        FontSize="16"
@@ -424,7 +425,7 @@
                     Padding="16"
                     MinHeight="220">
                 <Grid>
-                    <TextBlock Text="No activity in this period."
+                    <TextBlock Text="{loc:Str Dashboard.NoActivity}"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="14"
@@ -474,16 +475,16 @@
                         <!-- Walk up to the host Window to reach MainWindowViewModel,
                          because DashboardSectionViewModel doesn't hold a reference
                          to the shell VM. -->
-                        <Button Content="Open Wizard"
+                        <Button Content="{loc:Str Common.OpenWizard}"
                                 Command="{Binding $parent[Window].((shellvm:MainWindowViewModel)DataContext).OpenWizardCommand}" />
                     </StackPanel>
 
                     <StackPanel VerticalAlignment="Center"
                                 Spacing="4">
-                        <TextBlock Text="Setup Wizard"
+                        <TextBlock Text="{loc:Str Dashboard.SetupWizard}"
                                    FontSize="14"
                                    FontWeight="SemiBold" />
-                        <TextBlock Text="Re-run the initial setup to configure model, microphone and hotkeys."
+                        <TextBlock Text="{loc:Str Dashboard.SetupWizardHint}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                     </StackPanel>

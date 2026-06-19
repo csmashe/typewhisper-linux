@@ -1,9 +1,11 @@
 {
-  "Settings.Test": "Testen",
-  "Settings.Saved": "Gespeichert",
-  "Settings.EnterApiKey": "Bitte zuerst einen API-Key eingeben",
-  "Settings.Testing": "Teste...",
-  "Settings.ApiKeyValid": "API-Key gültig!",
-  "Settings.ApiKeyInvalid": "Ungültiger API-Key",
-  "Settings.Error": "Fehler: {0}"
+  "Settings.ApiKey": "API-Schlüssel",
+  "Settings.ApiKeyDescription": "Erforderlich für Deepgram-Transkription und -Streaming.",
+  "Settings.TranscriptionModel": "Transkriptionsmodell",
+  "Settings.ModelDescription": "Wählen Sie das Deepgram-Modell.",
+  "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
+  "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
+  "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Manifest.Name": "Deepgram",
+  "Manifest.Description": "Deepgram-Nova-Transkriptions-Engine"
 }

@@ -1,0 +1,23 @@
+{
+  "Settings.VaultPath": "Путь к хранилищу",
+  "Settings.VaultPathDescription": "Абсолютный путь к вашему хранилищу Obsidian.",
+  "Settings.VaultPathDetectedDescription": "Обнаружено хранилищ Obsidian: {0}. При необходимости введите путь вручную.",
+  "Settings.Subfolder": "Подпапка",
+  "Settings.SubfolderDescription": "Папка внутри хранилища, в которой сохраняются заметки.",
+  "Settings.SaveMode": "Режим сохранения",
+  "Settings.SaveModeDescription": "Выберите, добавлять ли запись в ежедневную заметку или создавать отдельную заметку для каждой транскрипции.",
+  "Settings.SaveModeOneNote": "Отдельная заметка для каждой транскрипции",
+  "Settings.SaveModeDailyNote": "Добавлять в ежедневную заметку",
+  "Settings.FilenameTemplate": "Шаблон имени файла",
+  "Settings.FilenameTemplateDescription": "Доступные подстановки: {{date}}, {{time}}, {{app}}.",
+  "Settings.PluginNotActivated": "Плагин не активирован.",
+  "Settings.PluginNotActivatedShort": "Плагин не активирован",
+  "Settings.NoVaultConfigured": "Хранилище Obsidian не настроено. Задайте путь к хранилищу в настройках плагина.",
+  "Settings.VaultPathNotFound": "Путь к хранилищу не найден: {0}",
+  "Settings.SavedTo": "Сохранено в {0}",
+  "Settings.EnterVaultPath": "Сначала введите путь к хранилищу.",
+  "Settings.VaultDetected": "Хранилище обнаружено: {0}",
+  "Settings.NotAnObsidianVault": "Папка существует, но не является хранилищем Obsidian (отсутствует каталог .obsidian).",
+  "Manifest.Name": "Obsidian",
+  "Manifest.Description": "Сохранение транскрипций как заметок в Obsidian"
+}

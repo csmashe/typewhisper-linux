@@ -1,0 +1,12 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción y el streaming de AssemblyAI.",
+  "Settings.TranscriptionModel": "Modelo de transcripción",
+  "Settings.ModelDescription": "Elige el modelo de voz de AssemblyAI.",
+  "Settings.EnterApiKey": "Primero introduce una clave de API.",
+  "Settings.ApiKeyValid": "La clave de API es válida.",
+  "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin sin configurar. Se requiere una clave de API.",
+  "Manifest.Name": "AssemblyAI",
+  "Manifest.Description": "Motor de transcripción AssemblyAI Universal-2"
+}

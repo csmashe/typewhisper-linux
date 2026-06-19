@@ -1,0 +1,8 @@
+{
+  "Settings.ApiKey": "API-Schlüssel",
+  "Settings.ApiKeyDescription": "OpenAI-API-Schlüssel zur Erzeugung von Embeddings für den Vektorspeicher.",
+  "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
+  "Settings.ApiKeyConfigured": "API-Schlüssel konfiguriert.",
+  "Manifest.Name": "OpenAI-Vektorspeicher",
+  "Manifest.Description": "Vektorbasierter Speicher mit OpenAI-Embeddings"
+}

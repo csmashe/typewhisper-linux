@@ -3,6 +3,7 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.ShortcutsSection"
              x:DataType="vm:ShortcutsSectionViewModel">
     <UserControl.Styles>
@@ -49,34 +50,34 @@
         <StackPanel Margin="28"
                     MaxWidth="860">
             <StackPanel Margin="0,0,0,18">
-                <TextBlock Text="Shortcuts"
+                <TextBlock Text="{loc:Str Shortcuts.Title}"
                            Classes="page-title" />
                 <TextBlock
-                    Text="Keep capture keyboard-first. Start with one main hotkey, then adjust activation behavior or add the prompt palette shortcut as needed."
+                    Text="{loc:Str Shortcuts.Subtitle}"
                     Classes="page-subtitle" />
                 <TextBlock
-                    Text="Use a combination like Ctrl+Shift, Alt+F9, or Ctrl+Shift+Space, or a single side-specific modifier like Right Alt or Left Ctrl."
+                    Text="{loc:Str Shortcuts.ComboHint}"
                     FontSize="11"
                     Foreground="#AFC0D3"
                     TextWrapping="Wrap"
                     Margin="0,8,0,0" />
             </StackPanel>
 
-            <TextBlock Text="Status"
+            <TextBlock Text="{loc:Str Shortcuts.Status}"
                        Classes="section-label" />
             <Border Classes="section-panel">
                 <StackPanel>
                     <Border Classes="section-row">
                         <StackPanel>
-                            <TextBlock Text="Backend" Classes="row-title" />
+                            <TextBlock Text="{loc:Str Shortcuts.Backend}" Classes="row-title" />
                             <TextBlock Classes="row-hint"
-                                       Text="{Binding ActiveBackendDisplayName, StringFormat='Active: {0}'}" />
+                                       Text="{Binding ActiveBackendDisplayName, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusActive}" />
                             <TextBlock Classes="row-hint"
-                                       Text="{Binding SessionType, StringFormat='Display server: {0}'}" />
+                                       Text="{Binding SessionType, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusDisplayServer}" />
                             <TextBlock Classes="row-hint"
-                                       Text="{Binding ScopeText, StringFormat='Capture scope: {0}'}" />
+                                       Text="{Binding ScopeText, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusCaptureScope}" />
                             <TextBlock Classes="row-hint"
-                                       Text="{Binding SupportsPressRelease, StringFormat='Press/release support: {0}'}" />
+                                       Text="{Binding SupportsPressReleaseText, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusPressRelease}" />
                         </StackPanel>
                     </Border>
 
@@ -86,12 +87,12 @@
                     <Border Classes="section-row"
                             IsVisible="{Binding ShowInputGroupBanner}">
                         <StackPanel>
-                            <TextBlock Text="⚠ Add your user to the input group to enable global hotkeys"
+                            <TextBlock Text="{loc:Str Shortcuts.InputGroupBanner}"
                                        Classes="row-title"
                                        Foreground="#FFD27A" />
                             <TextBlock TextWrapping="Wrap"
                                        Classes="row-hint"
-                                       Text="On Wayland, TypeWhisper needs read access to /dev/input/event* to detect your dictation key while other apps are focused. Run the command below, then log out and back in." />
+                                       Text="{loc:Str Shortcuts.InputGroupBannerHint}" />
                             <Border Background="#0E1620"
                                     BorderBrush="#1AFFFFFF"
                                     BorderThickness="1"
@@ -111,12 +112,12 @@
                     <Border Classes="section-row"
                             IsVisible="{Binding ShowCapabilityMismatch}">
                         <StackPanel>
-                            <TextBlock Text="⚠ Capability mismatch"
+                            <TextBlock Text="{loc:Str Shortcuts.CapabilityMismatch}"
                                        Classes="row-title"
                                        Foreground="#FFD27A" />
                             <TextBlock TextWrapping="Wrap"
                                        Classes="row-hint"
-                                       Text="The active backend can only deliver presses, but your activation mode needs release events too. Push-to-talk and Hybrid won't work — switch to Toggle, or enable a backend that supports press+release." />
+                                       Text="{loc:Str Shortcuts.CapabilityMismatchHint}" />
                         </StackPanel>
                     </Border>
 
@@ -126,11 +127,11 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Read keyboard events globally on Wayland"
+                                <TextBlock Text="{loc:Str Shortcuts.WaylandEvdev}"
                                            Classes="row-title" />
                                 <TextBlock TextWrapping="Wrap"
                                            Classes="row-hint"
-                                           Text="When on, TypeWhisper reads /dev/input/event* so the configured hotkey fires regardless of which window has focus. Disable to fall back to focused-only behavior." />
+                                           Text="{loc:Str Shortcuts.WaylandEvdevHint}" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
                                           VerticalAlignment="Center"
@@ -140,17 +141,17 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="Main capture"
+            <TextBlock Text="{loc:Str Shortcuts.MainCapture}"
                        Classes="section-label" />
             <Border Classes="section-panel">
                 <Border Classes="section-row">
                     <Grid ColumnDefinitions="*,Auto"
                           ColumnSpacing="16">
                         <StackPanel Margin="0,0,16,0">
-                            <TextBlock Text="Main dictation hotkey"
+                            <TextBlock Text="{loc:Str Shortcuts.MainHotkey}"
                                        Classes="row-title" />
                             <TextBlock
-                                Text="Global shortcut that starts dictation. Its behavior depends on the activation mode below."
+                                Text="{loc:Str Shortcuts.MainHotkeyHint}"
                                 Classes="row-hint" />
                         </StackPanel>
 
@@ -161,14 +162,14 @@
                             <TextBox Width="240"
                                      Text="{Binding HotkeyText}"
                                      PlaceholderText="Ctrl+Shift+Space" />
-                            <Button Content="Apply"
+                            <Button Content="{loc:Str Common.Apply}"
                                     Command="{Binding ApplyHotkeyCommand}" />
                         </StackPanel>
                     </Grid>
                 </Border>
             </Border>
 
-            <TextBlock Text="More shortcuts"
+            <TextBlock Text="{loc:Str Shortcuts.MoreShortcuts}"
                        Classes="section-label" />
             <Border Classes="section-panel">
                 <StackPanel>
@@ -176,10 +177,10 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Activation mode"
+                                <TextBlock Text="{loc:Str Shortcuts.ActivationMode}"
                                            Classes="row-title" />
                                 <TextBlock
-                                    Text="Toggle starts and stops on repeated presses. Push to talk records while held. Hybrid starts immediately, keeps recording after a short press, and stops on release after a long hold."
+                                    Text="{loc:Str Shortcuts.ActivationModeHint}"
                                     Classes="row-hint" />
                             </StackPanel>
 
@@ -187,17 +188,17 @@
                                         Orientation="Horizontal"
                                         Spacing="14"
                                         VerticalAlignment="Center">
-                                <RadioButton Content="Toggle"
+                                <RadioButton Content="{loc:Str Common.ModeToggle}"
                                              GroupName="mode"
                                              IsChecked="{Binding Mode, Mode=TwoWay,
                                                                  Converter={x:Static local:EnumBoolConverter.Instance},
                                                                  ConverterParameter={x:Static models:RecordingMode.Toggle}}" />
-                                <RadioButton Content="Push to talk"
+                                <RadioButton Content="{loc:Str Common.ModePushToTalk}"
                                              GroupName="mode"
                                              IsChecked="{Binding Mode, Mode=TwoWay,
                                                                  Converter={x:Static local:EnumBoolConverter.Instance},
                                                                  ConverterParameter={x:Static models:RecordingMode.PushToTalk}}" />
-                                <RadioButton Content="Hybrid"
+                                <RadioButton Content="{loc:Str Common.ModeHybrid}"
                                              GroupName="mode"
                                              IsChecked="{Binding Mode, Mode=TwoWay,
                                                                  Converter={x:Static local:EnumBoolConverter.Instance},
@@ -214,10 +215,10 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Prompt Palette"
+                                <TextBlock Text="{loc:Str Shortcuts.PromptPalette}"
                                            Classes="row-title" />
                                 <TextBlock
-                                    Text="Optional global shortcut that opens the prompt palette for the current selection without starting dictation. Leave blank to disable it."
+                                    Text="{loc:Str Shortcuts.PromptPaletteHint}"
                                     Classes="row-hint" />
                             </StackPanel>
 
@@ -228,7 +229,7 @@
                                 <TextBox Width="240"
                                          Text="{Binding PromptPaletteHotkeyText}"
                                          PlaceholderText="Ctrl+Shift+P" />
-                                <Button Content="Apply"
+                                <Button Content="{loc:Str Common.Apply}"
                                         Command="{Binding ApplyPromptPaletteHotkeyCommand}" />
                             </StackPanel>
                         </Grid>
@@ -242,10 +243,10 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Transform selection"
+                                <TextBlock Text="{loc:Str Shortcuts.TransformSelection}"
                                            Classes="row-title" />
                                 <TextBlock
-                                    Text="Optional global shortcut for editing selected text by voice. Leave blank to disable it."
+                                    Text="{loc:Str Shortcuts.TransformSelectionHint}"
                                     Classes="row-hint" />
                             </StackPanel>
 
@@ -256,7 +257,7 @@
                                 <TextBox Width="240"
                                          Text="{Binding TransformSelectionHotkeyText}"
                                          PlaceholderText="Ctrl+Shift+T" />
-                                <Button Content="Apply"
+                                <Button Content="{loc:Str Common.Apply}"
                                         Command="{Binding ApplyTransformSelectionHotkeyCommand}" />
                             </StackPanel>
                         </Grid>
@@ -270,10 +271,10 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Recent transcriptions"
+                                <TextBlock Text="{loc:Str Shortcuts.RecentTranscriptions}"
                                            Classes="row-title" />
                                 <TextBlock
-                                    Text="Optional global shortcut that opens a searchable palette of recent transcriptions."
+                                    Text="{loc:Str Shortcuts.RecentTranscriptionsHint}"
                                     Classes="row-hint" />
                             </StackPanel>
 
@@ -284,7 +285,7 @@
                                 <TextBox Width="240"
                                          Text="{Binding RecentTranscriptionsHotkeyText}"
                                          PlaceholderText="Ctrl+Shift+R" />
-                                <Button Content="Apply"
+                                <Button Content="{loc:Str Common.Apply}"
                                         Command="{Binding ApplyRecentTranscriptionsHotkeyCommand}" />
                             </StackPanel>
                         </Grid>
@@ -298,10 +299,10 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
                             <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="Copy last transcription"
+                                <TextBlock Text="{loc:Str Shortcuts.CopyLastTranscription}"
                                            Classes="row-title" />
                                 <TextBlock
-                                    Text="Optional global shortcut that copies the latest transcription to the clipboard."
+                                    Text="{loc:Str Shortcuts.CopyLastTranscriptionHint}"
                                     Classes="row-hint" />
                             </StackPanel>
 
@@ -312,7 +313,7 @@
                                 <TextBox Width="240"
                                          Text="{Binding CopyLastTranscriptionHotkeyText}"
                                          PlaceholderText="Ctrl+Shift+C" />
-                                <Button Content="Apply"
+                                <Button Content="{loc:Str Common.Apply}"
                                         Command="{Binding ApplyCopyLastTranscriptionHotkeyCommand}" />
                             </StackPanel>
                         </Grid>
@@ -320,7 +321,7 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="Bind a custom shortcut"
+            <TextBlock Text="{loc:Str Shortcuts.BindCustom}"
                        Classes="section-label" />
             <Border Classes="section-panel">
                 <Border Classes="section-row">
@@ -332,7 +333,7 @@
                             <TextBlock Margin="0,4,0,0"
                                        Classes="row-hint"
                                        TextWrapping="Wrap"
-                                       Text="Write the dictation shortcut directly to your desktop's settings. The lines below show exactly what will be added — your existing shortcuts are preserved." />
+                                       Text="{loc:Str Shortcuts.AutoSetupHint}" />
 
                             <Border Background="#0E1620"
                                     BorderBrush="#1AFFFFFF"
@@ -351,7 +352,7 @@
                                         Margin="0,10,0,0">
                                 <Button Content="{Binding SetupAutomaticallyLabel}"
                                         Command="{Binding SetupAutomaticallyCommand}" />
-                                <Button Content="Remove integration"
+                                <Button Content="{loc:Str Common.RemoveIntegration}"
                                         Command="{Binding RemoveIntegrationCommand}" />
                             </StackPanel>
 
@@ -374,13 +375,13 @@
                         </StackPanel>
 
                         <TextBlock Classes="row-title"
-                                   Text="Show me the commands"
+                                   Text="{loc:Str Shortcuts.ShowCommands}"
                                    IsVisible="{Binding CanSetupAutomatically}"
                                    Margin="0,0,0,6" />
                         <TextBlock TextWrapping="Wrap"
                                    Classes="row-hint"
                                    Margin="0,0,0,10"
-                                   Text="You can bind any key combination to toggle dictation through your desktop's keyboard settings. Set the command to:" />
+                                   Text="{loc:Str Shortcuts.ShowCommandsHint}" />
 
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="8">
@@ -395,7 +396,7 @@
                                                      FontSize="12" />
                             </Border>
                             <Button Grid.Column="1"
-                                    Content="Copy"
+                                    Content="{loc:Str Common.Copy}"
                                     Command="{Binding CopyCustomShortcutCommand}" />
                         </Grid>
 
@@ -419,7 +420,7 @@
                                                          FontSize="12" />
                                 </Border>
                                 <Button Grid.Column="1"
-                                        Content="Copy"
+                                        Content="{loc:Str Common.Copy}"
                                         Command="{Binding CopyPushToTalkPressSnippetCommand}" />
                             </Grid>
 
@@ -437,19 +438,19 @@
                                                          FontSize="12" />
                                 </Border>
                                 <Button Grid.Column="1"
-                                        Content="Copy"
+                                        Content="{loc:Str Common.Copy}"
                                         Command="{Binding CopyPushToTalkReleaseSnippetCommand}" />
                             </Grid>
 
                             <Button Margin="0,8,0,0"
                                     HorizontalAlignment="Left"
-                                    Content="Copy both lines"
+                                    Content="{loc:Str Shortcuts.CopyBothLines}"
                                     Command="{Binding CopyPushToTalkPairCommand}" />
                         </StackPanel>
 
                         <TextBlock Margin="0,12,0,0"
                                    Classes="row-hint"
-                                   Text="{Binding DesktopName, StringFormat='Detected desktop: {0}'}" />
+                                   Text="{Binding DesktopName, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.DetectedDesktop}" />
                         <TextBlock Margin="0,4,0,0"
                                    Classes="row-hint"
                                    TextWrapping="Wrap"
@@ -458,7 +459,7 @@
                                    FontSize="11"
                                    Foreground="#7D8796"
                                    TextWrapping="Wrap"
-                                   Text="When TypeWhisper is already running, invoking this command toggles dictation in the existing instance — your shortcut won't launch a second copy." />
+                                   Text="{loc:Str Shortcuts.AlreadyRunningHint}" />
                     </StackPanel>
                 </Border>
             </Border>

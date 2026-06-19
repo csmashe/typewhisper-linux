@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "API-Schlüssel",
+  "Settings.ApiKeyDescription": "Erforderlich für Google Cloud Speech-to-Text.",
+  "Settings.TranscriptionModel": "Transkriptionsmodell",
+  "Settings.ModelDescription": "Wählen Sie das Google Cloud STT-Modell.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
+  "Manifest.Name": "Google Cloud STT",
+  "Manifest.Description": "Google Cloud Speech-to-Text v2 Transkription"
+}

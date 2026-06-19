@@ -1,0 +1,8 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "API-ключ OpenAI, используемый для создания эмбеддингов для векторной памяти.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyConfigured": "API-ключ настроен.",
+  "Manifest.Name": "Векторная память OpenAI",
+  "Manifest.Description": "Векторное хранилище памяти с использованием эмбеддингов OpenAI"
+}

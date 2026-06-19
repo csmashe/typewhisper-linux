@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -49,7 +50,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     private string _failedInsertionCountLabel = "0";
 
     [ObservableProperty]
-    private string _insertedBreakdownLabel = "0 pasted / 0 typed";
+    private string _insertedBreakdownLabel = Loc.Instance.GetString("Dashboard.InsertedBreakdown", 0, 0);
 
     [ObservableProperty]
     private string _insertionSuccessRateLabel = "0%";
@@ -91,6 +92,9 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         // versions of the app (DashboardSelectedPeriod is an unvalidated int).
         _selectedRange = ReadSelectedRange(settings.Current.DashboardSelectedPeriod);
         _history.RecordsChanged += OnRecordsChanged;
+        // The localized labels (InsertedBreakdownLabel) and TopApps rows (Summary)
+        // are resolved into stored strings, so rebuild them on a live language switch.
+        Loc.Instance.LanguageChanged += OnLanguageChanged;
         _ = InitializeAsync();
     }
 
@@ -103,6 +107,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     {
         _disposed = true;
         _history.RecordsChanged -= OnRecordsChanged;
+        Loc.Instance.LanguageChanged -= OnLanguageChanged;
     }
 
     partial void OnSelectedRangeChanged(TimeRange value)
@@ -146,6 +151,10 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         }
     }
 
+    // LanguageChanged is raised on the UI thread (from the settings binding), so
+    // Refresh can run directly and re-resolve the localized labels/rows in place.
+    private void OnLanguageChanged(object? sender, EventArgs e) => Refresh();
+
     private void Refresh()
     {
         if (_disposed)
@@ -178,7 +187,11 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         TypedCountLabel = insights.TypedCount.ToString();
         ClipboardFallbackCountLabel = insights.CopiedToClipboardCount.ToString();
         FailedInsertionCountLabel = insights.FailedInsertionCount.ToString();
-        InsertedBreakdownLabel = $"{insights.PastedCount} pasted / {insights.TypedCount} typed";
+        InsertedBreakdownLabel = Loc.Instance.GetString(
+            "Dashboard.InsertedBreakdown",
+            insights.PastedCount,
+            insights.TypedCount
+        );
         CleanupAppliedCountLabel = insights.CleanupAppliedCount.ToString();
         SnippetAppliedCountLabel = insights.SnippetAppliedCount.ToString();
         DictionaryCorrectionAppliedCountLabel =
@@ -245,5 +258,5 @@ public sealed class AppUsageInsightRow
     public string AppProcessName { get; }
     public int RecordCount { get; }
     public int WordCount { get; }
-    public string Summary => $"{RecordCount} dictations · {WordCount} words";
+    public string Summary => Loc.Instance.GetString("Dashboard.SummaryStat", RecordCount, WordCount);
 }

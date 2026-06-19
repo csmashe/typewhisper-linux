@@ -194,11 +194,12 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Phishing"
             ]
         ),
-        // Packs below use German display names and German-language terms,
-        // except "databases" which is language-neutral (PostgreSQL, MongoDB, \u2026).
+        // These packs originated upstream with German display names and German
+        // terms (upstream's authors are German). This fork is English-first, so
+        // names and domain terms are in English.
         new(
             "databases",
-            "Datenbanken",
+            "Databases",
             "\U0001F5C4\uFE0F",
             [
                 "PostgreSQL",
@@ -220,79 +221,79 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
         ),
         new(
             "medical",
-            "Medizin",
+            "Medicine",
             "\u2695\uFE0F",
             [
-                "Anamnese",
-                "Diagnose",
-                "Pathologie",
-                "EKG",
-                "MRT",
+                "Anamnesis",
+                "Diagnosis",
+                "Pathology",
+                "ECG",
+                "MRI",
                 "CT",
-                "Ultraschall",
-                "Biopsie",
-                "Anästhesie",
-                "Kardiologie",
-                "Onkologie",
-                "Orthopädie",
-                "Neurologie",
-                "Pädiatrie",
-                "Radiologie"
+                "Ultrasound",
+                "Biopsy",
+                "Anesthesia",
+                "Cardiology",
+                "Oncology",
+                "Orthopedics",
+                "Neurology",
+                "Pediatrics",
+                "Radiology"
             ]
         ),
         new(
             "legal",
-            "Jura",
+            "Law",
             "\u2696\uFE0F",
             [
-                "Klausel",
-                "Haftung",
-                "Vertragsrecht",
-                "DSGVO",
+                "Clause",
+                "Liability",
+                "Contract law",
+                "GDPR",
                 "Compliance",
-                "Insolvenz",
-                "Urheberrecht",
-                "Markenrecht",
-                "Patentrecht",
-                "Arbeitsrecht",
-                "Strafrecht",
-                "Zivilrecht",
-                "Schiedsverfahren",
-                "Datenschutz",
-                "Gewährleistung"
+                "Insolvency",
+                "Copyright",
+                "Trademark",
+                "Patent",
+                "Employment law",
+                "Criminal law",
+                "Civil law",
+                "Arbitration",
+                "Data protection",
+                "Warranty"
             ]
         ),
         new(
             "finance",
-            "Finanzen",
+            "Finance",
             "\U0001F4B0",
             [
                 "Portfolio",
-                "Derivat",
-                "Bilanz",
+                "Derivative",
+                "Balance sheet",
                 "EBITDA",
                 "Hedging",
                 "Cashflow",
-                "Rendite",
-                "Dividende",
-                "Aktie",
-                "Anleihe",
+                "Yield",
+                "Dividend",
+                "Stock",
+                "Bond",
                 "ETF",
-                "Kryptowährung",
+                "Cryptocurrency",
                 "Blockchain",
                 "Fintech",
-                "Liquidität"
+                "Liquidity"
             ]
         ),
         new(
             "music",
-            "Musik-Produktion",
+            "Music Production",
             "\U0001F3B5",
             [
                 "DAW",
                 "MIDI",
                 "Equalizer",
-                "Kompressor",
+                "Compressor",
                 "VST",
                 "Synthesizer",
                 "Reverb",

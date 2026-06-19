@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 
 // ReSharper disable UnusedParameterInPartialMethod
 
@@ -64,7 +65,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private FileTranscriptionQueueItemViewModel? _selectedItem;
 
     [ObservableProperty]
-    private string _statusText = "Drag or select files";
+    private string _statusText = Loc.Instance["FileTranscription.DragOrSelectFiles"];
 
     [ObservableProperty]
     private bool _watchFolderAutoStart;
@@ -107,6 +108,9 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         _settings.SettingsChanged += settingsValue =>
             Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
         _watchFolder.StateChanged += (_, _) => Dispatcher.UIThread.Post(SyncWatchFolderState);
+        // Item status texts and the queue summary are resolved into stored strings,
+        // so re-resolve them when the user switches UI language at runtime.
+        Loc.Instance.LanguageChanged += (_, _) => OnLanguageChanged();
 
         if (WatchFolderAutoStart && HasWatchFolderPath)
         {
@@ -127,7 +131,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     public bool ShowImporterUnavailableReason => !CanImportFiles;
 
     public string ImporterUnavailableReason =>
-        "Unavailable: ffmpeg is not installed on this system.";
+        Loc.Instance["FileTranscription.ImporterUnavailableReason"];
 
     public bool HasWatchFolderPath => !string.IsNullOrWhiteSpace(WatchFolderPath);
     public bool HasWatchFolderOutputPath => !string.IsNullOrWhiteSpace(WatchFolderOutputPath);
@@ -135,7 +139,9 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     public bool IsWatchFolderStopped => !IsWatchFolderRunning;
 
     public string WatchFolderOutputPathDisplay =>
-        HasWatchFolderOutputPath ? WatchFolderOutputPath! : "Same as watch folder";
+        HasWatchFolderOutputPath
+            ? WatchFolderOutputPath!
+            : Loc.Instance["FileTranscription.SameAsWatchFolder"];
 
     public string WatchFolderStatusText
     {
@@ -143,10 +149,15 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         {
             if (IsWatchFolderRunning && !string.IsNullOrWhiteSpace(CurrentlyProcessingWatchFile))
             {
-                return $"Processing {CurrentlyProcessingWatchFile}";
+                return Loc.Instance.GetString(
+                    "FileTranscription.ProcessingFile",
+                    CurrentlyProcessingWatchFile
+                );
             }
 
-            return IsWatchFolderRunning ? "Watching for new files" : "Stopped";
+            return IsWatchFolderRunning
+                ? Loc.Instance["FileTranscription.WatchingForNewFiles"]
+                : Loc.Instance["FileTranscription.Stopped"];
         }
     }
 
@@ -253,7 +264,11 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
 
         if (item.Status == FileTranscriptionQueueItemStatus.Queued)
         {
-            SetStatus(item, FileTranscriptionQueueItemStatus.Cancelled, "Cancelled.");
+            SetStatus(
+                item,
+                FileTranscriptionQueueItemStatus.Cancelled,
+                Loc.Instance["FileTranscription.Cancelled"]
+            );
             RefreshStatusText();
             return;
         }
@@ -342,12 +357,20 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                     SetStatus(
                         item,
                         FileTranscriptionQueueItemStatus.Completed,
-                        $"Done in {result.RawResult.ProcessingTime:F1}s ({result.RawResult.Duration:F1}s audio)"
+                        Loc.Instance.GetString(
+                            "FileTranscription.DoneIn",
+                            result.RawResult.ProcessingTime,
+                            result.RawResult.Duration
+                        )
                     );
                 }
                 catch (OperationCanceledException)
                 {
-                    SetStatus(item, FileTranscriptionQueueItemStatus.Cancelled, "Cancelled.");
+                    SetStatus(
+                        item,
+                        FileTranscriptionQueueItemStatus.Cancelled,
+                        Loc.Instance["FileTranscription.Cancelled"]
+                    );
                 }
                 catch (Exception ex)
                 {
@@ -412,6 +435,23 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         });
     }
 
+    private void OnLanguageChanged()
+    {
+        foreach (var item in Items)
+        {
+            item.RefreshLocalizedText();
+        }
+
+        // Also re-resolves the section-level summary / "drag or select files" text.
+        RefreshStatusText();
+
+        // The remaining localized labels are computed getters bound via {Binding},
+        // so nudge them to re-read from Loc in the new language.
+        OnPropertyChanged(nameof(ImporterUnavailableReason));
+        OnPropertyChanged(nameof(WatchFolderOutputPathDisplay));
+        OnPropertyChanged(nameof(WatchFolderStatusText));
+    }
+
     private void RefreshStatusText()
     {
         // Re-evaluated here because every add/remove (CollectionChanged) and every
@@ -421,7 +461,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         var total = Items.Count;
         if (total == 0)
         {
-            StatusText = "Drag or select files";
+            StatusText = Loc.Instance["FileTranscription.DragOrSelectFiles"];
             return;
         }
 
@@ -437,8 +477,14 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             item.Status == FileTranscriptionQueueItemStatus.Cancelled
         );
         var queued = Items.Count(item => item.Status == FileTranscriptionQueueItemStatus.Queued);
-        StatusText =
-            $"{completed} complete, {failed} failed, {cancelled} cancelled, {queued} queued ({total} total)";
+        StatusText = Loc.Instance.GetString(
+            "FileTranscription.QueueSummary",
+            completed,
+            failed,
+            cancelled,
+            queued,
+            total
+        );
     }
 
     partial void OnSelectedItemChanged(FileTranscriptionQueueItemViewModel? value)

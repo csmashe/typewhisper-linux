@@ -1,0 +1,12 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para las solicitudes de LLM de Fireworks.",
+  "Settings.StreamResponses": "Transmitir respuestas",
+  "Settings.StreamResponsesDescription": "Muestra la salida de las acciones de prompt token a token a medida que se genera, en lugar de esperar a la respuesta completa.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.ApiKeyValid": "La clave de API es válida.",
+  "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
+  "Manifest.Name": "Fireworks",
+  "Manifest.Description": "Inferencia rápida de LLM de Fireworks AI"
+}

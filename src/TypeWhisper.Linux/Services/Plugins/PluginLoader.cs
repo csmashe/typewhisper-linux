@@ -219,6 +219,16 @@ public sealed class PluginLoader
             );
         }
 
+        // Plugins that localize their settings UI declare IPluginLocalizationAware
+        // and receive their catalog at load — before, and independent of,
+        // activation. The settings page queries metadata (labels, validation) for
+        // every discovered plugin, including disabled ones that are never
+        // activated, so localization must not depend on _host being set.
+        if (instance is IPluginLocalizationAware localizationAware)
+        {
+            localizationAware.SetLocalization(new PluginLocalization(pluginDir));
+        }
+
         return new LoadedPlugin(manifest, instance, loadContext, pluginDir);
     }
 }

@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Gladia;
 
-public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.gladia.io/v2";
 
@@ -57,7 +57,7 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         return await GladiaStreamingSession.ConnectAsync(_httpClient, _apiKey!, language, ct);
     }
@@ -79,7 +79,7 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         using var content = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(wavAudio);
@@ -158,6 +158,16 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         _httpClient.Dispose();
     }
 
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+
     internal async Task SetApiKeyAsync(string apiKey)
     {
         // Trim defensively at the internal entry too: SetSettingValueAsync
@@ -178,11 +188,17 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [
-            new("api-key", "API key", true, null, "Required for Gladia transcription."),
+            new(
+                "api-key",
+                Loc.L("Settings.ApiKey"),
+                true,
+                null,
+                Loc.L("Settings.ApiKeyDescription")
+            ),
             new(
                 "selectedModel",
-                "Transcription model",
-                Description: "Choose the Gladia model.",
+                Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];

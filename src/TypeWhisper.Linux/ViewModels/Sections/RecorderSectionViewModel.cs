@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using Timer = System.Timers.Timer;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -38,7 +39,7 @@ public partial class RecorderSectionViewModel : ObservableObject
     private DateTime _recordingStart;
 
     [ObservableProperty]
-    private string _statusText = "Ready.";
+    private string _statusText = Loc.Instance["Recorder.StatusReady"];
 
     private Timer? _timer;
 
@@ -56,7 +57,8 @@ public partial class RecorderSectionViewModel : ObservableObject
         LoadExistingRecordings();
     }
 
-    public string RecordButtonText => IsRecording ? "Stop" : "Record";
+    public string RecordButtonText =>
+        IsRecording ? Loc.Instance["Recorder.Stop"] : Loc.Instance["Recorder.Record"];
 
     public ObservableCollection<RecordingItem> Recordings { get; } = [];
     public bool HasRecordings => Recordings.Count > 0;
@@ -79,14 +81,14 @@ public partial class RecorderSectionViewModel : ObservableObject
         _audio.StartRecording();
         if (!_audio.IsRecording)
         {
-            StatusText = "No microphone available.";
+            StatusText = Loc.Instance["Recorder.StatusNoMicrophone"];
             return;
         }
 
         IsRecording = true;
         OnPropertyChanged(nameof(RecordButtonText));
         _recordingStart = DateTime.UtcNow;
-        StatusText = "Recording...";
+        StatusText = Loc.Instance["Recorder.StatusRecording"];
 
         _timer = new Timer(100);
         _timer.Elapsed += (_, _) =>
@@ -113,7 +115,7 @@ public partial class RecorderSectionViewModel : ObservableObject
 
         if (wav.Length == 0)
         {
-            StatusText = "No audio captured.";
+            StatusText = Loc.Instance["Recorder.StatusNoAudio"];
             DurationText = "0:00";
             return;
         }
@@ -122,7 +124,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         var filePath = Path.Combine(TypeWhisperEnvironment.AudioPath, fileName);
         await File.WriteAllBytesAsync(filePath, wav);
 
-        StatusText = "Saved. Transcribing...";
+        StatusText = Loc.Instance["Recorder.StatusSavedTranscribing"];
         IsTranscribing = true;
 
         string? transcript = null;
@@ -166,7 +168,9 @@ public partial class RecorderSectionViewModel : ObservableObject
             new RecordingItem(fileName, filePath, DateTime.Now, duration, transcript)
         );
         OnPropertyChanged(nameof(HasRecordings));
-        StatusText = transcript is not null ? "Done." : "Saved (no model loaded)";
+        StatusText = transcript is not null
+            ? Loc.Instance["Recorder.StatusDone"]
+            : Loc.Instance["Recorder.StatusSavedNoModel"];
         DurationText = "0:00";
     }
 

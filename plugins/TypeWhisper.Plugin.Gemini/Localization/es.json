@@ -1,0 +1,12 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para las solicitudes al LLM de Gemini.",
+  "Settings.StreamResponses": "Transmitir respuestas",
+  "Settings.StreamResponsesDescription": "Muestra la salida de la acción del prompt token a token a medida que se genera, en lugar de esperar a la respuesta completa.",
+  "Settings.EnterApiKey": "Introduce primero una clave de API.",
+  "Settings.ApiKeyValid": "La clave de API es válida.",
+  "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
+  "Manifest.Name": "Google Gemini",
+  "Manifest.Description": "Proveedor de LLM Google Gemini para acciones de prompt y traducción"
+}

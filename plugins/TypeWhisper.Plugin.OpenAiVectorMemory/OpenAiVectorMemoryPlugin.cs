@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAiVectorMemory;
 
-public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSettingsProvider
+public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string EmbeddingModel = "text-embedding-3-small";
     private const string EmbeddingUrl = "https://api.openai.com/v1/embeddings";
@@ -25,6 +25,16 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     public string PluginId => "com.typewhisper.openai-vector-memory";
     public string PluginName => "OpenAI Vector Memory";
     public string PluginVersion => "1.0.0";
+
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -49,10 +59,10 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         [
             new(
                 Key: "api-key",
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Placeholder: "sk-...",
-                Description: "OpenAI API key used to generate embeddings for vector memory."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
         ];
 
@@ -85,8 +95,8 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
         Task.FromResult<PluginSettingsValidationResult?>(
             string.IsNullOrWhiteSpace(_apiKey)
-                ? new PluginSettingsValidationResult(false, "Enter an API key first.")
-                : new PluginSettingsValidationResult(true, "API key configured.")
+                ? new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"))
+                : new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyConfigured"))
         );
 
     public async Task StoreAsync(string content, CancellationToken ct)

@@ -1,0 +1,12 @@
+{
+  "Settings.AccountId": "Konto-ID",
+  "Settings.AccountIdDescription": "Erforderliche Cloudflare-Konto-ID.",
+  "Settings.ApiToken": "API-Token",
+  "Settings.ApiTokenDescription": "Cloudflare-API-Token mit Workers-AI-Zugriff.",
+  "Settings.TranscriptionModel": "Transkriptionsmodell",
+  "Settings.ModelDescription": "Wählen Sie das Cloudflare-ASR-Modell.",
+  "Settings.EnterAccountIdAndApiToken": "Geben Sie zuerst Konto-ID und API-Token ein.",
+  "Settings.CredentialsSaved": "Anmeldedaten gespeichert. Die Remote-Validierung ist noch nicht implementiert.",
+  "Manifest.Name": "Cloudflare ASR",
+  "Manifest.Description": "Cloudflare-Workers-AI-Whisper-Transkriptions-Engine"
+}

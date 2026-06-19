@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "Clave de API",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción de Speechmatics.",
+  "Settings.TranscriptionModel": "Modelo de transcripción",
+  "Settings.ModelDescription": "Elige el modelo de Speechmatics.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin no configurado. Se requiere una clave de API.",
+  "Manifest.Name": "Speechmatics",
+  "Manifest.Description": "Motor de transcripción de voz a texto de Speechmatics"
+}

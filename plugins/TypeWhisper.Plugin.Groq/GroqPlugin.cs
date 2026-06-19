@@ -10,7 +10,8 @@ namespace TypeWhisper.Plugin.Groq;
 public sealed partial class GroqPlugin
     : ITranscriptionEnginePlugin,
         ILlmProviderPlugin,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.groq.com/openai";
     private readonly HttpClient _httpClient;
@@ -155,7 +156,7 @@ public sealed partial class GroqPlugin
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = ResolveLlmModelId(string.IsNullOrWhiteSpace(model) ? null : model);
         return await OpenAiChatHelper.SendChatCompletionAsync(
@@ -183,7 +184,7 @@ public sealed partial class GroqPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = ResolveLlmModelId(string.IsNullOrWhiteSpace(model) ? null : model);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
@@ -201,7 +202,15 @@ public sealed partial class GroqPlugin
     }
 
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     internal string? SelectedLlmModelId => _selectedLlmModelId;
     internal IReadOnlyList<FetchedLlmModel> FetchedLlmModels => _fetchedLlmModels;
 
@@ -365,34 +374,33 @@ public sealed partial class GroqPlugin
         [
             new(
                 Key: "api-key",
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Placeholder: "gsk_...",
-                Description: "Stored securely and used for both Groq transcription and LLM requests."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 Key: "selectedModel",
-                Label: "Transcription model",
-                Description: "Choose the Groq transcription model.",
+                Label: Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.TranscriptionModelDescription"),
                 Options: TranscriptionModelEntries
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
             new(
                 Key: "selectedLlmModel",
-                Label: "LLM model",
+                Label: Loc.L("Settings.LlmModel"),
                 Description: _fetchedLlmModels.Count > 0
-                    ? $"Showing {_fetchedLlmModels.Count} Groq LLM model(s) fetched from the API."
-                    : "Using the default Groq LLM list. Click Validate to test the key and refresh current models.",
+                    ? Loc.L("Settings.LlmModelFetched", _fetchedLlmModels.Count)
+                    : Loc.L("Settings.LlmModelDefault"),
                 Options: SupportedModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as it is "
-                    + "generated, instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -447,11 +455,11 @@ public sealed partial class GroqPlugin
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         if (!valid)
-            return new PluginSettingsValidationResult(false, "API key is invalid.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
         var models = await FetchLlmModelsAsync(ct);
         if (models is not null)
@@ -459,13 +467,13 @@ public sealed partial class GroqPlugin
             SetFetchedLlmModels(models);
             return new PluginSettingsValidationResult(
                 true,
-                $"API key is valid. Fetched {models.Count} Groq LLM model(s)."
+                Loc.L("Settings.ApiKeyValidFetchedModels", models.Count)
             );
         }
 
         return new PluginSettingsValidationResult(
             true,
-            "API key is valid. Using saved/default LLM models."
+            Loc.L("Settings.ApiKeyValidSavedModels")
         );
     }
 

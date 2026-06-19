@@ -8,7 +8,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Reson8;
 
-public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     internal const string DefaultModelId = "__default__";
     internal const string DefaultBaseUrl = "https://api.reson8.dev";
@@ -74,7 +74,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public string ProviderDisplayName => "Reson8";
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
     public IReadOnlyList<PluginModelInfo> TranscriptionModels =>
-        [new PluginModelInfo(DefaultModelId, "Default model"), .. _fetchedCustomModels.Select(m => new PluginModelInfo(m.Id, m.Name))];
+        [new PluginModelInfo(DefaultModelId, Loc.L("Settings.DefaultModel")), .. _fetchedCustomModels.Select(m => new PluginModelInfo(m.Id, m.Name))];
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
@@ -84,7 +84,15 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     internal string CustomBaseUrl => _customBaseUrl;
     internal string CustomAuthHeader => _customAuthHeader;
     internal IReadOnlyList<Reson8CustomModel> FetchedCustomModels => _fetchedCustomModels;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     public void SelectModel(string modelId)
     {
@@ -104,7 +112,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
         using var request = new HttpRequestMessage(
@@ -135,7 +143,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         try
         {
@@ -183,7 +191,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         return await Reson8StreamingSession.ConnectAsync(
             _apiKey!,
@@ -200,31 +208,30 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         [
             new(
                 Key: ApiKeySecretName,
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
-                Description: "Stored securely and used for Reson8 transcription. "
-                    + "Validate to refresh the custom model catalog."),
+                Description: Loc.L("Settings.ApiKeyDescription")),
             new(
                 Key: SelectedModelSettingName,
-                Label: "Model",
+                Label: Loc.L("Settings.Model"),
                 Description: _fetchedCustomModels.Count > 0
-                    ? $"{_fetchedCustomModels.Count} custom model(s) loaded. Validate to refresh."
-                    : "No custom models yet — using the default model. Validate to fetch any custom models.",
+                    ? Loc.L("Settings.CustomModelsLoaded", _fetchedCustomModels.Count)
+                    : Loc.L("Settings.NoCustomModels"),
                 Options: TranscriptionModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList(),
                 Kind: PluginSettingKind.Dropdown),
             new(
                 Key: CustomBaseUrlSettingName,
-                Label: "Custom Base URL",
+                Label: Loc.L("Settings.CustomBaseUrl"),
                 Placeholder: DefaultBaseUrl,
-                Description: "Advanced: for a LiveKit gateway or custom proxy. Leave blank for the default.",
+                Description: Loc.L("Settings.CustomBaseUrlDescription"),
                 Kind: PluginSettingKind.Text),
             new(
                 Key: CustomAuthHeaderSettingName,
-                Label: "Custom Auth Header",
+                Label: Loc.L("Settings.CustomAuthHeader"),
                 Placeholder: DefaultAuthHeader,
-                Description: "Advanced: header name used to send the API key. Leave blank for the default.",
+                Description: Loc.L("Settings.CustomAuthHeaderDescription"),
                 Kind: PluginSettingKind.Text),
         ];
 
@@ -264,11 +271,11 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         if (!valid)
-            return new PluginSettingsValidationResult(false, "Invalid Reson8 API key.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.InvalidApiKey"));
 
         // A valid key gates the custom model catalog; refresh it so the model
         // dropdown reflects the account's custom models (mirrors the desktop
@@ -279,8 +286,8 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         return new PluginSettingsValidationResult(
             true,
             models.Count > 0
-                ? $"API key valid. {models.Count} custom model(s) loaded."
-                : "API key valid.");
+                ? Loc.L("Settings.ApiKeyValidWithModels", models.Count)
+                : Loc.L("Settings.ApiKeyValidShort"));
     }
 
     internal async Task SetApiKeyAsync(string apiKey)
@@ -509,13 +516,13 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             ? property.GetString()
             : null;
 
-    private static void ThrowForApiError(HttpStatusCode statusCode, string json)
+    private void ThrowForApiError(HttpStatusCode statusCode, string json)
     {
         var message = ExtractApiError(json);
         switch (statusCode)
         {
             case HttpStatusCode.Unauthorized:
-                throw new UnauthorizedAccessException("Invalid Reson8 API key.");
+                throw new UnauthorizedAccessException(Loc.L("Settings.InvalidApiKey"));
             case HttpStatusCode.NotFound:
                 throw new KeyNotFoundException($"Reson8 custom model not found: {message}");
             case HttpStatusCode.RequestEntityTooLarge:

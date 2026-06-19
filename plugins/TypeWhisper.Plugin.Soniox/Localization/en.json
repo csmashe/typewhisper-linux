@@ -1,0 +1,10 @@
+{
+  "Settings.ApiKey": "API key",
+  "Settings.ApiKeyDescription": "Required for Soniox transcription.",
+  "Settings.ApiKeyRequired": "API key required.",
+  "Settings.ApiKeyValid": "Soniox API key is valid.",
+  "Settings.ApiKeyInvalid": "Soniox API key could not be verified.",
+  "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
+  "Manifest.Name": "Soniox",
+  "Manifest.Description": "Soniox speech-to-text transcription engine"
+}

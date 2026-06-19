@@ -1,0 +1,10 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции и потоковой передачи Smallest AI Pulse.",
+  "Settings.EnterApiKey": "Сначала введите API-ключ.",
+  "Settings.ApiKeyValid": "API-ключ действителен.",
+  "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
+  "Manifest.Name": "Smallest AI Pulse",
+  "Manifest.Description": "Движок распознавания речи Smallest AI Pulse"
+}

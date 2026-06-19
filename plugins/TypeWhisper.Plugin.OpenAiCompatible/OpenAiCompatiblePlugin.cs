@@ -12,6 +12,7 @@ public sealed partial class OpenAiCompatiblePlugin
         ILlmProviderPlugin,
         IPluginSettingsProvider,
         IModelCatalogProvider,
+        IPluginLocalizationAware,
         IPluginCollectionSettingsProvider,
         IAdditionalTranscriptionEnginesProvider,
         IAdditionalLlmProvidersProvider
@@ -125,9 +126,9 @@ public sealed partial class OpenAiCompatiblePlugin
     )
     {
         if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException("Server-URL nicht konfiguriert");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
         if (string.IsNullOrEmpty(_selectedModelId))
-            throw new InvalidOperationException("Kein Transkriptions-Modell ausgewählt");
+            throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
@@ -168,11 +169,11 @@ public sealed partial class OpenAiCompatiblePlugin
     )
     {
         if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException("Server-URL nicht konfiguriert");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
         var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException("Kein LLM-Modell ausgewählt");
+            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
@@ -199,11 +200,11 @@ public sealed partial class OpenAiCompatiblePlugin
         }
 
         if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException("Server-URL nicht konfiguriert");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
         var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException("Kein LLM-Modell ausgewählt");
+            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
@@ -221,7 +222,15 @@ public sealed partial class OpenAiCompatiblePlugin
 
     internal string? BaseUrl => _baseUrl;
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     internal string? SelectedTranscriptionModelId => _selectedModelId;
     internal string? SelectedLlmModelId => _selectedLlmModelId;
     internal IReadOnlyList<FetchedModel> FetchedModels => _fetchedModels;
@@ -357,40 +366,38 @@ public sealed partial class OpenAiCompatiblePlugin
         [
             new(
                 "baseUrl",
-                "Base URL",
+                Loc.L("Settings.BaseUrl"),
                 false,
                 "http://localhost:8000",
-                "OpenAI-compatible server base URL."
+                Loc.L("Settings.BaseUrlDescription")
             ),
             new(
                 "api-key",
-                "API key",
+                Loc.L("Settings.ApiKey"),
                 true,
                 null,
-                "Optional bearer token used when calling the server."
+                Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 "selectedModel",
-                "Transcription model",
+                Loc.L("Settings.TranscriptionModel"),
                 Description: _fetchedModels.Count > 0
-                    ? $"Showing {_fetchedModels.Count} fetched model(s)."
-                    : "Click Validate after saving the server settings to fetch available models.",
+                    ? Loc.L("Settings.ModelsFetched", _fetchedModels.Count)
+                    : Loc.L("Settings.ValidateToFetchModels"),
                 Options: BuildModelOptions()
             ),
             new(
                 "selectedLlmModel",
-                "LLM model",
+                Loc.L("Settings.LlmModel"),
                 Description: _fetchedModels.Count > 0
-                    ? $"Showing {_fetchedModels.Count} fetched model(s)."
-                    : "Click Validate after saving the server settings to fetch available models.",
+                    ? Loc.L("Settings.ModelsFetched", _fetchedModels.Count)
+                    : Loc.L("Settings.ValidateToFetchModels"),
                 Options: BuildModelOptions()
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as the "
-                    + "server generates it (works with Ollama, LM Studio, vLLM, etc.), "
-                    + "instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -440,11 +447,11 @@ public sealed partial class OpenAiCompatiblePlugin
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_baseUrl))
-            return new PluginSettingsValidationResult(false, "Enter a base URL first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterBaseUrl"));
 
         var valid = await ValidateConnectionAsync(ct);
         if (!valid)
-            return new PluginSettingsValidationResult(false, "Could not connect to the server.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.CouldNotConnect"));
 
         var models = await FetchModelsAsync(ct) ?? [];
         SetFetchedModels(models, notifyCapabilitiesChanged: false);
@@ -458,7 +465,7 @@ public sealed partial class OpenAiCompatiblePlugin
 
         return new PluginSettingsValidationResult(
             true,
-            $"Connection OK. Fetched {models.Count} model(s)."
+            Loc.L("Settings.ConnectionOk", models.Count)
         );
     }
 
@@ -537,33 +544,33 @@ public sealed partial class OpenAiCompatiblePlugin
         [
             new PluginCollectionDefinition(
                 Key: ProfilesCollectionKey,
-                Label: "Additional provider profiles",
-                Description: "Extra OpenAI-compatible endpoints. Each profile appears as its "
-                    + "own transcription engine and LLM provider you can select in dictation "
-                    + "and prompts. The default endpoint above is unaffected.",
+                Label: Loc.L("Settings.ProfilesLabel"),
+                Description: Loc.L("Settings.ProfilesDescription"),
                 ItemFields:
                 [
                     new PluginSettingDefinition(
-                        "name", "Name", Placeholder: "Local Ollama", Kind: PluginSettingKind.Text),
-                    new PluginSettingDefinition(
-                        "baseUrl", "Base URL", Placeholder: "http://localhost:11434",
+                        "name", Loc.L("Settings.ProfileName"),
+                        Placeholder: Loc.L("Settings.ProfileNamePlaceholder"),
                         Kind: PluginSettingKind.Text),
                     new PluginSettingDefinition(
-                        "api-key", "API key", IsSecret: true,
-                        Description: "Leave blank to keep the current key.",
+                        "baseUrl", Loc.L("Settings.BaseUrl"), Placeholder: "http://localhost:11434",
+                        Kind: PluginSettingKind.Text),
+                    new PluginSettingDefinition(
+                        "api-key", Loc.L("Settings.ApiKey"), IsSecret: true,
+                        Description: Loc.L("Settings.ProfileApiKeyDescription"),
                         Kind: PluginSettingKind.Secret),
                     new PluginSettingDefinition(
-                        "selectedModel", "Transcription model",
-                        Description: "Optional default; any fetched model can be chosen per workflow.",
+                        "selectedModel", Loc.L("Settings.TranscriptionModel"),
+                        Description: Loc.L("Settings.ProfileTranscriptionModelDescription"),
                         Kind: PluginSettingKind.Text),
                     new PluginSettingDefinition(
-                        "selectedLlmModel", "LLM model",
-                        Description: "Optional default; prompts can use any fetched model.",
+                        "selectedLlmModel", Loc.L("Settings.LlmModel"),
+                        Description: Loc.L("Settings.ProfileLlmModelDescription"),
                         Kind: PluginSettingKind.Text),
                     new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
                 ],
                 ItemLabelFieldKey: "name",
-                AddButtonLabel: "Add profile"
+                AddButtonLabel: Loc.L("Settings.AddProfile")
             ),
         ];
 
@@ -600,7 +607,7 @@ public sealed partial class OpenAiCompatiblePlugin
     )
     {
         if (collectionKey != ProfilesCollectionKey)
-            return new PluginSettingsValidationResult(false, "Unknown collection.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.UnknownCollection"));
 
         var previousById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
         var newProfiles = new List<OpenAiCompatibleProfile>(items.Count);
@@ -749,9 +756,9 @@ public sealed partial class OpenAiCompatiblePlugin
     {
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException("Server URL not configured.");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
         if (string.IsNullOrEmpty(profile.SelectedModelId))
-            throw new InvalidOperationException("No transcription model selected.");
+            throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
@@ -777,11 +784,11 @@ public sealed partial class OpenAiCompatiblePlugin
     {
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException("Server URL not configured.");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
         var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException("No LLM model selected.");
+            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
@@ -814,11 +821,11 @@ public sealed partial class OpenAiCompatiblePlugin
 
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException("Server URL not configured.");
+            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
         var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException("No LLM model selected.");
+            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,

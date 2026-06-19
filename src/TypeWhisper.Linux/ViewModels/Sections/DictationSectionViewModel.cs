@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 
@@ -22,7 +23,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly LocalModelStorageService _modelStorage;
 
     [ObservableProperty]
-    private string _activeModelLabel = "No model loaded";
+    private string _activeModelLabel = Loc.Instance["Dictation.NoModelLoaded"];
 
     [ObservableProperty]
     private string _modelStoragePath = "";
@@ -55,7 +56,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private string _cudaSetupStatus = "";
 
     [ObservableProperty]
-    private string _engineName = "No engine selected";
+    private string _engineName = Loc.Instance["Dictation.NoEngineSelected"];
 
     [ObservableProperty]
     private bool _isModelDownloading;
@@ -93,7 +94,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private CancellationTokenSource? _modelSelectionCts;
 
     [ObservableProperty]
-    private string _modelStatusText = "Not ready";
+    private string _modelStatusText = Loc.Instance["Dictation.StatusNotReady"];
 
     [ObservableProperty]
     private string _newInsertionAppProcess = "";
@@ -130,7 +131,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _soundFeedbackEnabled = true;
 
     [ObservableProperty]
-    private string _statusText = "Press your hotkey or click Toggle to start recording.";
+    private string _statusText = Loc.Instance["Dictation.StatusPressHotkey"];
 
     [ObservableProperty]
     private bool _transcribeShortQuietClipsAggressively;
@@ -165,8 +166,8 @@ public partial class DictationSectionViewModel : ObservableObject
             {
                 IsRecording = recording;
                 StatusText = recording
-                    ? "Recording… press the hotkey again to stop."
-                    : "Stopped. Processing…";
+                    ? Loc.Instance["Dictation.StatusRecording"]
+                    : Loc.Instance["Dictation.StatusStopped"];
 
                 if (recording)
                 {
@@ -208,14 +209,14 @@ public partial class DictationSectionViewModel : ObservableObject
 
     public ObservableCollection<AccelerationOption> AccelerationOptions { get; } =
     [
-        new(AppSettings.LocalModelAccelerationAuto, "Auto"),
-        new(AppSettings.LocalModelAccelerationCpu, "CPU"),
-        new(AppSettings.LocalModelAccelerationNvidiaCuda, "NVIDIA CUDA")
+        new(AppSettings.LocalModelAccelerationAuto, Loc.Instance["Dictation.AccelerationAuto"]),
+        new(AppSettings.LocalModelAccelerationCpu, Loc.Instance["Dictation.AccelerationCpu"]),
+        new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"])
     ];
 
     public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
     [
-        new("auto", "Auto detect"),
+        new("auto", Loc.Instance["Dictation.LanguageAutoDetect"]),
         new("de", "Deutsch"),
         new("en", "English"),
         new("fr", "Français"),
@@ -234,18 +235,18 @@ public partial class DictationSectionViewModel : ObservableObject
 
     public ObservableCollection<CleanupLevelOption> CleanupLevelOptions { get; } =
     [
-        new(CleanupLevel.None, "None"),
-        new(CleanupLevel.Light, "Light"),
-        new(CleanupLevel.Medium, "Medium"),
-        new(CleanupLevel.High, "High")
+        new(CleanupLevel.None, Loc.Instance["Dictation.CleanupNone"]),
+        new(CleanupLevel.Light, Loc.Instance["Dictation.CleanupLight"]),
+        new(CleanupLevel.Medium, Loc.Instance["Dictation.CleanupMedium"]),
+        new(CleanupLevel.High, Loc.Instance["Dictation.CleanupHigh"])
     ];
 
     public ObservableCollection<InsertionStrategyOption> InsertionStrategyOptions { get; } =
     [
-        new(TextInsertionStrategy.Auto, "Auto"),
-        new(TextInsertionStrategy.ClipboardPaste, "Clipboard paste"),
-        new(TextInsertionStrategy.DirectTyping, "Direct typing"),
-        new(TextInsertionStrategy.CopyOnly, "Copy only")
+        new(TextInsertionStrategy.Auto, Loc.Instance["Dictation.AccelerationAuto"]),
+        new(TextInsertionStrategy.ClipboardPaste, Loc.Instance["Dictation.StrategyClipboardPaste"]),
+        new(TextInsertionStrategy.DirectTyping, Loc.Instance["Dictation.StrategyDirectTyping"]),
+        new(TextInsertionStrategy.CopyOnly, Loc.Instance["Dictation.StrategyCopyOnly"])
     ];
 
     public ObservableCollection<AppInsertionStrategyRow> AppInsertionStrategies { get; } = [];
@@ -254,19 +255,19 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool ShowAudioDuckingUnavailableReason => !CanUseAudioDucking;
 
     public string AudioDuckingUnavailableReason =>
-        "Unavailable: pactl is not installed on this system.";
+        Loc.Instance["Dictation.PactlUnavailable"];
 
     public bool CanUseMediaPause => _commands.HasPlayerCtl;
     public bool ShowMediaPauseUnavailableReason => !CanUseMediaPause;
 
     public string MediaPauseUnavailableReason =>
-        "Unavailable: playerctl is not installed on this system.";
+        Loc.Instance["Dictation.PlayerctlUnavailable"];
 
     public bool CanUseSoundFeedback => _commands.HasAudioPlayer;
     public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
 
     public string SoundFeedbackUnavailableReason =>
-        "Unavailable: no audio player (pw-play, paplay, or aplay) is installed on this system.";
+        Loc.Instance["Dictation.AudioPlayerUnavailable"];
 
     public bool CanDeleteSelectedModel =>
         SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
@@ -274,7 +275,7 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool ShowCudaLibraryPathAction =>
         _commands.HasCudaGpu && !CanUseCuda && FindCuda12LibraryPath() is not null;
 
-    public string CudaLibraryPathActionText => "Fix CUDA path";
+    public string CudaLibraryPathActionText => Loc.Instance["Dictation.FixCudaPath"];
     public bool CanUseCuda => _commands.HasCudaGpu && _commands.HasCudaRuntimeLibraries;
 
     public string AccelerationStatusText
@@ -286,14 +287,14 @@ public partial class DictationSectionViewModel : ObservableObject
             {
                 return LocalModelAcceleration switch
                 {
-                    AppSettings.LocalModelAccelerationCpu => "CPU mode is active.",
+                    AppSettings.LocalModelAccelerationCpu => Loc.Instance["Dictation.AccelCpuActive"],
                     AppSettings.LocalModelAccelerationNvidiaCuda when !CanUseCuda =>
                         FindCuda12LibraryPath() is null
-                            ? "CUDA 12 runtime libraries are not installed yet."
-                            : "CUDA 12 is installed, but TypeWhisper cannot see it yet.",
+                            ? Loc.Instance["Dictation.AccelCudaNotInstalled"]
+                            : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
-                        "CUDA is ready for whisper.cpp models. Other local plugins use CPU.",
-                    _ => "Auto: CUDA will be used when available, otherwise CPU."
+                        Loc.Instance["Dictation.AccelCudaReady"],
+                    _ => Loc.Instance["Dictation.AccelAutoStatus"]
                 };
             }
 
@@ -305,7 +306,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
             if (status.RequiresRestart)
             {
-                text += " Restart TypeWhisper to apply.";
+                text += " " + Loc.Instance["Dictation.RestartToApply"];
             }
 
             return text;
@@ -408,7 +409,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _previewAttached = true;
         if (!_audio.StartPreview() && Devices.Count > 0)
         {
-            MicrophoneStatus = "Could not start live input preview for the selected microphone.";
+            MicrophoneStatus = Loc.Instance["Dictation.PreviewStartFailed"];
         }
     }
 
@@ -428,7 +429,7 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         _modelSelectionCts?.Cancel();
-        StatusText = $"Deleting {selected.DisplayLabel}...";
+        StatusText = Loc.Instance.GetString("Dictation.DeletingModel", selected.DisplayLabel);
 
         try
         {
@@ -439,11 +440,11 @@ public partial class DictationSectionViewModel : ObservableObject
             }
 
             SelectedModel = null;
-            StatusText = $"{selected.DisplayLabel} was deleted from disk.";
+            StatusText = Loc.Instance.GetString("Dictation.ModelDeleted", selected.DisplayLabel);
         }
         catch (Exception ex)
         {
-            StatusText = $"Model delete failed: {ex.Message}";
+            StatusText = Loc.Instance.GetString("Dictation.ModelDeleteFailed", ex.Message);
         }
         finally
         {
@@ -482,8 +483,8 @@ public partial class DictationSectionViewModel : ObservableObject
 
         MicrophoneStatus =
             Devices.Count == 0
-                ? "No input devices detected."
-                : $"{Devices.Count} input device(s) available.";
+                ? Loc.Instance["Dictation.NoInputDevices"]
+                : Loc.Instance.GetString("Dictation.InputDevicesAvailable", Devices.Count);
     }
 
     private void RefreshModels()
@@ -615,13 +616,15 @@ public partial class DictationSectionViewModel : ObservableObject
     private void RefreshModelState()
     {
         var active = _models.ActiveModelId;
-        ActiveModelLabel = string.IsNullOrEmpty(active) ? "No model loaded" : $"Active: {active}";
+        ActiveModelLabel = string.IsNullOrEmpty(active)
+            ? Loc.Instance["Dictation.NoModelLoaded"]
+            : Loc.Instance.GetString("Dictation.ActiveModel", active);
 
         var selected = SelectedModel;
         if (selected is null)
         {
-            EngineName = "No engine selected";
-            ModelStatusText = "Not selected";
+            EngineName = Loc.Instance["Dictation.NoEngineSelected"];
+            ModelStatusText = Loc.Instance["Dictation.StatusNotSelected"];
             ModelReady = false;
             OnPropertyChanged(nameof(CanDeleteSelectedModel));
             return;
@@ -632,11 +635,14 @@ public partial class DictationSectionViewModel : ObservableObject
         ModelReady = status.Type == ModelStatusType.Ready;
         ModelStatusText = status.Type switch
         {
-            ModelStatusType.Ready => "Ready",
-            ModelStatusType.Loading => "Loading",
-            ModelStatusType.Downloading => $"Downloading {status.Progress:P0}",
+            ModelStatusType.Ready => Loc.Instance["Dictation.StatusReady"],
+            ModelStatusType.Loading => Loc.Instance["Dictation.StatusLoading"],
+            ModelStatusType.Downloading => Loc.Instance.GetString(
+                "Dictation.StatusDownloading",
+                status.Progress.ToString("P0")
+            ),
             ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
-            _ => "Not ready"
+            _ => Loc.Instance["Dictation.StatusNotReady"]
         };
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
@@ -666,13 +672,10 @@ public partial class DictationSectionViewModel : ObservableObject
             // Three distinct cases: no GPU; GPU + libs found but not on loader path; libs not installed.
             var message =
                 !_commands.HasCudaGpu
-                    ? "No NVIDIA GPU/driver detected — CUDA is unavailable on this system. Staying on CPU."
+                    ? Loc.Instance["Dictation.CudaNoGpu"]
                     : FindCuda12LibraryPath() is not null
-                        ? "CUDA 12 runtime libraries are installed but not on TypeWhisper's library path. "
-                          + "Click \"Fix CUDA path\", then restart TypeWhisper."
-                        : "NVIDIA GPU detected, but the CUDA 12 runtime libraries are not installed "
-                          + "(libcudart.so.12 / libcublas.so.12). Install the CUDA 12 runtime, then "
-                          + "restart TypeWhisper. Staying on CPU until then.";
+                        ? Loc.Instance["Dictation.CudaNotOnPath"]
+                        : Loc.Instance["Dictation.CudaRuntimeMissing"];
             // Revert on the next UI frame: a ComboBox ignores SelectedItem changes inside its
             // own selection-change cycle, leaving the dropdown stuck on "NVIDIA CUDA".
             // Write the message after the revert — the CPU re-entry clears CudaSetupStatus.
@@ -730,19 +733,29 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         IsMigratingModelStorage = true;
-        ModelStorageStatusText = "Moving models to the new location…";
+        ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageMoving"];
         try
         {
             await _modelStorage.MoveDownloadsAndUsePathAsync(folderPath);
-            ModelStorageStatusText = "Model storage location updated.";
+            ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageUpdated"];
         }
         catch (LocalModelStorageUnavailableException ex)
         {
-            ModelStorageStatusText = ex.Message;
+            ModelStorageStatusText = ex.Reason switch
+            {
+                LocalModelStorageUnavailableReason.DoesNotExist =>
+                    Loc.Instance.GetString("Dictation.ModelStorageDoesNotExist", ex.Path),
+                LocalModelStorageUnavailableReason.NotWritable =>
+                    Loc.Instance.GetString("Dictation.ModelStorageNotWritable", ex.Path),
+                LocalModelStorageUnavailableReason.NestedUnderCurrentFolder =>
+                    Loc.Instance.GetString(
+                        "Dictation.ModelStorageNestedUnderCurrent", ex.Path, ex.CurrentPath ?? string.Empty),
+                _ => Loc.Instance.GetString("Dictation.ModelStorageChangeFailed", ex.Message)
+            };
         }
         catch (Exception ex)
         {
-            ModelStorageStatusText = $"Could not change model storage: {ex.Message}";
+            ModelStorageStatusText = Loc.Instance.GetString("Dictation.ModelStorageChangeFailed", ex.Message);
         }
         finally
         {
@@ -767,8 +780,7 @@ public partial class DictationSectionViewModel : ObservableObject
         // Leaves already-moved files where they are and points future downloads back
         // at the default app-data location.
         _modelStorage.ResetToDefault();
-        ModelStorageStatusText =
-            "Future downloads will use the default location. Existing files were left in place.";
+        ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageResetStatus"];
     }
 
     private async Task ReloadActiveModelForAccelerationChangeAsync(DictationModelOption selected)
@@ -779,7 +791,10 @@ public partial class DictationSectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusText = $"Model reload failed: {FormatModelStatusError(ex.Message)}";
+            StatusText = Loc.Instance.GetString(
+                "Dictation.ModelReloadFailed",
+                FormatModelStatusError(ex.Message)
+            );
         }
         finally
         {
@@ -797,8 +812,8 @@ public partial class DictationSectionViewModel : ObservableObject
         try
         {
             StatusText = _models.IsDownloaded(selected.ModelId)
-                ? $"Loading {selected.DisplayLabel}..."
-                : $"Downloading {selected.DisplayLabel}...";
+                ? Loc.Instance.GetString("Dictation.LoadingModel", selected.DisplayLabel)
+                : Loc.Instance.GetString("Dictation.DownloadingModel", selected.DisplayLabel);
 
             await _models.DownloadAndLoadModelAsync(selected.ModelId, cts.Token);
 
@@ -807,7 +822,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 return;
             }
 
-            StatusText = $"{selected.DisplayLabel} is ready.";
+            StatusText = Loc.Instance.GetString("Dictation.ModelIsReady", selected.DisplayLabel);
             RefreshModelState();
         }
         catch (OperationCanceledException)
@@ -818,7 +833,10 @@ public partial class DictationSectionViewModel : ObservableObject
         {
             if (SelectedModel?.ModelId == selected.ModelId)
             {
-                StatusText = $"Model setup failed: {FormatModelStatusError(ex.Message)}";
+                StatusText = Loc.Instance.GetString(
+                    "Dictation.ModelSetupFailed",
+                    FormatModelStatusError(ex.Message)
+                );
             }
 
             RefreshModelState();
@@ -842,15 +860,14 @@ public partial class DictationSectionViewModel : ObservableObject
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             if (string.IsNullOrWhiteSpace(home))
             {
-                StatusText = "Could not find your home directory.";
+                StatusText = Loc.Instance["Dictation.NoHomeDirectory"];
                 return;
             }
 
             var cudaLibraryPath = FindCuda12LibraryPath();
             if (cudaLibraryPath is null)
             {
-                StatusText =
-                    "CUDA 12 libraries are not installed yet. Install CUDA 12, then run this action again.";
+                StatusText = Loc.Instance["Dictation.CudaLibsMissingRetry"];
                 return;
             }
 
@@ -875,14 +892,13 @@ public partial class DictationSectionViewModel : ObservableObject
             }
 
             WriteDesktopEnvironmentFile(home, cudaLibraryPath);
-            CudaSetupStatus =
-                "Saved. This affects future launches only: open a new terminal, or log out and back in for desktop launches, then restart TypeWhisper.";
-            StatusText = "CUDA path saved. Restart TypeWhisper from a new environment to use CUDA.";
+            CudaSetupStatus = Loc.Instance["Dictation.CudaPathSavedDetail"];
+            StatusText = Loc.Instance["Dictation.CudaPathSaved"];
         }
         catch (Exception ex)
         {
-            CudaSetupStatus = $"Could not save CUDA path: {ex.Message}";
-            StatusText = $"Could not update shell startup file: {ex.Message}";
+            CudaSetupStatus = Loc.Instance.GetString("Dictation.CudaPathSaveFailed", ex.Message);
+            StatusText = Loc.Instance.GetString("Dictation.ShellProfileUpdateFailed", ex.Message);
         }
     }
 
@@ -938,13 +954,13 @@ public partial class DictationSectionViewModel : ObservableObject
     {
         if (!IsCudaMissingLibraryError(message))
         {
-            return string.IsNullOrWhiteSpace(message) ? "Error" : message;
+            return string.IsNullOrWhiteSpace(message) ? Loc.Instance["Dictation.StatusError"] : message;
         }
 
         var cudaLibraryPath = FindCuda12LibraryPath();
         return cudaLibraryPath is null
-            ? "CUDA 12 is not installed yet. Install the CUDA 12 toolkit/runtime, then restart TypeWhisper."
-            : "CUDA 12 is installed, but TypeWhisper cannot see it yet. Click Fix CUDA path, then restart TypeWhisper.";
+            ? Loc.Instance["Dictation.CudaNotInstalledRestart"]
+            : Loc.Instance["Dictation.CudaNotVisibleRestart"];
     }
 
     private static bool IsCudaMissingLibraryError(string? message)
@@ -1022,7 +1038,7 @@ public partial class DictationSectionViewModel : ObservableObject
         var processName = NormalizeProcessName(NewInsertionAppProcess);
         if (string.IsNullOrWhiteSpace(processName))
         {
-            StatusText = "Enter an app process name before adding an insertion strategy.";
+            StatusText = Loc.Instance["Dictation.EnterProcessName"];
             return;
         }
 
@@ -1034,7 +1050,7 @@ public partial class DictationSectionViewModel : ObservableObject
             existing.Strategy = NewInsertionStrategy;
             SaveAppInsertionStrategies();
             NewInsertionAppProcess = "";
-            StatusText = $"Updated insertion strategy for {processName}.";
+            StatusText = Loc.Instance.GetString("Dictation.UpdatedStrategy", processName);
             return;
         }
 
@@ -1048,7 +1064,7 @@ public partial class DictationSectionViewModel : ObservableObject
         );
         SaveAppInsertionStrategies();
         NewInsertionAppProcess = "";
-        StatusText = $"Added insertion strategy for {processName}.";
+        StatusText = Loc.Instance.GetString("Dictation.AddedStrategy", processName);
     }
 
     [RelayCommand]
@@ -1061,7 +1077,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
         AppInsertionStrategies.Remove(row);
         SaveAppInsertionStrategies();
-        StatusText = $"Removed insertion strategy for {row.ProcessName}.";
+        StatusText = Loc.Instance.GetString("Dictation.RemovedStrategy", row.ProcessName);
     }
 
     private void SaveAppInsertionStrategies()

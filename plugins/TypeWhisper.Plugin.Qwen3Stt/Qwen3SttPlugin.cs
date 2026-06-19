@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Qwen3Stt;
 
-public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string DefaultBaseUrl = "http://localhost:8000";
     private const string DefaultModel = "Qwen/Qwen3-ASR";
@@ -65,7 +65,7 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. Base URL required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredBaseUrlRequired"));
 
         if (translate)
             throw new NotSupportedException(
@@ -89,6 +89,16 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
             prompt
         );
     }
+
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -119,12 +129,24 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [
-            new("baseUrl", "Base URL", false, DefaultBaseUrl, "OpenAI-compatible server base URL."),
-            new("api-key", "API key", true, null, "Optional bearer token for the server."),
+            new(
+                "baseUrl",
+                Loc.L("Settings.BaseUrl"),
+                false,
+                DefaultBaseUrl,
+                Loc.L("Settings.BaseUrlDescription")
+            ),
+            new(
+                "api-key",
+                Loc.L("Settings.ApiKey"),
+                true,
+                null,
+                Loc.L("Settings.ApiKeyDescription")
+            ),
             new(
                 "selectedModel",
-                "Transcription model",
-                Description: "Choose the Qwen3 STT model.",
+                Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: TranscriptionModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()

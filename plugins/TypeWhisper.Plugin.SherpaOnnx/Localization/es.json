@@ -1,0 +1,4 @@
+{
+  "Manifest.Name": "Modelos locales (sherpa-onnx)",
+  "Manifest.Description": "Transcripción sin conexión mediante sherpa-onnx (NVIDIA NeMo Parakeet + Canary)"
+}

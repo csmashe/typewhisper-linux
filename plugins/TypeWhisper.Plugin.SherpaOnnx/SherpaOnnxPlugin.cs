@@ -73,7 +73,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string _canaryTgtLang = "en";
 
     public string PluginId => "com.typewhisper.sherpa-onnx";
-    public string PluginName => "Lokale Modelle (sherpa-onnx)";
+    public string PluginName => "Local Models (sherpa-onnx)";
     public string PluginVersion => "1.0.0";
 
     public string ProviderId => "sherpa-onnx";

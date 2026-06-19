@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "API-ключ",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции Speechmatics.",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.ModelDescription": "Выберите модель Speechmatics.",
+  "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
+  "Manifest.Name": "Speechmatics",
+  "Manifest.Description": "Движок распознавания речи Speechmatics"
+}

@@ -31,6 +31,8 @@
         <!-- Dictation cue sounds (start/stop/success/error), played directly by
              SoundFeedbackService via pw-play/paplay/aplay. -->
         <Content Include="Resources\Sounds\*.wav" CopyToOutputDirectory="PreserveNewest"/>
+        <!-- Interface-language translation files, loaded at startup by Loc. -->
+        <Content Include="Resources\Localization\*.json" CopyToOutputDirectory="PreserveNewest"/>
     </ItemGroup>
 
     <ItemGroup>

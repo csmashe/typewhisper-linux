@@ -1,0 +1,20 @@
+{
+  "Settings.Name": "Nombre",
+  "Settings.Command": "Comando",
+  "Settings.Shell": "Shell",
+  "Settings.ShellBashDefault": "bash (predeterminado)",
+  "Settings.Enabled": "Activado",
+  "Settings.Scripts": "Scripts",
+  "Settings.ScriptsDescription": "Scripts de shell que se aplican al transcript, en orden.",
+  "Settings.AddScript": "Añadir script",
+  "Settings.UnknownCollection": "Colección desconocida.",
+  "Settings.Unnamed": "(sin nombre)",
+  "Settings.ScriptNameRequired": "Script '{0}': el nombre es obligatorio.",
+  "Settings.ScriptCommandRequired": "Script '{0}': el comando es obligatorio.",
+  "Settings.ScriptUnknownShell": "Script '{0}': shell desconocido '{1}'.",
+  "Settings.RefuseOverwriteScripts": "Se rechaza sobrescribir scripts.json — no se pudo leer el archivo existente: {0}",
+  "Settings.FailedToSaveScripts": "No se pudieron guardar los scripts: {0}",
+  "Settings.Saved": "Guardado.",
+  "Manifest.Name": "Script Runner",
+  "Manifest.Description": "Procesa las transcripciones mediante scripts de shell personalizados"
+}

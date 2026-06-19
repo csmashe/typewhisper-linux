@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 
@@ -119,32 +120,35 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     public IReadOnlyList<AutoUnloadOption> AutoUnloadOptions { get; } =
     [
-        new(0, "Never"),
-        new(30, "30 seconds"),
-        new(60, "1 minute"),
-        new(300, "5 minutes"),
-        new(900, "15 minutes")
+        new(0, Loc.Instance["Advanced.AutoUnloadNever"]),
+        new(30, Loc.Instance["Advanced.AutoUnload30Seconds"]),
+        new(60, Loc.Instance["Advanced.AutoUnload1Minute"]),
+        new(300, Loc.Instance["Advanced.AutoUnload5Minutes"]),
+        new(900, Loc.Instance["Advanced.AutoUnload15Minutes"])
     ];
 
     public IReadOnlyList<HistoryRetentionOption> HistoryRetentionOptions { get; } =
     [
-        new(HistoryRetentionMode.Duration, 24 * 60, "1 day"),
-        new(HistoryRetentionMode.Duration, 7 * 24 * 60, "7 days"),
-        new(HistoryRetentionMode.Duration, 30 * 24 * 60, "30 days"),
-        new(HistoryRetentionMode.Duration, 90 * 24 * 60, "90 days"),
-        new(HistoryRetentionMode.Forever, null, "Forever"),
-        new(HistoryRetentionMode.UntilAppCloses, null, "Until app closes")
+        new(HistoryRetentionMode.Duration, 24 * 60, Loc.Instance["Advanced.Retention1Day"]),
+        new(HistoryRetentionMode.Duration, 7 * 24 * 60, Loc.Instance["Advanced.Retention7Days"]),
+        new(HistoryRetentionMode.Duration, 30 * 24 * 60, Loc.Instance["Advanced.Retention30Days"]),
+        new(HistoryRetentionMode.Duration, 90 * 24 * 60, Loc.Instance["Advanced.Retention90Days"]),
+        new(HistoryRetentionMode.Forever, null, Loc.Instance["Advanced.RetentionForever"]),
+        new(HistoryRetentionMode.UntilAppCloses, null, Loc.Instance["Advanced.RetentionUntilAppCloses"])
     ];
 
     public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
     public bool ShowSpokenFeedbackUnavailableReason => !CanUseSpokenFeedback;
 
     private string SpokenFeedbackUnavailableReason =>
-        "Unavailable: install espeak-ng, espeak, or speech-dispatcher.";
+        Loc.Instance["Advanced.SpokenFeedbackUnavailable"];
 
     public string SpokenFeedbackHint =>
         CanUseSpokenFeedback
-            ? $"Spoken feedback reads the final transcription aloud via {_speechFeedback.BackendName}."
+            ? Loc.Instance.GetString(
+                "Advanced.SpokenFeedbackHint",
+                _speechFeedback.BackendName
+            )
             : SpokenFeedbackUnavailableReason;
 
     public bool CanUseMemory =>
@@ -154,11 +158,11 @@ public partial class AdvancedSectionViewModel : ObservableObject
     public bool ShowMemoryUnavailableReason => !CanUseMemory;
 
     private string MemoryUnavailableReason =>
-        "Unavailable: enable a memory storage plugin and configure an LLM provider.";
+        Loc.Instance["Advanced.MemoryUnavailable"];
 
     public string MemoryHint =>
         CanUseMemory
-            ? "Sends each eligible transcription to the configured LLM provider to extract lasting facts. With cloud providers, transcript text is uploaded off-device and stored as memory."
+            ? Loc.Instance["Advanced.MemoryHint"]
             : MemoryUnavailableReason;
 
     private void Refresh(AppSettings settings)

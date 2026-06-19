@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.Gladia;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -33,6 +34,73 @@ public class GladiaPluginTests
 
         Assert.NotNull(manifest);
         Assert.Equal(manifest.Version, sut.PluginVersion);
+    }
+
+    [Fact]
+    public void GetSettingDefinitions_LocalizesLabels_WithoutActivation()
+    {
+        // Regression: a disabled plugin is never activated, so _host (and thus the
+        // host-provided localization) is null. The loader injects the catalog via
+        // IPluginLocalizationAware at load, so the settings panel must still render
+        // real labels — not raw keys like "Settings.ApiKey" — before the user
+        // enables the plugin.
+        var pluginDir = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "..", "..", "..", "..", "..",
+                "plugins", "TypeWhisper.Plugin.Gladia"
+            )
+        );
+
+        var sut = new GladiaPlugin();
+        // No ActivateAsync — mimics a discovered-but-disabled plugin.
+        ((IPluginLocalizationAware)sut).SetLocalization(new PluginLocalization(pluginDir, "en"));
+
+        var definitions = sut.GetSettingDefinitions();
+
+        Assert.NotEmpty(definitions);
+        foreach (var definition in definitions)
+        {
+            Assert.False(
+                definition.Label.StartsWith("Settings.", StringComparison.Ordinal),
+                $"Unlocalized label leaked as raw key: {definition.Label}"
+            );
+            Assert.False(
+                (definition.Description ?? string.Empty).StartsWith("Settings.", StringComparison.Ordinal),
+                $"Unlocalized description leaked as raw key: {definition.Description}"
+            );
+        }
+
+        Assert.Contains(definitions, d => d.Label == "API key");
+    }
+
+    [Fact]
+    public void ManifestNameAndDescription_AreLocalized()
+    {
+        // The Plugins-list card text (name + description) is resolved from the
+        // plugin's catalog via Manifest.Name / Manifest.Description, falling back
+        // to the manifest literal. Guard that the keys exist and German is
+        // actually translated (not just echoing English / the raw key).
+        var pluginDir = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "..", "..", "..", "..", "..",
+                "plugins", "TypeWhisper.Plugin.Gladia"
+            )
+        );
+
+        var en = new PluginLocalization(pluginDir, "en");
+        var de = new PluginLocalization(pluginDir, "de");
+
+        // Keys are present (GetString echoes the key back on a miss).
+        Assert.NotEqual("Manifest.Description", en.GetString("Manifest.Description"));
+        Assert.NotEqual("Manifest.Description", de.GetString("Manifest.Description"));
+
+        // German description is a real translation, not the English string.
+        Assert.NotEqual(
+            en.GetString("Manifest.Description"),
+            de.GetString("Manifest.Description")
+        );
     }
 
     [Fact]

@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SmallestAi;
 
-public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.smallest.ai";
     private const string PulseEndpoint = $"{BaseUrl}/waves/v1/pulse/get_text";
@@ -91,7 +91,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
             throw new InvalidOperationException("Smallest AI Pulse does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         using var request = new HttpRequestMessage(HttpMethod.Post, BuildPulseUri(language, includeWordTimestamps: true));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
@@ -112,7 +112,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         return await SmallestAiStreamingSession.ConnectAsync(_apiKey!, NormalizeLanguage(language), ct);
     }
@@ -120,7 +120,15 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
     // Settings support
 
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -392,9 +400,9 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
         [
             new(
                 ApiKeySecretName,
-                "API key",
+                Loc.L("Settings.ApiKey"),
                 true,
-                Description: "Required for Smallest AI Pulse transcription and streaming."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
         ];
 
@@ -424,11 +432,11 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         return valid
-            ? new PluginSettingsValidationResult(true, "API key is valid.")
-            : new PluginSettingsValidationResult(false, "API key is invalid.");
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
+            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
     }
 }

@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Cerebras;
 
-public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider
+public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.cerebras.ai";
 
@@ -57,7 +57,7 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     )
     {
         if (!IsAvailable)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
@@ -84,7 +84,7 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         }
 
         if (!IsAvailable)
-            throw new InvalidOperationException("API key not configured");
+            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
@@ -101,7 +101,15 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     }
 
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -141,16 +149,15 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         [
             new(
                 Key: "api-key",
-                Label: "API key",
+                Label: Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Placeholder: "csk-...",
-                Description: "Required for Cerebras LLM requests."
+                Description: Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 Key: LlmStreamingSettings.StreamResponsesSettingKey,
-                Label: "Stream responses",
-                Description: "Render prompt-action output token-by-token as it is "
-                    + "generated, instead of waiting for the full reply.",
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
         ];
@@ -195,11 +202,11 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         return valid
-            ? new PluginSettingsValidationResult(true, "API key is valid.")
-            : new PluginSettingsValidationResult(false, "API key is invalid.");
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
+            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
     }
 }

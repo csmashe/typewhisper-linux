@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -35,7 +36,7 @@ public partial class FileTranscriptionSection : UserControl
         }
 
         var files = await topLevel.StorageProvider.OpenFilePickerAsync(
-            new FilePickerOpenOptions { Title = "Select files", AllowMultiple = true }
+            new FilePickerOpenOptions { Title = Loc.Instance["Dialog.SelectFiles"], AllowMultiple = true }
         );
 
         var paths = files
@@ -128,7 +129,7 @@ public partial class FileTranscriptionSection : UserControl
         var file = await topLevel.StorageProvider.SaveFilePickerAsync(
             new FilePickerSaveOptions
             {
-                Title = "Export text",
+                Title = Loc.Instance["Dialog.ExportText"],
                 SuggestedFileName = $"{baseName}.txt",
                 DefaultExtension = "txt",
                 FileTypeChoices = [new FilePickerFileType("Text") { Patterns = ["*.txt"] }]

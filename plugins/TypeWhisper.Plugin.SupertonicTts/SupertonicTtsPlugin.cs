@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SupertonicTts;
 
-public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsProvider, IPluginSettingsActivity
+public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsProvider, IPluginSettingsActivity, IPluginLocalizationAware
 {
     internal const string LicenseAcceptedSettingName = "licenseAccepted";
     internal const string SelectedVoiceSettingName = "selectedVoice";
@@ -89,14 +89,30 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
     internal int DenoisingSteps { get; private set; } = DefaultDenoisingSteps;
     internal bool HasAcceptedModelLicense => _licenseAccepted;
     internal bool AreAssetsReady => IsConfigured;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     public string? SettingsSummary
     {
         get
         {
-            var status = IsConfigured ? "ready" : "download required";
-            return $"Voice: {_selectedVoiceId}; speed {Speed:0.##}; steps {DenoisingSteps}; {status}";
+            var status = IsConfigured
+                ? L("Settings.StatusReady")
+                : L("Settings.StatusDownloadRequired");
+            return L(
+                "Settings.Summary",
+                _selectedVoiceId,
+                Speed.ToString("0.##", CultureInfo.InvariantCulture),
+                DenoisingSteps,
+                status
+            );
         }
     }
 
@@ -186,8 +202,8 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
             ),
             new(
                 Key: SelectedVoiceSettingName,
-                Label: "Voice",
-                Description: "Supertonic voice (M1–M5 male, F1–F5 female).",
+                Label: L("Settings.Voice"),
+                Description: L("Settings.VoiceDescription"),
                 Options: Voices
                     .Select(voice => new PluginSettingOption(voice.Id, voice.DisplayName))
                     .ToList()
@@ -196,14 +212,22 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
                 Key: SpeedSettingName,
                 Label: L("Settings.Speed"),
                 Placeholder: $"{MinSpeed.ToString("0.##", CultureInfo.InvariantCulture)} – {MaxSpeed.ToString("0.##", CultureInfo.InvariantCulture)}",
-                Description: $"Playback speed multiplier ({MinSpeed.ToString("0.##", CultureInfo.InvariantCulture)}–{MaxSpeed.ToString("0.##", CultureInfo.InvariantCulture)}).",
+                Description: L(
+                    "Settings.SpeedDescription",
+                    MinSpeed.ToString("0.##", CultureInfo.InvariantCulture),
+                    MaxSpeed.ToString("0.##", CultureInfo.InvariantCulture)
+                ),
                 Kind: PluginSettingKind.Text
             ),
             new(
                 Key: DenoisingStepsSettingName,
                 Label: L("Settings.Quality"),
                 Placeholder: $"{MinDenoisingSteps} – {MaxDenoisingSteps}",
-                Description: $"Denoising steps ({MinDenoisingSteps}–{MaxDenoisingSteps}); higher is slower but cleaner.",
+                Description: L(
+                    "Settings.QualityDescription",
+                    MinDenoisingSteps,
+                    MaxDenoisingSteps
+                ),
                 Kind: PluginSettingKind.Text
             ),
         ];

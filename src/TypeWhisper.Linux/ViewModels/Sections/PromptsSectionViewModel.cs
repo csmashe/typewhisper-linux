@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 
@@ -79,15 +80,16 @@ public partial class PromptsSectionViewModel : ObservableObject
     public bool HasSelectedAction => SelectedAction is not null || IsCreatingNew;
     public int ActionCount => Actions.Count;
     public int EnabledActionCount => Actions.Count(static action => action.IsEnabled);
-    public string Summary => $"{ActionCount} prompts, {EnabledActionCount} enabled";
+    public string Summary =>
+        Loc.Instance.GetString("Prompts.Summary", ActionCount, EnabledActionCount);
 
-    public string PromptsHint =>
-        "AI prompts for the Prompt Palette. Select text + hotkey = AI processes the text.";
+    public string PromptsHint => Loc.Instance["Prompts.Hint"];
 
     public bool ShowProviderWarning => AvailableProviders.Count <= 1;
-    public string ProviderWarningText => "Enable OpenAI or Groq in Extensions.";
+    public string ProviderWarningText => Loc.Instance["Prompts.ProviderWarning"];
     public bool ShowEmptyState => ActionCount == 0;
-    public string EditorTitle => IsCreatingNew ? "New Prompt" : "Edit Prompt";
+    public string EditorTitle =>
+        IsCreatingNew ? Loc.Instance["Prompts.NewPrompt"] : Loc.Instance["Prompts.EditPrompt"];
     public bool CanEditExistingAction => SelectedAction is not null;
 
     public string? DefaultLlmProvider
@@ -408,7 +410,9 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         ActionPluginOptions.Clear();
-        ActionPluginOptions.Add(new ActionPluginOption(null, "Insert text normally"));
+        ActionPluginOptions.Add(
+            new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
+        );
         foreach (
             var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
         )
@@ -429,7 +433,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     private string DefaultProviderPlaceholderLabel(IReadOnlyList<ProviderOption> resolvedOptions)
     {
-        const string baseLabel = "Use default provider";
+        var baseLabel = Loc.Instance["Prompts.UseDefaultProvider"];
         var configured = _settings.Current.DefaultLlmProvider;
         var configuredResolves = !string.IsNullOrWhiteSpace(configured)
                                  && resolvedOptions.Any(option =>
@@ -450,7 +454,7 @@ public partial class PromptsSectionViewModel : ObservableObject
         var fallbackLabel = fallbackModel is null
             ? fallback.ProviderName
             : $"{fallback.ProviderName} / {fallbackModel.DisplayName}";
-        return $"{baseLabel} ({fallbackLabel})";
+        return Loc.Instance.GetString("Prompts.UseDefaultProviderFallback", baseLabel, fallbackLabel);
     }
 
     private void SelectById(string id)

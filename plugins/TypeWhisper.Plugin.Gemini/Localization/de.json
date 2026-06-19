@@ -1,9 +1,12 @@
 {
-  "Settings.Test": "Testen",
-  "Settings.Saved": "Gespeichert",
-  "Settings.EnterApiKey": "Bitte zuerst einen API-Key eingeben",
-  "Settings.Testing": "Teste...",
-  "Settings.ApiKeyValid": "API-Key gültig!",
-  "Settings.ApiKeyInvalid": "Ungültiger API-Key",
-  "Settings.Error": "Fehler: {0}"
+  "Settings.ApiKey": "API-Schlüssel",
+  "Settings.ApiKeyDescription": "Erforderlich für Gemini-LLM-Anfragen.",
+  "Settings.StreamResponses": "Antworten streamen",
+  "Settings.StreamResponsesDescription": "Prompt-Aktions-Ausgabe Token für Token während der Generierung anzeigen, statt auf die vollständige Antwort zu warten.",
+  "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
+  "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
+  "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
+  "Manifest.Name": "Google Gemini",
+  "Manifest.Description": "Google-Gemini-LLM-Anbieter für Prompt-Aktionen und Übersetzung"
 }

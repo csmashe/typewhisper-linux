@@ -1,4 +1,5 @@
 using TypeWhisper.Linux.Services.Insertion;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services.Setup;
 
@@ -30,7 +31,7 @@ public sealed class AutoPasteSetupTask : ISetupTask
     private bool IsWayland => _commands.GetSnapshot().SessionType == "Wayland";
 
     public string Id => "auto-paste";
-    public string Title => "Automatic paste";
+    public string Title => Loc.Instance["Setup.AutoPasteTitle"];
     public SetupTaskSeverity Severity => SetupTaskSeverity.Required;
 
     public bool AppliesToThisMachine()
@@ -62,9 +63,9 @@ public sealed class AutoPasteSetupTask : ISetupTask
             return Task.FromResult(
                 new SetupTaskState(
                     SetupTaskStatusKind.NeedsAction,
-                    "xdotool is not installed.",
-                    "Needed to type the transcript into the focused window on X11.",
-                    "Install xdotool",
+                    Loc.Instance["Setup.XdotoolNotInstalled"],
+                    Loc.Instance["Setup.XdotoolNotInstalledDetail"],
+                    Loc.Instance["Setup.XdotoolInstall"],
                     _installer.BuildSudoCommand(new[] { "xdotool" })
                 )
             );
@@ -76,11 +77,9 @@ public sealed class AutoPasteSetupTask : ISetupTask
             return Task.FromResult(
                 new SetupTaskState(
                     SetupTaskStatusKind.NeedsAction,
-                    "ydotool is not installed.",
-                    "ydotool is the reliable way to type into Wayland windows on GNOME/KDE. "
-                    + "This installs it, then configures its udev rule and background service "
-                    + "(you'll be asked for your admin password).",
-                    "Install & set up ydotool",
+                    Loc.Instance["Setup.YdotoolNotInstalled"],
+                    Loc.Instance["Setup.YdotoolNotInstalledDetail"],
+                    Loc.Instance["Setup.YdotoolInstallAndSetUp"],
                     _installer.BuildSudoCommand(new[] { "ydotool" })
                 )
             );
@@ -89,10 +88,9 @@ public sealed class AutoPasteSetupTask : ISetupTask
         return Task.FromResult(
             new SetupTaskState(
                 SetupTaskStatusKind.NeedsAction,
-                "ydotool is installed but not configured.",
-                "Configures the udev rule and background service so ydotool can type "
-                + "(you'll be asked for your admin password).",
-                "Set up ydotool"
+                Loc.Instance["Setup.YdotoolNotConfigured"],
+                Loc.Instance["Setup.YdotoolNotConfiguredDetail"],
+                Loc.Instance["Setup.YdotoolSetUp"]
             )
         );
     }
@@ -131,8 +129,8 @@ public sealed class AutoPasteSetupTask : ISetupTask
         {
             result = new SetupActionOutcome(
                 false,
-                $"Setup failed: {ex.Message}",
-                "You can retry, or finish setup from the Text insertion section later."
+                Loc.Instance.GetString("Setup.AutoPasteSetupFailed", ex.Message),
+                Loc.Instance["Setup.AutoPasteSetupFailedDetail"]
             );
         }
 

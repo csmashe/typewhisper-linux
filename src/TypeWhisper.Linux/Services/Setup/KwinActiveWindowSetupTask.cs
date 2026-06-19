@@ -1,4 +1,5 @@
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services.Setup;
 
@@ -23,7 +24,7 @@ public sealed class KwinActiveWindowSetupTask : ISetupTask
     }
 
     public string Id => "active-window-kde";
-    public string Title => "Active-window detection";
+    public string Title => Loc.Instance["Setup.ActiveWindowTitle"];
     public SetupTaskSeverity Severity => SetupTaskSeverity.Recommended;
 
     public bool AppliesToThisMachine()
@@ -40,7 +41,7 @@ public sealed class KwinActiveWindowSetupTask : ISetupTask
             return Task.FromResult(
                 new SetupTaskState(
                     SetupTaskStatusKind.Satisfied,
-                    "kdotool available — the focused app is detected for per-app profiles and stats."
+                    Loc.Instance["Setup.KdotoolAvailable"]
                 )
             );
         }
@@ -48,11 +49,9 @@ public sealed class KwinActiveWindowSetupTask : ISetupTask
         return Task.FromResult(
             new SetupTaskState(
                 SetupTaskStatusKind.NeedsAction,
-                "kdotool is not installed.",
-                "On KDE Wayland, reading the focused window (so profiles match the "
-                + "active app and usage is attributed correctly) needs kdotool. Without "
-                + "it, dictations aren't tied to any app.",
-                "Install kdotool",
+                Loc.Instance["Setup.KdotoolNotInstalled"],
+                Loc.Instance["Setup.KdotoolNotInstalledDetail"],
+                Loc.Instance["Setup.KdotoolInstall"],
                 _installer.BuildSudoCommand(new[] { "kdotool" })
             )
         );

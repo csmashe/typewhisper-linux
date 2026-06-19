@@ -7,11 +7,12 @@
         xmlns:svc="using:TypeWhisper.Linux.Services"
         xmlns:models="using:TypeWhisper.Core.Models"
         xmlns:local="using:TypeWhisper.Linux"
+        xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="720"
         x:Class="TypeWhisper.Linux.Views.WelcomeWizard"
         x:DataType="vm:WelcomeWizardViewModel"
         RequestedThemeVariant="Dark"
-        Title="Welcome to TypeWhisper"
+        Title="{loc:Str Wizard.WindowTitle}"
         Icon="avares://typewhisper/Resources/typewhisper.ico"
         Width="640" Height="720"
         WindowStartupLocation="CenterOwner"
@@ -21,7 +22,7 @@
         <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,32,0,20" Spacing="6">
             <TextBlock Text="TypeWhisper" FontSize="26" FontWeight="SemiBold"
                        HorizontalAlignment="Center" />
-            <TextBlock Text="Speech-to-Text Transcription" FontSize="13"
+            <TextBlock Text="{loc:Str Wizard.Subtitle}" FontSize="13"
                        HorizontalAlignment="Center"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
             <!-- step dots -->
@@ -57,12 +58,12 @@
             <!-- Step 1: pick a model -->
             <TabItem>
                 <StackPanel Spacing="14">
-                    <TextBlock Text="Choose a transcription model"
+                    <TextBlock Text="{loc:Str Wizard.ChooseModelTitle}"
                                FontSize="18" FontWeight="SemiBold" />
                     <TextBlock TextWrapping="Wrap" FontSize="12"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               Text="The recommended model runs entirely on your computer — no cloud, no API key. You can add cloud providers later from the Plugins tab." />
-                    <TextBlock Text="All models" FontWeight="SemiBold" />
+                               Text="{loc:Str Wizard.ChooseModelDescription}" />
+                    <TextBlock Text="{loc:Str Wizard.AllModels}" FontWeight="SemiBold" />
                     <ComboBox ItemsSource="{Binding AvailableModels}"
                               SelectedItem="{Binding SelectedModel}"
                               HorizontalAlignment="Stretch">
@@ -76,7 +77,7 @@
                                     <TextBlock Text="{Binding SizeDescription}" FontSize="11"
                                                Foreground="#9CA3AF"
                                                VerticalAlignment="Center" />
-                                    <TextBlock Text="— Recommended" FontSize="11"
+                                    <TextBlock Text="{loc:Str Wizard.RecommendedSuffix}" FontSize="11"
                                                Foreground="#5BA3F5"
                                                VerticalAlignment="Center"
                                                IsVisible="{Binding IsRecommended}" />
@@ -99,10 +100,10 @@
                     </Grid>
 
                     <StackPanel Spacing="6" Margin="0,10,0,0">
-                        <TextBlock Text="Writing focus" FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str Wizard.WritingFocus}" FontWeight="SemiBold" />
                         <TextBlock TextWrapping="Wrap" FontSize="11"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   Text="Optional: pick an industry to enable a matching vocabulary pack on finish." />
+                                   Text="{loc:Str Wizard.WritingFocusHint}" />
                         <ComboBox ItemsSource="{Binding IndustryPresets}"
                                   SelectedValueBinding="{Binding Id}"
                                   SelectedValue="{Binding SelectedIndustryPresetId}"
@@ -125,10 +126,10 @@
             <!-- Step 2: extensions / plugins -->
             <TabItem>
                 <StackPanel Spacing="14">
-                    <TextBlock Text="Extensions" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Wizard.ExtensionsTitle}" FontSize="18" FontWeight="SemiBold" />
                     <TextBlock TextWrapping="Wrap" FontSize="12"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               Text="Enable the plugins you want. Cloud transcription plugins need an API key that you'll enter later from the Plugins tab." />
+                               Text="{loc:Str Wizard.ExtensionsDescription}" />
                     <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
                             CornerRadius="4" Padding="0">
                         <ScrollViewer MaxHeight="280">
@@ -161,17 +162,17 @@
             <!-- Step 3: mic + hotkey -->
             <TabItem>
                 <StackPanel Spacing="14">
-                    <TextBlock Text="Microphone and shortcut"
+                    <TextBlock Text="{loc:Str Wizard.MicAndShortcutTitle}"
                                FontSize="18" FontWeight="SemiBold" />
                     <StackPanel Spacing="6">
-                        <TextBlock Text="Input device" FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str Wizard.InputDevice}" FontWeight="SemiBold" />
                         <ComboBox ItemsSource="{Binding Mics}" SelectedItem="{Binding SelectedMic}"
                                   HorizontalAlignment="Stretch">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="svc:AudioInputDevice">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="{Binding Name}" />
-                                        <TextBlock Text="(default)" FontStyle="Italic"
+                                        <TextBlock Text="{loc:Str Wizard.DefaultDeviceSuffix}" FontStyle="Italic"
                                                    IsVisible="{Binding IsDefault}" />
                                     </StackPanel>
                                 </DataTemplate>
@@ -179,11 +180,11 @@
                         </ComboBox>
                     </StackPanel>
                     <StackPanel Spacing="6">
-                        <TextBlock Text="Toggle-dictation hotkey" FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str Wizard.ToggleHotkey}" FontWeight="SemiBold" />
                         <TextBox Text="{Binding HotkeyText}" PlaceholderText="Ctrl+Shift+Space" />
                         <TextBlock FontSize="11"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   Text="Accepts Ctrl / Shift / Alt / Meta plus a letter, digit, F-key, Space, Enter, Tab, arrows, etc." />
+                                   Text="{loc:Str Wizard.HotkeyHint}" />
                         <TextBlock Text="{Binding HotkeyStatus}"
                                    FontSize="11"
                                    TextWrapping="Wrap"
@@ -196,10 +197,10 @@
             <TabItem>
                 <StackPanel Spacing="14">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Grid.Column="0" Text="Set up your system"
+                        <TextBlock Grid.Column="0" Text="{loc:Str Wizard.SetupSystemTitle}"
                                    FontSize="18" FontWeight="SemiBold"
                                    VerticalAlignment="Center" />
-                        <Button Grid.Column="1" Content="Re-check"
+                        <Button Grid.Column="1" Content="{loc:Str Wizard.Recheck}"
                                 Command="{Binding RecheckSetupCommand}" />
                     </Grid>
                     <TextBlock Text="{Binding SetupSummary}"
@@ -276,7 +277,7 @@
                             CornerRadius="4" Padding="12">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                             <StackPanel Grid.Column="0" Spacing="3">
-                                <TextBlock Text="CUDA check"
+                                <TextBlock Text="{loc:Str Wizard.CudaCheck}"
                                            FontWeight="SemiBold" />
                                 <TextBlock Text="{Binding CudaBenchmarkStatus}"
                                            TextWrapping="Wrap"
@@ -284,7 +285,7 @@
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                             <Button Grid.Column="1"
-                                    Content="Run"
+                                    Content="{loc:Str Wizard.Run}"
                                     Command="{Binding RunCudaBenchmarkCommand}"
                                     IsEnabled="{Binding CudaBenchmarkButtonEnabled}"
                                     VerticalAlignment="Center" />
@@ -297,18 +298,18 @@
             <TabItem>
                 <ScrollViewer>
                     <StackPanel Spacing="14">
-                        <TextBlock Text="First dictation check"
+                        <TextBlock Text="{loc:Str Wizard.FirstDictationTitle}"
                                    FontSize="18" FontWeight="SemiBold" />
                         <TextBlock TextWrapping="Wrap" FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   Text="Verify the microphone, paste path, and selected model before finishing setup." />
+                                   Text="{loc:Str Wizard.FirstDictationDescription}" />
 
                         <Border Background="{DynamicResource ControlFillColorSecondaryBrush}"
                                 CornerRadius="4" Padding="12">
                             <StackPanel Spacing="8">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                     <TextBlock Grid.Column="0"
-                                               Text="Microphone"
+                                               Text="{loc:Str Wizard.Microphone}"
                                                FontWeight="SemiBold"
                                                VerticalAlignment="Center" />
                                     <Button Grid.Column="1"
@@ -331,16 +332,16 @@
                             <StackPanel Spacing="8">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                     <TextBlock Grid.Column="0"
-                                               Text="Paste"
+                                               Text="{loc:Str Wizard.Paste}"
                                                FontWeight="SemiBold"
                                                VerticalAlignment="Center" />
                                     <Button Grid.Column="1"
-                                            Content="Run paste test"
+                                            Content="{loc:Str Wizard.RunPasteTest}"
                                             Click="RunPasteSmokeButton_OnClick" />
                                 </Grid>
                                 <TextBox x:Name="PasteSmokeBox"
                                          Text="{Binding PasteSmokeText}"
-                                         PlaceholderText="Paste test output" />
+                                         PlaceholderText="{loc:Str Wizard.PasteTestOutputPlaceholder}" />
                                 <TextBlock Text="{Binding PasteTestStatus}"
                                            TextWrapping="Wrap"
                                            FontSize="12"
@@ -353,7 +354,7 @@
                             <StackPanel Spacing="8">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                     <TextBlock Grid.Column="0"
-                                               Text="Dictation"
+                                               Text="{loc:Str Wizard.Dictation}"
                                                FontWeight="SemiBold"
                                                VerticalAlignment="Center" />
                                     <Button Grid.Column="1"
@@ -368,7 +369,7 @@
                                          IsReadOnly="True"
                                          MinHeight="54"
                                          TextWrapping="Wrap"
-                                         PlaceholderText="Recognized text" />
+                                         PlaceholderText="{loc:Str Wizard.RecognizedTextPlaceholder}" />
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -378,16 +379,16 @@
             <!-- Step 6: done -->
             <TabItem>
                 <StackPanel Spacing="12" VerticalAlignment="Center">
-                    <TextBlock Text="You're ready" FontSize="22" FontWeight="SemiBold"
+                    <TextBlock Text="{loc:Str Wizard.YouAreReady}" FontSize="22" FontWeight="SemiBold"
                                HorizontalAlignment="Center"
                                IsVisible="{Binding AllRequiredReady}" />
-                    <TextBlock Text="Almost there" FontSize="22" FontWeight="SemiBold"
+                    <TextBlock Text="{loc:Str Wizard.AlmostThere}" FontSize="22" FontWeight="SemiBold"
                                HorizontalAlignment="Center"
                                IsVisible="{Binding !AllRequiredReady}" />
                     <TextBlock TextWrapping="Wrap" HorizontalAlignment="Center" MaxWidth="480"
                                TextAlignment="Center"
                                IsVisible="{Binding AllRequiredReady}"
-                               Text="Open any text field, press your hotkey, speak a sentence, then press the hotkey again. TypeWhisper will transcribe locally and type the result into the focused window." />
+                               Text="{loc:Str Wizard.ReadyInstructions}" />
 
                     <!-- Shown when setup added the user to the input group: the
                          global shortcut only activates after a re-login. -->
@@ -398,10 +399,10 @@
                             Margin="0,16,0,0"
                             IsVisible="{Binding ShowReloginNotice}">
                         <StackPanel Spacing="4">
-                            <TextBlock Text="One more step: log out and back in"
+                            <TextBlock Text="{loc:Str Wizard.ReloginNoticeTitle}"
                                        FontWeight="SemiBold" />
                             <TextBlock TextWrapping="Wrap" FontSize="12"
-                                       Text="Setup added you to the 'input' group so the global shortcut can read your keyboard (this is what enables hold-to-talk). Log out of your desktop and back in once to activate it." />
+                                       Text="{loc:Str Wizard.ReloginNoticeBody}" />
                         </StackPanel>
                     </Border>
 
@@ -421,7 +422,7 @@
                             <TextBlock FontSize="11"
                                        TextWrapping="Wrap"
                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                       Text="Go Back to finish those items, or choose Skip to set them up later from Settings." />
+                                       Text="{loc:Str Wizard.IncompleteHint}" />
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -430,10 +431,10 @@
 
         <!-- Footer buttons -->
         <Grid Grid.Row="2" Margin="32,16,32,24" ColumnDefinitions="Auto,*,Auto,Auto">
-            <Button Grid.Column="0" Content="Back"
+            <Button Grid.Column="0" Content="{loc:Str Common.Back}"
                     Command="{Binding BackCommand}"
                     IsEnabled="{Binding !IsFirstStep}" />
-            <Button Grid.Column="2" Content="Skip"
+            <Button Grid.Column="2" Content="{loc:Str Common.Skip}"
                     Command="{Binding SkipCommand}"
                     Margin="0,0,8,0" />
             <Button Grid.Column="3" Content="{Binding NextLabel}"

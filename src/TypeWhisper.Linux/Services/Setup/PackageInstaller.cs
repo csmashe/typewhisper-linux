@@ -1,4 +1,5 @@
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services.Setup;
 
@@ -83,8 +84,8 @@ public sealed class PackageInstaller
         {
             return new SetupActionOutcome(
                 false,
-                "Could not detect your package manager.",
-                $"Install it manually: {fallback}"
+                Loc.Instance["Setup.NoPackageManager"],
+                Loc.Instance.GetString("Setup.InstallItManually", fallback)
             );
         }
 
@@ -92,8 +93,8 @@ public sealed class PackageInstaller
         {
             return new SetupActionOutcome(
                 false,
-                "pkexec is not available to request admin rights.",
-                $"Run this in a terminal instead: {fallback}"
+                Loc.Instance["Setup.PkexecUnavailable"],
+                Loc.Instance.GetString("Setup.RunInTerminalInstead", fallback)
             );
         }
 
@@ -109,7 +110,7 @@ public sealed class PackageInstaller
         {
             return new SetupActionOutcome(
                 true,
-                $"Installed {string.Join(", ", packages)}."
+                Loc.Instance.GetString("Setup.InstalledPackages", string.Join(", ", packages))
             );
         }
 
@@ -118,17 +119,17 @@ public sealed class PackageInstaller
         {
             return new SetupActionOutcome(
                 false,
-                "Admin authorization was cancelled or denied.",
-                $"You can also run: {fallback}"
+                Loc.Instance["Setup.AdminAuthCancelled"],
+                Loc.Instance.GetString("Setup.YouCanAlsoRun", fallback)
             );
         }
 
         var detail = string.IsNullOrWhiteSpace(result.StandardError)
-            ? $"Run this in a terminal instead: {fallback}"
+            ? Loc.Instance.GetString("Setup.RunInTerminalInstead", fallback)
             : result.StandardError.Trim();
         return new SetupActionOutcome(
             false,
-            $"Install failed (exit {result.ExitCode}).",
+            Loc.Instance.GetString("Setup.InstallFailed", result.ExitCode),
             detail
         );
     }
@@ -178,12 +179,9 @@ public sealed class PackageInstaller
             }
         }
 
-        foreach (var manager in tokens.Select(MapDistroToManager))
+        foreach (var manager in tokens.Select(MapDistroToManager).OfType<string>())
         {
-            if (manager is not null)
-            {
-                yield return manager;
-            }
+            yield return manager;
         }
     }
 

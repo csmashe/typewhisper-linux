@@ -1,3 +1,5 @@
+using TypeWhisper.Linux.Services.Localization;
+
 namespace TypeWhisper.Linux.Services.Setup;
 
 /// <summary>
@@ -19,7 +21,7 @@ public sealed class ClipboardSetupTask : ISetupTask
     }
 
     public string Id => "clipboard";
-    public string Title => "Clipboard helper";
+    public string Title => Loc.Instance["Setup.ClipboardTitle"];
     public SetupTaskSeverity Severity => SetupTaskSeverity.Required;
 
     public bool AppliesToThisMachine()
@@ -35,16 +37,19 @@ public sealed class ClipboardSetupTask : ISetupTask
         if (snapshot.HasClipboardTool)
         {
             return Task.FromResult(
-                new SetupTaskState(SetupTaskStatusKind.Satisfied, $"{package} available.")
+                new SetupTaskState(
+                    SetupTaskStatusKind.Satisfied,
+                    Loc.Instance.GetString("Setup.PackageAvailable", package)
+                )
             );
         }
 
         return Task.FromResult(
             new SetupTaskState(
                 SetupTaskStatusKind.NeedsAction,
-                $"{package} is not installed.",
-                "Needed so TypeWhisper can place text on the clipboard as a fallback.",
-                $"Install {package}",
+                Loc.Instance.GetString("Setup.PackageNotInstalled", package),
+                Loc.Instance["Setup.ClipboardHint"],
+                Loc.Instance.GetString("Setup.InstallPackage", package),
                 _installer.BuildSudoCommand(new[] { package })
             )
         );

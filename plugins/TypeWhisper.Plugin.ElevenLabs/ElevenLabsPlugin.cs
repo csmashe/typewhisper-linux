@@ -5,7 +5,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.ElevenLabs;
 
-public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     internal const string DefaultModelId = "scribe_v2";
     private const string BaseUrl = "https://api.elevenlabs.io";
@@ -236,7 +236,15 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     }
 
     internal string? ApiKey => _apiKey;
-    internal IPluginLocalization? Loc => _host?.Localization;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -376,15 +384,15 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         [
             new(
                 "api-key",
-                "API key",
+                Loc.L("Settings.ApiKey"),
                 true,
                 "xi-...",
-                "Required for ElevenLabs Scribe transcription."
+                Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 "selectedModel",
-                "Transcription model",
-                Description: "Scribe v2 is used for file transcription; live dictation uses Scribe v2 Realtime.",
+                Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: ModelEntries
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
@@ -422,12 +430,12 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         return valid
-            ? new PluginSettingsValidationResult(true, "API key is valid.")
-            : new PluginSettingsValidationResult(false, "API key is invalid.");
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
+            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
     }
 
     public void Dispose()

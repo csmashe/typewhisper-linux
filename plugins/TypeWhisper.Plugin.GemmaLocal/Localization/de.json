@@ -1,16 +1,11 @@
 {
-  "Settings.SelectModel": "Gemma-Modell auswählen",
-  "Settings.Download": "Herunterladen",
-  "Settings.Load": "Laden",
-  "Settings.Unload": "Entladen",
-  "Settings.Cancel": "Abbrechen",
-  "Settings.NotDownloaded": "Nicht heruntergeladen",
-  "Settings.Downloaded": "Heruntergeladen, bereit zum Laden",
-  "Settings.Loaded": "Geladen und bereit",
-  "Settings.Loading": "Modell wird geladen...",
-  "Settings.Downloading": "Wird heruntergeladen...",
-  "Settings.DownloadComplete": "Download abgeschlossen! Klicke auf Laden, um das Modell zu nutzen.",
-  "Settings.DownloadCancelled": "Download abgebrochen",
-  "Settings.ModelReady": "Modell geladen und einsatzbereit!",
-  "Settings.Error": "Fehler: {0}"
+  "Settings.Model": "Modell",
+  "Settings.ModelDescription": "Lokales Gemma-Modell für die LLM-Verarbeitung. Bei Auswahl eines Modells wird es (falls nötig) heruntergeladen und geladen; Downloads können mehrere Gigabyte groß sein und der Fortschritt wird im Plugin-Protokoll angezeigt.",
+  "Settings.StreamResponses": "Antworten streamen",
+  "Settings.StreamResponsesDescription": "Prompt-Aktions-Ausgabe Token für Token anzeigen, während das lokale Modell sie generiert, anstatt auf die vollständige Antwort zu warten.",
+  "Settings.SelectModel": "Wählen Sie zuerst ein Modell.",
+  "Settings.ModelReady": "Modell geladen und bereit.",
+  "Settings.ModelSelectedNotLoaded": "Modell ausgewählt, aber noch nicht geladen.",
+  "Manifest.Name": "Gemma 4 (Lokal)",
+  "Manifest.Description": "Google Gemma 4 lokal über Ollama oder einen beliebigen OpenAI-kompatiblen Server ausführen"
 }

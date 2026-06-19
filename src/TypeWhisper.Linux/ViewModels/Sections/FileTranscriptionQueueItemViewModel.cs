@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -36,8 +37,8 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
         Status = status;
         StatusText =
             status == FileTranscriptionQueueItemStatus.Unsupported
-                ? "Unsupported format"
-                : "Queued";
+                ? Loc.Instance["FileTranscription.UnsupportedFormat"]
+                : Loc.Instance["FileTranscription.Queued"];
         ErrorText = status == FileTranscriptionQueueItemStatus.Unsupported ? StatusText : "";
     }
 
@@ -68,6 +69,37 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
     public void RefreshExportState()
     {
         OnPropertyChanged(nameof(CanExportSubtitles));
+    }
+
+    /// <summary>
+    ///     Re-resolves the status text for statuses whose label is a pure function
+    ///     of <see cref="Status" /> (plus stored timing), so a live UI-language
+    ///     switch updates queued and terminal items. Loading/Transcribing carry
+    ///     the processor's transient progress text and Error carries a raw
+    ///     exception message, so both are intentionally left untouched.
+    /// </summary>
+    public void RefreshLocalizedText()
+    {
+        switch (Status)
+        {
+            case FileTranscriptionQueueItemStatus.Unsupported:
+                StatusText = Loc.Instance["FileTranscription.UnsupportedFormat"];
+                ErrorText = StatusText;
+                break;
+            case FileTranscriptionQueueItemStatus.Queued:
+                StatusText = Loc.Instance["FileTranscription.Queued"];
+                break;
+            case FileTranscriptionQueueItemStatus.Cancelled:
+                StatusText = Loc.Instance["FileTranscription.Cancelled"];
+                break;
+            case FileTranscriptionQueueItemStatus.Completed:
+                StatusText = Loc.Instance.GetString(
+                    "FileTranscription.DoneIn",
+                    ProcessingTime,
+                    AudioDuration
+                );
+                break;
+        }
     }
 
     partial void OnStatusChanged(FileTranscriptionQueueItemStatus value)

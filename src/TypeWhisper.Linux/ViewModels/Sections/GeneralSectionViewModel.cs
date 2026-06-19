@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -73,37 +74,22 @@ public partial class GeneralSectionViewModel : ObservableObject
     public ObservableCollection<CommandExample> CurlExamples { get; } = [];
     public ObservableCollection<CommandExample> CliExamples { get; } = [];
 
+    // Only the languages we actually ship a JSON catalog for (plus "Auto"),
+    // discovered at startup by Loc — no dead/un-translated choices.
     public IReadOnlyList<UiLanguageOption> UiLanguageChoices { get; } =
-    [
-        new(null, "Auto (System)"),
-        new("en", "English"),
-        new("de", "Deutsch"),
-        new("fr", "Français"),
-        new("es", "Español"),
-        new("pt", "Português"),
-        new("ja", "日本語"),
-        new("zh", "中文"),
-        new("ko", "한국어"),
-        new("it", "Italiano"),
-        new("nl", "Nederlands"),
-        new("pl", "Polski"),
-        new("ru", "Русский")
-    ];
+        Loc.Instance.AvailableUiLanguages;
 
-    public bool IsUiLanguageSupported => false;
-
-    public string UiLanguageSupportMessage =>
-        "Interface language is not implemented in the Linux build yet.";
+    public bool IsUiLanguageSupported => true;
 
     public UiLanguageOption? SelectedUiLanguageOption
     {
         get =>
             UiLanguageChoices.FirstOrDefault(option =>
-                string.Equals(option.Value, UiLanguage, StringComparison.Ordinal)
+                string.Equals(option.Code, UiLanguage, StringComparison.Ordinal)
             );
         set
         {
-            var selected = value?.Value;
+            var selected = value?.Code;
             if (string.Equals(selected, UiLanguage, StringComparison.Ordinal))
             {
                 return;
@@ -158,8 +144,12 @@ public partial class GeneralSectionViewModel : ObservableObject
         CliBundledAvailable = state.BundledCliAvailable;
         CliInstalled = state.Installed;
         CliBundledPathText = state.BundledPath is null
-            ? $"Installer target: {state.LauncherPath}"
-            : $"Bundled: {state.BundledPath}  |  Target: {state.LauncherPath}";
+            ? Loc.Instance.GetString("General.CliInstallerTarget", state.LauncherPath)
+            : Loc.Instance.GetString(
+                "General.CliBundledTarget",
+                state.BundledPath,
+                state.LauncherPath
+            );
     }
 
     private void RefreshExamples(int port)
@@ -180,6 +170,7 @@ public partial class GeneralSectionViewModel : ObservableObject
     partial void OnUiLanguageChanged(string? value)
     {
         _settings.Save(_settings.Current with { UiLanguage = value });
+        Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(value);
         OnPropertyChanged(nameof(SelectedUiLanguageOption));
     }
 
@@ -230,7 +221,5 @@ public partial class GeneralSectionViewModel : ObservableObject
         _linuxPrefs.Save(_linuxPrefs.Current with { CloseToTray = value });
     }
 }
-
-public sealed record UiLanguageOption(string? Value, string DisplayName);
 
 public sealed record CommandExample(string Command);

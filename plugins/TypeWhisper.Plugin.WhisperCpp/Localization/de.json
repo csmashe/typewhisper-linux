@@ -1,0 +1,9 @@
+{
+  "Settings.NoSpeechThreshold": "Schwellenwert für Sprachlosigkeit",
+  "Settings.NoSpeechThresholdDescription": "0.0 bis 1.0. Segmente, deren Sprachlosigkeitswahrscheinlichkeit diesen Wert überschreitet, werden verworfen, damit stille Pausen nicht als halluzinierte Phrasen transkribiert werden (häufig \"Vielen Dank.\"). Niedriger = aggressivere Filterung. Der Standardwert 0.6 entspricht dem Standard von whisper.cpp. Leer lassen, um den Standardwert zu verwenden.",
+  "Settings.UsingDefaultThreshold": "Standardschwellenwert {0} wird verwendet.",
+  "Settings.ThresholdSet": "Schwellenwert auf {0} gesetzt.",
+  "Settings.ThresholdInvalid": "Der Schwellenwert für Sprachlosigkeit muss eine Zahl zwischen 0.0 und 1.0 sein.",
+  "Manifest.Name": "whisper.cpp (Lokal)",
+  "Manifest.Description": "Offline-Transkription über whisper.cpp mit Whisper.net"
+}

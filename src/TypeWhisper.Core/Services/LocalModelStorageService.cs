@@ -104,12 +104,15 @@ public sealed class LocalModelStorageService
         // source's contents into one of its own subdirectories — self-recursive copying.
         if (IsNestedUnder(targetRoot, sourceRoot))
         {
-            throw new InvalidOperationException(
+            throw new LocalModelStorageUnavailableException(
+                LocalModelStorageUnavailableReason.NestedUnderCurrentFolder,
+                targetRoot,
                 string.Format(
                     CultureInfo.InvariantCulture,
                     "Target model storage folder '{0}' must not be inside the current folder '{1}'.",
                     targetRoot,
-                    sourceRoot));
+                    sourceRoot),
+                currentPath: sourceRoot);
         }
 
         _unloadActiveModels?.Invoke();
@@ -148,6 +151,8 @@ public sealed class LocalModelStorageService
         if (!Directory.Exists(fullPath))
         {
             throw new LocalModelStorageUnavailableException(
+                LocalModelStorageUnavailableReason.DoesNotExist,
+                fullPath,
                 string.Format(
                     CultureInfo.InvariantCulture,
                     "Model storage folder does not exist: {0}",
@@ -168,11 +173,13 @@ public sealed class LocalModelStorageService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new LocalModelStorageUnavailableException(
+                LocalModelStorageUnavailableReason.NotWritable,
+                fullPath,
                 string.Format(
                     CultureInfo.InvariantCulture,
                     "Model storage folder is not writable: {0}",
                     fullPath),
-                ex);
+                innerException: ex);
         }
     }
 

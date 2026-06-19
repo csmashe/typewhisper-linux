@@ -39,10 +39,10 @@ public class Reson8PluginTests
         var en = LoadLocalization("en");
         var de = LoadLocalization("de");
 
-        Assert.Equal("API Key", en.GetProperty("Settings.ApiKeyLabel").GetString());
-        Assert.Equal("API-Schlüssel", de.GetProperty("Settings.ApiKeyLabel").GetString());
-        Assert.Equal("API-Schlüssel gültig!", de.GetProperty("Settings.ApiKeyValid").GetString());
-        Assert.Equal("Ungültiger API-Schlüssel", de.GetProperty("Settings.ApiKeyInvalid").GetString());
+        Assert.Equal("API key", en.GetProperty("Settings.ApiKey").GetString());
+        Assert.Equal("API-Schlüssel", de.GetProperty("Settings.ApiKey").GetString());
+        Assert.Equal("API-Schlüssel gültig.", de.GetProperty("Settings.ApiKeyValidShort").GetString());
+        Assert.Equal("Ungültiger Reson8-API-Schlüssel.", de.GetProperty("Settings.InvalidApiKey").GetString());
     }
 
     [Fact]

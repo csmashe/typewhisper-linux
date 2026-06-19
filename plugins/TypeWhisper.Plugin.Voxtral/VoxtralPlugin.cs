@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Voxtral;
 
-public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider
+public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.mistral.ai";
     private const string ModelId = "mistral-whisper";
@@ -61,7 +61,7 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException("Plugin not configured. Mistral API key required.");
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredMistralApiKeyRequired"));
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
@@ -78,6 +78,15 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     }
 
     internal string? ApiKey => _apiKey;
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
     {
@@ -112,15 +121,15 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
         [
             new(
                 "api-key",
-                "API key",
+                Loc.L("Settings.ApiKey"),
                 true,
                 null,
-                "Required for Voxtral transcription via Mistral."
+                Loc.L("Settings.ApiKeyDescription")
             ),
             new(
                 "selectedModel",
-                "Transcription model",
-                Description: "Choose the Voxtral model.",
+                Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: TranscriptionModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
@@ -158,12 +167,12 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            return new PluginSettingsValidationResult(false, "Enter an API key first.");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(_apiKey, ct);
         return valid
-            ? new PluginSettingsValidationResult(true, "API key is valid.")
-            : new PluginSettingsValidationResult(false, "API key is invalid.");
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
+            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
     }
 
     public void Dispose() => _httpClient.Dispose();

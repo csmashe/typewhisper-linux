@@ -1,0 +1,11 @@
+{
+  "Settings.Model": "Модель",
+  "Settings.ModelDescription": "Локальная модель Gemma для обработки LLM. При выборе модели она загружается (при необходимости) и загружается в память; загрузки могут занимать несколько гигабайт, а ход выполнения отображается в журнале плагина.",
+  "Settings.StreamResponses": "Потоковая передача ответов",
+  "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации локальной моделью, не дожидаясь полного ответа.",
+  "Settings.SelectModel": "Сначала выберите модель.",
+  "Settings.ModelReady": "Модель загружена и готова.",
+  "Settings.ModelSelectedNotLoaded": "Модель выбрана, но ещё не загружена.",
+  "Manifest.Name": "Gemma 4 (локально)",
+  "Manifest.Description": "Запуск Google Gemma 4 локально через Ollama или любой OpenAI-совместимый сервер"
+}

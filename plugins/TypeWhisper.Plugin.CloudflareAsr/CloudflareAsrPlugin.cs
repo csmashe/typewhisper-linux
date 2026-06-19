@@ -8,7 +8,8 @@ namespace TypeWhisper.Plugin.CloudflareAsr;
 
 public sealed partial class CloudflareAsrPlugin
     : ITranscriptionEnginePlugin,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
     private IPluginHostServices? _host;
@@ -153,6 +154,16 @@ public sealed partial class CloudflareAsrPlugin
         _httpClient.Dispose();
     }
 
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+
     internal async Task SetAccountIdAsync(string accountId)
     {
         _accountId = string.IsNullOrWhiteSpace(accountId) ? null : accountId.Trim();
@@ -184,18 +195,24 @@ public sealed partial class CloudflareAsrPlugin
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [
-            new("account-id", "Account ID", false, null, "Required Cloudflare account identifier."),
+            new(
+                "account-id",
+                Loc.L("Settings.AccountId"),
+                false,
+                null,
+                Loc.L("Settings.AccountIdDescription")
+            ),
             new(
                 "api-token",
-                "API token",
+                Loc.L("Settings.ApiToken"),
                 true,
                 null,
-                "Cloudflare API token with Workers AI access."
+                Loc.L("Settings.ApiTokenDescription")
             ),
             new(
                 "selectedModel",
-                "Transcription model",
-                Description: "Choose the Cloudflare ASR model.",
+                Loc.L("Settings.TranscriptionModel"),
+                Description: Loc.L("Settings.ModelDescription"),
                 Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
@@ -238,15 +255,12 @@ public sealed partial class CloudflareAsrPlugin
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(
                     false,
-                    "Enter both Account ID and API token first."
+                    Loc.L("Settings.EnterAccountIdAndApiToken")
                 )
             );
 
         return Task.FromResult<PluginSettingsValidationResult?>(
-            new PluginSettingsValidationResult(
-                true,
-                "Credentials saved. Remote validation is not implemented yet."
-            )
+            new PluginSettingsValidationResult(true, Loc.L("Settings.CredentialsSaved"))
         );
     }
 }

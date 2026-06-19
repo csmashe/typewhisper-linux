@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using System.Diagnostics;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -31,7 +32,7 @@ public partial class DictionarySection : UserControl
             var file = await topLevel.StorageProvider.SaveFilePickerAsync(
                 new FilePickerSaveOptions
                 {
-                    Title = "Export dictionary",
+                    Title = Loc.Instance["Dialog.ExportDictionary"],
                     SuggestedFileName = "typewhisper-dictionary.csv",
                     DefaultExtension = "csv",
                     FileTypeChoices = [new FilePickerFileType("CSV") { Patterns = ["*.csv"] }]
@@ -72,7 +73,7 @@ public partial class DictionarySection : UserControl
             var files = await topLevel.StorageProvider.OpenFilePickerAsync(
                 new FilePickerOpenOptions
                 {
-                    Title = "Import dictionary",
+                    Title = Loc.Instance["Dialog.ImportDictionary"],
                     AllowMultiple = false,
                     FileTypeFilter = [new FilePickerFileType("CSV") { Patterns = ["*.csv"] }]
                 }

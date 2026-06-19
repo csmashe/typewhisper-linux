@@ -1,0 +1,11 @@
+{
+  "Settings.Model": "Modelo",
+  "Settings.ModelDescription": "Modelo Gemma local que se usa para el procesamiento de LLM. Al seleccionar un modelo se descarga (si es necesario) y se carga; las descargas pueden ocupar varios gigabytes y el progreso se muestra en el registro del plugin.",
+  "Settings.StreamResponses": "Transmitir respuestas",
+  "Settings.StreamResponsesDescription": "Muestra la salida de la acción del prompt token a token mientras el modelo local la genera, en lugar de esperar a la respuesta completa.",
+  "Settings.SelectModel": "Selecciona primero un modelo.",
+  "Settings.ModelReady": "Modelo cargado y listo.",
+  "Settings.ModelSelectedNotLoaded": "Modelo seleccionado, pero aún no cargado.",
+  "Manifest.Name": "Gemma 4 (Local)",
+  "Manifest.Description": "Ejecuta Google Gemma 4 localmente mediante Ollama o cualquier servidor compatible con OpenAI"
+}

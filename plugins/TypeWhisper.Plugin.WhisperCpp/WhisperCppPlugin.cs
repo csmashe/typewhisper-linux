@@ -12,7 +12,8 @@ namespace TypeWhisper.Plugin.WhisperCpp;
 public sealed class WhisperCppPlugin
     : ITypeWhisperPlugin,
         ITranscriptionEnginePlugin,
-        IPluginSettingsProvider
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string NoSpeechThresholdKey = "noSpeechThreshold";
     private const float DefaultNoSpeechThreshold = 0.6f;
@@ -194,6 +195,16 @@ public sealed class WhisperCppPlugin
     public string ProviderId => "whisper-cpp";
     public string ProviderDisplayName => "Local (whisper.cpp)";
     public bool IsConfigured => true;
+
+    private IPluginLocalization? _injectedLocalization;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // Prefer the host's localization once activated; fall back to the catalog
+    // injected at load so settings labels/validation resolve even when this
+    // plugin is disabled (never activated, so _host is null).
+    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => true;
     public bool SupportsModelDownload => true;
@@ -572,12 +583,9 @@ public sealed class WhisperCppPlugin
         [
             new(
                 Key: NoSpeechThresholdKey,
-                Label: "No-speech threshold",
+                Label: Loc.L("Settings.NoSpeechThreshold"),
                 Placeholder: DefaultNoSpeechThreshold.ToString(CultureInfo.InvariantCulture),
-                Description: "0.0 to 1.0. Segments whose no-speech probability exceeds this value "
-                    + "are dropped so silent gaps don't get transcribed as hallucinated phrases "
-                    + "(commonly \"Thank you.\"). Lower = more aggressive filtering. "
-                    + "Default 0.6 matches whisper.cpp's own default. Leave blank to use the default.",
+                Description: Loc.L("Settings.NoSpeechThresholdDescription"),
                 Kind: PluginSettingKind.Text
             ),
         ];
@@ -639,7 +647,10 @@ public sealed class WhisperCppPlugin
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(
                     true,
-                    $"Using default threshold {DefaultNoSpeechThreshold.ToString(CultureInfo.InvariantCulture)}."
+                    Loc.L(
+                        "Settings.UsingDefaultThreshold",
+                        DefaultNoSpeechThreshold.ToString(CultureInfo.InvariantCulture)
+                    )
                 )
             );
 
@@ -650,14 +661,17 @@ public sealed class WhisperCppPlugin
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(
                     true,
-                    $"Threshold set to {parsed.ToString(CultureInfo.InvariantCulture)}."
+                    Loc.L(
+                        "Settings.ThresholdSet",
+                        parsed.ToString(CultureInfo.InvariantCulture)
+                    )
                 )
             );
 
         return Task.FromResult<PluginSettingsValidationResult?>(
             new PluginSettingsValidationResult(
                 false,
-                "No-speech threshold must be a number between 0.0 and 1.0."
+                Loc.L("Settings.ThresholdInvalid")
             )
         );
     }

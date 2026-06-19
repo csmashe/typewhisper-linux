@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
+             xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.GeneralSection"
              x:DataType="vm:GeneralSectionViewModel">
     <UserControl.Styles>
@@ -22,7 +23,7 @@
         <StackPanel Margin="28"
                     MaxWidth="980"
                     Spacing="18">
-            <TextBlock Text="Language"
+            <TextBlock Text="{loc:Str General.Language}"
                        Classes="section-title" />
 
             <Border Classes="panel">
@@ -30,7 +31,7 @@
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
-                            <TextBlock Text="Interface Language"
+                            <TextBlock Text="{loc:Str General.UiLanguage}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
@@ -39,7 +40,7 @@
                                       SelectedItem="{Binding SelectedUiLanguageOption}"
                                       IsEnabled="{Binding IsUiLanguageSupported}">
                                 <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:UiLanguageOption">
+                                    <DataTemplate x:DataType="loc:UiLanguageOption">
                                         <TextBlock Text="{Binding DisplayName}" />
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
@@ -50,14 +51,14 @@
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
-                        <TextBlock Text="{Binding UiLanguageSupportMessage}"
+                        <TextBlock Text="{loc:Str General.UiLanguageHint}"
                                    FontSize="12"
                                    Foreground="#8A9AAE" />
                     </Border>
                 </Grid>
             </Border>
 
-            <TextBlock Text="Startup"
+            <TextBlock Text="{loc:Str General.Startup}"
                        Classes="section-title" />
 
             <Border Classes="panel">
@@ -65,7 +66,7 @@
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
-                            <TextBlock Text="Start automatically at system startup"
+                            <TextBlock Text="{loc:Str General.Autostart}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
@@ -77,14 +78,14 @@
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
-                        <TextBlock Text="TypeWhisper starts automatically when you log in."
+                        <TextBlock Text="{loc:Str General.AutostartHint}"
                                    FontSize="12"
                                    Foreground="#8A9AAE" />
                     </Border>
                 </Grid>
             </Border>
 
-            <TextBlock Text="Window"
+            <TextBlock Text="{loc:Str General.Window}"
                        Classes="section-title" />
 
             <Border Classes="panel">
@@ -92,7 +93,7 @@
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
-                            <TextBlock Text="Close button hides to tray"
+                            <TextBlock Text="{loc:Str General.CloseToTray}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
@@ -107,12 +108,12 @@
                             Padding="18,12">
                         <StackPanel Spacing="6">
                             <TextBlock
-                                Text="On: the close (X) button hides the window to the tray icon — it leaves the dock and the app keeps running, reachable from the tray menu. Off: the close button quits TypeWhisper."
+                                Text="{loc:Str General.CloseToTrayHint}"
                                 FontSize="12"
                                 Foreground="#8A9AAE"
                                 TextWrapping="Wrap" />
                             <TextBlock IsVisible="{Binding IsTrayUnavailable}"
-                                       Text="No system tray was detected on this desktop, so this option is unavailable — the close button will quit TypeWhisper. On GNOME, install the AppIndicator extension to enable it."
+                                       Text="{loc:Str General.CloseToTrayUnavailableHint}"
                                        FontSize="12"
                                        Foreground="#E0A845"
                                        TextWrapping="Wrap" />
@@ -121,7 +122,7 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="Services"
+            <TextBlock Text="{loc:Str General.Services}"
                        Classes="section-title" />
 
             <Border Classes="panel">
@@ -129,7 +130,7 @@
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
-                            <TextBlock Text="Enable local API"
+                            <TextBlock Text="{loc:Str General.LocalApi}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
@@ -145,7 +146,7 @@
                             Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Port"
+                            <TextBlock Text="{loc:Str General.Port}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <NumericUpDown Grid.Column="1"
@@ -163,7 +164,7 @@
                             Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
-                            <TextBlock Text="Bearer token"
+                            <TextBlock Text="{loc:Str General.BearerToken}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <TextBox Grid.Column="1"
@@ -183,7 +184,7 @@
                 </Grid>
             </Border>
 
-            <TextBlock Text="API examples"
+            <TextBlock Text="{loc:Str General.ApiExamples}"
                        Classes="section-title" />
 
             <Border Classes="panel"
@@ -202,7 +203,7 @@
                 </ItemsControl>
             </Border>
 
-            <TextBlock Text="Command line"
+            <TextBlock Text="{loc:Str General.CommandLine}"
                        Classes="section-title"
                        IsVisible="{Binding ApiServerEnabled}" />
 
@@ -224,9 +225,9 @@
                             <StackPanel Grid.Column="1"
                                         Orientation="Horizontal"
                                         Spacing="8">
-                                <Button Content="Refresh"
+                                <Button Content="{loc:Str Common.Refresh}"
                                         Command="{Binding RefreshCliStateCommand}" />
-                                <Button Content="Install"
+                                <Button Content="{loc:Str Common.Install}"
                                         Command="{Binding InstallCliCommand}"
                                         IsEnabled="{Binding CliBundledAvailable}" />
                             </StackPanel>
@@ -239,7 +240,7 @@
                     <Border Grid.Row="2"
                             Padding="18,12">
                         <TextBlock
-                            Text="Installs the bundled CLI launcher to ~/.local/bin/typewhisper. Use the bearer token above through TYPEWHISPER_API_TOKEN or --token."
+                            Text="{loc:Str General.CliInstallHint}"
                             FontSize="12"
                             Foreground="#8A9AAE"
                             TextWrapping="Wrap" />
