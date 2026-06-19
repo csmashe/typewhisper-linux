@@ -129,14 +129,29 @@ internal sealed class SherpaCudaRuntimeInstaller : ISherpaCudaRuntimeInstaller
     {
         using var stream = File.OpenRead(archivePath);
         using var reader = ReaderFactory.OpenReader(stream);
+        var destinationRoot = Path.GetFullPath(destinationDirectory);
 
         while (reader.MoveToNextEntry())
         {
             if (reader.Entry.IsDirectory)
                 continue;
 
+            var entryKey = reader.Entry.Key;
+            if (string.IsNullOrWhiteSpace(entryKey) || Path.IsPathRooted(entryKey))
+                throw new InvalidOperationException(
+                    $"The sherpa-onnx CUDA runtime archive contains an unsafe path: {entryKey}");
+
+            var destinationPath = Path.GetFullPath(Path.Join(destinationRoot, entryKey));
+            if (!destinationPath.StartsWith(
+                    destinationRoot + Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"The sherpa-onnx CUDA runtime archive contains an unsafe path: {entryKey}");
+            }
+
             reader.WriteEntryToDirectory(
-                destinationDirectory,
+                destinationRoot,
                 new SharpCompress.Common.ExtractionOptions
                 {
                     ExtractFullPath = true,

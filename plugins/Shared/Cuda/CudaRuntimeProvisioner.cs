@@ -68,6 +68,8 @@ internal sealed class CudaRuntimeProvisioner
     private static readonly object s_preloadLock = new();
     private static readonly Dictionary<string, IntPtr> s_preloadedLibraries = new(
         StringComparer.Ordinal);
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> s_ldConfigLibraries =
+        new(BuildLdConfigMap, LazyThreadSafetyMode.ExecutionAndPublication);
 
     private readonly string _bundleDirectory;
     private readonly HttpClient _httpClient;
@@ -311,6 +313,15 @@ internal sealed class CudaRuntimeProvisioner
 
     private static string? TryResolveLibraryWithLdConfig(string libraryName)
     {
+        return s_ldConfigLibraries.Value.TryGetValue(libraryName, out var path)
+            ? path
+            : null;
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildLdConfigMap()
+    {
+        var libraries = new Dictionary<string, string>(StringComparer.Ordinal);
+
         try
         {
             using var process = Process.Start(
@@ -322,32 +333,33 @@ internal sealed class CudaRuntimeProvisioner
                 });
 
             if (process is null)
-                return null;
+                return libraries;
 
             var output = process.StandardOutput.ReadToEnd();
             process.WaitForExit(2000);
 
             foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
-                if (!line.Contains(libraryName, StringComparison.Ordinal))
-                    continue;
-
                 var marker = "=>";
                 var markerIndex = line.IndexOf(marker, StringComparison.Ordinal);
                 if (markerIndex < 0)
                     continue;
 
                 var path = line[(markerIndex + marker.Length)..].Trim();
-                if (File.Exists(path))
-                    return path;
+                if (!File.Exists(path))
+                    continue;
+
+                var name = line[..markerIndex].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(name) && !libraries.ContainsKey(name))
+                    libraries[name] = path;
             }
         }
         catch
         {
-            return null;
+            return libraries;
         }
 
-        return null;
+        return libraries;
     }
 
     private static IEnumerable<string> EnumerateLibraryDirectories()
@@ -382,26 +394,14 @@ internal sealed class CudaRuntimeProvisioner
 
     private static IEnumerable<string> EnumerateCudaDirectories()
     {
-        var roots = new[]
-        {
-            "/usr/local/cuda",
-            "/usr/local/cuda-12.9",
-            "/usr/local/cuda-12.8",
-            "/usr/local/cuda-12.7",
-            "/usr/local/cuda-12.6",
-            "/usr/local/cuda-12.5",
-            "/usr/local/cuda-12.4",
-            "/usr/local/cuda-12.3",
-            "/usr/local/cuda-12.2",
-            "/usr/local/cuda-12.1",
-            "/usr/local/cuda-12.0"
-        };
+        yield return "/usr/local/cuda/lib64";
+        yield return "/usr/local/cuda/targets/x86_64-linux/lib";
 
-        foreach (var root in roots)
+        for (var minor = 9; minor >= 0; minor--)
         {
             foreach (var suffix in new[] { "lib64", "targets/x86_64-linux/lib" })
             {
-                var directory = Path.Join(root, suffix);
+                var directory = Path.Join($"/usr/local/cuda-12.{minor}", suffix);
                 if (Directory.Exists(directory))
                     yield return directory;
             }

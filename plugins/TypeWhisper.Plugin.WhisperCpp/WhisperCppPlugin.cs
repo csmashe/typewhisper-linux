@@ -716,10 +716,21 @@ public sealed class WhisperCppPlugin
         var provisioner = _cudaRuntimeProvisioner
             ?? throw new InvalidOperationException("The CUDA runtime provisioner is not available.");
 
-        await provisioner.PreloadAsync(
-            [CudaRuntimeComponent.CudaRuntime, CudaRuntimeComponent.Cublas],
-            allowDownloads: false,
-            cancellationToken);
+        try
+        {
+            await provisioner.PreloadAsync(
+                [CudaRuntimeComponent.CudaRuntime, CudaRuntimeComponent.Cublas],
+                allowDownloads: false,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _accelerationStatus = new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Cpu,
+                "CUDA unavailable",
+                ex.Message);
+            throw;
+        }
     }
 
     // RuntimeOptions.RuntimeLibraryOrder is consulted once when the native library first loads.

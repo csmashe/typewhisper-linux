@@ -10,7 +10,7 @@ internal static class SherpaOnnxNativeRuntime
     private const int RtldGlobal = 0x100;
 
     private static readonly object Sync = new();
-    private static readonly List<IntPtr> Handles = [];
+    private static readonly Dictionary<string, IntPtr> Handles = new(StringComparer.Ordinal);
     private static bool _resolverRegistered;
     private static string? _cudaRuntimeDirectory;
 
@@ -95,6 +95,9 @@ internal static class SherpaOnnxNativeRuntime
             if (!File.Exists(path))
                 continue;
 
+            if (Handles.ContainsKey(path))
+                continue;
+
             var handle = dlopen(path, RtldNow | RtldGlobal);
             if (handle == IntPtr.Zero)
             {
@@ -103,7 +106,7 @@ internal static class SherpaOnnxNativeRuntime
                     $"Could not load sherpa-onnx CUDA runtime library {path}: {error ?? "unknown error"}");
             }
 
-            Handles.Add(handle);
+            Handles[path] = handle;
         }
     }
 

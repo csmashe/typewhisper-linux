@@ -427,10 +427,14 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             SherpaOnnxNativeRuntime.ConfigureCudaRuntime(_cudaRuntimeInstaller.RuntimeDirectory);
         }
 
-        if (_loadedNativeProvider is not null
-            && !string.Equals(_loadedNativeProvider, desiredProvider, StringComparison.OrdinalIgnoreCase))
+        string? loadedNativeProvider;
+        lock (_sync)
+            loadedNativeProvider = _loadedNativeProvider;
+
+        if (loadedNativeProvider is not null
+            && !string.Equals(loadedNativeProvider, desiredProvider, StringComparison.OrdinalIgnoreCase))
         {
-            _accelerationStatus = CreateRestartRequiredStatus(_loadedNativeProvider, desiredProvider);
+            _accelerationStatus = CreateRestartRequiredStatus(loadedNativeProvider, desiredProvider);
             throw new InvalidOperationException(_accelerationStatus.Detail);
         }
 
@@ -459,6 +463,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     private string GetModelDirectory(string modelId)
     {
+        // Model IDs are intentionally flat; Path.GetFileName prevents path traversal.
         var safeModelId = Path.GetFileName(modelId);
         if (string.IsNullOrWhiteSpace(safeModelId) || safeModelId is "." or "..")
             throw new ArgumentException("Model ID must not be empty.", nameof(modelId));
