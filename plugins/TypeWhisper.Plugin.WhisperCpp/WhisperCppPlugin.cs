@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text;
+using TypeWhisper.Plugins.Shared.Cuda;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using Whisper.net;
@@ -176,8 +179,10 @@ public sealed class WhisperCppPlugin
     ];
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly HttpClient _httpClient = new();
     private IPluginHostServices? _host;
     private WhisperFactory? _factory;
+    private CudaRuntimeProvisioner? _cudaProvisioner;
     private string? _selectedModelId;
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
@@ -433,6 +438,13 @@ public sealed class WhisperCppPlugin
         if (!File.Exists(modelPath))
             throw new FileNotFoundException($"Model files not found for: {modelId}", modelPath);
 
+        // Make sure cudart/cuBLAS are present and preloaded before whisper.cpp's
+        // native CUDA runtime loads. A no-op when the host already provides them
+        // (the usual case — the host's CUDA preflight gates on these very libs),
+        // so it never blocks the CPU path or triggers a surprise download there.
+        if (string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase))
+            await EnsureCudaRuntimeReadyAsync(ct).ConfigureAwait(false);
+
         await _gate.WaitAsync(ct);
         try
         {
@@ -577,6 +589,42 @@ public sealed class WhisperCppPlugin
     {
         DisposeFactoryUnsafe();
         _gate.Dispose();
+        _httpClient.Dispose();
+    }
+
+    // Ensures whisper.cpp's CUDA dependencies (cudart + cuBLAS) are present and
+    // preloaded RTLD_GLOBAL via the shared provisioner. The host's preflight
+    // already requires these libraries before resolving to CUDA, so on a normal
+    // CUDA box this only re-preloads what's already loaded; it exists so the
+    // dependency is explicit and so the shared cache can supply them if a future
+    // driver-only path is enabled.
+    private async Task EnsureCudaRuntimeReadyAsync(CancellationToken ct)
+    {
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            return;
+
+        _cudaProvisioner ??= new CudaRuntimeProvisioner(
+            CudaRuntimeProvisioner.DefaultCacheRoot(),
+            _httpClient,
+            msg => _host?.Log(PluginLogLevel.Info, msg)
+        );
+
+        try
+        {
+            await _cudaProvisioner
+                .EnsureReadyAsync(CudaRuntimeProfile.WhisperCublas, progress: null, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Don't block the load: if the host already has the libs visible (the
+            // common case) the native factory will still find them. Surface the
+            // reason for diagnostics and let WhisperFactory report any real failure.
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"CUDA runtime preload reported an issue: {ex.Message}"
+            );
+        }
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>

@@ -16,6 +16,12 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- Shared on-demand CUDA provisioner, compiled into the plugin assembly. -->
+        <Compile Include="..\Shared\Cuda\CudaRuntimeProvisioner.cs"
+                 Link="Shared\Cuda\CudaRuntimeProvisioner.cs" />
+    </ItemGroup>
+
+    <ItemGroup>
         <Content Include="manifest.json">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>

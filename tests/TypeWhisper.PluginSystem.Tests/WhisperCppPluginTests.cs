@@ -57,21 +57,30 @@ public class WhisperCppPluginTests
 public class SherpaOnnxPluginTests
 {
     [Fact]
-    public void SupportedAccelerationBackends_IsCpuOnly()
+    public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
     {
         var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
 
-        Assert.Single(plugin.SupportedAccelerationBackends);
-        Assert.Equal(
-            TranscriptionAccelerationBackend.Cpu,
-            plugin.SupportedAccelerationBackends[0]);
+        Assert.Contains(TranscriptionAccelerationBackend.Cpu, plugin.SupportedAccelerationBackends);
+        Assert.Contains(
+            TranscriptionAccelerationBackend.NvidiaCuda,
+            plugin.SupportedAccelerationBackends);
     }
 
     [Fact]
-    public async Task SetAccelerationPreference_NvidiaCuda_LogsWarningAndStaysCpu()
+    public void DefaultAccelerationStatus_ReportsCpu()
     {
         var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
-        var host = CreateHost(out var logEntries);
+
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
+    }
+
+    [Fact]
+    public async Task SetAccelerationPreference_NvidiaCuda_TracksPreferenceAndShowsPending()
+    {
+        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        var host = CreateHost(out _);
         await plugin.ActivateAsync(host);
 
         plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
@@ -79,12 +88,10 @@ public class SherpaOnnxPluginTests
         Assert.Equal(
             TranscriptionAccelerationPreference.NvidiaCuda,
             plugin.AccelerationPreference);
-        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
-        Assert.NotNull(plugin.AccelerationStatus.Detail);
-        Assert.Contains(
-            logEntries,
-            entry => entry.level == PluginLogLevel.Warning
-                && entry.message.Contains("CUDA", StringComparison.OrdinalIgnoreCase));
+        // Pending until the next model load actually provisions + pins the runtime.
+        Assert.Equal(
+            TranscriptionAccelerationBackend.NvidiaCuda,
+            plugin.AccelerationStatus.ActiveBackend);
     }
 
     private static IPluginHostServices CreateHost(
