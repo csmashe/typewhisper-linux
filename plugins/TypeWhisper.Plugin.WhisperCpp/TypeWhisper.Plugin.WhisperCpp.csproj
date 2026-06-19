@@ -9,6 +9,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <Compile Include="..\Shared\Cuda\CudaRuntimeProvisioner.cs" Link="Shared\Cuda\CudaRuntimeProvisioner.cs" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
         <PackageReference Include="Whisper.net" Version="1.8.1" />
         <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" />

@@ -1,6 +1,4 @@
-using Moq;
 using TypeWhisper.Plugin.WhisperCpp;
-using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
@@ -57,22 +55,53 @@ public class WhisperCppPluginTests
 public class SherpaOnnxPluginTests
 {
     [Fact]
-    public void SupportedAccelerationBackends_IsCpuOnly()
+    public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
     {
         var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
 
-        Assert.Single(plugin.SupportedAccelerationBackends);
-        Assert.Equal(
+        Assert.Contains(
             TranscriptionAccelerationBackend.Cpu,
-            plugin.SupportedAccelerationBackends[0]);
+            plugin.SupportedAccelerationBackends);
+        Assert.Contains(
+            TranscriptionAccelerationBackend.NvidiaCuda,
+            plugin.SupportedAccelerationBackends);
     }
 
     [Fact]
-    public async Task SetAccelerationPreference_NvidiaCuda_LogsWarningAndStaysCpu()
+    public void SetAccelerationPreference_Cpu_TracksPreferenceAndReportsCpu()
     {
         var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
-        var host = CreateHost(out var logEntries);
-        await plugin.ActivateAsync(host);
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+
+        Assert.Equal(
+            TranscriptionAccelerationPreference.Cpu,
+            plugin.AccelerationPreference);
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
+    }
+
+    [Fact]
+    public void SetAccelerationPreference_NvidiaCuda_TracksPreferenceAndShowsPending()
+    {
+        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+
+        Assert.Equal(
+            TranscriptionAccelerationPreference.NvidiaCuda,
+            plugin.AccelerationPreference);
+        Assert.Equal(
+            TranscriptionAccelerationBackend.NvidiaCuda,
+            plugin.AccelerationStatus.ActiveBackend);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
+    }
+
+    [Fact]
+    public void SetAccelerationPreference_NvidiaCuda_WhenRuntimePinnedToCpu_RequiresRestart()
+    {
+        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        plugin.MarkNativeRuntimeLoadedForTests("cpu");
 
         plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
 
@@ -80,23 +109,33 @@ public class SherpaOnnxPluginTests
             TranscriptionAccelerationPreference.NvidiaCuda,
             plugin.AccelerationPreference);
         Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.True(plugin.AccelerationStatus.RequiresRestart);
         Assert.NotNull(plugin.AccelerationStatus.Detail);
         Assert.Contains(
-            logEntries,
-            entry => entry.level == PluginLogLevel.Warning
-                && entry.message.Contains("CUDA", StringComparison.OrdinalIgnoreCase));
+            "restart",
+            plugin.AccelerationStatus.Detail,
+            StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IPluginHostServices CreateHost(
-        out List<(PluginLogLevel level, string message)> logEntries)
+    [Fact]
+    public void SetAccelerationPreference_Cpu_WhenRuntimePinnedToCuda_RequiresRestart()
     {
-        var entries = new List<(PluginLogLevel, string)>();
-        logEntries = entries;
+        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        plugin.MarkNativeRuntimeLoadedForTests("cuda");
 
-        var host = new Mock<IPluginHostServices>();
-        host.Setup(h => h.PluginDataDirectory).Returns(Path.GetTempPath());
-        host.Setup(h => h.Log(It.IsAny<PluginLogLevel>(), It.IsAny<string>()))
-            .Callback<PluginLogLevel, string>((lvl, msg) => entries.Add((lvl, msg)));
-        return host.Object;
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+
+        Assert.Equal(
+            TranscriptionAccelerationPreference.Cpu,
+            plugin.AccelerationPreference);
+        Assert.Equal(
+            TranscriptionAccelerationBackend.NvidiaCuda,
+            plugin.AccelerationStatus.ActiveBackend);
+        Assert.True(plugin.AccelerationStatus.RequiresRestart);
+        Assert.NotNull(plugin.AccelerationStatus.Detail);
+        Assert.Contains(
+            "restart",
+            plugin.AccelerationStatus.Detail,
+            StringComparison.OrdinalIgnoreCase);
     }
 }

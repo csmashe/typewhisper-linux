@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using System.Text;
+using TypeWhisper.Plugin.Shared.Cuda;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using Whisper.net;
@@ -176,7 +177,9 @@ public sealed class WhisperCppPlugin
     ];
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly HttpClient _httpClient = new();
     private IPluginHostServices? _host;
+    private CudaRuntimeProvisioner? _cudaRuntimeProvisioner;
     private WhisperFactory? _factory;
     private string? _selectedModelId;
     private string? _loadedModelId;
@@ -231,6 +234,10 @@ public sealed class WhisperCppPlugin
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
+        _cudaRuntimeProvisioner = new CudaRuntimeProvisioner(
+            host.PluginAssetDirectory,
+            _httpClient,
+            host);
         _selectedModelId = host.GetSetting<string>("selectedModel");
         _noSpeechThreshold = ReadNoSpeechThreshold(host);
         host.Log(PluginLogLevel.Info, "Activated");
@@ -438,6 +445,7 @@ public sealed class WhisperCppPlugin
         {
             DisposeFactoryUnsafe();
             EnsureRuntimeLibraryOrderInitialized();
+            await EnsureCudaRuntimeReadyAsync(ct);
             _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
             _loadedModelId = modelId;
             _selectedModelId = modelId;
@@ -576,6 +584,7 @@ public sealed class WhisperCppPlugin
     public void Dispose()
     {
         DisposeFactoryUnsafe();
+        _httpClient.Dispose();
         _gate.Dispose();
     }
 
@@ -698,6 +707,20 @@ public sealed class WhisperCppPlugin
         {
             UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase),
         };
+
+    private async Task EnsureCudaRuntimeReadyAsync(CancellationToken cancellationToken)
+    {
+        if (!string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var provisioner = _cudaRuntimeProvisioner
+            ?? throw new InvalidOperationException("The CUDA runtime provisioner is not available.");
+
+        await provisioner.PreloadAsync(
+            [CudaRuntimeComponent.CudaRuntime, CudaRuntimeComponent.Cublas],
+            allowDownloads: false,
+            cancellationToken);
+    }
 
     // RuntimeOptions.RuntimeLibraryOrder is consulted once when the native library first loads.
     // Later changes are ignored for the process lifetime, so set it once before the first factory.
