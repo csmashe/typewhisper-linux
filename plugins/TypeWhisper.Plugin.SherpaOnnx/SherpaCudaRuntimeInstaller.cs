@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO.Compression;
 using SharpCompress.Readers;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
