@@ -38,6 +38,18 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
         [TranscriptionAccelerationBackend.Cpu];
 
+    /// <summary>
+    ///     Whether this engine downloads and preloads its own CUDA runtime on demand
+    ///     during <see cref="LoadModelAsync" />, and falls back to CPU itself
+    ///     (surfacing the reason via <see cref="AccelerationStatus" />) when the GPU
+    ///     path can't be honoured. When <c>true</c>, the host must not reject an
+    ///     explicit <see cref="TranscriptionAccelerationBackend.NvidiaCuda" /> load
+    ///     just because the CUDA runtime libraries aren't already installed on the
+    ///     host — the plugin provisions them. Default: <c>false</c> (the engine relies
+    ///     on a host-provided CUDA runtime).
+    /// </summary>
+    bool ProvisionsCudaRuntimeOnDemand => false;
+
     /// <summary>Acceleration preference last requested by the host. Default: Auto.</summary>
     TranscriptionAccelerationPreference AccelerationPreference =>
         TranscriptionAccelerationPreference.Auto;

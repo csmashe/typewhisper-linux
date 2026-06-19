@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using Moq;
 using TypeWhisper.Plugin.WhisperCpp;
 using TypeWhisper.PluginSDK;
@@ -117,6 +119,42 @@ public class WhisperCppPluginTests
         Assert.Equal(installer.NativeDirectory, loaderSearchDir);
         Assert.False(installer.IsInstalled); // nothing extracted into a fresh temp root
     }
+
+    // The csproj pins Whisper.net / Whisper.net.Runtime, and the on-demand CUDA build
+    // is the whisper.net.runtime.cuda.linux nupkg at WhisperCudaRuntimeInstaller.
+    // RuntimeVersion. whisper.cpp's native ABI isn't stable across releases, so if
+    // these drift the downloaded CUDA runtime fails to load against the managed
+    // binding. Fail the build the moment they diverge, as the csproj comment promises.
+    [Fact]
+    public void WhisperNetPackageVersions_StayInLockStepWithCudaRuntimeVersion()
+    {
+        var csproj = File.ReadAllText(WhisperCppCsprojPath());
+
+        var managed = Regex.Match(
+            csproj,
+            """<PackageReference\s+Include="Whisper\.net"\s+Version="([^"]+)"\s*/>""");
+        var runtime = Regex.Match(
+            csproj,
+            """<PackageReference\s+Include="Whisper\.net\.Runtime"\s+Version="([^"]+)"\s*/>""");
+
+        Assert.True(managed.Success, "Could not find the Whisper.net <PackageReference> in the csproj.");
+        Assert.True(runtime.Success, "Could not find the Whisper.net.Runtime <PackageReference> in the csproj.");
+
+        Assert.Equal(WhisperCudaRuntimeInstaller.RuntimeVersion, managed.Groups[1].Value);
+        Assert.Equal(WhisperCudaRuntimeInstaller.RuntimeVersion, runtime.Groups[1].Value);
+    }
+
+    // Resolve the plugin csproj relative to THIS test file so the assertion doesn't
+    // depend on the csproj being copied to test output (mirrors LocalizationResourcesTests).
+    private static string WhisperCppCsprojPath([CallerFilePath] string thisFile = "")
+    {
+        var testDir = Path.GetDirectoryName(thisFile)!;
+        return Path.GetFullPath(
+            Path.Combine(
+                testDir, "..", "..",
+                "plugins", "TypeWhisper.Plugin.WhisperCpp",
+                "TypeWhisper.Plugin.WhisperCpp.csproj"));
+    }
 }
 
 public class SherpaOnnxPluginTests
@@ -197,6 +235,29 @@ public class SherpaOnnxPluginTests
             "restart",
             plugin.AccelerationStatus.Detail!,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    // The GPU runtime tarball is downloaded then dlopen'd, so its integrity is pinned
+    // by SHA-256 and verified before extraction. Lock in the fail-closed contract: a
+    // download whose bytes don't match the pinned digest must throw (so it never
+    // reaches extraction), rather than silently caching unverified native code.
+    [Fact]
+    public void SherpaCudaRuntimeInstaller_VerifySha256_RejectsArtifactNotMatchingPinnedDigest()
+    {
+        var path = Path.Join(
+            Path.GetTempPath(),
+            "tw-sherpa-cuda-bad-" + Guid.NewGuid().ToString("N") + ".tmp");
+        File.WriteAllText(path, "not the real sherpa-onnx GPU tarball");
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.VerifySha256(path));
+            Assert.Contains("Checksum mismatch", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     private static IPluginHostServices CreateHost(

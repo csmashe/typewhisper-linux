@@ -219,6 +219,10 @@ public sealed class WhisperCppPlugin
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
 
+    // LoadModelAsync downloads + preloads the CUDA runtime on demand and falls back to
+    // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
+    public bool ProvisionsCudaRuntimeOnDemand => true;
+
     public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
 
     public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
@@ -511,6 +515,17 @@ public sealed class WhisperCppPlugin
                 _computeBackend = desiredBackend;
             }
 
+            // Commit the process-wide loader path only now that the backend choice has
+            // survived the re-check. Setting it during provisioning (outside the gate)
+            // would leave RuntimeOptions.LibraryPath pointing at the CUDA cache if the
+            // user switched to CPU mid-download and we aborted the load above — a later
+            // CPU load would then resolve the runtime against the wrong directory.
+            // Harmless to (re)set when already pinned: LibraryPath is consulted only at
+            // the one-time native load.
+            if (string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+                && _whisperCudaInstaller is not null)
+                RuntimeOptions.LibraryPath = _whisperCudaInstaller.LibraryPath;
+
             DisposeFactoryUnsafe();
             ApplyRuntimeLibraryOrderUnsafe();
 
@@ -703,10 +718,12 @@ public sealed class WhisperCppPlugin
     //   1. the CUDA math libraries (cudart + cuBLAS) it links against, preloaded
     //      RTLD_GLOBAL via the shared provisioner (downloaded if the host lacks them);
     //   2. the ~409 MB CUDA native build itself, fetched from nuget.org and cached
-    //      rather than bundled in every package;
-    //   3. RuntimeOptions.LibraryPath pointed at that cache so Whisper.net's own
-    //      loader finds the runtime when the first factory triggers the native load.
-    // Throws on any failure so the caller can fall back to a working CPU load.
+    //      rather than bundled in every package.
+    // LoadModelAsync points RuntimeOptions.LibraryPath at the cache itself, but only
+    // after its post-provision backend re-check confirms CUDA is still the chosen
+    // backend — so a backend switch during this (slow) download can't leave that
+    // process-wide path committed to a load we then abort. Throws on any failure so
+    // the caller can fall back to a working CPU load.
     private async Task EnsureCudaRuntimeReadyAsync(CancellationToken ct)
     {
         if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
@@ -734,10 +751,6 @@ public sealed class WhisperCppPlugin
         await _whisperCudaInstaller
             .EnsureInstalledAsync(LogProgress("whisper.cpp GPU runtime"), ct)
             .ConfigureAwait(false);
-
-        // 3. Point Whisper.net's loader at the downloaded runtime. Must be set before
-        //    the first WhisperFactory triggers the (once-per-process) native load.
-        RuntimeOptions.LibraryPath = _whisperCudaInstaller.LibraryPath;
     }
 
     // Logs download progress in coarse 10% steps so a first-time multi-hundred-MB
@@ -999,12 +1012,16 @@ public sealed class WhisperCppPlugin
 
     // An explicit NVIDIA CUDA request that couldn't be honoured (no usable GPU, a
     // failed runtime download, missing CUDA libraries): the model still loaded on
-    // CPU, so report CPU as active and carry the reason for the UI to surface.
+    // CPU, so report CPU as active and carry the reason for the UI to surface. The
+    // native runtime is now pinned to CPU for the process, so retrying CUDA needs a
+    // restart — flag it, matching the requested-vs-loaded mismatch path (a later
+    // reload would otherwise re-derive RequiresRestart=true and flip this status).
     private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(string detail) =>
         new(
             TranscriptionAccelerationBackend.Cpu,
             "Using CPU",
-            $"CUDA unavailable: {detail}"
+            $"CUDA unavailable: {detail}",
+            RequiresRestart: true
         );
 
     private static void TryDeleteFile(string path)

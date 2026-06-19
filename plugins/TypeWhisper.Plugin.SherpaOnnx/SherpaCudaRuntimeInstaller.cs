@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net.Http;
+using System.Security.Cryptography;
 using SharpCompress.Readers;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
@@ -22,6 +23,15 @@ internal sealed class SherpaCudaRuntimeInstaller
 
     internal const string DownloadUrl =
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.23/" + AssetFileName;
+
+    // SHA-256 of that release asset, matching GitHub's published asset digest (and a
+    // local recompute of the served bytes). These .so files get dlopen'd into the
+    // TypeWhisper process and trusted on every later run, so guard the on-demand
+    // download against corruption or a swapped/tampered release asset before any of
+    // them is extracted — fail closed on mismatch. Mirrors the whisper.cpp and shared
+    // CUDA wheel paths, which both verify before extraction.
+    internal const string AssetSha256 =
+        "ac5400eb7971b7134d03429727ebdd702c23597e3721f4a3ade84815708d8c3e";
 
     // Approximate download size, used only as a progress denominator when the
     // server omits Content-Length.
@@ -95,6 +105,11 @@ internal sealed class SherpaCudaRuntimeInstaller
                 _log?.Invoke($"sherpa-onnx GPU runtime: downloading {AssetFileName}");
                 await DownloadAsync(tarballPath, progress, ct).ConfigureAwait(false);
 
+                // Verify before extracting so a corrupt/tampered download can't drop
+                // bad native .so files into the cache — code we then dlopen and trust
+                // on every later run.
+                VerifySha256(tarballPath);
+
                 _log?.Invoke("sherpa-onnx GPU runtime: extracting native libraries");
                 ExtractCoreRuntimeFiles(tarballPath);
             }
@@ -159,6 +174,20 @@ internal sealed class SherpaCudaRuntimeInstaller
                 lastReport = now;
             }
         }
+    }
+
+    // internal (not private) so a unit test can pin the fail-closed contract without
+    // a network download — a corrupt/swapped artifact must throw before extraction.
+    internal static void VerifySha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        var hash = Convert.ToHexString(SHA256.HashData(stream));
+        if (!string.Equals(hash, AssetSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Checksum mismatch for {AssetFileName} "
+                    + $"(expected {AssetSha256}, got {hash.ToLowerInvariant()}). The download may "
+                    + "be corrupt; clear the sherpa-onnx GPU runtime cache and retry."
+            );
     }
 
     // SharpCompress ReaderFactory streams a .tar.bz2 in a single forward pass

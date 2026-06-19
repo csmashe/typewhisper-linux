@@ -93,9 +93,11 @@ find "$PUBLISH_DIR" -type d \
 # Windows-native onnxruntime DLLs flat into the output root and per-plugin dirs,
 # not under a runtimes/win-* directory the prune above would catch. They are PE
 # binaries with no use on Linux — the managed Microsoft.ML.OnnxRuntime.dll loads
-# libonnxruntime.so instead — so strip them too. The lowercase "onnxruntime*"
-# glob never matches the managed wrapper, which keeps its Microsoft. prefix.
-find "$PUBLISH_DIR" -type f -name "onnxruntime*.dll" -delete
+# libonnxruntime.so instead — so strip them too. Match case-insensitively so a
+# differently-cased native drop (e.g. OnnxRuntime.dll) is pruned too; the glob is
+# anchored at the filename start, so it still never matches the managed wrapper,
+# which keeps its Microsoft. prefix.
+find "$PUBLISH_DIR" -type f -iname "onnxruntime*.dll" -delete
 
 # ---------- tar.gz (the JustWorks fallback) ----------
 echo "==> Building tar.gz"

@@ -94,6 +94,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
 
+    // LoadModelAsync downloads + preloads the CUDA runtime on demand and falls back to
+    // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
+    public bool ProvisionsCudaRuntimeOnDemand => true;
+
     public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
 
     public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
@@ -662,11 +666,16 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             ),
         };
 
+    // The CUDA request fell back to CPU, but the native ORT provider is now pinned to
+    // CPU for the process; retrying CUDA needs a restart. Flag it so the status stays
+    // consistent with the requested-vs-loaded mismatch path (which a later reload
+    // would otherwise re-derive as RequiresRestart=true).
     private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(string detail) =>
         new(
             TranscriptionAccelerationBackend.Cpu,
             "Using CPU",
-            $"CUDA unavailable: {detail}"
+            $"CUDA unavailable: {detail}",
+            RequiresRestart: true
         );
 
     private void EnsureCanaryLanguage(string? language, bool translate)

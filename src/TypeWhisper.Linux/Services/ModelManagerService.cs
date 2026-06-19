@@ -534,10 +534,11 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 TranscriptionAccelerationBackend.NvidiaCuda
             );
 
-            // CPU-only plugins (e.g. SherpaOnnx) handle a CUDA preference internally by
-            // falling back to CPU, so the preflight hard-error path is irrelevant and would
-            // break valid CPU loads on CUDA-less hosts. Always resolve Auto → Cpu locally
-            // so plugins never receive the unresolved Auto sentinel (SDK contract).
+            // CPU-only plugins (those that don't list NvidiaCuda) handle a CUDA
+            // preference internally by falling back to CPU, so the preflight hard-error
+            // path is irrelevant and would break valid CPU loads on CUDA-less hosts.
+            // Always resolve Auto → Cpu locally so plugins never receive the unresolved
+            // Auto sentinel (SDK contract).
             TranscriptionAccelerationPreference resolvedPreference;
             if (pluginSupportsCuda)
             {
@@ -559,13 +560,32 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 && resolvedPreference == TranscriptionAccelerationPreference.NvidiaCuda
             )
             {
-                var (ok, message) = CudaRuntimePreflight();
-                if (!ok)
+                if (plugin.ProvisionsCudaRuntimeOnDemand)
                 {
-                    // Explicit NvidiaCuda keeps the hard-error path so broken CUDA is visible.
-                    // Auto would have resolved to Cpu above; this branch is for explicit
-                    // requests (or the pathological double-preflight-inconsistency case).
-                    throw new InvalidOperationException(message);
+                    // This plugin downloads + preloads its own CUDA runtime during the
+                    // load and falls back to CPU itself (reporting via AccelerationStatus)
+                    // if that fails, so a missing *system* CUDA install is not fatal —
+                    // skipping the host preflight is what lets on-demand provisioning run
+                    // on a driver-only host. Still hard-fail when there's no NVIDIA GPU at
+                    // all, so we don't kick off a multi-hundred-MB runtime download with
+                    // nothing to run it on. (_commands is null only in unit tests, where
+                    // the absence of a known-missing GPU lets the provisioning path run.)
+                    if (_commands is { HasCudaGpu: false })
+                    {
+                        throw new InvalidOperationException("No NVIDIA GPU/driver detected.");
+                    }
+                }
+                else
+                {
+                    // Plugins that rely on a host-provided CUDA runtime keep the hard-error
+                    // path so broken CUDA is visible. Auto would have resolved to Cpu above;
+                    // this branch is for explicit requests (or the pathological
+                    // double-preflight-inconsistency case).
+                    var (ok, message) = CudaRuntimePreflight();
+                    if (!ok)
+                    {
+                        throw new InvalidOperationException(message);
+                    }
                 }
             }
 

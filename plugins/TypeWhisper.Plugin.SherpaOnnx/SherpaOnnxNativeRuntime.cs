@@ -25,16 +25,25 @@ internal static class SherpaOnnxNativeRuntime
 
     // Loaded RTLD_GLOBAL ahead of the C API so its undefined references resolve.
     // The CUDA math libs (cudart/cublas/cufft/curand/cudnn) are preloaded
-    // separately by CudaRuntimeProvisioner before this runs. We also load the ORT
-    // CUDA provider here by absolute path: it carries no rpath, the runtime dir is
-    // not on the loader search path, and relying on libonnxruntime.so to find it
-    // "next to itself" is fragile — so we make it explicit (and surface any missing
-    // CUDA dependency now, while Auto can still fall back to CPU).
+    // separately by CudaRuntimeProvisioner before this runs.
+    //
+    // IMPORTANT: do NOT add libonnxruntime_providers_cuda.so here. Its ELF
+    // constructors call Provider_GetHost() and immediately dereference the result.
+    // That ProviderHost is installed by libonnxruntime.so only when ORT loads the
+    // provider through its own provider-bridge (ProviderLibrary::Ensure) during
+    // session creation — it calls SetProviderHost on the shared lib *before*
+    // dlopen'ing the provider. dlopen'ing the CUDA provider ourselves runs those
+    // constructors while the host is still null, so Provider_GetHost() returns null
+    // and the vtable deref segfaults the whole process (uncatchable by managed
+    // try/catch). ORT locates the provider next to libonnxruntime.so — which we DO
+    // preload by absolute path, so its directory is discoverable — and loads it
+    // correctly (host first) when the recognizer requests the CUDA EP. A genuinely
+    // missing CUDA dependency then surfaces as a catchable session-creation error
+    // (→ CPU fallback) instead of a crash.
     private static readonly string[] PreloadOrder =
     [
         "libonnxruntime_providers_shared.so",
         "libonnxruntime.so",
-        "libonnxruntime_providers_cuda.so",
         "libsherpa-onnx-cxx-api.so"
     ];
 

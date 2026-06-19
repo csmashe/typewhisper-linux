@@ -209,7 +209,7 @@ public sealed class CudaRuntimeProvisioner
     {
         // Resolve each wheel's download URL + size + checksum up front so progress
         // can be weighted by real byte totals across the whole batch.
-        var jobs = new List<(CudaWheel Wheel, string Url, long Size, string? Sha256)>();
+        var jobs = new List<(CudaWheel Wheel, string Url, long Size, string Sha256)>();
         foreach (var wheel in missing)
         {
             var (url, size, sha256) = await ResolveWheelAsync(wheel, ct).ConfigureAwait(false);
@@ -239,7 +239,7 @@ public sealed class CudaRuntimeProvisioner
         progress?.Report(1.0);
     }
 
-    private async Task<(string Url, long Size, string? Sha256)> ResolveWheelAsync(
+    private async Task<(string Url, long Size, string Sha256)> ResolveWheelAsync(
         CudaWheel wheel,
         CancellationToken ct
     )
@@ -274,10 +274,13 @@ public sealed class CudaRuntimeProvisioner
             var url = entry.GetProperty("url").GetString()
                 ?? throw new InvalidOperationException($"No URL for {wheel.Package} wheel.");
             var size = entry.TryGetProperty("size", out var sizeNode) ? sizeNode.GetInt64() : 0;
-            string? sha256 = null;
-            if (entry.TryGetProperty("digests", out var digests)
-                && digests.TryGetProperty("sha256", out var shaNode))
-                sha256 = shaNode.GetString();
+            // Fail closed: these .so files get dlopen'd RTLD_GLOBAL into the process, so
+            // a missing digest must abort rather than silently skip integrity checking.
+            // PyPI always publishes a sha256 here; an absent one signals a bad/MITM'd
+            // metadata response. Mirrors the url fail-closed above.
+            var sha256 = entry.GetProperty("digests").GetProperty("sha256").GetString()
+                ?? throw new InvalidOperationException(
+                    $"No SHA-256 digest for the {wheel.Package} wheel.");
             return (url, size, sha256);
         }
 
@@ -289,7 +292,7 @@ public sealed class CudaRuntimeProvisioner
     private async Task DownloadAndExtractWheelAsync(
         CudaWheel wheel,
         string url,
-        string? expectedSha256,
+        string expectedSha256,
         Action<long> onBytesRead,
         CancellationToken ct
     )
@@ -330,9 +333,9 @@ public sealed class CudaRuntimeProvisioner
             }
 
             // Guard against a corrupt/truncated download surfacing later as a
-            // confusing native load error.
-            if (!string.IsNullOrEmpty(expectedSha256))
-                VerifySha256(tmpPath, expectedSha256, wheel.Package);
+            // confusing native load error. expectedSha256 is always present
+            // (ResolveWheelAsync fails closed when PyPI omits it).
+            VerifySha256(tmpPath, expectedSha256, wheel.Package);
 
             ExtractSharedObjects(tmpPath);
 
@@ -434,7 +437,7 @@ public sealed class CudaRuntimeProvisioner
                 // dlopen would fail even though IsWheelSatisfied saw the file there.
                 // Only fall back to the bare soname (ldconfig resolution) when the
                 // file isn't found at a known path.
-                var target = ResolveLibraryPath(soname) ?? soname;
+                var target = ResolveLibraryPath(wheel, soname) ?? soname;
                 var handle = dlopen(target, RtldNow | RtldGlobal);
                 if (handle == IntPtr.Zero)
                 {
@@ -476,12 +479,18 @@ public sealed class CudaRuntimeProvisioner
     private bool IsInCache(string soname) => File.Exists(Path.Join(CacheDirectory, soname));
 
     // Absolute path of the soname if it exists in our cache or a known system dir,
-    // else null (meaning: let the dynamic linker resolve the bare soname).
-    private string? ResolveLibraryPath(string soname)
+    // else null (meaning: let the dynamic linker resolve the bare soname). The cache
+    // copy is only trusted when the wheel's extraction completed (marker present) —
+    // mirroring IsWheelSatisfied — so a partial extract (primary soname written,
+    // companions/marker missing) can't be preferred over a complete system copy.
+    private string? ResolveLibraryPath(CudaWheel wheel, string soname)
     {
-        var cachePath = Path.Join(CacheDirectory, soname);
-        if (File.Exists(cachePath))
-            return cachePath;
+        if (IsWheelExtractionComplete(wheel))
+        {
+            var cachePath = Path.Join(CacheDirectory, soname);
+            if (File.Exists(cachePath))
+                return cachePath;
+        }
 
         foreach (var dir in EnumerateSystemSearchDirectories())
         {
