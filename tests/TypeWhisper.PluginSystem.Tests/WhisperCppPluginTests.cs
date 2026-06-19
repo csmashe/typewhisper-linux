@@ -52,6 +52,71 @@ public class WhisperCppPluginTests
             TranscriptionAccelerationBackend.NvidiaCuda,
             plugin.AccelerationStatus.ActiveBackend);
     }
+
+    [Fact]
+    public void SetAccelerationPreference_NvidiaCuda_WhenRuntimePinnedToCpu_RequiresRestart()
+    {
+        var plugin = new WhisperCppPlugin();
+        plugin.MarkNativeRuntimeLoadedForTests("cpu");
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+
+        Assert.Equal(
+            TranscriptionAccelerationPreference.NvidiaCuda,
+            plugin.AccelerationPreference);
+        // The native runtime is pinned to CPU; the request is surfaced as
+        // restart-required rather than silently dropped.
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.True(plugin.AccelerationStatus.RequiresRestart);
+        Assert.NotNull(plugin.AccelerationStatus.Detail);
+        Assert.Contains(
+            "restart",
+            plugin.AccelerationStatus.Detail!,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SetAccelerationPreference_Cpu_WhenRuntimePinnedToCuda_RequiresRestart()
+    {
+        var plugin = new WhisperCppPlugin();
+        plugin.MarkNativeRuntimeLoadedForTests("cuda");
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+
+        Assert.Equal(TranscriptionAccelerationPreference.Cpu, plugin.AccelerationPreference);
+        Assert.Equal(
+            TranscriptionAccelerationBackend.NvidiaCuda,
+            plugin.AccelerationStatus.ActiveBackend);
+        Assert.True(plugin.AccelerationStatus.RequiresRestart);
+        Assert.NotNull(plugin.AccelerationStatus.Detail);
+        Assert.Contains(
+            "restart",
+            plugin.AccelerationStatus.Detail!,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    // The on-demand CUDA runtime is downloaded into NativeDirectory, but Whisper.net
+    // is pointed at it via RuntimeOptions.LibraryPath. Its loader takes
+    // Path.GetDirectoryName(LibraryPath) and appends runtimes/cuda/<platform>-<arch>.
+    // This contract is what makes the downloaded runtime resolvable; assert the two
+    // properties stay in lockstep so a layout change can't silently break GPU loads.
+    [Fact]
+    public void WhisperCudaRuntimeInstaller_LibraryPath_ResolvesToNativeDirectory()
+    {
+        using var http = new HttpClient();
+        var root = Path.Join(Path.GetTempPath(), "tw-whisper-cuda-" + Guid.NewGuid().ToString("N"));
+        var installer = new WhisperCudaRuntimeInstaller(root, http);
+
+        // Replicates Whisper.net's NativeLibraryLoader path arithmetic for linux-x64.
+        var loaderSearchDir = Path.Combine(
+            Path.GetDirectoryName(installer.LibraryPath)!,
+            "runtimes",
+            "cuda",
+            "linux-x64");
+
+        Assert.Equal(installer.NativeDirectory, loaderSearchDir);
+        Assert.False(installer.IsInstalled); // nothing extracted into a fresh temp root
+    }
 }
 
 public class SherpaOnnxPluginTests
@@ -92,6 +157,46 @@ public class SherpaOnnxPluginTests
         Assert.Equal(
             TranscriptionAccelerationBackend.NvidiaCuda,
             plugin.AccelerationStatus.ActiveBackend);
+    }
+
+    [Fact]
+    public void SetAccelerationPreference_NvidiaCuda_WhenRuntimePinnedToCpu_RequiresRestart()
+    {
+        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        plugin.MarkNativeRuntimeLoadedForTests("cpu");
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+
+        Assert.Equal(
+            TranscriptionAccelerationPreference.NvidiaCuda,
+            plugin.AccelerationPreference);
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.True(plugin.AccelerationStatus.RequiresRestart);
+        Assert.NotNull(plugin.AccelerationStatus.Detail);
+        Assert.Contains(
+            "restart",
+            plugin.AccelerationStatus.Detail!,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SetAccelerationPreference_Cpu_WhenRuntimePinnedToCuda_RequiresRestart()
+    {
+        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        plugin.MarkNativeRuntimeLoadedForTests("cuda");
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+
+        Assert.Equal(TranscriptionAccelerationPreference.Cpu, plugin.AccelerationPreference);
+        Assert.Equal(
+            TranscriptionAccelerationBackend.NvidiaCuda,
+            plugin.AccelerationStatus.ActiveBackend);
+        Assert.True(plugin.AccelerationStatus.RequiresRestart);
+        Assert.NotNull(plugin.AccelerationStatus.Detail);
+        Assert.Contains(
+            "restart",
+            plugin.AccelerationStatus.Detail!,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static IPluginHostServices CreateHost(

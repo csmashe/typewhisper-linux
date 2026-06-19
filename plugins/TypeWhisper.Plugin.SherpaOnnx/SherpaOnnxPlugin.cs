@@ -522,8 +522,32 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _httpClient.Dispose();
     }
 
-    private string GetModelDirectory(string modelId) =>
-        Path.Join(_host?.PluginAssetDirectory ?? ".", "Models", modelId);
+    private string GetModelDirectory(string modelId)
+    {
+        // Defense in depth: callers validate modelId against the known model list
+        // first, but a model ID flows into a filesystem path here, so strip any path
+        // separators and reject empty/relative segments before joining.
+        var safeModelId = Path.GetFileName(modelId);
+        if (string.IsNullOrWhiteSpace(safeModelId) || safeModelId is "." or "..")
+            throw new ArgumentException("Model ID must not be empty.", nameof(modelId));
+
+        return Path.Join(_host?.PluginAssetDirectory ?? ".", "Models", safeModelId);
+    }
+
+    // Test seam: simulate the process having pinned its native ORT provider to a
+    // backend, without creating a real recognizer, so the CPU↔CUDA restart-required
+    // status logic can be unit-tested.
+    internal void MarkNativeRuntimeLoadedForTests(string provider)
+    {
+        var normalized = string.Equals(provider, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cuda"
+            : "cpu";
+        lock (_sync)
+        {
+            _computeBackend = normalized;
+            _loadedNativeProvider = normalized;
+        }
+    }
 
     private static ModelDefinition GetModelDefinition(string modelId) =>
         Models.FirstOrDefault(m => m.Id == modelId)

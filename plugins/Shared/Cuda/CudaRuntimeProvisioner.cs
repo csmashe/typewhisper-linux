@@ -335,10 +335,41 @@ public sealed class CudaRuntimeProvisioner
                 VerifySha256(tmpPath, expectedSha256, wheel.Package);
 
             ExtractSharedObjects(tmpPath);
+
+            // Stamp completion only after every .so is extracted. A wheel like cuDNN
+            // ships its primary soname (libcudnn.so.9) alongside companion engine
+            // libs; without this marker a crash mid-extract would leave the primary
+            // on disk and the next run's IsWheelSatisfied would wrongly skip the
+            // re-download, then fail when cuDNN dlopens a missing companion.
+            WriteCompletionMarker(wheel);
         }
         finally
         {
             TryDelete(tmpPath);
+        }
+    }
+
+    // A small sentinel written after a wheel's full extraction succeeds. Its
+    // presence is what lets the cache (as opposed to the host system) count toward
+    // IsWheelSatisfied, so a partially-extracted wheel re-downloads.
+    private string WheelMarkerPath(CudaWheel wheel) =>
+        Path.Join(CacheDirectory, $".{wheel.Package}-{wheel.Version}.complete");
+
+    private bool IsWheelExtractionComplete(CudaWheel wheel) =>
+        File.Exists(WheelMarkerPath(wheel));
+
+    private void WriteCompletionMarker(CudaWheel wheel)
+    {
+        var marker = WheelMarkerPath(wheel);
+        var stagePath = marker + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(stagePath, wheel.Version);
+            File.Move(stagePath, marker, overwrite: true);
+        }
+        finally
+        {
+            TryDelete(stagePath);
         }
     }
 
@@ -429,8 +460,18 @@ public sealed class CudaRuntimeProvisioner
 
     // Satisfied only when every library the wheel provides is resolvable; a single
     // missing soname means we (re)download the wheel, which supplies the full set.
-    private bool IsWheelSatisfied(CudaWheel wheel) =>
-        wheel.RequiredSonames.All(soname => IsInCache(soname) || IsResolvableOnSystem(soname));
+    // A library found in OUR cache only counts when the wheel's completion marker is
+    // present — otherwise a download interrupted mid-extract (primary soname written,
+    // companions not) could masquerade as complete. Libraries the host already ships
+    // on the system count regardless: we never wrote (or need) a marker for those.
+    private bool IsWheelSatisfied(CudaWheel wheel)
+    {
+        // Check the marked-complete cache first so a warm cache short-circuits before
+        // the (potentially ldconfig-spawning) system probe, matching the prior fast path.
+        var extracted = IsWheelExtractionComplete(wheel);
+        return wheel.RequiredSonames.All(soname =>
+            (extracted && IsInCache(soname)) || IsResolvableOnSystem(soname));
+    }
 
     private bool IsInCache(string soname) => File.Exists(Path.Join(CacheDirectory, soname));
 

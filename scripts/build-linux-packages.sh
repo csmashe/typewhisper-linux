@@ -77,14 +77,25 @@ if [ ! -x "$PUBLISH_DIR/typewhisper" ]; then
 fi
 
 # Whisper.net (and a couple of other plugin deps) bundle native libs for every
-# RID they support. For a linux-x64 build, the linux-arm/linux-arm64/win/osx
+# RID they support. For a linux-x64 build, the linux-arm/linux-arm64/win/macos/osx
 # directories are dead weight (~50 MB per package format) and they also break
 # rpmbuild's auto-strip phase, which can't read non-host ELF formats.
+# Note: whisper.cpp names its Apple runtime dirs "macos-*", while SkiaSharp and the
+# .NET runtime pack use "osx-*" — prune both families.
 echo "==> Pruning non-linux-x64 native runtimes"
 find "$PUBLISH_DIR" -type d \
   \( -name "linux-arm" -o -name "linux-arm64" -o -name "linux-musl-*" \
-     -o -name "win-*" -o -name "osx-*" -o -name "browser-*" -o -name "android-*" \
+     -o -name "win-*" -o -name "osx-*" -o -name "macos-*" \
+     -o -name "browser-*" -o -name "android-*" \
   \) -prune -exec rm -rf {} +
+
+# Some ONNX Runtime consumers (sherpa-onnx, supertonic-tts) also drop the
+# Windows-native onnxruntime DLLs flat into the output root and per-plugin dirs,
+# not under a runtimes/win-* directory the prune above would catch. They are PE
+# binaries with no use on Linux — the managed Microsoft.ML.OnnxRuntime.dll loads
+# libonnxruntime.so instead — so strip them too. The lowercase "onnxruntime*"
+# glob never matches the managed wrapper, which keeps its Microsoft. prefix.
+find "$PUBLISH_DIR" -type f -name "onnxruntime*.dll" -delete
 
 # ---------- tar.gz (the JustWorks fallback) ----------
 echo "==> Building tar.gz"

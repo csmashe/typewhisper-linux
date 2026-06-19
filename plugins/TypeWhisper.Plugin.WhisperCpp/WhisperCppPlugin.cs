@@ -183,6 +183,7 @@ public sealed class WhisperCppPlugin
     private IPluginHostServices? _host;
     private WhisperFactory? _factory;
     private CudaRuntimeProvisioner? _cudaProvisioner;
+    private WhisperCudaRuntimeInstaller? _whisperCudaInstaller;
     private string? _selectedModelId;
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
@@ -438,26 +439,132 @@ public sealed class WhisperCppPlugin
         if (!File.Exists(modelPath))
             throw new FileNotFoundException($"Model files not found for: {modelId}", modelPath);
 
-        // Make sure cudart/cuBLAS are present and preloaded before whisper.cpp's
-        // native CUDA runtime loads. A no-op when the host already provides them
-        // (the usual case — the host's CUDA preflight gates on these very libs),
-        // so it never blocks the CPU path or triggers a surprise download there.
-        if (string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase))
-            await EnsureCudaRuntimeReadyAsync(ct).ConfigureAwait(false);
+        // Snapshot the requested backend (and whether the native runtime is already
+        // pinned) under the gate, then release it: provisioning the CUDA runtime can
+        // download hundreds of MB on first use, and holding the load/transcribe gate
+        // for that long would needlessly block a backend switch the user might make
+        // mid-download.
+        string desiredBackend;
+        bool alreadyPinned;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            desiredBackend = _computeBackend;
+            alreadyPinned = _runtimeLibraryOrderInitialized;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        // Set if a CUDA attempt fails and we fall back to CPU, so the final status
+        // can explain why rather than hard-failing an explicit CUDA request.
+        string? cudaUnavailableDetail = null;
+        var downgradedToCpu = false;
+
+        // Provision + download the GPU runtime before touching the factory. Skipped
+        // once the native runtime is pinned: it's already loaded, so re-fetching it
+        // would be pointless (and a pinned mismatch is surfaced as restart-required).
+        if (string.Equals(desiredBackend, "cuda", StringComparison.OrdinalIgnoreCase) && !alreadyPinned)
+        {
+            try
+            {
+                await EnsureCudaRuntimeReadyAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"whisper.cpp CUDA runtime unavailable ({ex.Message}); falling back to CPU."
+                );
+                cudaUnavailableDetail = ex.Message;
+                desiredBackend = "cpu";
+                downgradedToCpu = true;
+            }
+        }
 
         await _gate.WaitAsync(ct);
         try
         {
+            if (_runtimeLibraryOrderInitialized)
+            {
+                // The native runtime is pinned for the process; load on whatever it
+                // was pinned to. _computeBackend can't drift from it (backend swaps
+                // are refused after the pin), so the factory's UseGpu flag stays
+                // consistent and any unsatisfiable request already reads as
+                // restart-required in the acceleration status.
+                cudaUnavailableDetail = null;
+            }
+            else
+            {
+                // Not pinned yet. A user-initiated backend switch during the (possibly
+                // long) download leaves _computeBackend pointing somewhere else; abort
+                // the now-stale load rather than pinning the process to a backend the
+                // user no longer wants. A CPU downgrade we made ourselves is expected,
+                // not a user switch, so it doesn't trip this.
+                if (!downgradedToCpu
+                    && !string.Equals(_computeBackend, desiredBackend, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "Compute backend changed during model load; reload to apply the new backend."
+                    );
+
+                _computeBackend = desiredBackend;
+            }
+
             DisposeFactoryUnsafe();
-            EnsureRuntimeLibraryOrderInitialized();
+            ApplyRuntimeLibraryOrderUnsafe();
+
+            // Two distinct failure layers here, handled differently:
+            //
+            // 1. Native LIBRARY load (the .so set). Whisper.net does this exactly once
+            //    per process via a static Lazy<LoadResult> and caches the outcome —
+            //    success OR failure — so there is no in-process retry for it. The
+            //    recoverable causes (CUDA libraries or the GPU backend missing /
+            //    uninstallable) are handled earlier: EnsureCudaRuntimeReadyAsync throws
+            //    and the caller downgrades desiredBackend to CPU, so the order applied
+            //    above is [Cpu]. A library-load failure here surfaces as a throw.
+            //
+            // 2. Native CONTEXT creation (whisper_init for this model). This is
+            //    per-factory, NOT cached, and — critically — FromPath does NOT throw
+            //    when it fails: Whisper.net stores a null context and only throws later
+            //    at CreateBuilder. We must validate now so we never publish a model as
+            //    "loaded" that can't actually transcribe. And because the context is
+            //    per-factory, we CAN recover from a GPU context failure by rebuilding
+            //    it with UseGpu=false on the already-loaded native runtime (no second
+            //    library load), which yields a working CPU transcriber.
             _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
+
+            if (!TryValidateFactory(_factory)
+                && string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase))
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    "whisper.cpp GPU context could not be created; falling back to CPU compute."
+                );
+                cudaUnavailableDetail ??= "The GPU context could not be created; using CPU.";
+                DisposeFactoryUnsafe();
+                _computeBackend = "cpu";
+                // Same pinned native runtime; only the context is rebuilt (UseGpu=false).
+                _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
+            }
+
+            if (!TryValidateFactory(_factory))
+            {
+                DisposeFactoryUnsafe();
+                throw new InvalidOperationException(
+                    $"Failed to load whisper model '{modelId}': the model could not be initialized."
+                );
+            }
+
+            // First successful factory creation loads + pins the native runtime; from
+            // here on the backend can't be swapped without a restart.
+            _runtimeLibraryOrderInitialized = true;
             _loadedModelId = modelId;
             _selectedModelId = modelId;
             _host?.SetSetting("selectedModel", modelId);
-            _accelerationStatus = CreateLoadedAccelerationStatus(
-                _computeBackend,
-                _accelerationPreference
-            );
+            _accelerationStatus = cudaUnavailableDetail is null
+                ? CreateLoadedAccelerationStatus(_computeBackend, _accelerationPreference)
+                : CreateCudaUnavailableStatus(cudaUnavailableDetail);
             _host?.Log(
                 PluginLogLevel.Info,
                 $"Loaded model {modelId} using {_computeBackend.ToUpperInvariant()}"
@@ -592,39 +699,60 @@ public sealed class WhisperCppPlugin
         _httpClient.Dispose();
     }
 
-    // Ensures whisper.cpp's CUDA dependencies (cudart + cuBLAS) are present and
-    // preloaded RTLD_GLOBAL via the shared provisioner. The host's preflight
-    // already requires these libraries before resolving to CUDA, so on a normal
-    // CUDA box this only re-preloads what's already loaded; it exists so the
-    // dependency is explicit and so the shared cache can supply them if a future
-    // driver-only path is enabled.
+    // Provisions everything whisper.cpp's CUDA build needs, on demand:
+    //   1. the CUDA math libraries (cudart + cuBLAS) it links against, preloaded
+    //      RTLD_GLOBAL via the shared provisioner (downloaded if the host lacks them);
+    //   2. the ~409 MB CUDA native build itself, fetched from nuget.org and cached
+    //      rather than bundled in every package;
+    //   3. RuntimeOptions.LibraryPath pointed at that cache so Whisper.net's own
+    //      loader finds the runtime when the first factory triggers the native load.
+    // Throws on any failure so the caller can fall back to a working CPU load.
     private async Task EnsureCudaRuntimeReadyAsync(CancellationToken ct)
     {
         if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
-            return;
+            throw new PlatformNotSupportedException(
+                "NVIDIA CUDA acceleration for whisper.cpp is only available on Linux x64."
+            );
 
         _cudaProvisioner ??= new CudaRuntimeProvisioner(
             CudaRuntimeProvisioner.DefaultCacheRoot(),
             _httpClient,
             msg => _host?.Log(PluginLogLevel.Info, msg)
         );
+        _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
+            _host?.PluginAssetDirectory ?? ".",
+            _httpClient,
+            msg => _host?.Log(PluginLogLevel.Info, msg)
+        );
 
-        try
+        // 1. Preload cudart + cuBLAS, downloading any the host doesn't provide.
+        await _cudaProvisioner
+            .EnsureReadyAsync(CudaRuntimeProfile.WhisperCublas, LogProgress("CUDA libraries"), ct)
+            .ConfigureAwait(false);
+
+        // 2. Download + extract whisper.cpp's CUDA native build on first use.
+        await _whisperCudaInstaller
+            .EnsureInstalledAsync(LogProgress("whisper.cpp GPU runtime"), ct)
+            .ConfigureAwait(false);
+
+        // 3. Point Whisper.net's loader at the downloaded runtime. Must be set before
+        //    the first WhisperFactory triggers the (once-per-process) native load.
+        RuntimeOptions.LibraryPath = _whisperCudaInstaller.LibraryPath;
+    }
+
+    // Logs download progress in coarse 10% steps so a first-time multi-hundred-MB
+    // fetch doesn't look hung, without flooding the log.
+    private IProgress<double> LogProgress(string label)
+    {
+        var lastBucket = -1;
+        return new Progress<double>(p =>
         {
-            await _cudaProvisioner
-                .EnsureReadyAsync(CudaRuntimeProfile.WhisperCublas, progress: null, ct)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // Don't block the load: if the host already has the libs visible (the
-            // common case) the native factory will still find them. Surface the
-            // reason for diagnostics and let WhisperFactory report any real failure.
-            _host?.Log(
-                PluginLogLevel.Warning,
-                $"CUDA runtime preload reported an issue: {ex.Message}"
-            );
-        }
+            var bucket = (int)(Math.Clamp(p, 0, 1) * 10);
+            if (bucket == lastBucket)
+                return;
+            lastBucket = bucket;
+            _host?.Log(PluginLogLevel.Info, $"{label}: {p:P0}");
+        });
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
@@ -741,15 +869,44 @@ public sealed class WhisperCppPlugin
         _factory = null;
     }
 
+    // FromPath returns a factory even when whisper.cpp failed to create the native
+    // context (Whisper.net stores a null context and defers the throw to CreateBuilder).
+    // Probe it here: CreateBuilder is the cheapest public call that surfaces a null
+    // context, and it allocates no native state (that happens at Build()), so the
+    // discarded builder needs no disposal.
+    private static bool TryValidateFactory(WhisperFactory factory)
+    {
+        try
+        {
+            _ = factory.CreateBuilder();
+            return true;
+        }
+        catch (WhisperModelLoadException)
+        {
+            return false;
+        }
+    }
+
     private WhisperFactoryOptions CreateFactoryOptions() =>
         new()
         {
             UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase),
         };
 
-    // RuntimeOptions.RuntimeLibraryOrder is consulted once when the native library first loads.
-    // Later changes are ignored for the process lifetime, so set it once before the first factory.
-    private void EnsureRuntimeLibraryOrderInitialized()
+    // Points Whisper.net's runtime order at the current _computeBackend. The order
+    // is consulted only when the native library first loads and ignored for the
+    // process lifetime afterwards, so this no-ops once the runtime is pinned.
+    //
+    // CUDA uses a single-entry [Cuda] order on purpose — NOT [Cuda, Cpu]. Whisper.net
+    // only auto-falls-back to CPU when Cuda is the LAST entry; with Cuda last its
+    // loader skips the CudaHelper.IsCudaAvailable() probe entirely (see
+    // NativeLibraryLoader.IsRuntimeSupported). That probe P/Invokes the *unversioned*
+    // libcudart.so, which the hosts this on-demand runtime targets do not have — they
+    // only get our cached libcudart.so.12. So [Cuda, Cpu] would make IsCudaAvailable()
+    // fail and silently downgrade every on-demand CUDA user to CPU. With [Cuda] the
+    // probe is bypassed and our preloaded runtime loads. (We can't lean on an
+    // in-process CPU fallback after a failed load anyway — see LoadModelAsync.)
+    private void ApplyRuntimeLibraryOrderUnsafe()
     {
         if (_runtimeLibraryOrderInitialized)
             return;
@@ -761,7 +918,26 @@ public sealed class WhisperCppPlugin
         )
             ? [RuntimeLibrary.Cuda]
             : [RuntimeLibrary.Cpu];
-        _runtimeLibraryOrderInitialized = true;
+    }
+
+    // Test seam: simulate the native runtime having loaded and pinned itself to a
+    // backend, without a real model file or WhisperFactory, so the CPU↔CUDA
+    // restart-required status logic can be unit-tested.
+    internal void MarkNativeRuntimeLoadedForTests(string backend)
+    {
+        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cuda"
+            : "cpu";
+        _gate.Wait();
+        try
+        {
+            _computeBackend = normalized;
+            _runtimeLibraryOrderInitialized = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
@@ -773,7 +949,7 @@ public sealed class WhisperCppPlugin
             TranscriptionAccelerationPreference.NvidiaCuda => new(
                 TranscriptionAccelerationBackend.NvidiaCuda,
                 "Preparing NVIDIA CUDA",
-                "Will apply on next model load."
+                "The GPU runtime downloads on the next model load."
             ),
             TranscriptionAccelerationPreference.Cpu => new(
                 TranscriptionAccelerationBackend.Cpu,
@@ -820,6 +996,16 @@ public sealed class WhisperCppPlugin
 
         return new TranscriptionAccelerationStatus(loaded, displayText);
     }
+
+    // An explicit NVIDIA CUDA request that couldn't be honoured (no usable GPU, a
+    // failed runtime download, missing CUDA libraries): the model still loaded on
+    // CPU, so report CPU as active and carry the reason for the UI to surface.
+    private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(string detail) =>
+        new(
+            TranscriptionAccelerationBackend.Cpu,
+            "Using CPU",
+            $"CUDA unavailable: {detail}"
+        );
 
     private static void TryDeleteFile(string path)
     {
