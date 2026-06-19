@@ -16,6 +16,7 @@ The Linux branch currently includes:
 
 - Global dictation with toggle, push-to-talk, and hybrid activation modes
 - A Linux desktop UI with dashboard, dictation, shortcuts, text insertion, file transcription, recorder, history, dictionary, snippets, profiles, prompts, plugins, general, appearance, advanced, and about sections
+- A localizable interface with an **Interface Language** selector in the General section (`Auto (System)`, English, German, Spanish, Russian) that live-switches the whole UI without an app restart; bundled plugins localize their own settings panels too
 - Plugin-backed transcription engines and prompt/LLM providers, with optional real-time websocket streaming for supported cloud engines and token-by-token streaming of LLM responses
 - Drag-and-drop file transcription with batch queues, watch folders, and `ffmpeg`-based import when available
 - Session recording to WAV with optional transcript sidecar text files
@@ -539,7 +540,6 @@ Plugin source projects live under `plugins/`. The Linux app expects each deploye
 
 These items appeared in the earlier project README or settings surface, but they are not fully implemented in this Linux branch yet and should be treated as planned work:
 
-- Interface language switching is not implemented yet. The setting is visible, but the Linux UI does not currently live-switch translations.
 - In-place app self-update (downloading and applying a new build) is not implemented. The app does check GitHub Releases for a newer version — the About page's `Check for Updates` button and a once-per-day startup check surface a non-obtrusive banner when an update is available — but installing it is still a manual download.
 - Marketplace/store browsing is intentionally not active in the Linux UI right now.
 - Windows release channels and Velopack update-channel controls are not used by this Linux branch.
