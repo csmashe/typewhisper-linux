@@ -220,15 +220,11 @@ internal sealed class WhisperCudaRuntimeInstaller
         var wanted = new HashSet<string>(CoreRuntimeFiles, StringComparer.Ordinal);
 
         using var archive = ZipFile.OpenRead(nupkgPath);
-        foreach (var entry in archive.Entries)
+        foreach (var entry in archive.Entries.Where(e =>
+            e.FullName.StartsWith(PackageLibPrefix, StringComparison.Ordinal)
+            && wanted.Contains(Path.GetFileName(e.FullName))))
         {
-            if (!entry.FullName.StartsWith(PackageLibPrefix, StringComparison.Ordinal))
-                continue;
-
             var fileName = Path.GetFileName(entry.FullName);
-            if (!wanted.Contains(fileName))
-                continue;
-
             var destination = Path.Join(NativeDirectory, fileName);
             // Atomic publish so a half-written .so can't be picked up by a concurrent
             // load or a later run's existence check.

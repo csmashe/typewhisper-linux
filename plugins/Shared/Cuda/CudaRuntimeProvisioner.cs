@@ -288,23 +288,26 @@ public sealed class CudaRuntimeProvisioner
         using var json = await JsonDocument.ParseAsync(stream, cancellationToken: ct)
             .ConfigureAwait(false);
 
-        foreach (var entry in json.RootElement.GetProperty("urls").EnumerateArray())
+        // The single linux x64 wheel: a manylinux build for x86_64. Excludes
+        // win_amd64 and aarch64. The exact glibc tag (2_17 vs 2_27) varies per
+        // package, so match on the platform family rather than a fixed tag.
+        static bool IsLinuxX64Wheel(JsonElement entry)
         {
             if (entry.TryGetProperty("packagetype", out var pkgType)
                 && pkgType.GetString() != "bdist_wheel")
-                continue;
+                return false;
 
             var filename = entry.GetProperty("filename").GetString();
-            // The single linux x64 wheel: a manylinux build for x86_64. Excludes
-            // win_amd64 and aarch64. The exact glibc tag (2_17 vs 2_27) varies per
-            // package, so match on the platform family rather than a fixed tag.
-            if (filename is null
-                || !filename.EndsWith(".whl", StringComparison.Ordinal)
-                || !filename.Contains("manylinux", StringComparison.Ordinal)
-                || !filename.Contains("x86_64", StringComparison.Ordinal)
-                || filename.Contains("aarch64", StringComparison.Ordinal))
-                continue;
+            return filename is not null
+                && filename.EndsWith(".whl", StringComparison.Ordinal)
+                && filename.Contains("manylinux", StringComparison.Ordinal)
+                && filename.Contains("x86_64", StringComparison.Ordinal)
+                && !filename.Contains("aarch64", StringComparison.Ordinal);
+        }
 
+        foreach (var entry in json.RootElement.GetProperty("urls").EnumerateArray()
+            .Where(IsLinuxX64Wheel))
+        {
             var url = entry.GetProperty("url").GetString()
                 ?? throw new InvalidOperationException($"No URL for {wheel.Package} wheel.");
             var size = entry.TryGetProperty("size", out var sizeNode) ? sizeNode.GetInt64() : 0;
@@ -440,17 +443,17 @@ public sealed class CudaRuntimeProvisioner
     // else (Python stubs, headers, metadata).
     private void ExtractSharedObjects(string wheelPath)
     {
+        // Keep only the shared objects under nvidia/<component>/lib/, skipping
+        // directory entries, Python stubs, headers, and metadata.
+        static bool IsLibEntry(ZipArchiveEntry entry) =>
+            !entry.FullName.EndsWith("/", StringComparison.Ordinal)
+            && entry.FullName.Contains("/lib/", StringComparison.Ordinal)
+            && IsSharedObject(Path.GetFileName(entry.FullName));
+
         using var archive = ZipFile.OpenRead(wheelPath);
-        foreach (var entry in archive.Entries)
+        foreach (var entry in archive.Entries.Where(IsLibEntry))
         {
-            if (entry.FullName.EndsWith("/", StringComparison.Ordinal))
-                continue;
-
             var fileName = Path.GetFileName(entry.FullName);
-            if (!IsSharedObject(fileName)
-                || !entry.FullName.Contains("/lib/", StringComparison.Ordinal))
-                continue;
-
             var destination = Path.Join(CacheDirectory, fileName);
             // Atomic publish so a half-written .so can't be picked up by a concurrent
             // load or a later run's existence check.
@@ -473,11 +476,8 @@ public sealed class CudaRuntimeProvisioner
         lock (_preloadSync)
         {
             foreach (var wheel in wheels)
-            foreach (var soname in wheel.RequiredSonames)
+            foreach (var soname in wheel.RequiredSonames.Where(s => !_preloaded.Contains(s)))
             {
-                if (_preloaded.Contains(soname))
-                    continue;
-
                 // Resolve to the absolute path of the file we actually found (cache
                 // first, then the system dirs). A toolkit dir like /usr/local/cuda
                 // is often absent from ldconfig/LD_LIBRARY_PATH, so a bare-soname
@@ -636,13 +636,11 @@ public sealed class CudaRuntimeProvisioner
             if (parent is null || !parent.Exists)
                 return;
 
-            foreach (var dir in parent.EnumerateDirectories())
+            foreach (var dir in parent.EnumerateDirectories()
+                .Where(dir => !string.Equals(dir.Name, BundleVersion, StringComparison.Ordinal)))
             {
-                if (!string.Equals(dir.Name, BundleVersion, StringComparison.Ordinal))
-                {
-                    try { dir.Delete(recursive: true); }
-                    catch { /* best effort cleanup */ }
-                }
+                try { dir.Delete(recursive: true); }
+                catch { /* best effort cleanup */ }
             }
         }
         catch
