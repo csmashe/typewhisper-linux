@@ -593,7 +593,35 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
             if (plugin.SupportsModelDownload)
             {
-                await plugin.LoadModelAsync(pluginModelId, cancellationToken);
+                // A self-provisioning engine may download a multi-hundred-MB GPU runtime
+                // during the load (first CUDA use). Surface that as DownloadingModel so the
+                // UI shows a real progress bar instead of the static LoadingModel spinner
+                // set above; when provisioning finishes (or none is needed) the plugin
+                // reports 1.0 and we drop back to LoadingModel for the native init.
+                //
+                // Progress<T> posts callbacks asynchronously to the captured
+                // SynchronizationContext, so a late report could otherwise run AFTER this
+                // load returns and clobber the terminal Ready status (set below) with a
+                // stale Loading/Downloading one. Gate the handler so it no-ops once the
+                // load has returned.
+                var loadInProgress = true;
+                var loadProgress = new Progress<double>(p =>
+                {
+                    if (!System.Threading.Volatile.Read(ref loadInProgress))
+                        return;
+                    SetStatus(
+                        modelId,
+                        p >= 1.0 ? ModelStatus.LoadingModel : ModelStatus.DownloadingModel(p)
+                    );
+                });
+                try
+                {
+                    await plugin.LoadModelAsync(pluginModelId, loadProgress, cancellationToken);
+                }
+                finally
+                {
+                    System.Threading.Volatile.Write(ref loadInProgress, false);
+                }
             }
 
             plugin.SelectModel(pluginModelId);

@@ -59,7 +59,16 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     ];
 
     private readonly object _sync = new();
-    private readonly HttpClient _httpClient = new();
+
+    // Drives both the model-file downloads and the on-demand CUDA runtime fetches
+    // (the ~224 MB sherpa GPU tarball plus the cudart/cuBLAS/cuFFT/cuRAND/cuDNN
+    // wheels, the largest of which is ~685 MB). HttpClient.Timeout bounds the WHOLE
+    // request including the streamed body — even with ResponseHeadersRead — so the
+    // default 100 s deadline would cancel these large fetches mid-stream on any
+    // ordinary link. Use a generous ceiling (matching GemmaLocal's large-model
+    // client) and rely on the per-call CancellationToken for cancellation; the
+    // ceiling also bounds a stalled-but-open socket so it can't hang forever.
+    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
     private IPluginHostServices? _host;
     private OfflineRecognizer? _recognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
@@ -315,7 +324,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         progress?.Report(1.0);
     }
 
-    public async Task LoadModelAsync(string modelId, CancellationToken ct)
+    public Task LoadModelAsync(string modelId, CancellationToken ct) =>
+        LoadModelAsync(modelId, null, ct);
+
+    public async Task LoadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
     {
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
@@ -340,13 +352,16 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         {
             try
             {
-                await EnsureCudaRuntimeReadyAsync(ct).ConfigureAwait(false);
+                await EnsureCudaRuntimeReadyAsync(progress, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _host?.Log(
                     PluginLogLevel.Warning,
                     $"sherpa-onnx CUDA runtime unavailable ({ex.Message}); falling back to CPU."
+                        + (_cudaProvisioner is { } provisioner
+                            ? $" Shared CUDA runtime cache: {provisioner.CacheDirectory}."
+                            : "")
                 );
                 cudaUnavailableDetail = ex.Message;
                 desiredProvider = "cpu";
@@ -419,7 +434,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             .ConfigureAwait(false);
     }
 
-    private async Task EnsureCudaRuntimeReadyAsync(CancellationToken ct)
+    private async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
     {
         EnsureCudaPlatformSupported();
 
@@ -430,37 +445,53 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             _cudaRuntimeInstaller
             ?? throw new InvalidOperationException("CUDA runtime installer is not initialized.");
 
-        // Preload the CUDA math libraries (cudart/cublas/cufft/curand/cuDNN),
+        // The two download stages map to a single monotonic 0→1 bar for the host: the
+        // math libs (cuDNN alone is ~1.7 GB unpacked) are the bulk, so weight them 60%
+        // and the sherpa GPU build 40%.
+        // Preload the CUDA math libraries (cudart/cublas/cufft/curand/nvrtc/cuDNN),
         // downloading any the host doesn't already provide.
         await provisioner
             .EnsureReadyAsync(
                 CudaRuntimeProfile.OnnxRuntimeCuda,
-                LogProgress("CUDA libraries"),
+                ProvisionProgress("CUDA libraries", progress, 0.0, 0.6),
                 ct
             )
             .ConfigureAwait(false);
 
         // Download + extract the sherpa-onnx GPU native build.
         await installer
-            .EnsureInstalledAsync(LogProgress("sherpa-onnx GPU runtime"), ct)
+            .EnsureInstalledAsync(
+                ProvisionProgress("sherpa-onnx GPU runtime", progress, 0.6, 1.0),
+                ct
+            )
             .ConfigureAwait(false);
 
         // Route the managed bindings to the GPU dir and preload its ORT deps.
         SherpaOnnxNativeRuntime.ConfigureCudaRuntime(installer.RuntimeDirectory);
     }
 
-    // Logs download progress in coarse 10% steps so a first-time multi-hundred-MB
-    // fetch doesn't look hung, without flooding the log.
-    private IProgress<double> LogProgress(string label)
+    // Logs download progress in coarse 10% steps (so a first-time multi-hundred-MB fetch
+    // doesn't look hung, without flooding the log) AND forwards a fraction mapped into
+    // [start, end] of the overall provisioning bar to the host's progress reporter, so
+    // the UI can show a real download bar instead of a static spinner.
+    private IProgress<double> ProvisionProgress(
+        string label,
+        IProgress<double>? forward,
+        double start,
+        double end
+    )
     {
         var lastBucket = -1;
         return new Progress<double>(p =>
         {
-            var bucket = (int)(Math.Clamp(p, 0, 1) * 10);
-            if (bucket == lastBucket)
-                return;
-            lastBucket = bucket;
-            _host?.Log(PluginLogLevel.Info, $"{label}: {p:P0}");
+            var clamped = Math.Clamp(p, 0, 1);
+            var bucket = (int)(clamped * 10);
+            if (bucket != lastBucket)
+            {
+                lastBucket = bucket;
+                _host?.Log(PluginLogLevel.Info, $"{label}: {clamped:P0}");
+            }
+            forward?.Report(start + clamped * (end - start));
         });
     }
 

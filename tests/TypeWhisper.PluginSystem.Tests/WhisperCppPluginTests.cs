@@ -261,6 +261,68 @@ public class SherpaOnnxPluginTests
         }
     }
 
+    // libonnxruntime_providers_cuda.so MUST be extracted (so ORT can discover it next
+    // to libonnxruntime.so and load it host-first at session creation) but MUST NEVER
+    // be preloaded directly: its ELF constructors dereference a ProviderHost that
+    // libonnxruntime.so installs only when IT loads the provider through its own
+    // provider-bridge. dlopen'ing it ourselves runs those constructors with a null
+    // host → uncatchable segfault. Lock the invariant so a future "preload everything"
+    // refactor can't silently reintroduce it (see SherpaOnnxNativeRuntime.PreloadOrder).
+    [Fact]
+    public void SherpaCudaProvider_IsExtractedButNeverPreloaded()
+    {
+        Assert.Contains(
+            "libonnxruntime_providers_cuda.so",
+            TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.CoreRuntimeFiles);
+        Assert.DoesNotContain(
+            "libonnxruntime_providers_cuda.so",
+            TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxNativeRuntime.PreloadOrder);
+    }
+
+    // The csproj pins org.k2fsa.sherpa.onnx, and the on-demand GPU build is the
+    // v{RuntimeVersion} release tarball at SherpaCudaRuntimeInstaller. sherpa-onnx's
+    // C API isn't ABI-stable across releases, so if the managed package and the GPU
+    // runtime version drift the downloaded native libs fail to load against the
+    // binding. The version is embedded separately in RuntimeVersion, AssetFileName,
+    // and DownloadUrl — assert all of them stay in lockstep with the csproj so a
+    // partial bump fails the build (mirrors WhisperNetPackageVersions above).
+    [Fact]
+    public void SherpaOnnxPackageVersion_StaysInLockStepWithCudaRuntimeVersion()
+    {
+        var csproj = File.ReadAllText(SherpaOnnxCsprojPath());
+
+        var managed = Regex.Match(
+            csproj,
+            """<PackageReference\s+Include="org\.k2fsa\.sherpa\.onnx"\s+Version="([^"]+)"\s*/>""");
+
+        Assert.True(
+            managed.Success,
+            "Could not find the org.k2fsa.sherpa.onnx <PackageReference> in the csproj.");
+
+        var version = managed.Groups[1].Value;
+        // RuntimeVersion is the tag form ("v1.12.23"); the csproj pins the bare version.
+        Assert.Equal(
+            version,
+            TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.RuntimeVersion.TrimStart('v'));
+        Assert.Contains(
+            version,
+            TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.AssetFileName);
+        Assert.Contains(
+            version,
+            TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.DownloadUrl);
+    }
+
+    // Resolve the plugin csproj relative to THIS test file (mirrors WhisperCppCsprojPath).
+    private static string SherpaOnnxCsprojPath([CallerFilePath] string thisFile = "")
+    {
+        var testDir = Path.GetDirectoryName(thisFile)!;
+        return Path.GetFullPath(
+            Path.Join(
+                testDir, "..", "..",
+                "plugins", "TypeWhisper.Plugin.SherpaOnnx",
+                "TypeWhisper.Plugin.SherpaOnnx.csproj"));
+    }
+
     private static IPluginHostServices CreateHost(
         out List<(PluginLogLevel level, string message)> logEntries)
     {

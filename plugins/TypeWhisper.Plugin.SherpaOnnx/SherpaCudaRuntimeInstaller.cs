@@ -40,7 +40,9 @@ internal sealed class SherpaCudaRuntimeInstaller
     // What we keep out of the tarball's lib/ directory. The TensorRT provider
     // (libonnxruntime_providers_tensorrt.so) is deliberately excluded — we only
     // use the CUDA execution provider, and it adds nothing but bulk.
-    private static readonly string[] CoreRuntimeFiles =
+    // internal (not private) so a regression test can assert the CUDA provider is
+    // extracted here even though it must never be preloaded (see SherpaOnnxNativeRuntime).
+    internal static readonly string[] CoreRuntimeFiles =
     [
         "libsherpa-onnx-c-api.so",
         "libsherpa-onnx-cxx-api.so",
@@ -108,7 +110,7 @@ internal sealed class SherpaCudaRuntimeInstaller
                 // Verify before extracting so a corrupt/tampered download can't drop
                 // bad native .so files into the cache — code we then dlopen and trust
                 // on every later run.
-                VerifySha256(tarballPath);
+                VerifySha256(tarballPath, RuntimeDirectory);
 
                 _log?.Invoke("sherpa-onnx GPU runtime: extracting native libraries");
                 ExtractCoreRuntimeFiles(tarballPath);
@@ -178,7 +180,9 @@ internal sealed class SherpaCudaRuntimeInstaller
 
     // internal (not private) so a unit test can pin the fail-closed contract without
     // a network download — a corrupt/swapped artifact must throw before extraction.
-    internal static void VerifySha256(string path)
+    // cacheDirectory is optional so the test can call it without a path; the real caller
+    // passes RuntimeDirectory so the message names the exact dir to delete (M4).
+    internal static void VerifySha256(string path, string? cacheDirectory = null)
     {
         using var stream = File.OpenRead(path);
         var hash = Convert.ToHexString(SHA256.HashData(stream));
@@ -186,7 +190,9 @@ internal sealed class SherpaCudaRuntimeInstaller
             throw new InvalidOperationException(
                 $"Checksum mismatch for {AssetFileName} "
                     + $"(expected {AssetSha256}, got {hash.ToLowerInvariant()}). The download may "
-                    + "be corrupt; clear the sherpa-onnx GPU runtime cache and retry."
+                    + (cacheDirectory is null
+                        ? "be corrupt; clear the sherpa-onnx GPU runtime cache and retry."
+                        : $"be corrupt; delete the sherpa-onnx GPU runtime cache ({cacheDirectory}) and retry.")
             );
     }
 

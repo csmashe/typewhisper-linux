@@ -87,10 +87,26 @@ public sealed class CudaRuntimeProvisioner
         RequiredSonames: ["libcudnn.so.9"]
     );
 
+    // cuDNN 9's graph engine JIT-compiles some kernels and dlopens libnvrtc.so.12
+    // LAZILY at that point (it carries an $ORIGIN/../../cuda_nvrtc/lib runpath that
+    // doesn't exist in our flat cache, and no library hard-NEEDs nvrtc). Without it,
+    // a model/shape that routes through a runtime-compiled cuDNN engine (e.g. Canary's
+    // attention path) fails deep in ORT session execution with an opaque error — the
+    // conv-heavy Parakeet graph happens to use only precompiled engines, which is why
+    // it works without this. Preloading nvrtc RTLD_GLOBAL satisfies that lazy dlopen.
+    // Pinned to the CUDA 12.9.1 nvrtc that pairs with cudart 12.9.79; its
+    // libnvrtc-builtins companion comes along in the flat extraction and resolves via
+    // $ORIGIN. Only sherpa-onnx's ORT/cuDNN path needs this, not whisper.cpp.
+    private static readonly CudaWheel Nvrtc = new(
+        "nvidia-cuda-nvrtc-cu12",
+        "12.9.86",
+        RequiredSonames: ["libnvrtc.so.12"]
+    );
+
     private static readonly CudaWheel[] WhisperWheels = [CudaRuntime, Cublas];
 
     private static readonly CudaWheel[] OnnxRuntimeWheels =
-        [CudaRuntime, Cublas, Cufft, Curand, Cudnn];
+        [CudaRuntime, Cublas, Cufft, Curand, Nvrtc, Cudnn];
 
     private static readonly string[] s_systemLibraryDirectories = BuildSystemLibraryDirectories();
 
@@ -160,6 +176,19 @@ public sealed class CudaRuntimeProvisioner
                 "On-demand CUDA provisioning is only supported on Linux x64."
             );
 
+        // Verify the NVIDIA driver can actually initialize before downloading or
+        // dlopen'ing anything. HasCudaGpu (nvidia-smi/-/dev/nvidiactl present) only
+        // proves a device exists, not that the driver is usable for THIS CUDA 12
+        // runtime — a too-old driver inits-fail. Committing to the GPU path anyway is
+        // especially costly for whisper.cpp: its [Cuda]-only loader caches the native
+        // library-load FAILURE in a process-wide static and then poisons CPU fallback
+        // until restart. Throwing here lets the caller downgrade to CPU cleanly (and
+        // before fetching ~1.5 GB of wheels) instead.
+        if (!TryInitializeCudaDriver(out var driverError))
+            throw new InvalidOperationException(
+                $"The NVIDIA CUDA driver is not usable: {driverError}"
+            );
+
         var wheels = profile == CudaRuntimeProfile.WhisperCublas
             ? WhisperWheels
             : OnnxRuntimeWheels;
@@ -208,7 +237,9 @@ public sealed class CudaRuntimeProvisioner
     )
     {
         // Resolve each wheel's download URL + size + checksum up front so progress
-        // can be weighted by real byte totals across the whole batch.
+        // can be weighted by real byte totals across the whole batch. The size is a
+        // best-effort estimate: PyPI publishes it today, but ResolveWheelAsync defaults
+        // it to 0 if a future response omits it, so the denominator could be understated.
         var jobs = new List<(CudaWheel Wheel, string Url, long Size, string Sha256)>();
         foreach (var wheel in missing)
         {
@@ -222,7 +253,7 @@ public sealed class CudaRuntimeProvisioner
         foreach (var (wheel, url, size, sha256) in jobs)
         {
             var baseline = completedBytes;
-            await DownloadAndExtractWheelAsync(
+            var downloaded = await DownloadAndExtractWheelAsync(
                 wheel,
                 url,
                 sha256,
@@ -233,7 +264,10 @@ public sealed class CudaRuntimeProvisioner
                 },
                 ct
             ).ConfigureAwait(false);
-            completedBytes += size;
+            // Advance by the metadata size when known, else by what we actually read,
+            // so a wheel whose PyPI size was missing still moves the cumulative counter
+            // instead of stalling it at the previous baseline.
+            completedBytes += size > 0 ? size : downloaded;
         }
 
         progress?.Report(1.0);
@@ -276,8 +310,14 @@ public sealed class CudaRuntimeProvisioner
             var size = entry.TryGetProperty("size", out var sizeNode) ? sizeNode.GetInt64() : 0;
             // Fail closed: these .so files get dlopen'd RTLD_GLOBAL into the process, so
             // a missing digest must abort rather than silently skip integrity checking.
-            // PyPI always publishes a sha256 here; an absent one signals a bad/MITM'd
-            // metadata response. Mirrors the url fail-closed above.
+            // Scope note: this digest is read from the SAME pypi.org JSON as the URL, so
+            // it only guards against in-transit corruption or a CDN serving bytes that
+            // don't match its own metadata — NOT a forged/MITM'd metadata response (an
+            // attacker who could forge the response controls both the URL and the hash).
+            // The actual supply-chain trust anchor for the wheels is TLS to pypi.org;
+            // unlike the sherpa tarball and whisper nupkg (source-pinned SHA-256), the
+            // wheel hashes are intentionally not pinned in source. Mirrors the url
+            // fail-closed above.
             var sha256 = entry.GetProperty("digests").GetProperty("sha256").GetString()
                 ?? throw new InvalidOperationException(
                     $"No SHA-256 digest for the {wheel.Package} wheel.");
@@ -289,7 +329,9 @@ public sealed class CudaRuntimeProvisioner
         );
     }
 
-    private async Task DownloadAndExtractWheelAsync(
+    // Returns the number of bytes actually downloaded, so the caller can advance its
+    // cumulative progress counter even when PyPI omitted this wheel's metadata size.
+    private async Task<long> DownloadAndExtractWheelAsync(
         CudaWheel wheel,
         string url,
         string expectedSha256,
@@ -302,6 +344,7 @@ public sealed class CudaRuntimeProvisioner
             $"{wheel.Package}.{Guid.NewGuid():N}.whl.tmp"
         );
 
+        long readTotal = 0;
         try
         {
             using (var response = await _httpClient
@@ -322,7 +365,6 @@ public sealed class CudaRuntimeProvisioner
                 );
 
                 var buffer = new byte[81920];
-                long readTotal = 0;
                 int read;
                 while ((read = await contentStream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
                 {
@@ -345,6 +387,8 @@ public sealed class CudaRuntimeProvisioner
             // on disk and the next run's IsWheelSatisfied would wrongly skip the
             // re-download, then fail when cuDNN dlopens a missing companion.
             WriteCompletionMarker(wheel);
+
+            return readTotal;
         }
         finally
         {
@@ -376,7 +420,10 @@ public sealed class CudaRuntimeProvisioner
         }
     }
 
-    private static void VerifySha256(string path, string expected, string package)
+    // Instance (not static) so the mismatch message can name CacheDirectory — the exact
+    // path to delete if a corrupt download needs clearing (M4: a corrupt cached file is
+    // never auto-re-fetched, so the user needs to know where it lives).
+    private void VerifySha256(string path, string expected, string package)
     {
         using var stream = File.OpenRead(path);
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
@@ -384,7 +431,7 @@ public sealed class CudaRuntimeProvisioner
             throw new InvalidOperationException(
                 $"Checksum mismatch for the {package} wheel "
                     + $"(expected {expected}, got {hash.ToLowerInvariant()}). The download may be "
-                    + "corrupt; clear the CUDA runtime cache and retry."
+                    + $"corrupt; delete the CUDA runtime cache ({CacheDirectory}) and retry."
             );
     }
 
@@ -620,6 +667,41 @@ public sealed class CudaRuntimeProvisioner
             // best effort
         }
     }
+
+    // Probes the NVIDIA driver via cuInit(0) from libcuda.so.1 (the driver stub,
+    // never one of our provisioned math libs). Returns false — rather than throwing —
+    // when the driver is absent (DllNotFoundException) or can't initialize (cuInit
+    // returns a non-zero CUresult, e.g. CUDA_ERROR_NO_DEVICE / a driver-too-old
+    // mismatch), so the caller can fall back to CPU without committing to the GPU
+    // native runtimes.
+    internal static bool TryInitializeCudaDriver(out string? error)
+    {
+        try
+        {
+            var result = cuInit(0);
+            if (result == 0)
+            {
+                error = null;
+                return true;
+            }
+
+            error = $"cuInit returned CUDA error {result}.";
+            return false;
+        }
+        catch (DllNotFoundException)
+        {
+            error = "the CUDA driver library (libcuda.so.1) was not found.";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            error = $"the driver probe failed: {ex.Message}";
+            return false;
+        }
+    }
+
+    [DllImport("libcuda.so.1", EntryPoint = "cuInit")]
+    private static extern int cuInit(uint flags);
 
     [DllImport("libdl.so.2", CharSet = CharSet.Ansi)]
     private static extern IntPtr dlopen(string fileName, int flags);

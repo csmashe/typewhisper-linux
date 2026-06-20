@@ -100,6 +100,20 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    ///     Loads a downloaded model into memory, reporting provisioning/download
+    ///     progress 0.0–1.0 via <paramref name="progress" /> — e.g. when a
+    ///     self-provisioning engine fetches its CUDA runtime on first GPU use (see
+    ///     <see cref="ProvisionsCudaRuntimeOnDemand" />). The host surfaces this as a
+    ///     download progress bar instead of a static spinner. Default delegates to
+    ///     <see cref="LoadModelAsync(string, CancellationToken)" /> (no progress), so
+    ///     engines with nothing slow to provision need not override it.
+    /// </summary>
+    Task LoadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    {
+        return LoadModelAsync(modelId, ct);
+    }
+
     /// <summary>Deletes downloaded model files for the given model ID.</summary>
     Task DeleteModelAsync(string modelId, CancellationToken ct)
     {

@@ -198,7 +198,10 @@ internal sealed class WhisperCudaRuntimeInstaller
         }
     }
 
-    private static void VerifySha256(string path)
+    // Instance (not static) so the mismatch message can name NativeDirectory — the exact
+    // path to delete if a corrupt download needs clearing (M4: a corrupt cached file is
+    // never auto-re-fetched, so the user needs to know where it lives).
+    private void VerifySha256(string path)
     {
         using var stream = File.OpenRead(path);
         var hash = Convert.ToHexString(SHA256.HashData(stream));
@@ -206,7 +209,7 @@ internal sealed class WhisperCudaRuntimeInstaller
             throw new InvalidOperationException(
                 $"Checksum mismatch for the {PackageId} package "
                     + $"(expected {PackageSha256}, got {hash.ToLowerInvariant()}). The download may "
-                    + "be corrupt; clear the whisper.cpp GPU runtime cache and retry."
+                    + $"be corrupt; delete the whisper.cpp GPU runtime cache ({NativeDirectory}) and retry."
             );
     }
 

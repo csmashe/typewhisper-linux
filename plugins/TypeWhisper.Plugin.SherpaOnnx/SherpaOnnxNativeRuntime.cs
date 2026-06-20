@@ -40,7 +40,9 @@ internal static class SherpaOnnxNativeRuntime
     // correctly (host first) when the recognizer requests the CUDA EP. A genuinely
     // missing CUDA dependency then surfaces as a catchable session-creation error
     // (→ CPU fallback) instead of a crash.
-    private static readonly string[] PreloadOrder =
+    // internal (not private) so a regression test can assert the CUDA provider is
+    // never reintroduced here (see the §6 invariant in the comment above).
+    internal static readonly string[] PreloadOrder =
     [
         "libonnxruntime_providers_shared.so",
         "libonnxruntime.so",
