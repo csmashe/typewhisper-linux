@@ -1,13 +1,17 @@
 using SharpHook.Native;
 using System.Diagnostics;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 
 /// <summary>
 ///     Reads keyboard input directly from <c>/dev/input/event*</c> for global
 ///     hotkey detection on Wayland (SharpHook only sees events while focused).
-///     Requires the user to be in the <c>input</c> group; <see cref="IsAvailable" />
-///     returns false when no device can be opened so callers fall through to SharpHook.
+///     Requires read access to a keyboard event node — granted on first run by
+///     the keyboard-access udev rule (<see cref="InputAccessSetupHelper" />) via
+///     <c>TAG+="uaccess"</c>, with <c>GROUP="input"</c> as the non-logind
+///     fallback. <see cref="IsAvailable" /> returns false when no device can be
+///     opened so callers fall through to SharpHook.
 /// </summary>
 public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 {
@@ -83,34 +87,9 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 
     public bool IsAvailable()
     {
-        // Available when at least one keyboard device is readable. Cheapest probe: open+close.
-        var devices = KeyboardDeviceDiscovery.EnumerateKeyboards();
-        if (devices.Count == 0)
-        {
-            return false;
-        }
-
-        foreach (var d in devices)
-        {
-            try
-            {
-                using var s = new FileStream(
-                    d,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite
-                );
-                return true;
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-            catch (IOException)
-            {
-            }
-        }
-
-        return false;
+        // Available when at least one keyboard event node is readable — the
+        // ground-truth probe shared with the keyboard-access setup task.
+        return InputDeviceAccessCheck.HasKeyboardAccess();
     }
 
     public Task<GlobalShortcutRegistrationResult> RegisterAsync(
@@ -148,9 +127,9 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
                         new GlobalShortcutRegistrationResult(
                             false,
                             BackendId,
-                            "No accessible keyboards under /dev/input. Add your user to the 'input' group.",
+                            Loc.Instance["Shortcuts.EvdevNoKeyboardAccess"],
                             false,
-                            "sudo usermod -aG input $USER"
+                            InputAccessSetupHelper.ManualInstallCommand()
                         )
                     );
                 }

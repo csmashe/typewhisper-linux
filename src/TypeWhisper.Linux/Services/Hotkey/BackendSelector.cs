@@ -21,20 +21,15 @@ public sealed class BackendSelector
     {
     }
 
-    public BackendSelector(
-        SharpHookGlobalShortcutBackend sharpHook,
-        EvdevGlobalShortcutBackend evdev,
-        XdgPortalGlobalShortcutsBackend portal,
-        ISettingsService settings
-    )
-        : this(() =>
-            Resolve(
-                evdev,
-                portal,
-                sharpHook,
-                settings.Current.WaylandEvdevHotkeysEnabled
-            )
-        )
+    // Takes the settings service, NOT the backend instances: each Resolve() must
+    // mint FRESH backends. HotkeyService.SwitchBackendAsync disposes the active
+    // backend before re-resolving (on the evdev on/off toggle and after the
+    // keyboard-access setup grants access), so reusing injected singletons would
+    // hand back a disposed instance on the next switch — e.g. a disposed SharpHook
+    // whose RegisterAsync reports success without actually starting the hook,
+    // silently breaking the focused-only fallback until restart.
+    public BackendSelector(ISettingsService settings)
+        : this(DefaultFactory(settings))
     {
     }
 
@@ -52,61 +47,47 @@ public sealed class BackendSelector
     {
         return () =>
         {
-            var sharpHook = new SharpHookGlobalShortcutBackend();
+            // X11/unknown: the in-process hook is already global.
             if (!IsWaylandSession())
             {
-                return sharpHook;
+                return new SharpHookGlobalShortcutBackend();
             }
 
-            var evdev = new EvdevGlobalShortcutBackend();
+            // Wayland: evdev first (the full global hotkey set), unless opted out.
+            // Probe access via the static check so a rejected evdev never allocates
+            // a backend; construct it only when it's the one we return.
+            var evdevEnabled = settings?.Current.WaylandEvdevHotkeysEnabled ?? true;
+            if (evdevEnabled && InputDeviceAccessCheck.HasKeyboardAccess())
+            {
+                Trace.WriteLine(
+                    "[BackendSelector] evdev backend active — reading keyboard events to detect your configured shortcut. No keystroke content is logged."
+                );
+                return new EvdevGlobalShortcutBackend();
+            }
+
+            // Portal is a stub (IsAvailable()==false). Probe via a throwaway instance
+            // and dispose it when unselected so a future real impl isn't leaked.
             var portal = new XdgPortalGlobalShortcutsBackend();
-            var enabled = settings?.Current.WaylandEvdevHotkeysEnabled ?? true;
-            return Resolve(evdev, portal, sharpHook, enabled);
+            if (portal.IsAvailable())
+            {
+                Trace.WriteLine(
+                    "[BackendSelector] Using XDG portal global-shortcuts backend (toggle-only)."
+                );
+                return portal;
+            }
+
+            _ = portal.DisposeAsync();
+
+            Trace.WriteLine(
+                evdevEnabled
+                    ? "[BackendSelector] Wayland session but evdev unavailable; falling back to SharpHook (focused-only)."
+                    : "[BackendSelector] Wayland session but user disabled evdev hotkeys; using focused-only SharpHook."
+            );
+
+            // Construct SharpHook ONLY here, when it's the selected backend, so its
+            // TaskPoolGlobalHook is never created for a backend we'd discard.
+            return new SharpHookGlobalShortcutBackend();
         };
-    }
-
-    private static IGlobalShortcutBackend Resolve(
-        EvdevGlobalShortcutBackend evdev,
-        XdgPortalGlobalShortcutsBackend portal,
-        SharpHookGlobalShortcutBackend sharpHook,
-        bool evdevEnabled
-    )
-    {
-        if (!IsWaylandSession())
-        {
-            return sharpHook;
-        }
-
-        if (evdevEnabled && evdev.IsAvailable())
-        {
-            Trace.WriteLine(
-                "[BackendSelector] evdev backend active — reading keyboard events to detect your configured shortcut. No keystroke content is logged."
-            );
-            return evdev;
-        }
-
-        if (portal.IsAvailable())
-        {
-            Trace.WriteLine(
-                "[BackendSelector] Using XDG portal global-shortcuts backend (toggle-only)."
-            );
-            return portal;
-        }
-
-        if (!evdevEnabled)
-        {
-            Trace.WriteLine(
-                "[BackendSelector] Wayland session but user disabled evdev hotkeys; using focused-only SharpHook."
-            );
-        }
-        else
-        {
-            Trace.WriteLine(
-                "[BackendSelector] Wayland session but evdev unavailable; falling back to SharpHook (focused-only)."
-            );
-        }
-
-        return sharpHook;
     }
 
     private static bool IsWaylandSession()

@@ -8,24 +8,71 @@ namespace TypeWhisper.Linux.Services.Setup;
 ///     Ensures the dictation hotkey fires globally with full tap-vs-hold support.
 ///     On X11 the in-app hook is already global — nothing to do.
 ///     On Wayland the compositor won't deliver global keys to the app, so it reads
-///     input devices directly via evdev (requires the <c>input</c> group; one admin
-///     prompt + re-login).
+///     keyboard input directly via evdev. That needs read access to keyboard event
+///     nodes, which this task grants by installing a small <c>uaccess</c> udev rule
+///     (<see cref="InputAccessSetupHelper" />): one admin prompt, access applied to
+///     the active session immediately — no logout or reboot. On init systems
+///     without logind the rule's <c>GROUP="input"</c> fallback additionally needs
+///     the user to join the <c>input</c> group and re-login, which this task falls
+///     back to automatically.
 ///     Desktop "custom shortcuts" (gsettings / KDE / compositor binds) are deliberately
-///     avoided: they fire a single pulse per press with no release event, making
-///     hold-to-talk impossible and autorepeat thrashing start/stop rapidly.
+///     avoided as the default: they fire a single pulse per press with no release event,
+///     making hold-to-talk impossible and autorepeat thrashing start/stop rapidly. They
+///     remain available as a documented alternative in Settings → Shortcuts.
 /// </summary>
 public sealed class GlobalHotkeySetupTask : ISetupTask
 {
-    private readonly SystemCommandAvailabilityService _commands;
     private readonly IProcessRunner _runner;
+    private readonly InputAccessSetupHelper _accessHelper;
 
-    public GlobalHotkeySetupTask(SystemCommandAvailabilityService commands, IProcessRunner runner)
+    // Seams kept behind an internal constructor so the production wiring uses the
+    // real session probe / device probe / group-file read / backend hot-swap,
+    // while tests drive the state machine deterministically without touching the
+    // session environment, /dev/input, /etc/group, or resolving a live backend.
+    private readonly Func<bool> _isWayland;
+    private readonly Func<bool> _hasKeyboardAccess;
+    private readonly Func<bool> _userListedInInputGroupFile;
+    private readonly Func<bool> _ruleInstalled;
+    private readonly Func<CancellationToken, Task> _onAccessGranted;
+
+    public GlobalHotkeySetupTask(
+        SystemCommandAvailabilityService commands,
+        IProcessRunner runner,
+        InputAccessSetupHelper accessHelper,
+        HotkeyService hotkey
+    )
+        : this(
+            () => commands.GetSnapshot().SessionType == "Wayland",
+            runner,
+            accessHelper,
+            InputDeviceAccessCheck.HasKeyboardAccess,
+            UserListedInInputGroupFile,
+            accessHelper.IsRuleInstalled,
+            hotkey.SwitchBackendAsync
+        )
     {
-        _commands = commands;
-        _runner = runner;
     }
 
-    private bool IsWayland => _commands.GetSnapshot().SessionType == "Wayland";
+    internal GlobalHotkeySetupTask(
+        Func<bool> isWayland,
+        IProcessRunner runner,
+        InputAccessSetupHelper accessHelper,
+        Func<bool> hasKeyboardAccess,
+        Func<bool> userListedInInputGroupFile,
+        Func<bool> ruleInstalled,
+        Func<CancellationToken, Task> onAccessGranted
+    )
+    {
+        _isWayland = isWayland;
+        _runner = runner;
+        _accessHelper = accessHelper;
+        _hasKeyboardAccess = hasKeyboardAccess;
+        _userListedInInputGroupFile = userListedInInputGroupFile;
+        _ruleInstalled = ruleInstalled;
+        _onAccessGranted = onAccessGranted;
+    }
+
+    private bool IsWayland => _isWayland();
 
     private static string CurrentUser => Environment.UserName;
 
@@ -40,23 +87,28 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
 
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
     {
-        // X11: in-app hook captures global keys with press/release — no group needed.
+        // X11: in-app hook captures global keys with press/release — no setup needed.
         if (!IsWayland)
         {
             return Satisfied(Loc.Instance["Setup.GlobalHotkeyActiveX11"]);
         }
 
-        // Wayland: evdev global hotkey requires the input group.
-        if (InputGroupCheck.CurrentUserInInputGroup() == true)
+        // Wayland: gate on actual openability of a keyboard node, NOT input-group
+        // membership. With the uaccess rule the user is granted access via a
+        // session ACL without ever joining the group, so a group check would
+        // falsely report "no access" and nag.
+        if (_hasKeyboardAccess())
         {
-            return Satisfied(
-                Loc.Instance["Setup.GlobalHotkeyActiveEvdev"]
-            );
+            return Satisfied(Loc.Instance["Setup.GlobalHotkeyActiveEvdev"]);
         }
 
-        // usermod ran but the new group isn't effective until re-login.
-        // Treat as satisfied-with-caveat so Finish isn't blocked.
-        if (UserListedInInputGroupFile())
+        // Non-logind fallback: we already installed the uaccess rule and fell back
+        // to the input group, so only a re-login remains — satisfied-with-caveat so
+        // Finish isn't blocked. Gated on the rule actually being installed: a user
+        // with *stale* group membership from the old usermod flow (rule not yet
+        // installed) should instead be offered the new rule, which can grant access
+        // immediately on logind rather than forcing a logout.
+        if (_userListedInInputGroupFile() && _ruleInstalled())
         {
             return Task.FromResult(
                 new SetupTaskState(
@@ -72,19 +124,21 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
                 Loc.Instance["Setup.GlobalHotkeyNeedsInputGroup"],
                 Loc.Instance["Setup.GlobalHotkeyNeedsInputGroupHint"],
                 Loc.Instance["Setup.GlobalHotkeyAddMeButton"],
-                $"sudo usermod -aG input {CurrentUser}"
+                InputAccessSetupHelper.ManualInstallCommand()
             )
         );
     }
 
     public async Task<SetupActionOutcome> RunActionAsync(CancellationToken ct)
     {
-        if (!IsWayland || InputGroupCheck.CurrentUserInInputGroup() == true)
+        if (!IsWayland || _hasKeyboardAccess())
         {
             return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyAlreadyActive"]);
         }
 
-        var manual = $"sudo usermod -aG input {CurrentUser}";
+        // ManualInstallCommand() already carries the non-logind input-group fallback
+        // as a trailing comment, so the copyable command is complete on every system.
+        var manual = InputAccessSetupHelper.ManualInstallCommand();
         if (!DesktopDetector.BinaryExists("pkexec"))
         {
             return new SetupActionOutcome(
@@ -93,6 +147,53 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
                 Loc.Instance.GetString("Setup.RunInTerminalInstead", manual)
             );
         }
+
+        // Install the keyboard-access udev rule (one admin prompt) and apply it to
+        // the current session via udevadm reload + trigger + settle.
+        var install = await _accessHelper.InstallAsync(ct).ConfigureAwait(false);
+        if (!install.Success)
+        {
+            return new SetupActionOutcome(
+                false,
+                install.Cancelled
+                    ? Loc.Instance["Setup.AdminAuthCancelled"]
+                    : Loc.Instance["Setup.GlobalHotkeyAccessFailed"],
+                Loc.Instance.GetString("Setup.RunInTerminalInstead", manual)
+            );
+        }
+
+        // Self-correcting: on logind systems the uaccess ACL is live now, so the
+        // re-probe succeeds and we're done with no reboot. Hot-swap the backend so
+        // evdev re-attaches the now-readable devices without an app restart.
+        if (_hasKeyboardAccess())
+        {
+            try
+            {
+                await _onAccessGranted(ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // A backend hot-swap hiccup must not turn a successful grant into a
+                // failure — the access is granted; the backend re-probes on next
+                // launch regardless.
+            }
+
+            return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyAccessEnabled"]);
+        }
+
+        // No logind (Devuan, Alpine without elogind): the rule's GROUP="input"
+        // fallback only grants access once the user joins that group and re-logs.
+        return await AddToInputGroupFallbackAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Non-logind last resort: add the user to the <c>input</c> group so the
+    ///     rule's <c>GROUP="input"</c> clause grants access after a re-login. Only
+    ///     reached when the uaccess ACL didn't take effect (no systemd-logind).
+    /// </summary>
+    private async Task<SetupActionOutcome> AddToInputGroupFallbackAsync(CancellationToken ct)
+    {
+        var manual = $"sudo usermod -aG input {CurrentUser}";
 
         var result = await _runner
             .RunAsync(
@@ -136,6 +237,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     /// <summary>
     ///     True when the current user is listed in <c>/etc/group</c> for the <c>input</c>
     ///     group — i.e. <c>usermod -aG</c> ran but the session hasn't been restarted yet.
+    ///     Used only for the non-logind relogin-pending caveat.
     /// </summary>
     private static bool UserListedInInputGroupFile()
     {

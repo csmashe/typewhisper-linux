@@ -11,7 +11,6 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class ShortcutsSectionViewModel : ObservableObject
 {
-    private const string AddToInputGroupCommand = "sudo usermod -aG input $USER";
     private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
 
     private readonly HotkeyService _hotkey;
@@ -113,9 +112,11 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public bool ShowCapabilityMismatch =>
         _hotkey.BackendRequiresToggleMode && Mode != RecordingMode.Toggle;
 
-    // Hide the banner when the group check returns null (e.g. /proc
-    // unavailable) so we don't nag users we can't actually advise.
-    public bool ShowInputGroupBanner
+    // Show the banner only on Wayland when we genuinely can't open a keyboard
+    // node. Gating on actual access (not input-group membership) is correct now
+    // that the uaccess rule grants access via a session ACL without the group —
+    // a membership check would nag users who already have working access.
+    public bool ShowKeyboardAccessBanner
     {
         get
         {
@@ -124,12 +125,13 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 return false;
             }
 
-            var inGroup = InputGroupCheck.CurrentUserInInputGroup();
-            return inGroup == false;
+            return !InputDeviceAccessCheck.HasKeyboardAccess();
         }
     }
 
-    public string InputGroupCommand => AddToInputGroupCommand;
+    // The exact command the keyboard-access setup runs, offered as a copyable
+    // fallback for users who'd rather not click through the one-prompt installer.
+    public string KeyboardAccessCommand => InputAccessSetupHelper.ManualInstallCommand();
 
     // Bare binary name relies on the Phase 4 single-instance IPC: a second
     // invocation toggles the existing instance instead of launching a new one.
@@ -542,6 +544,6 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SupportsPressRelease));
         OnPropertyChanged(nameof(ScopeText));
         OnPropertyChanged(nameof(ShowCapabilityMismatch));
-        OnPropertyChanged(nameof(ShowInputGroupBanner));
+        OnPropertyChanged(nameof(ShowKeyboardAccessBanner));
     }
 }
