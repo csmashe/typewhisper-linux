@@ -207,11 +207,11 @@ public sealed class InputAccessSetupHelperTests
     {
         private readonly string? _originalPath = Environment.GetEnvironmentVariable("PATH");
         private readonly string? _originalSysConf = InputAccessSetupHelper.SysConfDirOverride;
-        private readonly string _pathDir = Path.Combine(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
+        private readonly string _pathDir = Path.Join(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
 
         public SysConfEnvironment()
         {
-            Dir = Path.Combine(Path.GetTempPath(), $"tw-etc-{Guid.NewGuid():N}");
+            Dir = Path.Join(Path.GetTempPath(), $"tw-etc-{Guid.NewGuid():N}");
             Directory.CreateDirectory(_pathDir);
             Directory.CreateDirectory(Dir);
             Environment.SetEnvironmentVariable("PATH", _pathDir);
@@ -230,7 +230,7 @@ public sealed class InputAccessSetupHelperTests
 
         public void PutFakeBinaryOnPath(string name)
         {
-            File.WriteAllText(Path.Combine(_pathDir, name), "#!/bin/sh\n");
+            File.WriteAllText(Path.Join(_pathDir, name), "#!/bin/sh\n");
         }
 
         public void WriteRule(string content)

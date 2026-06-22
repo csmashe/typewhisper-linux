@@ -239,8 +239,8 @@ public sealed class GlobalHotkeySetupTaskTests
     {
         private readonly string? _originalPath = Environment.GetEnvironmentVariable("PATH");
         private readonly string? _originalSysConf = InputAccessSetupHelper.SysConfDirOverride;
-        private readonly string _pathDir = Path.Combine(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
-        private readonly string _sysConfDir = Path.Combine(Path.GetTempPath(), $"tw-etc-{Guid.NewGuid():N}");
+        private readonly string _pathDir = Path.Join(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
+        private readonly string _sysConfDir = Path.Join(Path.GetTempPath(), $"tw-etc-{Guid.NewGuid():N}");
 
         public PkexecOnPath(bool installPkexec = true)
         {
@@ -250,7 +250,7 @@ public sealed class GlobalHotkeySetupTaskTests
             InputAccessSetupHelper.SysConfDirOverride = _sysConfDir;
             if (installPkexec)
             {
-                File.WriteAllText(Path.Combine(_pathDir, "pkexec"), "#!/bin/sh\n");
+                File.WriteAllText(Path.Join(_pathDir, "pkexec"), "#!/bin/sh\n");
             }
         }
 
