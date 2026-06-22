@@ -148,6 +148,10 @@
                                     Content="{Binding CudaLibraryPathActionText}"
                                     Command="{Binding AddCudaLibraryPathToShellProfileCommand}"
                                     IsVisible="{Binding ShowCudaLibraryPathAction}" />
+                            <Button Grid.Column="2"
+                                    Content="{Binding DownloadCudaRuntimeText}"
+                                    Command="{Binding DownloadCudaRuntimeCommand}"
+                                    IsVisible="{Binding ShowDownloadCudaRuntimeAction}" />
                         </Grid>
                     </Border>
 

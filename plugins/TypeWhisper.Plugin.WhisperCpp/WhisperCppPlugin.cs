@@ -238,6 +238,13 @@ public sealed class WhisperCppPlugin
     // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
     public bool ProvisionsCudaRuntimeOnDemand => true;
 
+    // CUDA is ready only when BOTH cudart+cuBLAS (system-or-cached) AND whisper.cpp's
+    // GPU native build are present; a partial state reports false so the host keeps
+    // offering the download action. Pure file/cache inspection — no driver probe.
+    public bool IsCudaRuntimeProvisioned =>
+        _cudaProvisioner?.IsProfileSatisfied(CudaRuntimeProfile.WhisperCublas) == true
+        && _whisperCudaInstaller?.IsInstalled == true;
+
     public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
 
     public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
@@ -258,6 +265,22 @@ public sealed class WhisperCppPlugin
         _host = host;
         _selectedModelId = host.GetSetting<string>("selectedModel");
         _noSpeechThreshold = ReadNoSpeechThreshold(host);
+
+        // Create the CUDA provisioner/installer eagerly so IsCudaRuntimeProvisioned can
+        // report a warm cache immediately after a restart (the host gates CUDA selection
+        // on it), not only after a download has been attempted. Both are cheap to build;
+        // the ?? lets tests inject fakes before activate.
+        _cudaProvisioner ??= new CudaRuntimeProvisioner(
+            CudaRuntimeProvisioner.DefaultCacheRoot(),
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg)
+        );
+        _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
+            host.PluginAssetDirectory,
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg)
+        );
+
         host.Log(PluginLogLevel.Info, "Activated");
         return Task.CompletedTask;
     }
@@ -791,7 +814,7 @@ public sealed class WhisperCppPlugin
     // backend — so a backend switch during this (slow) download can't leave that
     // process-wide path committed to a load we then abort. Throws on any failure so
     // the caller can fall back to a working CPU load.
-    private async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+    public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
     {
         if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
             throw new PlatformNotSupportedException(

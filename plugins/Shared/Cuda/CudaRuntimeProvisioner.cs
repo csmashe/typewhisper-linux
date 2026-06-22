@@ -159,6 +159,21 @@ public sealed class CudaRuntimeProvisioner
             "cuda"
         );
 
+    private static CudaWheel[] WheelsFor(CudaRuntimeProfile profile) =>
+        profile == CudaRuntimeProfile.WhisperCublas ? WhisperWheels : OnnxRuntimeWheels;
+
+    /// <summary>
+    ///     True when every CUDA library the <paramref name="profile" /> needs is
+    ///     already resolvable — either provided by the host system or sitting
+    ///     complete in our cache. Pure inspection: it does NOT probe the driver,
+    ///     download, or preload anything, so it is safe to poll from the UI to
+    ///     decide whether CUDA can be selected (true) or the runtime still needs
+    ///     downloading (false). When only some wheels are satisfied it returns
+    ///     false — the partial-install case the download button must still offer.
+    /// </summary>
+    public bool IsProfileSatisfied(CudaRuntimeProfile profile) =>
+        WheelsFor(profile).All(IsWheelSatisfied);
+
     /// <summary>
     ///     Ensures every CUDA library the <paramref name="profile" /> needs is on
     ///     disk (downloading the missing wheels) and preloaded
@@ -189,9 +204,7 @@ public sealed class CudaRuntimeProvisioner
                 $"The NVIDIA CUDA driver is not usable: {driverError}"
             );
 
-        var wheels = profile == CudaRuntimeProfile.WhisperCublas
-            ? WhisperWheels
-            : OnnxRuntimeWheels;
+        var wheels = WheelsFor(profile);
 
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try

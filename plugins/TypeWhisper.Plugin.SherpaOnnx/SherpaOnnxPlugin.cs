@@ -107,6 +107,14 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
     public bool ProvisionsCudaRuntimeOnDemand => true;
 
+    // CUDA is ready only when BOTH the math libraries (system-or-cached) AND the
+    // sherpa-onnx GPU native build are present. A partial state (e.g. math libs cached
+    // but the GPU tarball not yet extracted) reports false so the host keeps offering
+    // the download action. Pure file/cache inspection — no driver probe, no download.
+    public bool IsCudaRuntimeProvisioned =>
+        _cudaProvisioner?.IsProfileSatisfied(CudaRuntimeProfile.OnnxRuntimeCuda) == true
+        && _cudaRuntimeInstaller?.IsInstalled == true;
+
     public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
 
     public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
@@ -434,7 +442,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             .ConfigureAwait(false);
     }
 
-    private async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+    public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
     {
         EnsureCudaPlatformSupported();
 
@@ -466,8 +474,24 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             )
             .ConfigureAwait(false);
 
-        // Route the managed bindings to the GPU dir and preload its ORT deps.
-        SherpaOnnxNativeRuntime.ConfigureCudaRuntime(installer.RuntimeDirectory);
+        // Route the managed bindings to the GPU dir and preload its ORT deps — but only
+        // while it is still safe to do so. ConfigureCudaRuntime dlopens a second
+        // libonnxruntime.so RTLD_GLOBAL and redirects the import resolver, which must
+        // happen "before the first recognizer is created" (see SherpaOnnxNativeRuntime).
+        // Once a recognizer has pinned the process to a non-CUDA provider — e.g. the user
+        // ran on CPU and is now clicking the host's "download CUDA runtime" button — wiring
+        // the GPU ORT into that live process would leave it in a mixed CPU/GPU native state.
+        // Skip it: the files are now on disk, and the host's restart prompt lets a fresh
+        // process wire the GPU runtime cleanly. (On the LoadModelAsync path desiredProvider
+        // can only be "cuda" when the process isn't CPU-pinned, so this never blocks it.)
+        bool canWireIntoProcess;
+        lock (_sync)
+            canWireIntoProcess =
+                _loadedNativeProvider is null
+                || string.Equals(_loadedNativeProvider, "cuda", StringComparison.Ordinal);
+
+        if (canWireIntoProcess)
+            SherpaOnnxNativeRuntime.ConfigureCudaRuntime(installer.RuntimeDirectory);
     }
 
     // Logs download progress in coarse 10% steps (so a first-time multi-hundred-MB fetch

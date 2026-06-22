@@ -50,6 +50,32 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     /// </summary>
     bool ProvisionsCudaRuntimeOnDemand => false;
 
+    /// <summary>
+    ///     For a self-provisioning engine (<see cref="ProvisionsCudaRuntimeOnDemand" />),
+    ///     whether the CUDA runtime it needs is already fully available — every
+    ///     required library either provided by the host system or already downloaded
+    ///     into the cache. Pure inspection (no driver probe, no download), so the host
+    ///     can poll it to decide whether CUDA can be selected now (<c>true</c>) or the
+    ///     runtime still needs fetching (<c>false</c>, including the partial-install
+    ///     case where only some libraries are present). Default: <c>false</c>.
+    /// </summary>
+    bool IsCudaRuntimeProvisioned => false;
+
+    /// <summary>
+    ///     Downloads and preloads only the CUDA runtime libraries this engine is still
+    ///     missing (a no-op when <see cref="IsCudaRuntimeProvisioned" /> is already
+    ///     <c>true</c>), reporting progress 0.0–1.0. Lets the host offer an explicit
+    ///     "download CUDA runtime" action on a driver-only host instead of waiting for
+    ///     the lazy <see cref="LoadModelAsync(string, IProgress{double}, CancellationToken)" />
+    ///     path. Throws if the NVIDIA driver is unusable or the download fails — the
+    ///     host surfaces the message. Default: no-op (engines that rely on a
+    ///     host-provided runtime have nothing to fetch).
+    /// </summary>
+    Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+    {
+        return Task.CompletedTask;
+    }
+
     /// <summary>Acceleration preference last requested by the host. Default: Auto.</summary>
     TranscriptionAccelerationPreference AccelerationPreference =>
         TranscriptionAccelerationPreference.Auto;

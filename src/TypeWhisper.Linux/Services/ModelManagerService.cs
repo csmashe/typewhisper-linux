@@ -73,18 +73,23 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public ITranscriptionEnginePlugin? ActiveTranscriptionPlugin
-    {
-        get
-        {
-            if (_activeModelId is null || !IsPluginModel(_activeModelId))
-            {
-                return null;
-            }
+    public ITranscriptionEnginePlugin? ActiveTranscriptionPlugin => GetTranscriptionPlugin(_activeModelId);
 
-            var (pluginId, _) = ParsePluginModelId(_activeModelId);
-            return PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId);
+    /// <summary>
+    ///     Resolves the transcription plugin that owns <paramref name="modelId" /> (a
+    ///     <c>plugin:&lt;id&gt;:&lt;model&gt;</c> identifier), or null when the id is not a
+    ///     plugin model or no matching engine is loaded. Lets callers target the engine for
+    ///     a specific (e.g. UI-selected) model rather than only the active one.
+    /// </summary>
+    public ITranscriptionEnginePlugin? GetTranscriptionPlugin(string? modelId)
+    {
+        if (modelId is null || !IsPluginModel(modelId))
+        {
+            return null;
         }
+
+        var (pluginId, _) = ParsePluginModelId(modelId);
+        return PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId);
     }
 
     public void Dispose()
@@ -607,7 +612,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 var loadInProgress = true;
                 var loadProgress = new Progress<double>(p =>
                 {
-                    if (!System.Threading.Volatile.Read(ref loadInProgress))
+                    if (!Volatile.Read(ref loadInProgress))
                         return;
                     SetStatus(
                         modelId,
@@ -620,7 +625,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 }
                 finally
                 {
-                    System.Threading.Volatile.Write(ref loadInProgress, false);
+                    Volatile.Write(ref loadInProgress, false);
                 }
             }
 
