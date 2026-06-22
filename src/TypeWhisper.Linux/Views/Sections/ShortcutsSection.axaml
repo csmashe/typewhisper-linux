@@ -323,7 +323,17 @@
 
             <TextBlock Text="{loc:Str Shortcuts.BindCustom}"
                        Classes="section-label" />
-            <Border Classes="section-panel">
+            <TextBlock FontSize="12"
+                       Foreground="#8A9AAE"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8"
+                       Text="{loc:Str Shortcuts.CompositorBindsNote}" />
+            <Button HorizontalAlignment="Left"
+                    Margin="0,0,0,10"
+                    Content="{Binding CompositorBindsToggleLabel}"
+                    Command="{Binding ToggleCompositorBindsCommand}" />
+            <Border Classes="section-panel"
+                    IsVisible="{Binding CompositorBindsExpanded}">
                 <Border Classes="section-row">
                     <StackPanel>
                         <StackPanel IsVisible="{Binding CanSetupAutomatically}"
