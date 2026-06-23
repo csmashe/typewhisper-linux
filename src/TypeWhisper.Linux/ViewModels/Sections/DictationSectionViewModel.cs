@@ -22,6 +22,13 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
     private readonly LocalModelStorageService _modelStorage;
 
+    // Cached snapshot of the selected engine's CUDA-provisioned state; CanUseCuda reads this
+    // instead of probing the plugin inline (see CanUseCuda). Recomputed off the UI thread by
+    // RefreshSelectedPluginCudaProvisionedAsync; _cudaProbeGeneration discards a probe whose
+    // selection has since changed.
+    private bool _selectedPluginCudaProvisioned;
+    private int _cudaProbeGeneration;
+
     [ObservableProperty]
     private string _activeModelLabel = Loc.Instance["Dictation.NoModelLoaded"];
 
@@ -54,6 +61,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string _cudaSetupStatus = "";
+
+    [ObservableProperty]
+    private bool _isDownloadingCudaRuntime;
 
     [ObservableProperty]
     private string _engineName = Loc.Instance["Dictation.NoEngineSelected"];
@@ -92,6 +102,10 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _modelReady;
 
     private CancellationTokenSource? _modelSelectionCts;
+
+    // Set while hydrating from saved settings so OnLocalModelAccelerationChanged doesn't
+    // run its CUDA-availability revert guard against a not-yet-loaded engine.
+    private bool _suppressAccelerationGuard;
 
     [ObservableProperty]
     private string _modelStatusText = Loc.Instance["Dictation.StatusNotReady"];
@@ -272,11 +286,60 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool CanDeleteSelectedModel =>
         SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
 
+    // The loader-path fix only applies when the system CUDA libraries exist on disk but
+    // aren't currently loadable. Once they are loadable (HasCudaRuntimeLibraries) there is
+    // nothing to fix — a self-provisioning engine that still lacks its own GPU build is then
+    // handled by ShowDownloadCudaRuntimeAction instead. The !CanUseCuda gate also hides it
+    // once an engine is fully provisioned from its own cache (CUDA already usable).
     public bool ShowCudaLibraryPathAction =>
-        _commands.HasCudaGpu && !CanUseCuda && FindCuda12LibraryPath() is not null;
+        _commands.HasCudaGpu
+        && !CanUseCuda
+        && !_commands.HasCudaRuntimeLibraries
+        && FindCuda12LibraryPath() is not null;
 
     public string CudaLibraryPathActionText => Loc.Instance["Dictation.FixCudaPath"];
-    public bool CanUseCuda => _commands.HasCudaGpu && _commands.HasCudaRuntimeLibraries;
+
+    // CUDA is usable only when the GPU/driver is present AND the runtime the SELECTED engine
+    // needs is fully available. A self-provisioning engine needs its own GPU native build
+    // (the sherpa-onnx GPU ORT / whisper.cpp CUDA build) on top of the CUDA math libraries —
+    // even a complete host CUDA toolkit never ships that engine build — so the system-library
+    // flag alone is not enough: we require the engine's full provisioned state. That keeps the
+    // "Download CUDA runtime" action available to prefetch the engine build instead of hiding
+    // it and deferring a large download to the lazy model-load path. Engines that rely on a
+    // host-provided runtime are usable as soon as the system CUDA libraries are present.
+    //
+    // The provisioned arm reads a cached flag rather than the plugin's IsCudaRuntimeProvisioned:
+    // the probe can shell out to `ldconfig -p` (~1s) once per missing CUDA library on a
+    // driver-only host, and CanUseCuda is read by several bindings and re-evaluated on every
+    // ModelStatusText change — calling it inline would freeze the UI thread.
+    // RefreshSelectedPluginCudaProvisionedAsync recomputes the flag off-thread.
+    public bool CanUseCuda =>
+        _commands.HasCudaGpu
+        && (
+            SelectedModelPlugin?.ProvisionsCudaRuntimeOnDemand == true
+                ? _selectedPluginCudaProvisioned
+                : _commands.HasCudaRuntimeLibraries
+        );
+
+    // The engine that owns the model selected in the Dictation UI — the one a CUDA download
+    // must target. Distinct from ActiveTranscriptionPlugin (the loaded engine), which is null
+    // before any model loads (e.g. at startup) and can lag a freshly selected model.
+    private ITranscriptionEnginePlugin? SelectedModelPlugin =>
+        _models.GetTranscriptionPlugin(SelectedModel?.ModelId);
+
+    // Offer the in-app download when there's a GPU but CUDA isn't usable yet and the
+    // selected engine can fetch its own runtime — i.e. a driver-only host, or a partial
+    // install where only some libraries are present (the engine downloads just the gaps).
+    // Suppressed while a download is in flight, and when the libs exist on disk but only
+    // need a loader-path fix (that's the ShowCudaLibraryPathAction button's job instead).
+    public bool ShowDownloadCudaRuntimeAction =>
+        _commands.HasCudaGpu
+        && !CanUseCuda
+        && !IsDownloadingCudaRuntime
+        && !ShowCudaLibraryPathAction
+        && SelectedModelPlugin?.ProvisionsCudaRuntimeOnDemand == true;
+
+    public string DownloadCudaRuntimeText => Loc.Instance["Dictation.DownloadCudaRuntime"];
 
     public string AccelerationStatusText
     {
@@ -518,9 +581,17 @@ public partial class DictationSectionViewModel : ObservableObject
         Language = string.IsNullOrWhiteSpace(settings.Language) ? "auto" : settings.Language;
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
         CleanupLevel = settings.CleanupLevel;
+        // Hydrate the saved acceleration WITHOUT running the change guard: at startup no
+        // model is loaded yet, so ActiveTranscriptionPlugin is null and CanUseCuda would
+        // read false even when the runtime is fully provisioned — the guard would then
+        // revert a saved "nvidia-cuda" back to CPU and persist it, losing the user's
+        // choice. The model-load path provisions/falls back and AccelerationStatus
+        // reports the truth; we just reflect the saved value here.
+        _suppressAccelerationGuard = true;
         LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
             settings.LocalModelAcceleration
         );
+        _suppressAccelerationGuard = false;
         ModelStoragePath = _modelStorage.ResolvedModelStoragePath;
         IsUsingCustomModelStorage =
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
@@ -645,8 +716,11 @@ public partial class DictationSectionViewModel : ObservableObject
             _ => Loc.Instance["Dictation.StatusNotReady"]
         };
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
+        OnPropertyChanged(nameof(CanUseCuda));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
+        OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
         OnPropertyChanged(nameof(AccelerationStatusText));
+        _ = RefreshSelectedPluginCudaProvisionedAsync();
     }
 
     partial void OnSelectedModelChanged(DictationModelOption? value)
@@ -664,6 +738,15 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnLocalModelAccelerationChanged(string value)
     {
+        // During settings hydration just reflect the saved value — no revert, no persist,
+        // no reload (see RefreshFromSettings). The guard below is only for live user edits.
+        if (_suppressAccelerationGuard)
+        {
+            OnPropertyChanged(nameof(SelectedAccelerationOption));
+            OnPropertyChanged(nameof(AccelerationStatusText));
+            return;
+        }
+
         var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
 
         // Guard: CUDA can't be selected when unavailable; Auto always works and resolves to CPU.
@@ -902,6 +985,66 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
+    // Driver-only host (or partial install): download just the CUDA libraries the selected
+    // engine is missing, show progress, then ask the user to restart so a clean process
+    // loads the GPU build. The engine itself skips any library already on the system.
+    [RelayCommand]
+    private async Task DownloadCudaRuntimeAsync()
+    {
+        var plugin = SelectedModelPlugin;
+        if (plugin is not { ProvisionsCudaRuntimeOnDemand: true } || IsDownloadingCudaRuntime)
+        {
+            return;
+        }
+
+        IsDownloadingCudaRuntime = true;
+        OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
+        StatusText = Loc.Instance["Dictation.CudaDownloadingShort"];
+        CudaSetupStatus = Loc.Instance.GetString("Dictation.CudaDownloading", "0%");
+
+        // Marshal progress onto the UI thread — the provisioner reports from a background
+        // task, and CudaSetupStatus binds straight into the view.
+        var progress = new Progress<double>(p =>
+            CudaSetupStatus = Loc.Instance.GetString(
+                "Dictation.CudaDownloading",
+                Math.Clamp(p, 0, 1).ToString("P0")
+            )
+        );
+
+        try
+        {
+            await plugin.EnsureCudaRuntimeReadyAsync(progress, CancellationToken.None);
+
+            // Refresh the cached provisioned flag (cheap now — the cache is populated, so the
+            // probe is file-existence checks, no `ldconfig`) so CanUseCuda reads true before
+            // we select CUDA below.
+            await RefreshSelectedPluginCudaProvisionedAsync();
+
+            // Auto-select CUDA so the single restart we prompt for lands directly on the
+            // GPU — the user downloaded the runtime in order to use it, so making them
+            // also toggle the dropdown (and restart a second time) is needless friction.
+            // CanUseCuda is now true (the selected engine just provisioned the cache), so
+            // this persists the preference instead of the guard reverting it to CPU. Set
+            // the status text AFTER, since the acceleration-change handler clears it.
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda;
+            CudaSetupStatus = Loc.Instance["Dictation.CudaDownloaded"];
+            StatusText = Loc.Instance["Dictation.CudaDownloadedShort"];
+        }
+        catch (Exception ex)
+        {
+            CudaSetupStatus = Loc.Instance.GetString("Dictation.CudaDownloadFailed", ex.Message);
+            StatusText = Loc.Instance["Dictation.CudaDownloadFailedShort"];
+        }
+        finally
+        {
+            IsDownloadingCudaRuntime = false;
+            OnPropertyChanged(nameof(CanUseCuda));
+            OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
+            OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
+            OnPropertyChanged(nameof(AccelerationStatusText));
+        }
+    }
+
     private static string ResolveShellProfilePath(string home)
     {
         var shell = Environment.GetEnvironmentVariable("SHELL") ?? string.Empty;
@@ -947,7 +1090,47 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnModelStatusTextChanged(string value)
     {
+        OnPropertyChanged(nameof(CanUseCuda));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
+        OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
+        _ = RefreshSelectedPluginCudaProvisionedAsync();
+    }
+
+    // Recompute the cached CanUseCuda provisioned flag off the UI thread — the selected
+    // engine's IsCudaRuntimeProvisioned can shell out to `ldconfig -p` (~1s) per missing CUDA
+    // library, so it must never run inline on a binding (see CanUseCuda). A generation guard
+    // drops the result if the selection changed while the probe was in flight.
+    private async Task RefreshSelectedPluginCudaProvisionedAsync()
+    {
+        var generation = ++_cudaProbeGeneration;
+        var provisioned = false;
+        if (SelectedModelPlugin is { ProvisionsCudaRuntimeOnDemand: true } plugin)
+        {
+            provisioned = await Task
+                .Run(() => plugin.IsCudaRuntimeProvisioned)
+                .ConfigureAwait(true);
+        }
+
+        if (generation != _cudaProbeGeneration)
+        {
+            return;
+        }
+
+        SetSelectedPluginCudaProvisioned(provisioned);
+    }
+
+    private void SetSelectedPluginCudaProvisioned(bool value)
+    {
+        if (_selectedPluginCudaProvisioned == value)
+        {
+            return;
+        }
+
+        _selectedPluginCudaProvisioned = value;
+        OnPropertyChanged(nameof(CanUseCuda));
+        OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
+        OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
+        OnPropertyChanged(nameof(AccelerationStatusText));
     }
 
     private static string FormatModelStatusError(string? message)

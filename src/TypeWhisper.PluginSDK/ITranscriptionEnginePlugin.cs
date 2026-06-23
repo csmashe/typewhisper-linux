@@ -38,6 +38,44 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
         [TranscriptionAccelerationBackend.Cpu];
 
+    /// <summary>
+    ///     Whether this engine downloads and preloads its own CUDA runtime on demand
+    ///     during <see cref="LoadModelAsync" />, and falls back to CPU itself
+    ///     (surfacing the reason via <see cref="AccelerationStatus" />) when the GPU
+    ///     path can't be honoured. When <c>true</c>, the host must not reject an
+    ///     explicit <see cref="TranscriptionAccelerationBackend.NvidiaCuda" /> load
+    ///     just because the CUDA runtime libraries aren't already installed on the
+    ///     host — the plugin provisions them. Default: <c>false</c> (the engine relies
+    ///     on a host-provided CUDA runtime).
+    /// </summary>
+    bool ProvisionsCudaRuntimeOnDemand => false;
+
+    /// <summary>
+    ///     For a self-provisioning engine (<see cref="ProvisionsCudaRuntimeOnDemand" />),
+    ///     whether the CUDA runtime it needs is already fully available — every
+    ///     required library either provided by the host system or already downloaded
+    ///     into the cache. Pure inspection (no driver probe, no download), so the host
+    ///     can poll it to decide whether CUDA can be selected now (<c>true</c>) or the
+    ///     runtime still needs fetching (<c>false</c>, including the partial-install
+    ///     case where only some libraries are present). Default: <c>false</c>.
+    /// </summary>
+    bool IsCudaRuntimeProvisioned => false;
+
+    /// <summary>
+    ///     Downloads and preloads only the CUDA runtime libraries this engine is still
+    ///     missing (a no-op when <see cref="IsCudaRuntimeProvisioned" /> is already
+    ///     <c>true</c>), reporting progress 0.0–1.0. Lets the host offer an explicit
+    ///     "download CUDA runtime" action on a driver-only host instead of waiting for
+    ///     the lazy <see cref="LoadModelAsync(string, IProgress{double}, CancellationToken)" />
+    ///     path. Throws if the NVIDIA driver is unusable or the download fails — the
+    ///     host surfaces the message. Default: no-op (engines that rely on a
+    ///     host-provided runtime have nothing to fetch).
+    /// </summary>
+    Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+    {
+        return Task.CompletedTask;
+    }
+
     /// <summary>Acceleration preference last requested by the host. Default: Auto.</summary>
     TranscriptionAccelerationPreference AccelerationPreference =>
         TranscriptionAccelerationPreference.Auto;
@@ -86,6 +124,20 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     Task LoadModelAsync(string modelId, CancellationToken ct)
     {
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    ///     Loads a downloaded model into memory, reporting provisioning/download
+    ///     progress 0.0–1.0 via <paramref name="progress" /> — e.g. when a
+    ///     self-provisioning engine fetches its CUDA runtime on first GPU use (see
+    ///     <see cref="ProvisionsCudaRuntimeOnDemand" />). The host surfaces this as a
+    ///     download progress bar instead of a static spinner. Default delegates to
+    ///     <see cref="LoadModelAsync(string, CancellationToken)" /> (no progress), so
+    ///     engines with nothing slow to provision need not override it.
+    /// </summary>
+    Task LoadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+    {
+        return LoadModelAsync(modelId, ct);
     }
 
     /// <summary>Deletes downloaded model files for the given model ID.</summary>

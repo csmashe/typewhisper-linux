@@ -73,18 +73,23 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public ITranscriptionEnginePlugin? ActiveTranscriptionPlugin
-    {
-        get
-        {
-            if (_activeModelId is null || !IsPluginModel(_activeModelId))
-            {
-                return null;
-            }
+    public ITranscriptionEnginePlugin? ActiveTranscriptionPlugin => GetTranscriptionPlugin(_activeModelId);
 
-            var (pluginId, _) = ParsePluginModelId(_activeModelId);
-            return PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId);
+    /// <summary>
+    ///     Resolves the transcription plugin that owns <paramref name="modelId" /> (a
+    ///     <c>plugin:&lt;id&gt;:&lt;model&gt;</c> identifier), or null when the id is not a
+    ///     plugin model or no matching engine is loaded. Lets callers target the engine for
+    ///     a specific (e.g. UI-selected) model rather than only the active one.
+    /// </summary>
+    public ITranscriptionEnginePlugin? GetTranscriptionPlugin(string? modelId)
+    {
+        if (modelId is null || !IsPluginModel(modelId))
+        {
+            return null;
         }
+
+        var (pluginId, _) = ParsePluginModelId(modelId);
+        return PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId);
     }
 
     public void Dispose()
@@ -534,10 +539,11 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 TranscriptionAccelerationBackend.NvidiaCuda
             );
 
-            // CPU-only plugins (e.g. SherpaOnnx) handle a CUDA preference internally by
-            // falling back to CPU, so the preflight hard-error path is irrelevant and would
-            // break valid CPU loads on CUDA-less hosts. Always resolve Auto → Cpu locally
-            // so plugins never receive the unresolved Auto sentinel (SDK contract).
+            // CPU-only plugins (those that don't list NvidiaCuda) handle a CUDA
+            // preference internally by falling back to CPU, so the preflight hard-error
+            // path is irrelevant and would break valid CPU loads on CUDA-less hosts.
+            // Always resolve Auto → Cpu locally so plugins never receive the unresolved
+            // Auto sentinel (SDK contract).
             TranscriptionAccelerationPreference resolvedPreference;
             if (pluginSupportsCuda)
             {
@@ -559,13 +565,32 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 && resolvedPreference == TranscriptionAccelerationPreference.NvidiaCuda
             )
             {
-                var (ok, message) = CudaRuntimePreflight();
-                if (!ok)
+                if (plugin.ProvisionsCudaRuntimeOnDemand)
                 {
-                    // Explicit NvidiaCuda keeps the hard-error path so broken CUDA is visible.
-                    // Auto would have resolved to Cpu above; this branch is for explicit
-                    // requests (or the pathological double-preflight-inconsistency case).
-                    throw new InvalidOperationException(message);
+                    // This plugin downloads + preloads its own CUDA runtime during the
+                    // load and falls back to CPU itself (reporting via AccelerationStatus)
+                    // if that fails, so a missing *system* CUDA install is not fatal —
+                    // skipping the host preflight is what lets on-demand provisioning run
+                    // on a driver-only host. Still hard-fail when there's no NVIDIA GPU at
+                    // all, so we don't kick off a multi-hundred-MB runtime download with
+                    // nothing to run it on. (_commands is null only in unit tests, where
+                    // the absence of a known-missing GPU lets the provisioning path run.)
+                    if (_commands is { HasCudaGpu: false })
+                    {
+                        throw new InvalidOperationException("No NVIDIA GPU/driver detected.");
+                    }
+                }
+                else
+                {
+                    // Plugins that rely on a host-provided CUDA runtime keep the hard-error
+                    // path so broken CUDA is visible. Auto would have resolved to Cpu above;
+                    // this branch is for explicit requests (or the pathological
+                    // double-preflight-inconsistency case).
+                    var (ok, message) = CudaRuntimePreflight();
+                    if (!ok)
+                    {
+                        throw new InvalidOperationException(message);
+                    }
                 }
             }
 
@@ -573,7 +598,35 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
             if (plugin.SupportsModelDownload)
             {
-                await plugin.LoadModelAsync(pluginModelId, cancellationToken);
+                // A self-provisioning engine may download a multi-hundred-MB GPU runtime
+                // during the load (first CUDA use). Surface that as DownloadingModel so the
+                // UI shows a real progress bar instead of the static LoadingModel spinner
+                // set above; when provisioning finishes (or none is needed) the plugin
+                // reports 1.0 and we drop back to LoadingModel for the native init.
+                //
+                // Progress<T> posts callbacks asynchronously to the captured
+                // SynchronizationContext, so a late report could otherwise run AFTER this
+                // load returns and clobber the terminal Ready status (set below) with a
+                // stale Loading/Downloading one. Gate the handler so it no-ops once the
+                // load has returned.
+                var loadInProgress = true;
+                var loadProgress = new Progress<double>(p =>
+                {
+                    if (!Volatile.Read(ref loadInProgress))
+                        return;
+                    SetStatus(
+                        modelId,
+                        p >= 1.0 ? ModelStatus.LoadingModel : ModelStatus.DownloadingModel(p)
+                    );
+                });
+                try
+                {
+                    await plugin.LoadModelAsync(pluginModelId, loadProgress, cancellationToken);
+                }
+                finally
+                {
+                    Volatile.Write(ref loadInProgress, false);
+                }
             }
 
             plugin.SelectModel(pluginModelId);

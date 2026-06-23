@@ -438,6 +438,81 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task LoadModelAsync_NvidiaCudaPreference_SelfProvisioningPlugin_NoSystemCuda_LoadsWithCuda()
+    {
+        // A plugin that downloads + preloads its own CUDA runtime on demand must NOT be
+        // hard-failed just because the host has no system CUDA install — that's exactly
+        // the case its on-demand provisioner exists to handle. The host skips the
+        // preflight entirely and lets the plugin provision (and fall back to CPU itself
+        // if needed) during the load.
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true)
+        {
+            ProvisionsCudaRuntimeOnDemand = true,
+        };
+        var preflightCalls = 0;
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () =>
+            {
+                preflightCalls++;
+                return (false, "CUDA 12 runtime libraries are not installed.");
+            },
+        };
+
+        await sut.LoadModelAsync(fullModelId);
+
+        // No preflight gate for self-provisioning plugins; the plugin receives the
+        // explicit NvidiaCuda preference and handles provisioning/fallback itself.
+        Assert.Equal(0, preflightCalls);
+        Assert.Equal(
+            TranscriptionAccelerationPreference.NvidiaCuda,
+            fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_AutoPreference_SelfProvisioningPlugin_NoSystemCuda_ResolvesToCpu()
+    {
+        // Auto stays conservative even for self-provisioning plugins: when no CUDA
+        // runtime is already present, Auto resolves to CPU rather than silently kicking
+        // off a large on-demand download. The big download only happens on an explicit
+        // NvidiaCuda choice.
+        const string pluginId = "com.typewhisper.sherpa-onnx";
+        var fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+            });
+
+        var fake = new FakeTranscriptionPlugin(pluginId, true, null, true)
+        {
+            ProvisionsCudaRuntimeOnDemand = true,
+        };
+        var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () => (false, "CUDA 12 runtime libraries are not installed."),
+        };
+
+        await sut.LoadModelAsync(fullModelId);
+
+        Assert.Equal(
+            TranscriptionAccelerationPreference.Cpu,
+            fake.AccelerationPreferenceAtLoad);
+    }
+
+    [Fact]
     public async Task LoadModelAsync_AutoPreferenceOnCpuOnlyPlugin_ResolvesToCpu_NoPreflight()
     {
         // SDK contract: plugins must never see TranscriptionAccelerationPreference.Auto.
@@ -678,6 +753,8 @@ public class ModelManagerServiceTests
 
         public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; set; } =
             [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
+
+        public bool ProvisionsCudaRuntimeOnDemand { get; set; }
 
         /// <summary>Last preference passed to <see cref="SetAccelerationPreference" />.</summary>
         public TranscriptionAccelerationPreference? LastAccelerationPreference { get; private set; }

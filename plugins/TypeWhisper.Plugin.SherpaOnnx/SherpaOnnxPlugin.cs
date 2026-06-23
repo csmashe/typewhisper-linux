@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using SherpaOnnx;
+using TypeWhisper.Plugins.Shared.Cuda;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -57,13 +59,28 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     ];
 
     private readonly object _sync = new();
-    private readonly HttpClient _httpClient = new();
+
+    // Drives both the model-file downloads and the on-demand CUDA runtime fetches
+    // (the ~224 MB sherpa GPU tarball plus the cudart/cuBLAS/cuFFT/cuRAND/cuDNN
+    // wheels, the largest of which is ~685 MB). HttpClient.Timeout bounds the WHOLE
+    // request including the streamed body — even with ResponseHeadersRead — so the
+    // default 100 s deadline would cancel these large fetches mid-stream on any
+    // ordinary link. Use a generous ceiling (matching GemmaLocal's large-model
+    // client) and rely on the per-call CancellationToken for cancellation; the
+    // ceiling also bounds a stalled-but-open socket so it can't hang forever.
+    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
     private IPluginHostServices? _host;
     private OfflineRecognizer? _recognizer;
+    private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
+    private CudaRuntimeProvisioner? _cudaProvisioner;
     private string? _loadedModelId;
     private string? _loadedModelDir;
     private string? _selectedModelId;
     private string _computeBackend = "cpu";
+
+    // The ORT/CUDA native provider is pinned to whichever backend loads first in
+    // the process; it can't be hot-swapped, so a later mismatch requires a restart.
+    private string? _loadedNativeProvider;
     private TranscriptionAccelerationPreference _accelerationPreference =
         TranscriptionAccelerationPreference.Auto;
     private TranscriptionAccelerationStatus _accelerationStatus =
@@ -84,7 +101,19 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public bool SupportsModelDownload => true;
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
-        [TranscriptionAccelerationBackend.Cpu];
+        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
+
+    // LoadModelAsync downloads + preloads the CUDA runtime on demand and falls back to
+    // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
+    public bool ProvisionsCudaRuntimeOnDemand => true;
+
+    // CUDA is ready only when BOTH the math libraries (system-or-cached) AND the
+    // sherpa-onnx GPU native build are present. A partial state (e.g. math libs cached
+    // but the GPU tarball not yet extracted) reports false so the host keeps offering
+    // the download action. Pure file/cache inspection — no driver probe, no download.
+    public bool IsCudaRuntimeProvisioned =>
+        _cudaProvisioner?.IsProfileSatisfied(CudaRuntimeProfile.OnnxRuntimeCuda) == true
+        && _cudaRuntimeInstaller?.IsInstalled == true;
 
     public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
 
@@ -107,6 +136,23 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
+
+        // Lazily provisioned on demand; the ?? lets tests inject fakes before activate.
+        _cudaRuntimeInstaller ??= new SherpaCudaRuntimeInstaller(
+            host.PluginAssetDirectory,
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg)
+        );
+        _cudaProvisioner ??= new CudaRuntimeProvisioner(
+            CudaRuntimeProvisioner.DefaultCacheRoot(),
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg)
+        );
+
+        // Register the import resolver now; until CUDA is configured it defers to
+        // the default loader, which picks up the CPU runtime from the managed nuget.
+        SherpaOnnxNativeRuntime.RegisterResolver();
+
         MigrateModelFiles();
         return Task.CompletedTask;
     }
@@ -138,9 +184,20 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (_computeBackend == normalized)
                 return Task.CompletedTask;
 
+            // Once a recognizer has loaded, the native provider is pinned for the
+            // process lifetime. Refuse to desync _computeBackend from it — keeping
+            // them equal means the requested switch is surfaced as restart-required
+            // via the acceleration status (derived from the saved preference) and a
+            // reload can't silently rebuild on the wrong backend.
+            if (
+                _loadedNativeProvider is not null
+                && !string.Equals(_loadedNativeProvider, normalized, StringComparison.Ordinal)
+            )
+                return Task.CompletedTask;
+
             _computeBackend = normalized;
-            if (!string.Equals(normalized, "cpu", StringComparison.OrdinalIgnoreCase))
-                UnloadRecognizerUnsafe();
+            // Drop the active recognizer so the next load rebuilds on the new backend.
+            UnloadRecognizerUnsafe();
         }
 
         return Task.CompletedTask;
@@ -149,30 +206,19 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public void SetAccelerationPreference(TranscriptionAccelerationPreference preference)
     {
         _accelerationPreference = preference;
-        if (preference == TranscriptionAccelerationPreference.NvidiaCuda)
-        {
-            _host?.Log(
-                PluginLogLevel.Warning,
-                "SherpaOnnx does not support CUDA on Linux; falling back to CPU."
-            );
-            _accelerationStatus = new TranscriptionAccelerationStatus(
-                TranscriptionAccelerationBackend.Cpu,
-                "Using CPU",
-                "SherpaOnnx does not support CUDA on Linux; falling back to CPU."
-            );
-        }
-        else
-        {
-            _accelerationStatus = new TranscriptionAccelerationStatus(
-                TranscriptionAccelerationBackend.Cpu,
-                "Using CPU"
-            );
-        }
 
-        // ConfigureComputeBackendAsync completes synchronously for SherpaOnnx
-        // (no awaits in the body), so the swap is fully applied by the time
-        // SetAccelerationPreference returns.
-        _ = ConfigureComputeBackendAsync("cpu");
+        var desired = preference == TranscriptionAccelerationPreference.NvidiaCuda ? "cuda" : "cpu";
+
+        // ConfigureComputeBackendAsync completes synchronously for SherpaOnnx (no
+        // awaits in the body) and refuses to switch once the native provider is
+        // pinned. Derive the status from the saved preference so a pinned mismatch
+        // reads as restart-required and survives a subsequent reload (which would
+        // otherwise overwrite it). The CUDA runtime is provisioned lazily on the
+        // next LoadModelAsync.
+        _ = ConfigureComputeBackendAsync(desired);
+        _accelerationStatus = _loadedNativeProvider is null
+            ? CreatePendingAccelerationStatus(preference)
+            : CreateLoadedAccelerationStatus(_loadedNativeProvider, preference);
     }
 
     public bool IsModelDownloaded(string modelId)
@@ -286,7 +332,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         progress?.Report(1.0);
     }
 
-    public Task LoadModelAsync(string modelId, CancellationToken ct)
+    public Task LoadModelAsync(string modelId, CancellationToken ct) =>
+        LoadModelAsync(modelId, null, ct);
+
+    public async Task LoadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
     {
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
@@ -294,33 +343,188 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         if (!model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName))))
             throw new FileNotFoundException($"Model files not found for: {modelId}");
 
-        return Task.Run(
+        string desiredProvider;
+        lock (_sync)
+            desiredProvider = _computeBackend;
+
+        // Set if a CUDA attempt fails and we fall back to CPU, so the final status
+        // can explain why. We can't tell whether the user's saved setting was Auto
+        // (the host resolves it before calling us and never passes Auto), so rather
+        // than hard-fail an explicit CUDA request we always fall back to a working
+        // CPU load and surface the reason in the acceleration status.
+        string? cudaUnavailableDetail = null;
+
+        // Provision + wire the GPU runtime before touching the recognizer. Done
+        // outside the lock because it may download hundreds of MB on first use.
+        if (string.Equals(desiredProvider, "cuda", StringComparison.Ordinal))
+        {
+            try
+            {
+                await EnsureCudaRuntimeReadyAsync(progress, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"sherpa-onnx CUDA runtime unavailable ({ex.Message}); falling back to CPU."
+                        + (_cudaProvisioner is { } provisioner
+                            ? $" Shared CUDA runtime cache: {provisioner.CacheDirectory}."
+                            : "")
+                );
+                cudaUnavailableDetail = ex.Message;
+                desiredProvider = "cpu";
+                lock (_sync)
+                    _computeBackend = "cpu";
+            }
+        }
+
+        await Task.Run(
             () =>
             {
                 lock (_sync)
                 {
-                    if (!string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase))
-                        throw new NotSupportedException(
-                            "CUDA is not available for the bundled sherpa-onnx runtime. Select a whisper.cpp model for CUDA."
+                    // Provisioning can take minutes; the backend may have been
+                    // switched out from under us in that window. Abort the stale
+                    // load rather than pinning the process to a runtime the user
+                    // no longer wants (and possibly after downloading it for nothing).
+                    if (!string.Equals(_computeBackend, desiredProvider, StringComparison.Ordinal))
+                        throw new InvalidOperationException(
+                            "Compute backend changed during model load; reload to apply the new backend."
                         );
 
                     UnloadRecognizerUnsafe();
 
-                    _recognizer = model.SupportsTranslation
-                        ? CreateCanaryRecognizer(dir, "en", "en")
-                        : CreateParakeetRecognizer(dir);
+                    var activeProvider = desiredProvider;
+                    try
+                    {
+                        _recognizer = model.SupportsTranslation
+                            ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
+                            : CreateParakeetRecognizer(dir, activeProvider);
+                    }
+                    catch (Exception ex)
+                        when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
+                    {
+                        // Recreate with the CPU execution provider. The GPU ONNX
+                        // Runtime is already wired in by ConfigureCudaRuntime and runs
+                        // the CPU provider correctly, so this yields working CPU
+                        // transcription rather than failing the load outright.
+                        _host?.Log(
+                            PluginLogLevel.Warning,
+                            $"sherpa-onnx CUDA recognizer creation failed ({ex.Message}); falling back to CPU."
+                        );
+                        cudaUnavailableDetail = ex.Message;
+                        activeProvider = "cpu";
+                        _computeBackend = "cpu";
+                        _recognizer = model.SupportsTranslation
+                            ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
+                            : CreateParakeetRecognizer(dir, activeProvider);
+                    }
+
+                    // First successful load pins the native provider for the process.
+                    _loadedNativeProvider ??= activeProvider;
 
                     _loadedModelId = modelId;
                     _loadedModelDir = dir;
                     _selectedModelId = modelId;
                     _canarySrcLang = "en";
                     _canaryTgtLang = "en";
+                    _accelerationStatus = cudaUnavailableDetail is null
+                        ? CreateLoadedAccelerationStatus(activeProvider, _accelerationPreference)
+                        : CreateCudaUnavailableStatus(cudaUnavailableDetail);
 
-                    Debug.WriteLine($"[SherpaOnnx] Model {modelId} loaded from {dir}");
+                    Debug.WriteLine(
+                        $"[SherpaOnnx] Model {modelId} loaded from {dir} ({activeProvider})"
+                    );
                 }
             },
             ct
-        );
+        )
+            .ConfigureAwait(false);
+    }
+
+    public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+    {
+        EnsureCudaPlatformSupported();
+
+        var provisioner =
+            _cudaProvisioner
+            ?? throw new InvalidOperationException("CUDA provisioner is not initialized.");
+        var installer =
+            _cudaRuntimeInstaller
+            ?? throw new InvalidOperationException("CUDA runtime installer is not initialized.");
+
+        // The two download stages map to a single monotonic 0→1 bar for the host: the
+        // math libs (cuDNN alone is ~1.7 GB unpacked) are the bulk, so weight them 60%
+        // and the sherpa GPU build 40%.
+        // Preload the CUDA math libraries (cudart/cublas/cufft/curand/nvrtc/cuDNN),
+        // downloading any the host doesn't already provide.
+        await provisioner
+            .EnsureReadyAsync(
+                CudaRuntimeProfile.OnnxRuntimeCuda,
+                ProvisionProgress("CUDA libraries", progress, 0.0, 0.6),
+                ct
+            )
+            .ConfigureAwait(false);
+
+        // Download + extract the sherpa-onnx GPU native build.
+        await installer
+            .EnsureInstalledAsync(
+                ProvisionProgress("sherpa-onnx GPU runtime", progress, 0.6, 1.0),
+                ct
+            )
+            .ConfigureAwait(false);
+
+        // Route the managed bindings to the GPU dir and preload its ORT deps — but only
+        // while it is still safe to do so. ConfigureCudaRuntime dlopens a second
+        // libonnxruntime.so RTLD_GLOBAL and redirects the import resolver, which must
+        // happen "before the first recognizer is created" (see SherpaOnnxNativeRuntime).
+        // Once a recognizer has pinned the process to a non-CUDA provider — e.g. the user
+        // ran on CPU and is now clicking the host's "download CUDA runtime" button — wiring
+        // the GPU ORT into that live process would leave it in a mixed CPU/GPU native state.
+        // Skip it: the files are now on disk, and the host's restart prompt lets a fresh
+        // process wire the GPU runtime cleanly. (On the LoadModelAsync path desiredProvider
+        // can only be "cuda" when the process isn't CPU-pinned, so this never blocks it.)
+        bool canWireIntoProcess;
+        lock (_sync)
+            canWireIntoProcess =
+                _loadedNativeProvider is null
+                || string.Equals(_loadedNativeProvider, "cuda", StringComparison.Ordinal);
+
+        if (canWireIntoProcess)
+            SherpaOnnxNativeRuntime.ConfigureCudaRuntime(installer.RuntimeDirectory);
+    }
+
+    // Logs download progress in coarse 10% steps (so a first-time multi-hundred-MB fetch
+    // doesn't look hung, without flooding the log) AND forwards a fraction mapped into
+    // [start, end] of the overall provisioning bar to the host's progress reporter, so
+    // the UI can show a real download bar instead of a static spinner.
+    private IProgress<double> ProvisionProgress(
+        string label,
+        IProgress<double>? forward,
+        double start,
+        double end
+    )
+    {
+        var lastBucket = -1;
+        return new Progress<double>(p =>
+        {
+            var clamped = Math.Clamp(p, 0, 1);
+            var bucket = (int)(clamped * 10);
+            if (bucket != lastBucket)
+            {
+                lastBucket = bucket;
+                _host?.Log(PluginLogLevel.Info, $"{label}: {clamped:P0}");
+            }
+            forward?.Report(start + clamped * (end - start));
+        });
+    }
+
+    private static void EnsureCudaPlatformSupported()
+    {
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException(
+                "NVIDIA CUDA acceleration for sherpa-onnx is only available on Linux x64."
+            );
     }
 
     public Task<PluginTranscriptionResult> TranscribeAsync(
@@ -377,8 +581,32 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _httpClient.Dispose();
     }
 
-    private string GetModelDirectory(string modelId) =>
-        Path.Join(_host?.PluginAssetDirectory ?? ".", "Models", modelId);
+    private string GetModelDirectory(string modelId)
+    {
+        // Defense in depth: callers validate modelId against the known model list
+        // first, but a model ID flows into a filesystem path here, so strip any path
+        // separators and reject empty/relative segments before joining.
+        var safeModelId = Path.GetFileName(modelId);
+        if (string.IsNullOrWhiteSpace(safeModelId) || safeModelId is "." or "..")
+            throw new ArgumentException("Model ID must not be empty.", nameof(modelId));
+
+        return Path.Join(_host?.PluginAssetDirectory ?? ".", "Models", safeModelId);
+    }
+
+    // Test seam: simulate the process having pinned its native ORT provider to a
+    // backend, without creating a real recognizer, so the CPU↔CUDA restart-required
+    // status logic can be unit-tested.
+    internal void MarkNativeRuntimeLoadedForTests(string provider)
+    {
+        var normalized = string.Equals(provider, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cuda"
+            : "cpu";
+        lock (_sync)
+        {
+            _computeBackend = normalized;
+            _loadedNativeProvider = normalized;
+        }
+    }
 
     private static ModelDefinition GetModelDefinition(string modelId) =>
         Models.FirstOrDefault(m => m.Id == modelId)
@@ -400,7 +628,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _canaryTgtLang = "en";
     }
 
-    private static OfflineRecognizer CreateParakeetRecognizer(string modelDir)
+    private static OfflineRecognizer CreateParakeetRecognizer(string modelDir, string provider)
     {
         var config = new OfflineRecognizerConfig();
         config.ModelConfig.Transducer.Encoder = Path.Combine(modelDir, "encoder.int8.onnx");
@@ -408,7 +636,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         config.ModelConfig.Transducer.Joiner = Path.Combine(modelDir, "joiner.int8.onnx");
         config.ModelConfig.Tokens = Path.Combine(modelDir, "tokens.txt");
         config.ModelConfig.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
-        config.ModelConfig.Provider = "cpu";
+        config.ModelConfig.Provider = provider;
         config.ModelConfig.Debug = 0;
         config.DecodingMethod = "greedy_search";
         return new OfflineRecognizer(config);
@@ -417,7 +645,8 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private static OfflineRecognizer CreateCanaryRecognizer(
         string modelDir,
         string srcLang,
-        string tgtLang
+        string tgtLang,
+        string provider
     )
     {
         var config = new OfflineRecognizerConfig();
@@ -428,11 +657,81 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         config.ModelConfig.Canary.UsePnc = 1;
         config.ModelConfig.Tokens = Path.Combine(modelDir, "tokens.txt");
         config.ModelConfig.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
-        config.ModelConfig.Provider = "cpu";
+        config.ModelConfig.Provider = provider;
         config.ModelConfig.Debug = 0;
         config.DecodingMethod = "greedy_search";
         return new OfflineRecognizer(config);
     }
+
+    // Status for the currently-loaded provider, made restart-required when the
+    // user's saved preference can't be honoured by the pinned native provider.
+    // Deriving from the preference (rather than stamping a one-shot status) means a
+    // later reload re-computes the same restart-required state instead of clobbering
+    // it with a plain "Using X".
+    private static TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
+        string loadedProvider,
+        TranscriptionAccelerationPreference preference
+    )
+    {
+        var loaded = string.Equals(loadedProvider, "cuda", StringComparison.Ordinal)
+            ? TranscriptionAccelerationBackend.NvidiaCuda
+            : TranscriptionAccelerationBackend.Cpu;
+        var displayText =
+            loaded == TranscriptionAccelerationBackend.NvidiaCuda ? "Using NVIDIA CUDA" : "Using CPU";
+
+        var requested = preference switch
+        {
+            TranscriptionAccelerationPreference.NvidiaCuda =>
+                TranscriptionAccelerationBackend.NvidiaCuda,
+            TranscriptionAccelerationPreference.Cpu => TranscriptionAccelerationBackend.Cpu,
+            // Auto (not normally seen by plugins) imposes no mismatch.
+            _ => loaded,
+        };
+
+        if (requested != loaded)
+        {
+            var target = requested == TranscriptionAccelerationBackend.NvidiaCuda
+                ? "NVIDIA CUDA"
+                : "CPU";
+            return new TranscriptionAccelerationStatus(
+                loaded,
+                displayText,
+                $"Restart TypeWhisper to switch sherpa-onnx to {target}.",
+                true
+            );
+        }
+
+        return new TranscriptionAccelerationStatus(loaded, displayText);
+    }
+
+    private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
+        TranscriptionAccelerationPreference preference
+    ) =>
+        preference switch
+        {
+            TranscriptionAccelerationPreference.NvidiaCuda => new(
+                TranscriptionAccelerationBackend.NvidiaCuda,
+                "Preparing NVIDIA CUDA",
+                "The GPU runtime downloads on the next model load."
+            ),
+            _ => new(
+                TranscriptionAccelerationBackend.Cpu,
+                "Preparing CPU",
+                "Will apply on next model load."
+            ),
+        };
+
+    // The CUDA request fell back to CPU, but the native ORT provider is now pinned to
+    // CPU for the process; retrying CUDA needs a restart. Flag it so the status stays
+    // consistent with the requested-vs-loaded mismatch path (which a later reload
+    // would otherwise re-derive as RequiresRestart=true).
+    private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(string detail) =>
+        new(
+            TranscriptionAccelerationBackend.Cpu,
+            "Using CPU",
+            $"CUDA unavailable: {detail}",
+            RequiresRestart: true
+        );
 
     private void EnsureCanaryLanguage(string? language, bool translate)
     {
@@ -447,8 +746,15 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
         // Canary bakes src/tgt language into the recognizer config, so a
         // language or translation change requires recreating the recognizer.
+        // Reuse the provider the model was loaded with (the native provider is
+        // pinned for the process anyway).
         _recognizer?.Dispose();
-        _recognizer = CreateCanaryRecognizer(_loadedModelDir, srcLang, tgtLang);
+        _recognizer = CreateCanaryRecognizer(
+            _loadedModelDir,
+            srcLang,
+            tgtLang,
+            _loadedNativeProvider ?? "cpu"
+        );
         _canarySrcLang = srcLang;
         _canaryTgtLang = tgtLang;
     }
