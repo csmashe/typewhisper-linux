@@ -157,7 +157,7 @@
   "Dictation.AccelCpuActive": "CPU-Modus ist aktiv.",
   "Dictation.AccelCudaNotInstalled": "CUDA-12-Runtime-Bibliotheken sind noch nicht installiert.",
   "Dictation.AccelCudaNotVisible": "CUDA 12 ist installiert, aber TypeWhisper kann es noch nicht erkennen.",
-  "Dictation.AccelCudaReady": "CUDA ist bereit für whisper.cpp-Modelle. Andere lokale Plugins nutzen die CPU.",
+  "Dictation.AccelCudaReady": "CUDA ist bereit für whisper.cpp- und sherpa-onnx-Modelle. Andere lokale Plugins nutzen die CPU.",
   "Dictation.AccelerationAuto": "Auto",
   "Dictation.AccelerationCpu": "CPU",
   "Dictation.AccelerationNvidiaCuda": "NVIDIA CUDA",

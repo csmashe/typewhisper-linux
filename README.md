@@ -4,342 +4,37 @@
 [![Linux](https://img.shields.io/badge/Linux-Desktop-FCC624.svg)](https://kernel.org)
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4.svg)](https://dotnet.microsoft.com)
 
-Speech-to-text and AI text processing for Linux desktop. This repository is a Linux desktop port forked from the TypeWhisper project, which provides macOS and Windows versions. I ported it so I could use TypeWhisper on Linux, and I am making this branch available for other Linux users who want the same.
+Speech-to-text and AI text processing for the Linux desktop. This repository is a Linux desktop port forked from the TypeWhisper project, which provides macOS and Windows versions. I ported it so I could use TypeWhisper on Linux, and I am making this branch available for other Linux users who want the same.
 
 If the TypeWhisper project releases an official Linux version, or if this port is merged into the main TypeWhisper branch, I plan to use the upstream Linux version instead. Until then, this branch exists as a practical Linux port adapted around Avalonia, Linux desktop services, and Linux-friendly install and startup behavior.
 
-TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary and snippet post-processing, and run prompt-based AI text actions through plugins.
+Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary and snippet post-processing, and run prompt-based AI text actions through plugins.
 
-## Current Linux Scope
+## Documentation
 
-The Linux branch currently includes:
+**The full, step-by-step documentation lives in the [Wiki](https://github.com/csmashe/typewhisper-linux/wiki).** This README is a short overview — the wiki has the how-to detail, per-distro setup, and troubleshooting.
 
-- Global dictation with toggle, push-to-talk, and hybrid activation modes
-- A Linux desktop UI with dashboard, dictation, shortcuts, text insertion, file transcription, recorder, history, dictionary, snippets, profiles, prompts, plugins, general, appearance, advanced, and about sections
-- A localizable interface with an **Interface Language** selector in the General section (`Auto (System)`, English, German, Spanish, Russian) that live-switches the whole UI without an app restart; bundled plugins localize their own settings panels too
-- Plugin-backed transcription engines and prompt/LLM providers, with optional real-time websocket streaming for supported cloud engines and token-by-token streaming of LLM responses
-- Drag-and-drop file transcription with batch queues, watch folders, and `ffmpeg`-based import when available
-- Session recording to WAV with optional transcript sidecar text files
-- Searchable history, recent transcriptions, dictionary corrections and term packs, snippets, and profiles
-- Configurable dictation overlay with two content slots, each showing one of several widgets (indicator, timer, waveform, clock, profile, hotkey mode, app name), including a live audio-level waveform visualization
-- Tray integration and XDG autostart support
-- Settings backup and restore
-- Local HTTP API and installable CLI for desktop automation
-- A user-level installer script that creates a desktop launcher and app icon
+- **Getting started** — [Installation](https://github.com/csmashe/typewhisper-linux/wiki/Installation) · [Quick Start](https://github.com/csmashe/typewhisper-linux/wiki/Quick-Start) · [Setup Wizard](https://github.com/csmashe/typewhisper-linux/wiki/Setup-Wizard) · [Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements)
+- **Using it** — [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) · [Global Hotkeys](https://github.com/csmashe/typewhisper-linux/wiki/Global-Hotkeys) · [Text Insertion](https://github.com/csmashe/typewhisper-linux/wiki/Text-Insertion) · [Profiles](https://github.com/csmashe/typewhisper-linux/wiki/Profiles) · [Text Cleanup](https://github.com/csmashe/typewhisper-linux/wiki/Text-Cleanup)
+- **Platform** — [Wayland Notes](https://github.com/csmashe/typewhisper-linux/wiki/Wayland-Notes) · [GPU & CUDA](https://github.com/csmashe/typewhisper-linux/wiki/GPU-and-CUDA) · [Desktop Integration](https://github.com/csmashe/typewhisper-linux/wiki/Desktop-Integration) · [Tested Configurations](https://github.com/csmashe/typewhisper-linux/wiki/Tested-Configurations) · [Troubleshooting](https://github.com/csmashe/typewhisper-linux/wiki/Troubleshooting)
+- **Automation** — [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) · [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI)
+- **Plugins** — [Plugins](https://github.com/csmashe/typewhisper-linux/wiki/Plugins) · [Transcription Engines](https://github.com/csmashe/typewhisper-linux/wiki/Transcription-Engines) · [LLM Providers](https://github.com/csmashe/typewhisper-linux/wiki/LLM-Providers) · [Plugin SDK](https://github.com/csmashe/typewhisper-linux/wiki/Plugin-SDK)
+- **Project** — [Data & File Paths](https://github.com/csmashe/typewhisper-linux/wiki/Data-and-File-Paths) · [Roadmap](https://github.com/csmashe/typewhisper-linux/wiki/Roadmap) · [Contributing](https://github.com/csmashe/typewhisper-linux/wiki/Contributing)
 
-## Linux Branch Additions
+## What it does
 
-This branch contains Linux-specific work that is not part of the original branch or the Windows branch:
+- **Global dictation** with Toggle, Push-to-talk, and Hybrid activation modes, a configurable recording overlay, recent-transcriptions and transform-selection hotkeys, and cancel-in-flight. See [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) and [Global Hotkeys](https://github.com/csmashe/typewhisper-linux/wiki/Global-Hotkeys).
+- **Plugin-backed transcription** — local engines (whisper.cpp, sherpa-onnx, …) and cloud engines, with optional real-time websocket streaming and token-by-token LLM response streaming. See [Transcription Engines](https://github.com/csmashe/typewhisper-linux/wiki/Transcription-Engines).
+- **Local GPU acceleration** — optional NVIDIA CUDA for the bundled whisper.cpp and sherpa-onnx engines, with the runtime downloaded on demand rather than bundled. See [GPU & CUDA](https://github.com/csmashe/typewhisper-linux/wiki/GPU-and-CUDA).
+- **Smart per-app text insertion** — `Auto` / `Clipboard Paste` / `Direct Typing` / `Copy Only` keyed by process name, with session-aware Wayland backends (`wtype` / `ydotool` / `xdotool`). See [Text Insertion](https://github.com/csmashe/typewhisper-linux/wiki/Text-Insertion).
+- **AI text cleanup & formatting** in the Wispr-Flow style, driven by your own LLM, with profile style presets and developer-safe formatting. See [Text Cleanup](https://github.com/csmashe/typewhisper-linux/wiki/Text-Cleanup).
+- **File transcription and a recorder** — batch queues, watch folders, subtitle (SRT/VTT) export, and longer WAV captures. See [File Transcription](https://github.com/csmashe/typewhisper-linux/wiki/File-Transcription) and [Recorder](https://github.com/csmashe/typewhisper-linux/wiki/Recorder).
+- **Personalization** — searchable history, a dictionary with term packs, snippets, and app/URL-matched profiles. See [Profiles](https://github.com/csmashe/typewhisper-linux/wiki/Profiles).
+- **A localized interface** — English, German, Spanish, or Russian, switched live (or Auto, to follow your system locale). See [General Settings](https://github.com/csmashe/typewhisper-linux/wiki/General-Settings).
+- **Automation** — a local [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and an installable `typewhisper` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI).
+- **Desktop integration** — tray icon, XDG autostart, single-instance handoff, and a user-level installer. See [Desktop Integration](https://github.com/csmashe/typewhisper-linux/wiki/Desktop-Integration).
 
-- CUDA GPU support for the bundled whisper.cpp transcription engine on compatible NVIDIA systems
-- Linux desktop integration through Avalonia, XDG autostart, Linux tray behavior, and a user-level desktop launcher
-- Wayland global hotkey detection via an evdev backend that reads `/dev/input/event*` directly, so the configured shortcut fires regardless of which window has focus, and falls back to focused-only SharpHook when the evdev path is unavailable. Enabled by default; first run installs a keyboard-scoped `uaccess` udev rule that grants the active session read access immediately (one admin prompt, no logout or reboot, `GROUP="input"` fallback on init systems without logind). It can be turned off from Settings → Shortcuts to keep focused-only behavior. Compositor-native keybindings (per-desktop shortcut writers, plus `bindr`/`--release` push-to-talk on wlroots) remain a documented alternative
-- A Shortcuts settings panel with per-desktop shortcut writers (GNOME, KDE, Hyprland, Sway) and a one-click auto-setup flow, so the configured TypeWhisper hotkey is registered with the active desktop environment without hand-editing config files
-- Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `pw-play`/`paplay`/`aplay`, or CUDA runtime libraries
-- Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
-- Linux session audio handling for dictation, file transcription, and recorder workflows
-- Optional transcription cleanup pipeline with `Light` (deterministic), `Medium`, and `High` levels — Medium/High route through the configured LLM provider and degrade to Light when no provider is available
-- Profile style presets — `Raw`, `Clean`, `Concise`, `Formal Email`, `Casual Message`, `Developer`, `Terminal Safe`, and `Meeting Notes` — that bundle cleanup level and formatting choices per profile, with optional cleanup and developer-formatting overrides
-- Developer-safe formatting that converts spoken punctuation and casing commands (for example "dash dash", "open paren", "snake case") into code-friendly output
-- Voice command suffixes parsed at the end of a dictation: `press enter`, `new paragraph`, `new line`, and `cancel`
-- Spoken IDE file references such as "at file dot ts" mapped to file tags for editor/IDE workflows
-- Per-app text-insertion strategies (`Auto`, `Clipboard Paste`, `Direct Typing`, `Copy Only`) keyed by process name, with auto-paste retry and clipboard preservation
-- Smart `Auto` insertion that picks per-target: types directly into supported browsers (falling back to clipboard paste when the title looks like a webmail composer), types directly into terminals and the Codex CLI (where synthesized Ctrl+V isn't interpreted as paste), and on Wayland sessions where the focused app can't be identified, prefers direct typing for ASCII text and clipboard paste for non-ASCII text
-- Extended active-window browser coverage to include the Zen Browser and LibreWolf on top of the Chromium/Firefox families the upstream Windows build already supports, with title-based inference when process metadata is unavailable
-- Correction suggestions generated from user edits in history, with optional auto-learning into the dictionary and confidence scoring
-- Dictionary entries gain starring, priority, source tracking (`Manual`, `Import`, `CorrectionSuggestion`, `AutoLearned`), and times-applied/times-corrected stats
-- Snippets gain an `Exact Phrase` trigger mode alongside `Anywhere`, plus per-profile scoping by profile id
-- Dashboard insertion-reliability metric and per-dictation averages (average words and duration) on top of the upstream dashboard's words-per-minute, top-apps, and time-saved tiles
-
-## Features
-
-### Transcription
-
-- Plugin-based transcription engines for local and cloud workflows
-- Real-time streaming live transcription for cloud engines that support it (AssemblyAI, Deepgram, ElevenLabs, Gladia, OpenAI GPT Realtime, Reson8, Smallest AI, Soniox, Speechmatics, and xAI): audio is streamed to the provider over a websocket and partial text appears in the overlay as you speak, instead of re-uploading the growing buffer on a poll. Enabled per session from the dictation settings; falls back to the batch polling preview when the engine or setting does not support streaming
-- File transcription page for importing and transcribing audio files
-- Batch file transcription queue with per-file status tracking
-- Watch folders for automatic file transcription with selectable export format (`md`, `txt`, `srt`, `vtt`), optional language override, auto-start on app launch, and an optional delete-source-after-export step
-- Subtitle export to SRT and WebVTT from the File transcription page when the active engine returns segment timing
-- Recorder page for saving longer WAV captures and transcribing them after recording stops
-- Dictation pipeline with post-processing through dictionary corrections and vocabulary boosting
-- Bundled Linux plugins deployed on build and auto-copied into the user plugin directory on first run
-
-### Dictation
-
-- One main global dictation hotkey
-- Activation modes: `Toggle` (press to start, press to stop), `Push to talk` (hold to record), and `Hybrid` (starts on press; a short tap keeps recording, holding past ~600 ms stops on release)
-- Optional prompt palette hotkey
-- Recent transcriptions palette and copy-last-transcription hotkey
-- Transform-selection hotkey that voice-edits the text currently selected in another application
-- Cancel-in-flight via the `Escape` key during recording, transcription, or post-processing — only active while a dictation is running so it does not shadow modal dialogs or editors
-- Auto-paste after transcription
-- Whisper mode, silence auto-stop, sound feedback, audio ducking, and media pause settings in the Linux UI
-- Aggressive short-clip transcription option for short, quiet utterances that would otherwise be discarded as silence
-- Short-speech policy with peak-level and duration thresholds so accidental taps and silent clips are dropped before they reach the engine
-- Live microphone preview and recording overlay, with live partial-transcript text in the overlay when a streaming-capable engine is active
-- Token-by-token streaming of LLM responses into the dictation overlay and the prompt palette, with a per-provider **Stream responses** toggle (on by default) on each LLM provider
-
-Some Linux dictation features depend on external desktop tools:
-
-- Sound feedback uses `pw-play`, `paplay`, or `aplay` (the first available PCM player)
-- Audio ducking uses `pactl`
-- Media pause uses `playerctl`
-- Clipboard-backed auto-paste uses `xclip` (X11), `wl-copy`/`wl-paste` (Wayland), and a typing/paste backend selected per session. On wlroots compositors (Hyprland, Sway) `wtype` is tried first; on GNOME and KDE Wayland — which omit the wtype virtual-keyboard protocol — `ydotool` is tried first instead, with `wtype` and `xdotool` as later fallbacks. X11 sessions use `xdotool`.
-
-When one of those tools is missing, the Linux UI disables that control and shows the reason, including session-aware install hints (for example, suggesting `wtype` on a wlroots Wayland session, or `ydotool` on GNOME / KDE Wayland). The **Text insertion** settings panel surfaces the current backend chain and offers a one-click setup flow for the `ydotool` daemon and `input`-group membership when needed.
-
-### Personalization
-
-- Dictionary entries for corrections and terms
-- Built-in term packs with enable/disable toggles
-- Snippets with placeholder support such as `{date}`, `{time}`, `{datetime}`, `{clipboard}`, `{day}`, and `{year}`
-- Profiles with rule matching, per-profile overrides, enable/disable state, and priority
-- Prompt actions for LLM-driven text processing, provider overrides, and action plugin routing
-- Optional long-term memory: when an `IMemoryStoragePlugin` (for example `FileMemory` or `OpenAiVectorMemory`) is enabled alongside a configured LLM provider, eligible transcriptions are sent to the LLM to extract durable facts that future prompt actions can recall as context
-
-### Advanced Settings
-
-The Advanced page exposes:
-
-- History retention mode — `Duration` (default 90 days), `Forever`, or `Until app closes`
-- `Save to history` toggle for runs you do not want stored
-- Model auto-unload after a selectable idle period — `Never`, 30 seconds, 1 minute, 5 minutes, or 15 minutes (`Never` keeps the model loaded)
-- Memory enable toggle, gated on having both a memory storage plugin and an available LLM provider
-- Spoken feedback toggle, provider selection (defaults to the bundled Linux system TTS), and voice selection per provider
-
-### Desktop Integration
-
-- Tray icon support where the current desktop environment exposes a compatible system tray; the "close to tray" setting is gated on whether a real system tray is actually registered (detected via a D-Bus probe at startup) so the app can't hide itself with no way back to the UI
-- XDG autostart integration through `~/.config/autostart/typewhisper.desktop`
-- Single-instance enforcement via a Unix control socket under `XDG_RUNTIME_DIR` (falling back to a `0700` directory under `/tmp` when `XDG_RUNTIME_DIR` is unavailable); a second launch hands its CLI command off to the already-running instance over a JSON control protocol instead of starting a new window
-- Set `TYPEWHISPER_DISABLE_IME=1` to disable Avalonia X11 IME integration when debugging input-method issues
-- Desktop install script that publishes the app, installs it under the user profile, and creates a launcher icon
-
-#### GNOME Wayland tray icons
-
-GNOME Shell does not show AppIndicator/KStatusNotifier tray icons by default.
-On Fedora GNOME Wayland, install and enable the AppIndicator extension if you
-want TypeWhisper's tray menu/icon in the top bar:
-
-```bash
-sudo dnf install -y gnome-shell-extension-appindicator
-gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
-```
-
-If `gnome-extensions enable` reports that the extension does not exist right
-after installation, log out and back in so GNOME Shell reloads system
-extensions, then run the enable command again. Restart TypeWhisper after the
-extension is loaded.
-
-The tray icon is separate from the launcher/dock icon. When running from
-source with `dotnet run`, GNOME may not match the process to a registered
-desktop entry, so the dock or app switcher can show a generic icon. The
-desktop installer registers the `.desktop` file and icon theme entry for that
-case.
-
-#### GNOME Wayland active-window detection
-
-Profile matching by process name (e.g. matching on `firefox`, `code`,
-`soffice.bin`) requires TypeWhisper to know which window has focus.
-TypeWhisper picks a compositor-native provider per session — `xdotool` on
-X11/XWayland, `hyprctl` on Hyprland, `swaymsg` on Sway, `kdotool` on KDE
-Plasma — and falls back to a Linux process-name lookup via `/proc/PID/comm`
-so user profiles built against X11 keep working unchanged on Wayland.
-
-On GNOME Wayland there is no built-in way for an unprivileged app to ask
-"what's the active window" — the built-in `org.gnome.Shell.Introspect`
-D-Bus API returns `AccessDenied` for everyone except trusted clients. The
-fix is the user-installed **Window Calls** GNOME Shell extension:
-
-1. Install from <https://extensions.gnome.org/extension/4974/window-calls/>
-   (the Profiles section in TypeWhisper has an **Install Window Calls
-   extension** button that opens this page when the extension is missing).
-2. Once enabled, restart TypeWhisper — no logout required. The extension's
-   D-Bus interface (`org.gnome.Shell.Extensions.Windows`) is detected at
-   the next snapshot tick.
-
-Without the extension, GNOME Wayland users can still use URL-only profile
-rules and any global (no-match) profile, but app-name matching will not
-fire.
-
-#### Wayland URL detection for browser-based profile rules
-
-URL-based profile rules (`mail.google.com`, `*.github.com`, etc.) need
-TypeWhisper to read the browser's address bar. On X11 the existing
-`xdotool` + `xclip` Ctrl+L/Ctrl+C trick covers this without any browser
-configuration. On Wayland synthetic-input shortcuts are blocked by the
-compositor, so TypeWhisper falls back to walking the browser's
-[AT-SPI](https://docs.gtk.org/atspi2/) accessibility tree — which only
-works if the browser is exposing it.
-
-The Profiles section in TypeWhisper has an **Enable browser URL
-detection** button that:
-
-- Writes `~/.config/environment.d/typewhisper-accessibility.conf` setting
-  `MOZ_ENABLE_ACCESSIBILITY=1` and `GTK_MODULES=gail:atk-bridge` for
-  Firefox-family browsers.
-- Patches user-local `.desktop` launchers for Firefox / Zen / LibreWolf
-  and Chromium / Chrome / Edge / Brave / Vivaldi / Opera so the
-  appropriate flag (`MOZ_ENABLE_ACCESSIBILITY=1` for Firefox-family,
-  `--force-renderer-accessibility` for Chromium-family) is set inline on
-  every menu launch — independent of whether `systemd --user` reloaded
-  the `environment.d` file across logouts.
-- Backs up any non-owned user `.desktop` files in
-  `~/.local/share/typewhisper/launcher-backups/` so the integration can
-  be cleanly removed without losing user customizations.
-
-**Firefox additionally needs the lazy-init gate flipped.** Modern Firefox
-(100+) refuses to register on AT-SPI until either an assistive
-technology connects or `accessibility.force_disabled` is explicitly set:
-
-1. Open `about:config` in Firefox, accept the warning.
-2. Search for `accessibility.force_disabled`.
-3. Edit the value from `0` to `-1` (force-enable always).
-4. Restart Firefox. Verify by visiting `about:support` — the
-   **Accessibility** section should now say `Activated: Yes`.
-
-After Firefox is on the AT-SPI bus, the TypeWhisper walker finds the
-address-bar element automatically and surfaces the URL to the profile
-matcher. The walker has a 1.2 s per-call budget and caches the matched
-URL for 10 s, so transient title bumps (Gmail badge updates,
-draft-saved overlays, etc.) do not force constant re-walking.
-
-When URL detection fails, the Profiles section banner explains what's
-missing, and the Error Log on the About page records a one-line
-diagnostic per unique state. Look for entries like
-`AT-SPI URL walk: process=firefox matched-app='Firefox' nodes-walked=N
-best-score=... result=...` — `matched-app=none` means the browser
-isn't exposing AT-SPI, `result=null` with a non-null `best-score` means
-the walker reached the address bar but didn't recognise it.
-
-#### Wayland global hotkeys
-
-For the dictation hotkey to fire while another app is focused, TypeWhisper
-has to see key events that the compositor only delivers to the focused
-window. The in-process hook (SharpHook) is therefore *focused-only* on
-Wayland. To get a real global hotkey — with the full set (toggle,
-push-to-talk, hybrid, palette, cancel, profiles, prompt-actions) and
-in-app rebinding — TypeWhisper uses the **evdev backend**, which reads
-keyboard events from `/dev/input/event*` directly. This is the default on
-every Wayland compositor.
-
-Reading those nodes needs read permission on keyboard event devices.
-Instead of asking you to join the `input` group (which covers *all* input
-devices and only takes effect after a logout), the first-run setup installs
-a narrow udev rule at `/etc/udev/rules.d/61-typewhisper-input.rules`:
-
-```
-SUBSYSTEM=="input", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess", GROUP="input", MODE="0660"
-```
-
-`TAG+="uaccess"` is the modern systemd-logind primitive: it grants the
-user on the **currently active seat** read access to keyboard devices via a
-session ACL — no group membership, no logout, applied to your running
-session the moment the rule is installed. It's scoped to keyboards (not
-mice/touchpads) and to your session, so it's strictly narrower and more
-secure than the `input` group. `GROUP="input"` is a fallback for init
-systems without logind (see below).
-
-**What each environment does:**
-
-- **GNOME / KDE Plasma / Cinnamon (Wayland)** — Open Settings → Shortcuts
-  (or the first-run setup checklist) and click **Enable keyboard access**.
-  Approve the single admin prompt. The hotkey starts working immediately,
-  including hold-to-talk push-to-talk — no logout, no reboot. `groups` will
-  *not* list `input`; access comes from the session ACL. (The same applies
-  to any other systemd-logind Wayland session.)
-- **Hyprland / Sway / other wlroots (Wayland)** — Same one-click rule
-  install as above; evdev is the default and gives you the full hotkey set.
-  If you'd rather not read input devices at all, these compositors also
-  support **compositor-native** push-to-talk via separate press/release
-  binds — see the snippets in Settings → Shortcuts, e.g. on Hyprland:
-
-  ```
-  bind  = CTRL SHIFT, SPACE, exec, typewhisper record start
-  bindr = CTRL SHIFT, SPACE, exec, typewhisper record stop
-  ```
-
-  and on Sway:
-
-  ```
-  bindsym --no-repeat $mod+space exec typewhisper record start
-  bindsym --release   $mod+space exec typewhisper record stop
-  ```
-
-- **X11 (any desktop)** — Nothing to do. On X11 the in-process hook is
-  already global with press/release, so the hotkey works out of the box
-  with zero setup and no udev rule.
-- **Init systems without systemd-logind (Devuan, Alpine without elogind)**
-  — `TAG+="uaccess"` has no effect, so the rule's `GROUP="input"` clause
-  takes over: setup adds you to the `input` group as a fallback, and that
-  grant only applies after you **log out and back in**. The setup task
-  detects this case automatically and tells you when a re-login is needed.
-
-The rule is owned by TypeWhisper (it carries an ownership marker comment)
-and persists across reboots; teardown deletes only that TypeWhisper-owned
-file, never a rule a distro or you placed at the same path. You can disable
-global reads (falling back to focused-only behavior) at any time from
-Settings → Shortcuts. The XDG GlobalShortcuts portal is intentionally
-not used: it's KDE/GNOME/Hyprland-only, press-only, and awkward for dynamic
-rebinding, and the `uaccess` rule already covers the groupless case on
-those desktops. (A portal backend would only matter for a sandboxed/Flatpak
-build, which this project doesn't ship.)
-
-## Linux Requirements
-
-- A modern Linux desktop session
-- .NET 10 SDK to build from source
-- `ffmpeg` for file transcription imports beyond already-supported direct formats
-- Optional desktop helpers:
-  - `pactl` for audio ducking
-  - `playerctl` for media pause during recording
-  - `pw-play`, `paplay`, or `aplay` for sound feedback
-  - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
-  - `xclip` (X11 clipboard) and `wl-copy`/`wl-paste` (Wayland clipboard) for clipboard-backed auto-paste
-  - `wtype` (wlroots Wayland: Hyprland, Sway) and `ydotool` (GNOME / KDE Wayland, where wtype is unavailable) for Wayland keyboard input; `xdotool` as a fallback on X11 and XWayland apps. `ydotool` requires its daemon to be running and access to `/dev/uinput`, which the one-click Text insertion setup grants via a `uaccess` udev rule (no logout)
-  - Wayland global hotkeys (the evdev backend) need read access to keyboard event nodes, granted by a keyboard-scoped `uaccess` udev rule the first-run setup installs — applied to the active session immediately, no logout or reboot; see *Wayland global hotkeys* below
-- Optional CUDA backend:
-  - NVIDIA GPU and driver
-  - CUDA 12 runtime/toolkit libraries providing `libcudart.so.12` and `libcublas.so.12`
-  - CUDA currently applies to the bundled whisper.cpp engine; other bundled local engines stay on CPU
-
-## Tested On
-
-This Linux branch has been tested on the maintainer's current setups:
-
-- Pop!_OS 22.04 LTS / GNOME 42.9 / X11 session
-- Linux Mint 22.3 / Cinnamon 6.6.7 / X11 session (global hotkey via the
-  in-process X11 hook; `xdotool` for keyboard input and active-window
-  detection, with dictation typed directly into `gnome-terminal`)
-- Fedora 44 / GNOME 46+ / Wayland session (with the Window Calls
-  extension installed for active-window detection)
-- Fedora 44 / KDE Plasma 6.6 / Wayland session (global hotkey via the
-  evdev backend with the keyboard-access `uaccess` udev rule, `ydotool`
-  for keyboard input, and `kdotool` for active-window detection)
-- Arch Linux (Omarchy 3.8.2) / Hyprland 0.55.2 / Wayland session
-  (recording indicator via a desktop notification instead of the overlay;
-  global hotkey via the evdev backend with the keyboard-access `uaccess`
-  udev rule; `ydotool` for keyboard input, with the `uinput` module loaded
-  and persisted during setup; and Hyprland's compositor-native window
-  provider for active-window detection)
-
-Other Wayland setups (Sway and other wlroots compositors, and other GNOME
-versions) should work via their respective compositor-native window
-providers, but have not been tested at this time.
-
-Linux desktop behavior can vary by distribution, compositor, desktop
-environment, and especially Wayland implementation. Compositor-native
-window providers exist for Hyprland, Sway, KDE Plasma (via `kdotool`),
-and GNOME (via the Window Calls extension); URL detection on Wayland
-uses AT-SPI and requires browser-side accessibility to be enabled — see
-*Wayland URL detection for browser-based profile rules* above.
-
-If you run into a setup-specific issue, please create an issue or open a
-pull request with the distribution, desktop environment, display server,
-reproduction steps, and any relevant logs (the Error Log section on the
-About page has a per-window AT-SPI walk diagnostic for URL detection
-issues).
+Everything here is Linux-specific work adapted from the upstream macOS/Windows project: Wayland/X11 global hotkeys, compositor-native window and URL detection, session audio handling, and Linux packaging. The deep how-and-why for each lives in the wiki — start with [Wayland Notes](https://github.com/csmashe/typewhisper-linux/wiki/Wayland-Notes) if you're on Wayland.
 
 ## My Setup
 
@@ -347,189 +42,37 @@ I run this branch as my daily driver and tune it to feel as close to [Wispr Flow
 
 The stack I actually use day to day:
 
-- **Transcription** — the bundled whisper.cpp engine on the GPU (CUDA 12), running the `large-v3-turbo` model. It's fully local, fast enough on my GTX 1070, and accurate enough that I rarely re-record.
-- **Cleanup** — an OpenAI-compatible LLM server (Ollama) running on a separate machine on my LAN — an RTX 3090 box — serving `mistral-small:24b`. My **Auto Clean Up Text** prompt drives it, and it's written to clean dictation the way Wispr Flow does: strip filler words ("um", "uh", "like"), fix capitalization and punctuation, apply spoken self-corrections in place, and format lists when I clearly ask for one — without ever adding, answering, or dropping anything I actually said. The **Auto Format** profile binds that prompt to a single hotkey (`Ctrl+Alt+E`), so dictation goes straight through cleanup before it's inserted. Both ship seeded but disabled on a fresh install, so you can turn them on and point the cleanup at your own LLM.
+- **Transcription** — the bundled whisper.cpp engine on the GPU (CUDA 12), running the full `large-v3` model. Since I'm running on a GPU there's headroom for it, so I moved up from `large-v3-turbo` to the full model. It's fully local, runs fine on my GTX 1070, and accurate enough that I rarely re-record.
+- **Cleanup** — an OpenAI-compatible LLM server (Ollama) running on a separate machine on my LAN — an RTX 3090 box. I now run cleanup through a custom dictation-cleanup model we're still putting together; it isn't released yet (more on that below). If you want the same setup today, I recommend `mistral-small:24b` — it's what I ran before and still works well. My **Auto Clean Up Text** prompt drives the model, and it's written to clean dictation the way Wispr Flow does: strip filler words ("um", "uh", "like"), fix capitalization and punctuation, apply spoken self-corrections in place, and format lists when I clearly ask for one — without ever adding, answering, or dropping anything I actually said. The **Auto Format** profile binds that prompt to a single hotkey (`Ctrl+Alt+E`), so dictation goes straight through cleanup before it's inserted. Both ship seeded but disabled on a fresh install, so you can turn them on and point the cleanup at your own LLM.
 - **Insertion** — auto-paste is on, and on GNOME Wayland the text is delivered through `ydotool`.
-- **Hotkeys** — global shortcuts use the Wayland evdev backend (reads `/dev/input/event*`, with keyboard access granted by the `uaccess` udev rule the first-run setup installs — no `input`-group membership and no logout) so the hotkey fires no matter which window is focused. I run in **Hybrid** activation mode: a quick tap toggles recording, while holding past ~600 ms acts as push-to-talk.
+- **Hotkeys** — I run in **Hybrid** activation mode: a quick tap toggles recording, and holding acts as push-to-talk.
 
 I keep the rest deliberately minimal for latency and predictability — audio ducking, media pause, sound feedback, live/streaming transcription, and silence auto-stop are all off. The cleanup LLM is the only network hop, and it lives on a separate box on my own LAN, so nothing leaves the machines I control.
 
-**Where this is going:** right now the cleanup is a general-purpose model steered by a long system prompt (see [`docs/prompts/`](docs/prompts/)). I plan to train — or fine-tune — a model purpose-built for dictation cleanup so the behavior lives in the weights instead of being carried by the prompt. That should make it faster, more consistent, and far less sensitive to prompt wording than leaning on a general model. If you find a model that works better than Mistral let me know and I will update the documentation.
+**Where this is going:** the cleanup model I run now is an early, not-yet-released build of a model we're putting together purpose-built for dictation cleanup, so the behavior lives in the weights instead of being carried by a long system prompt (see [`docs/prompts/`](docs/prompts/) for the prompt-driven approach `mistral-small:24b` still uses). The goal is cleanup that's faster, more consistent, and far less sensitive to prompt wording than leaning on a general model. Until it ships, `mistral-small:24b` is the one to use — and if you find a model that works better, let me know and I will update the documentation.
 
-## Download a Prebuilt Release
+## Install
 
-Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four formats for `linux-x64`. Pick whichever fits your distribution and root preference:
+Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four `linux-x64` formats — **AppImage**, Debian/Ubuntu **`.deb`**, Fedora/RHEL **`.rpm`**, and a no-root **tarball** — each bundling the self-contained .NET runtime and the Linux plugins. See **[Installation](https://github.com/csmashe/typewhisper-linux/wiki/Installation)** for which format to pick and the per-format commands, and **[Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements)** for the optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `pw-play` / `paplay` / `aplay`, …).
 
-| Format | Filename | Where it installs | Notes |
-|--------|----------|-------------------|-------|
-| AppImage | `TypeWhisper-<version>-x86_64.AppImage` | Anywhere — run the file directly | Portable, no install step. `chmod +x` and double-click or run from a terminal. |
-| Debian / Ubuntu `.deb` | `typewhisper_<version>_amd64.deb` | `/opt/typewhisper` with `/usr/bin/typewhisper` wrapper | `sudo apt install ./typewhisper_<version>_amd64.deb`. Recommends `libpulse0`, `pulseaudio-utils`, `playerctl`, `xdotool`. |
-| Fedora / RHEL `.rpm` | `typewhisper-<version>-1.x86_64.rpm` | `/opt/typewhisper` with `/usr/bin/typewhisper` wrapper | `sudo dnf install ./typewhisper-<version>-1.x86_64.rpm`. Recommends `pulseaudio-libs`, `pulseaudio-utils`, `playerctl`, `xdotool`. |
-| Tarball | `typewhisper-linux-x64-<version>.tar.gz` | User-local: `~/.local/share/TypeWhisper` + `~/.local/bin/typewhisper` symlink | No root required. Extract, then `./install.sh` (or `./install.sh --uninstall` to remove). |
+Whichever format you install, the first-run [Setup Wizard](https://github.com/csmashe/typewhisper-linux/wiki/Setup-Wizard) checks what's needed and gets you set up with everything required — the typing/paste backend, the global-dictation hotkey, active-window detection, and more — so you don't have to wire it up by hand.
 
-All four formats bundle the self-contained .NET runtime and the Linux plugins — `.NET 10 SDK` is only needed if you're building from source. Optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `wl-copy`/`xclip`, `pw-play`/`paplay`/`aplay`, `espeak-ng`) are still installed via your distro; see *Linux Requirements* above.
+### Build from source
 
-The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayland global hotkeys (the keyboard-access `uaccess` udev rule for the evdev backend) still need their one-click setup steps regardless of which package format you install.
-
-## Build and Run
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/csmashe/typewhisper-linux.git
-   cd typewhisper-linux
-   ```
-
-2. Build:
-   ```bash
-   dotnet build
-   ```
-
-3. Run from source:
-   ```bash
-   dotnet run --project src/TypeWhisper.Linux
-   ```
-
-## Install as a Desktop App
-
-To install a clickable launcher with an icon for the current user:
+Requires the **.NET 10 SDK**.
 
 ```bash
-./scripts/install-linux-app.sh
+git clone https://github.com/csmashe/typewhisper-linux.git
+cd typewhisper-linux
+dotnet build
+dotnet run --project src/TypeWhisper.Linux
 ```
 
-This script:
-
-- publishes `src/TypeWhisper.Linux` as a self-contained Linux app
-- bundles Linux plugins into the published output
-- installs the app into `~/.local/share/TypeWhisper`
-- creates `~/.local/share/applications/typewhisper.desktop`
-- registers the application icon under the user icon theme
-
-To remove that user-level install:
+To install a clickable launcher and icon for the current user (publishes self-contained, bundles the Linux plugins, and registers a `.desktop` entry):
 
 ```bash
-./scripts/uninstall-linux-app.sh
+./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove
 ```
-
-## Models
-
-TypeWhisper uses plugin-provided transcription models. In this Linux branch, models appear in the Dictation page after the bundled or installed transcription plugins are loaded.
-
-Current model behavior:
-
-- The selected transcription model is saved in settings.
-- The Dictation page can load the selected model through the active transcription plugin.
-- File transcription and recorder transcription use the same selected model.
-- Model auto-unload is exposed in Advanced settings.
-
-Model state on the Dictation page reports `Ready`, `Loading`, `Downloading <percent>`, or `Error`. Plugins that report `SupportsModelDownload` will trigger a download from the Dictation page when a not-yet-downloaded model is selected, and the API server can pause for that download via `?await_download=1`.
-
-Known model gaps:
-
-- Marketplace-style model browsing/management is not wired up in the Linux UI yet — model selection comes from whichever bundled or manually installed plugins are present and enabled.
-- Local model availability depends on the Linux-compatible plugin implementation and any files it requires under the user data directory.
-
-## HTTP API
-
-The Linux app includes a local HTTP API for integrations and automation. Configure it in the General page:
-
-- `Enable local API`
-- `Port`, defaulting to `9876`
-- An auto-generated bearer token, shown read-only, that API clients must present
-
-When enabled, TypeWhisper listens on `http://localhost:<port>/`.
-
-Available endpoints:
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/status` | GET | App status and active model |
-| `/v1/models` | GET | List available models |
-| `/v1/transcribe` | POST | Transcribe uploaded audio (see options below) |
-| `/v1/history` | GET | Search history |
-| `/v1/history` | DELETE | Delete history entries |
-| `/v1/profiles` | GET | List profiles |
-| `/v1/profiles/toggle` | PUT | Toggle a profile on or off |
-| `/v1/dictionary/terms` | GET | List dictionary terms |
-| `/v1/dictionary/terms` | PUT | Add or update dictionary terms |
-| `/v1/dictionary/terms` | DELETE | Delete dictionary terms |
-| `/v1/dictation/start` | POST | Start recording |
-| `/v1/dictation/stop` | POST | Stop recording |
-| `/v1/dictation/status` | GET | Check dictation state |
-
-`/v1/transcribe` accepts these optional form/query fields: `filename`, `language`, `language_hint` (repeatable), `task` (`transcribe` or `translate`), `target_language`, `model`, `engine`, `prompt`, and `response_format` (`json` or `verbose_json`). Append `?await_download=1` to wait while the active engine restores or downloads its model before transcribing.
-
-When `response_format=verbose_json`, the response includes per-segment timing (`start`, `end`, `text`) alongside the standard `text`, `language`, `duration`, `noSpeechProbability`, `engine`, and `model` fields, so callers can build SRT/VTT output themselves if they need it.
-
-Current API limitations:
-
-- Uploaded audio conversion uses the same `ffmpeg`-based importer as the File transcription page.
-- The API binds to `localhost` only.
-
-## CLI
-
-The Linux build ships a `typewhisper` CLI client that talks to the local API. Install it from the General page or by running `typewhisper`'s installer logic; it lands in `~/.local/bin/typewhisper`.
-
-Commands:
-
-- `typewhisper status` — show app status and active model
-- `typewhisper models` — list available models
-- `typewhisper transcribe <file|->` — transcribe an audio file (use `-` to read WAV bytes from stdin)
-
-Useful options for `transcribe`: `--language`, `--language-hint` (repeatable), `--task transcribe|translate`, `--translate-to <code>`, `--response-format json|verbose_json`, `--prompt`, `--engine <id>`, `--model <id>`, `--await-download`.
-
-Global options: `--port <N>` (defaults to `9876`), `--token <token>` or the `TYPEWHISPER_API_TOKEN` environment variable, `--json`, `--version`, and `--help`.
-
-Examples:
-
-```bash
-typewhisper status --token "$TYPEWHISPER_API_TOKEN"
-typewhisper transcribe recording.wav --language de --json
-typewhisper transcribe recording.wav --engine groq --model whisper-large-v3-turbo
-typewhisper transcribe - < audio.wav
-```
-
-## Profiles
-
-Profiles let TypeWhisper apply different settings based on the active application or URL pattern.
-
-In the Linux branch, profiles support:
-
-- Profile creation, editing, enable/disable, save, and delete
-- Process/app matching fields
-- URL pattern fields
-- Priority
-- Language, task, translation, model, whisper mode, and prompt action overrides
-- A live-context view for checking what app context TypeWhisper sees
-
-Example profile uses:
-
-- Use a specific language for one editor or browser
-- Enable whisper mode for a quiet-room workflow
-- Use a different transcription model for one app
-- Run a specific prompt action for text captured in a matching context
-
-Profile-rule prerequisites on Wayland:
-
-- App-name rules need a compositor-native window provider — installed by
-  default on Hyprland (`hyprctl`) and Sway (`swaymsg`), available via
-  `kdotool` on KDE Plasma, and via the user-installed **Window Calls**
-  extension on GNOME. See *GNOME Wayland active-window detection* above.
-- URL-pattern rules need browser-side AT-SPI accessibility enabled. The
-  Profiles section has an **Enable browser URL detection** button that
-  patches the relevant launchers and writes the env file; Firefox users
-  additionally need the `about:config` flip described in *Wayland URL
-  detection* above.
-- The Profiles section shows live diagnostic banners when window detection
-  fails repeatedly, with a one-click remediation button for the missing
-  piece. The Error Log on the About page records per-state walk
-  diagnostics that pinpoint exactly which step failed.
-
-Known profile gaps:
-
-- Active-window detection on KDE Plasma requires `kdotool` to be
-  installed; without it, app-name matching is unavailable in that
-  session.
 
 ## Project Layout
 
@@ -542,91 +85,18 @@ typewhisper-linux/
 │   └── TypeWhisper.Cli/         # CLI client for talking to the local API
 ├── plugins/                     # Plugin source projects
 ├── scripts/                     # Linux build, deploy, and install scripts
-├── docs/                        # Planning and release notes
+├── docs/                        # Release notes and prompts
 └── tests/                       # Automated tests
 ```
 
-## Data and Paths
+## Contributing & Support
 
-TypeWhisper stores its Linux data under the user-local application data directory exposed by .NET:
+This branch is tested on Pop!_OS (GNOME/X11), Linux Mint (Cinnamon/X11), Fedora (GNOME and KDE Wayland), and Arch (Hyprland/Wayland) — see [Tested Configurations](https://github.com/csmashe/typewhisper-linux/wiki/Tested-Configurations) for the per-setup detail. Other Wayland compositors should work via their compositor-native providers but are untested.
 
-- Base path: `~/.local/share/TypeWhisper` on typical Linux setups
-- Settings: `settings.json`
-- Database: `Data/typewhisper.db`
-- Logs: `Logs/`
-- Plugins: `Plugins/`
-- Audio: `Audio/`
-- Plugin data: `PluginData/`
-
-## Plugins
-
-The Linux app uses the shared plugin model from the TypeWhisper codebase. Plugin categories used by this branch include:
-
-- Transcription engines — bundled examples include `WhisperCpp` (with a configurable `noSpeechThreshold` for filtering silent segments to reduce hallucinated phrases), `SherpaOnnx`, `Qwen3Stt`, `Voxtral`, plus cloud engines `OpenAi`, `OpenAiCompatible`, `Groq`, `Deepgram`, `AssemblyAi`, `ElevenLabs`, `Speechmatics`, `Soniox`, `Reson8`, `SmallestAi`, `Xai`, `Gladia`, `CloudflareAsr`, and `GoogleCloudStt`. Real-time websocket streaming is supported by `AssemblyAi`, `Deepgram`, `ElevenLabs`, `Gladia`, `OpenAi` (GPT Realtime), `Reson8`, `SmallestAi`, `Soniox`, `Speechmatics`, and `Xai`
-- LLM providers — `Claude`, `OpenAi`, `OpenAiCompatible`, `OpenRouter`, `Gemini`, `GemmaLocal`, `Groq`, `Cerebras`, `Cohere`, `Fireworks`, and `Xai`, each with a per-provider streaming-response toggle
-- Action plugins — `Linear` and `Obsidian`
-- Post-processing plugins — `Script` (run a shell command against the transcription)
-- Memory storage plugins — `FileMemory` (local JSON) and `OpenAiVectorMemory` (embedding-backed recall)
-- Companion plugins — `Webhook` notifications
-
-The Linux build currently deploys bundled plugins from `plugins/` into the app output, then copies them into the user plugin directory on first run if they are missing.
-
-Plugins that own user-editable collections (Webhook, Script) expose per-plugin collection settings under `PluginData/<plugin-id>/` so their entries survive plugin reinstalls and the host can edit them through the settings UI without round-tripping a plugin process.
-
-Plugins are loaded from the user plugin directory:
-
-- `~/.local/share/TypeWhisper/Plugins/` on typical Linux setups
-
-Bundled plugin deployment:
-
-- Release builds run `scripts/deploy-linux-plugins.sh`.
-- The install script also bundles plugins into the published app.
-- On first run, bundled plugins are copied into the user plugin directory if they are missing.
-
-Known plugin gaps:
-
-- Marketplace/store browsing is intentionally not active in the Linux UI right now.
-- Plugin update handling is limited compared with the intended full marketplace workflow.
-- Some plugins may depend on external binaries, API keys, local model files, or services that must be configured separately.
-- Plugins have been ported but I do not use all of them, so I can't say that they all work 100%. If you find one that is having issues let me know or create a pull request.
-
-## Plugin SDK
-
-Plugin projects use `TypeWhisper.PluginSDK`.
-
-The SDK defines the shared plugin contracts used by the Linux app:
-
-| Interface | Purpose |
-|-----------|---------|
-| `ITranscriptionEnginePlugin` | Add a local, cloud, or custom transcription engine |
-| `ILlmProviderPlugin` | Add an LLM provider for prompt processing |
-| `IPostProcessorPlugin` | Add text cleanup or transformation steps after transcription |
-| `IActionPlugin` | Run custom actions from transcriptions or prompt results |
-| `IMemoryStoragePlugin` | Persist and recall extracted memory entries |
-| `ITtsProviderPlugin` | Add spoken-feedback voice providers |
-| `ITypeWhisperPlugin` | Observe app/plugin events |
-
-The SDK also includes helper types for plugin manifests, plugin events, transcription results, LLM requests, and action contexts.
-
-Plugin source projects live under `plugins/`. The Linux app expects each deployed plugin to include its manifest and runtime assemblies in its plugin folder.
-
-## Known Linux Gaps and Planned Work
-
-These items appeared in the earlier project README or settings surface, but they are not fully implemented in this Linux branch yet and should be treated as planned work:
-
-- In-place app self-update (downloading and applying a new build) is not implemented. The app does check GitHub Releases for a newer version — the About page's `Check for Updates` button and a once-per-day startup check surface a non-obtrusive banner when an update is available — but installing it is still a manual download.
-- Marketplace/store browsing is intentionally not active in the Linux UI right now.
-- Windows release channels and Velopack update-channel controls are not used by this Linux branch.
-- The old README described broader platform feature coverage than this branch currently ships. Any feature not described as active above should be treated as pending until it is implemented in this repository.
-
-## Development Notes
-
-- Release builds run `scripts/deploy-linux-plugins.sh` to publish and bundle the Linux-capable plugins.
-- On startup, the app deploys bundled plugins into the user plugin directory if they are missing.
-- Session audio files are cleaned up on startup and shutdown so history retention preserves text without indefinitely retaining WAV captures.
+If you hit a setup-specific issue, please open an issue or pull request with your distribution, desktop environment, display server, reproduction steps, and any relevant logs (the About page's Error Log captures diagnostics). See [Troubleshooting](https://github.com/csmashe/typewhisper-linux/wiki/Troubleshooting) and [Contributing](https://github.com/csmashe/typewhisper-linux/wiki/Contributing).
 
 ## License
 
-GPLv3 — see [LICENSE](LICENSE) for details. Commercial licensing available — see [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md). Trademark policy — see [TRADEMARK.md](TRADEMARK.md).
+GPLv3 — see [LICENSE](LICENSE) for details. Trademark policy — see [TRADEMARK.md](TRADEMARK.md).
 
 Copyright and attribution — see [NOTICE](NOTICE). TypeWhisper for Linux is © 2026 Excel on the Web and incorporates code from the upstream TypeWhisper project (© 2026 TypeWhisper).
