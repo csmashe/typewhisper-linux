@@ -93,9 +93,9 @@ internal static class ServiceRegistrations
         services.AddSingleton<SessionAudioFileService>();
         services.AddSingleton<SoundFeedbackService>();
         services.AddSingleton<SpeechFeedbackService>();
-        services.AddSingleton<SharpHookGlobalShortcutBackend>();
-        services.AddSingleton<EvdevGlobalShortcutBackend>();
-        services.AddSingleton<XdgPortalGlobalShortcutsBackend>();
+        // The concrete backends are intentionally NOT registered: BackendSelector
+        // mints fresh instances per Resolve() (they're disposed on backend switch,
+        // so a shared singleton would be reused after disposal).
         services.AddSingleton<BackendSelector>();
         services.AddSingleton<HotkeyService>();
 
@@ -107,6 +107,7 @@ internal static class ServiceRegistrations
 
         services.AddSingleton<TextInsertionService>();
         services.AddSingleton<YdotoolSetupHelper>();
+        services.AddSingleton<InputAccessSetupHelper>();
         services.AddSingleton<BrowserAccessibilitySetupHelper>();
         services.AddSingleton<GnomeWindowCallsSetupHelper>();
 

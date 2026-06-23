@@ -11,7 +11,6 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class ShortcutsSectionViewModel : ObservableObject
 {
-    private const string AddToInputGroupCommand = "sudo usermod -aG input $USER";
     private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
 
     private readonly HotkeyService _hotkey;
@@ -51,6 +50,13 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _waylandEvdevHotkeysEnabled;
 
+    // Whether the compositor-bind fallback section is expanded. Starts open only
+    // when those binds are the user's actual route to a global hotkey (see
+    // ComputeCompositorBindsRelevant); otherwise it's a collapsed alternative so
+    // the evdev backend reads as the headline path.
+    [ObservableProperty]
+    private bool _compositorBindsExpanded;
+
     // Test-friendly overload — production wiring passes the DI-registered
     // writer collection through the three-arg constructor.
     public ShortcutsSectionViewModel(HotkeyService hotkey, ISettingsService settings)
@@ -74,6 +80,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         TransformSelectionHotkeyText = settings.Current.TransformSelectionHotkey;
         Mode = settings.Current.Mode;
         _waylandEvdevHotkeysEnabled = settings.Current.WaylandEvdevHotkeysEnabled;
+        _compositorBindsExpanded = ComputeCompositorBindsRelevant();
     }
 
     public IReadOnlyList<RecordingMode> Modes { get; } =
@@ -113,9 +120,11 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public bool ShowCapabilityMismatch =>
         _hotkey.BackendRequiresToggleMode && Mode != RecordingMode.Toggle;
 
-    // Hide the banner when the group check returns null (e.g. /proc
-    // unavailable) so we don't nag users we can't actually advise.
-    public bool ShowInputGroupBanner
+    // Show the banner only on Wayland when we genuinely can't open a keyboard
+    // node. Gating on actual access (not input-group membership) is correct now
+    // that the uaccess rule grants access via a session ACL without the group —
+    // a membership check would nag users who already have working access.
+    public bool ShowKeyboardAccessBanner
     {
         get
         {
@@ -124,16 +133,40 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 return false;
             }
 
-            var inGroup = InputGroupCheck.CurrentUserInInputGroup();
-            return inGroup == false;
+            return !InputDeviceAccessCheck.HasKeyboardAccess();
         }
     }
 
-    public string InputGroupCommand => AddToInputGroupCommand;
+    // The exact command the keyboard-access setup runs, offered as a copyable
+    // fallback for users who'd rather not click through the one-prompt installer.
+    public string KeyboardAccessCommand => InputAccessSetupHelper.ManualInstallCommand();
 
     // Bare binary name relies on the Phase 4 single-instance IPC: a second
     // invocation toggles the existing instance instead of launching a new one.
     public string CustomShortcutCommand => "typewhisper";
+
+    public string CompositorBindsToggleLabel =>
+        Loc.Instance[
+            CompositorBindsExpanded
+                ? "Shortcuts.CompositorBindsHide"
+                : "Shortcuts.CompositorBindsShow"
+        ];
+
+    // Compositor binds are the user's actual path to a global hotkey only when
+    // the in-process backend isn't already carrying it: on Wayland with evdev
+    // turned off, or with no keyboard access yet. Otherwise (evdev active, or
+    // X11 where the in-app hook is already global) they're a lesser alternative —
+    // press-only on most desktops and limited to the main dictation toggle — so
+    // the section starts collapsed.
+    private bool ComputeCompositorBindsRelevant()
+    {
+        if (!IsWaylandSession())
+        {
+            return false;
+        }
+
+        return !WaylandEvdevHotkeysEnabled || !InputDeviceAccessCheck.HasKeyboardAccess();
+    }
 
     public bool ShowPushToTalkSnippet => DesktopName is "Hyprland" or "Sway";
 
@@ -404,6 +437,17 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void ToggleCompositorBinds()
+    {
+        CompositorBindsExpanded = !CompositorBindsExpanded;
+    }
+
+    partial void OnCompositorBindsExpandedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CompositorBindsToggleLabel));
+    }
+
+    [RelayCommand]
     private void CopyPushToTalkPressSnippet()
     {
         if (string.IsNullOrEmpty(PushToTalkPressSnippet))
@@ -509,6 +553,11 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             ? Loc.Instance["Shortcuts.GlobalReadsEnabled"]
             : Loc.Instance["Shortcuts.FocusedOnlyFallback"];
 
+        // Surface the compositor-bind fallback the moment evdev stops carrying the
+        // hotkey (and re-collapse it once evdev is back), matching the rule that it
+        // only auto-expands when it's the user's real route to a global hotkey.
+        CompositorBindsExpanded = ComputeCompositorBindsRelevant();
+
         // Hot-swap immediately: a restart-only opt-out would be a consent gap
         // for a setting that controls global keyboard event access.
         var task = SwitchBackendAndNotifyAsync();
@@ -542,6 +591,6 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SupportsPressRelease));
         OnPropertyChanged(nameof(ScopeText));
         OnPropertyChanged(nameof(ShowCapabilityMismatch));
-        OnPropertyChanged(nameof(ShowInputGroupBanner));
+        OnPropertyChanged(nameof(ShowKeyboardAccessBanner));
     }
 }

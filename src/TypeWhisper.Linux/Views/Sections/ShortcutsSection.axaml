@@ -82,24 +82,24 @@
                     </Border>
 
                     <Border Height="1" Background="#16FFFFFF" Margin="18,0"
-                            IsVisible="{Binding ShowInputGroupBanner}" />
+                            IsVisible="{Binding ShowKeyboardAccessBanner}" />
 
                     <Border Classes="section-row"
-                            IsVisible="{Binding ShowInputGroupBanner}">
+                            IsVisible="{Binding ShowKeyboardAccessBanner}">
                         <StackPanel>
-                            <TextBlock Text="{loc:Str Shortcuts.InputGroupBanner}"
+                            <TextBlock Text="{loc:Str Shortcuts.KeyboardAccessBanner}"
                                        Classes="row-title"
                                        Foreground="#FFD27A" />
                             <TextBlock TextWrapping="Wrap"
                                        Classes="row-hint"
-                                       Text="{loc:Str Shortcuts.InputGroupBannerHint}" />
+                                       Text="{loc:Str Shortcuts.KeyboardAccessBannerHint}" />
                             <Border Background="#0E1620"
                                     BorderBrush="#1AFFFFFF"
                                     BorderThickness="1"
                                     CornerRadius="6"
                                     Padding="10,6"
                                     Margin="0,8,0,0">
-                                <SelectableTextBlock Text="{Binding InputGroupCommand}"
+                                <SelectableTextBlock Text="{Binding KeyboardAccessCommand}"
                                                      FontFamily="Cascadia Mono, JetBrains Mono, monospace"
                                                      FontSize="12" />
                             </Border>
@@ -323,7 +323,17 @@
 
             <TextBlock Text="{loc:Str Shortcuts.BindCustom}"
                        Classes="section-label" />
-            <Border Classes="section-panel">
+            <TextBlock FontSize="12"
+                       Foreground="#8A9AAE"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8"
+                       Text="{loc:Str Shortcuts.CompositorBindsNote}" />
+            <Button HorizontalAlignment="Left"
+                    Margin="0,0,0,10"
+                    Content="{Binding CompositorBindsToggleLabel}"
+                    Command="{Binding ToggleCompositorBindsCommand}" />
+            <Border Classes="section-panel"
+                    IsVisible="{Binding CompositorBindsExpanded}">
                 <Border Classes="section-row">
                     <StackPanel>
                         <StackPanel IsVisible="{Binding CanSetupAutomatically}"

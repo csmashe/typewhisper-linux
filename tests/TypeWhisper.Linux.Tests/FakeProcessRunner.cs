@@ -19,6 +19,9 @@ internal sealed class FakeProcessRunner : IProcessRunner
     /// <summary>Result for any call that matches no override.</summary>
     public ProcessRunResult Default { get; set; } = Success();
 
+    /// <summary>The <c>standardInput</c> piped to the most recent invocation (e.g. a pkexec heredoc).</summary>
+    public string? LastStandardInput { get; private set; }
+
     public Task<ProcessRunResult> RunAsync(
         string fileName,
         IReadOnlyList<string> args,
@@ -28,7 +31,8 @@ internal sealed class FakeProcessRunner : IProcessRunner
         CancellationToken ct = default
     )
     {
-        Invocations.Add(new Invocation(fileName, args.ToArray()));
+        Invocations.Add(new Invocation(fileName, args.ToArray(), standardInput, timeout));
+        LastStandardInput = standardInput;
         foreach (var (match, result) in _overrides)
         {
             if (match(fileName, args))
@@ -52,6 +56,28 @@ internal sealed class FakeProcessRunner : IProcessRunner
                     1,
                     string.Empty,
                     stderr
+                )
+            )
+        );
+    }
+
+    /// <summary>
+    ///     Make calls matching <paramref name="match" /> return the given non-zero
+    ///     exit code (e.g. 126/127 for a dismissed pkexec auth prompt). The result
+    ///     is flagged started-and-not-timed-out so only the exit code drives the
+    ///     caller's branch.
+    /// </summary>
+    public void SetExitCode(Func<string, IReadOnlyList<string>, bool> match, int exitCode)
+    {
+        _overrides.Add(
+            (
+                match,
+                new ProcessRunResult(
+                    true,
+                    false,
+                    exitCode,
+                    string.Empty,
+                    string.Empty
                 )
             )
         );
@@ -97,5 +123,10 @@ internal sealed class FakeProcessRunner : IProcessRunner
         );
     }
 
-    public sealed record Invocation(string FileName, IReadOnlyList<string> Args);
+    public sealed record Invocation(
+        string FileName,
+        IReadOnlyList<string> Args,
+        string? StandardInput = null,
+        TimeSpan? Timeout = null
+    );
 }

@@ -33,7 +33,7 @@ This branch contains Linux-specific work that is not part of the original branch
 
 - CUDA GPU support for the bundled whisper.cpp transcription engine on compatible NVIDIA systems
 - Linux desktop integration through Avalonia, XDG autostart, Linux tray behavior, and a user-level desktop launcher
-- Wayland global hotkey detection via an evdev backend that reads `/dev/input/event*` directly, so the configured shortcut fires regardless of which window has focus; falls back to the XDG portal and then focused-only SharpHook when the evdev path is unavailable. Enabled by default, requires the current user to be in the `input` group, and can be turned off from Settings → Shortcuts to keep focused-only behavior
+- Wayland global hotkey detection via an evdev backend that reads `/dev/input/event*` directly, so the configured shortcut fires regardless of which window has focus, and falls back to focused-only SharpHook when the evdev path is unavailable. Enabled by default; first run installs a keyboard-scoped `uaccess` udev rule that grants the active session read access immediately (one admin prompt, no logout or reboot, `GROUP="input"` fallback on init systems without logind). It can be turned off from Settings → Shortcuts to keep focused-only behavior. Compositor-native keybindings (per-desktop shortcut writers, plus `bindr`/`--release` push-to-talk on wlroots) remain a documented alternative
 - A Shortcuts settings panel with per-desktop shortcut writers (GNOME, KDE, Hyprland, Sway) and a one-click auto-setup flow, so the configured TypeWhisper hotkey is registered with the active desktop environment without hand-editing config files
 - Linux-specific checks that disable unavailable controls and explain missing tools such as `pactl`, `playerctl`, `pw-play`/`paplay`/`aplay`, or CUDA runtime libraries
 - Linux-focused plugin deployment so bundled plugins are copied into the user plugin directory on first run
@@ -213,6 +213,79 @@ best-score=... result=...` — `matched-app=none` means the browser
 isn't exposing AT-SPI, `result=null` with a non-null `best-score` means
 the walker reached the address bar but didn't recognise it.
 
+#### Wayland global hotkeys
+
+For the dictation hotkey to fire while another app is focused, TypeWhisper
+has to see key events that the compositor only delivers to the focused
+window. The in-process hook (SharpHook) is therefore *focused-only* on
+Wayland. To get a real global hotkey — with the full set (toggle,
+push-to-talk, hybrid, palette, cancel, profiles, prompt-actions) and
+in-app rebinding — TypeWhisper uses the **evdev backend**, which reads
+keyboard events from `/dev/input/event*` directly. This is the default on
+every Wayland compositor.
+
+Reading those nodes needs read permission on keyboard event devices.
+Instead of asking you to join the `input` group (which covers *all* input
+devices and only takes effect after a logout), the first-run setup installs
+a narrow udev rule at `/etc/udev/rules.d/61-typewhisper-input.rules`:
+
+```
+SUBSYSTEM=="input", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess", GROUP="input", MODE="0660"
+```
+
+`TAG+="uaccess"` is the modern systemd-logind primitive: it grants the
+user on the **currently active seat** read access to keyboard devices via a
+session ACL — no group membership, no logout, applied to your running
+session the moment the rule is installed. It's scoped to keyboards (not
+mice/touchpads) and to your session, so it's strictly narrower and more
+secure than the `input` group. `GROUP="input"` is a fallback for init
+systems without logind (see below).
+
+**What each environment does:**
+
+- **GNOME / KDE Plasma / Cinnamon (Wayland)** — Open Settings → Shortcuts
+  (or the first-run setup checklist) and click **Enable keyboard access**.
+  Approve the single admin prompt. The hotkey starts working immediately,
+  including hold-to-talk push-to-talk — no logout, no reboot. `groups` will
+  *not* list `input`; access comes from the session ACL. (The same applies
+  to any other systemd-logind Wayland session.)
+- **Hyprland / Sway / other wlroots (Wayland)** — Same one-click rule
+  install as above; evdev is the default and gives you the full hotkey set.
+  If you'd rather not read input devices at all, these compositors also
+  support **compositor-native** push-to-talk via separate press/release
+  binds — see the snippets in Settings → Shortcuts, e.g. on Hyprland:
+
+  ```
+  bind  = CTRL SHIFT, SPACE, exec, typewhisper record start
+  bindr = CTRL SHIFT, SPACE, exec, typewhisper record stop
+  ```
+
+  and on Sway:
+
+  ```
+  bindsym --no-repeat $mod+space exec typewhisper record start
+  bindsym --release   $mod+space exec typewhisper record stop
+  ```
+
+- **X11 (any desktop)** — Nothing to do. On X11 the in-process hook is
+  already global with press/release, so the hotkey works out of the box
+  with zero setup and no udev rule.
+- **Init systems without systemd-logind (Devuan, Alpine without elogind)**
+  — `TAG+="uaccess"` has no effect, so the rule's `GROUP="input"` clause
+  takes over: setup adds you to the `input` group as a fallback, and that
+  grant only applies after you **log out and back in**. The setup task
+  detects this case automatically and tells you when a re-login is needed.
+
+The rule is owned by TypeWhisper (it carries an ownership marker comment)
+and persists across reboots; teardown deletes only that TypeWhisper-owned
+file, never a rule a distro or you placed at the same path. You can disable
+global reads (falling back to focused-only behavior) at any time from
+Settings → Shortcuts. The XDG GlobalShortcuts portal is intentionally
+not used: it's KDE/GNOME/Hyprland-only, press-only, and awkward for dynamic
+rebinding, and the `uaccess` rule already covers the groupless case on
+those desktops. (A portal backend would only matter for a sandboxed/Flatpak
+build, which this project doesn't ship.)
+
 ## Linux Requirements
 
 - A modern Linux desktop session
@@ -224,7 +297,8 @@ the walker reached the address bar but didn't recognise it.
   - `pw-play`, `paplay`, or `aplay` for sound feedback
   - `espeak-ng`, `espeak`, or `spd-say` for spoken feedback
   - `xclip` (X11 clipboard) and `wl-copy`/`wl-paste` (Wayland clipboard) for clipboard-backed auto-paste
-  - `wtype` (wlroots Wayland: Hyprland, Sway) and `ydotool` (GNOME / KDE Wayland, where wtype is unavailable) for Wayland keyboard input; `xdotool` as a fallback on X11 and XWayland apps. `ydotool` requires its daemon to be running and the current user to be in the `input` group
+  - `wtype` (wlroots Wayland: Hyprland, Sway) and `ydotool` (GNOME / KDE Wayland, where wtype is unavailable) for Wayland keyboard input; `xdotool` as a fallback on X11 and XWayland apps. `ydotool` requires its daemon to be running and access to `/dev/uinput`, which the one-click Text insertion setup grants via a `uaccess` udev rule (no logout)
+  - Wayland global hotkeys (the evdev backend) need read access to keyboard event nodes, granted by a keyboard-scoped `uaccess` udev rule the first-run setup installs — applied to the active session immediately, no logout or reboot; see *Wayland global hotkeys* below
 - Optional CUDA backend:
   - NVIDIA GPU and driver
   - CUDA 12 runtime/toolkit libraries providing `libcudart.so.12` and `libcublas.so.12`
@@ -241,14 +315,14 @@ This Linux branch has been tested on the maintainer's current setups:
 - Fedora 44 / GNOME 46+ / Wayland session (with the Window Calls
   extension installed for active-window detection)
 - Fedora 44 / KDE Plasma 6.6 / Wayland session (global hotkey via the
-  evdev backend with `input`-group membership, `ydotool` for keyboard
-  input, and `kdotool` for active-window detection)
+  evdev backend with the keyboard-access `uaccess` udev rule, `ydotool`
+  for keyboard input, and `kdotool` for active-window detection)
 - Arch Linux (Omarchy 3.8.2) / Hyprland 0.55.2 / Wayland session
   (recording indicator via a desktop notification instead of the overlay;
-  global hotkey via the evdev backend with `input`-group membership;
-  `ydotool` for keyboard input, with the `uinput` module loaded and
-  persisted during setup; and Hyprland's compositor-native window provider
-  for active-window detection)
+  global hotkey via the evdev backend with the keyboard-access `uaccess`
+  udev rule; `ydotool` for keyboard input, with the `uinput` module loaded
+  and persisted during setup; and Hyprland's compositor-native window
+  provider for active-window detection)
 
 Other Wayland setups (Sway and other wlroots compositors, and other GNOME
 versions) should work via their respective compositor-native window
@@ -276,7 +350,7 @@ The stack I actually use day to day:
 - **Transcription** — the bundled whisper.cpp engine on the GPU (CUDA 12), running the `large-v3-turbo` model. It's fully local, fast enough on my GTX 1070, and accurate enough that I rarely re-record.
 - **Cleanup** — an OpenAI-compatible LLM server (Ollama) running on a separate machine on my LAN — an RTX 3090 box — serving `mistral-small:24b`. My **Auto Clean Up Text** prompt drives it, and it's written to clean dictation the way Wispr Flow does: strip filler words ("um", "uh", "like"), fix capitalization and punctuation, apply spoken self-corrections in place, and format lists when I clearly ask for one — without ever adding, answering, or dropping anything I actually said. The **Auto Format** profile binds that prompt to a single hotkey (`Ctrl+Alt+E`), so dictation goes straight through cleanup before it's inserted. Both ship seeded but disabled on a fresh install, so you can turn them on and point the cleanup at your own LLM.
 - **Insertion** — auto-paste is on, and on GNOME Wayland the text is delivered through `ydotool`.
-- **Hotkeys** — global shortcuts use the Wayland evdev backend (reads `/dev/input/event*`, with my user in the `input` group) so the hotkey fires no matter which window is focused. I run in **Hybrid** activation mode: a quick tap toggles recording, while holding past ~600 ms acts as push-to-talk.
+- **Hotkeys** — global shortcuts use the Wayland evdev backend (reads `/dev/input/event*`, with keyboard access granted by the `uaccess` udev rule the first-run setup installs — no `input`-group membership and no logout) so the hotkey fires no matter which window is focused. I run in **Hybrid** activation mode: a quick tap toggles recording, while holding past ~600 ms acts as push-to-talk.
 
 I keep the rest deliberately minimal for latency and predictability — audio ducking, media pause, sound feedback, live/streaming transcription, and silence auto-stop are all off. The cleanup LLM is the only network hop, and it lives on a separate box on my own LAN, so nothing leaves the machines I control.
 
@@ -295,7 +369,7 @@ Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linu
 
 All four formats bundle the self-contained .NET runtime and the Linux plugins — `.NET 10 SDK` is only needed if you're building from source. Optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `wl-copy`/`xclip`, `pw-play`/`paplay`/`aplay`, `espeak-ng`) are still installed via your distro; see *Linux Requirements* above.
 
-The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayland global hotkeys (`input`-group membership for the evdev backend) still need their per-distro setup steps regardless of which package format you install.
+The Wayland typing backend (`ydotool` on GNOME/KDE, `wtype` on wlroots) and Wayland global hotkeys (the keyboard-access `uaccess` udev rule for the evdev backend) still need their one-click setup steps regardless of which package format you install.
 
 ## Build and Run
 
