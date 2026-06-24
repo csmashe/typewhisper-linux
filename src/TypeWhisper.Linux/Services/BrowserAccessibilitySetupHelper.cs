@@ -639,7 +639,7 @@ public sealed class BrowserAccessibilitySetupHelper
         }
     }
 
-    private static IReadOnlyList<string> RemoveOwnedFirefoxAccessibilityEntries()
+    private static List<string> RemoveOwnedFirefoxAccessibilityEntries()
     {
         var cleaned = new List<string>();
         foreach (var profileDir in EnumerateFirefoxProfileDirs())
@@ -701,7 +701,7 @@ public sealed class BrowserAccessibilitySetupHelper
         File.Move(tempPath, path, true);
     }
 
-    private static IReadOnlyList<string> PatchLaunchers(
+    private static List<string> PatchLaunchers(
         IReadOnlyList<string> names,
         Func<string, string> transformContent
     )
@@ -938,7 +938,7 @@ public sealed class BrowserAccessibilitySetupHelper
         return false;
     }
 
-    private static IReadOnlyList<string> RemoveOwnedLaunchers()
+    private static List<string> RemoveOwnedLaunchers()
     {
         var dir = UserApplicationsDir();
         if (!Directory.Exists(dir))

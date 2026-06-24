@@ -106,7 +106,7 @@ public static class InputGroupCheck
         return null;
     }
 
-    private static IEnumerable<string> TokenizeWhitespace(ReadOnlySpan<char> span)
+    private static List<string> TokenizeWhitespace(ReadOnlySpan<char> span)
     {
         var result = new List<string>();
         var i = 0;

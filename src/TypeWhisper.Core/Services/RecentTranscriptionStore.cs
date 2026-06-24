@@ -2,9 +2,13 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     In-memory, capped store of the current session's transcriptions, and merges them with
+///     persisted history records (session entries winning ties) for the recent-transcriptions palette.
+/// </summary>
 public sealed class RecentTranscriptionStore
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly int _maxSessionEntries;
     private readonly List<RecentTranscriptionEntry> _sessionEntries = [];
 
@@ -113,21 +117,7 @@ public sealed class RecentTranscriptionStore
         IReadOnlyList<TranscriptionRecord> historyRecords
     )
     {
-        return MergedEntries(historyRecords, 1).FirstOrDefault();
+        var merged = MergedEntries(historyRecords, 1);
+        return merged.Count > 0 ? merged[0] : null;
     }
-}
-
-public sealed record RecentTranscriptionEntry(
-    string Id,
-    string FinalText,
-    DateTime Timestamp,
-    string? AppName,
-    string? AppProcessName,
-    RecentTranscriptionSource Source
-);
-
-public enum RecentTranscriptionSource
-{
-    Session,
-    History
 }

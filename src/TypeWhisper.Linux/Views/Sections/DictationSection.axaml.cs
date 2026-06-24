@@ -77,7 +77,7 @@ public partial class DictationSection : UserControl
             }
         );
 
-        var path = folders.FirstOrDefault()?.TryGetLocalPath();
+        var path = (folders.Count > 0 ? folders[0] : null)?.TryGetLocalPath();
         if (!string.IsNullOrWhiteSpace(path))
         {
             await viewModel.ChangeModelStorageAsync(path);

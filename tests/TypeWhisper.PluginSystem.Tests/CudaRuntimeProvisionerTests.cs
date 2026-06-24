@@ -397,8 +397,8 @@ public class CudaRuntimeProvisionerTests
 
     private sealed class FakePyPiHandler : HttpMessageHandler
     {
-        private readonly IReadOnlyDictionary<string, WheelFixture> _byPackage;
-        private readonly IReadOnlyDictionary<string, WheelFixture> _byUrl;
+        private readonly Dictionary<string, WheelFixture> _byPackage;
+        private readonly Dictionary<string, WheelFixture> _byUrl;
         private int _json;
         private int _wheel;
 

@@ -164,7 +164,7 @@ internal sealed class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
         return mask;
     }
 
-    private static IReadOnlyList<string> ChunkText(string text, int maxLength)
+    private static List<string> ChunkText(string text, int maxLength)
     {
         var chunks = new List<string>();
         foreach (var paragraph in Regex.Split(text.Trim(), @"\n\s*\n+").Where(p => !string.IsNullOrWhiteSpace(p)))

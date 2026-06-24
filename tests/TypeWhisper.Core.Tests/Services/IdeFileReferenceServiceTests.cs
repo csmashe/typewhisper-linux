@@ -22,7 +22,7 @@ public sealed class IdeFileReferenceServiceTests
     [Fact]
     public void ToAtReference_PrefixesFileReferenceForAiChats()
     {
-        var result = _sut.ToAtReference("index dot ts");
+        var result = IdeFileReferenceService.ToAtReference("index dot ts");
 
         Assert.Equal("@index.ts", result);
     }
@@ -37,7 +37,7 @@ public sealed class IdeFileReferenceServiceTests
         string expected
     )
     {
-        var result = _sut.TryFormatReferenceCommand(input);
+        var result = IdeFileReferenceService.TryFormatReferenceCommand(input);
 
         Assert.Equal(expected, result);
     }
@@ -51,7 +51,7 @@ public sealed class IdeFileReferenceServiceTests
     [InlineData("reference the spec for details")]
     public void TryFormatReferenceCommand_LeavesNormalDeveloperTextAlone(string input)
     {
-        var result = _sut.TryFormatReferenceCommand(input);
+        var result = IdeFileReferenceService.TryFormatReferenceCommand(input);
 
         Assert.Null(result);
     }

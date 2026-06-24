@@ -106,7 +106,7 @@ public sealed class SuppressGlxRenderExceptionLogSinkTests
     // the trace) includes the frame text. The production predicate
     // checks ex.StackTrace, so we substitute a subclass that returns a
     // canned stack string.
-    private static SynchronizationLockException MakeSyncLockExceptionWithStackContaining(
+    private static StubSyncLockException MakeSyncLockExceptionWithStackContaining(
         string frame
     )
     {

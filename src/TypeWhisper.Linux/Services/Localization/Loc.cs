@@ -177,7 +177,7 @@ public sealed class Loc : INotifyPropertyChanged
         }
     }
 
-    private static IReadOnlyList<UiLanguageOption> BuildUiLanguageOptions(List<string> codes)
+    private static List<UiLanguageOption> BuildUiLanguageOptions(List<string> codes)
     {
         var displayNames = new Dictionary<string, string>
         {

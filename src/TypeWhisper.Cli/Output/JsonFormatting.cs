@@ -9,6 +9,8 @@ namespace TypeWhisper.Cli.Output;
 /// </summary>
 internal static class JsonFormatting
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     public static string Prop(JsonElement el, string name)
     {
         if (!el.TryGetProperty(name, out var value))
@@ -31,10 +33,7 @@ internal static class JsonFormatting
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return JsonSerializer.Serialize(
-                doc.RootElement,
-                new JsonSerializerOptions { WriteIndented = true }
-            );
+            return JsonSerializer.Serialize(doc.RootElement, s_jsonOptions);
         }
         catch
         {

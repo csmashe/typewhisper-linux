@@ -32,24 +32,15 @@ public sealed class LocalModelStorageService
     private readonly ISettingsService _settings;
     private readonly Action? _unloadActiveModels;
 
-    /// <summary>
-    /// Initializes a new instance of the LocalModelStorageService class.
-    /// </summary>
     public LocalModelStorageService(ISettingsService settings, Action? unloadActiveModels = null)
     {
         _settings = settings;
         _unloadActiveModels = unloadActiveModels;
     }
 
-    /// <summary>
-    /// Gets the currently resolved local model storage path.
-    /// </summary>
     public string ResolvedModelStoragePath =>
         LocalModelStoragePaths.ResolveModelStoragePath(_settings.Current);
 
-    /// <summary>
-    /// Gets the default local model storage path.
-    /// </summary>
     public static string DefaultModelStoragePath => LocalModelStoragePaths.DefaultModelStoragePath;
 
     /// <summary>

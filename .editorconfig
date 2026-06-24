@@ -6,6 +6,12 @@
 # IDE0066: Convert switch statement to expression
 dotnet_diagnostic.ide0066.severity = none
 
+# CA1859: Use concrete types when possible for improved performance
+dotnet_diagnostic.CA1859.severity = warning
+
+# CA1826: Use property/indexer instead of Enumerable methods on indexable collections
+dotnet_diagnostic.CA1826.severity = warning
+
 # Indentation
 csharp_indent_labels = one_less_than_current
 csharp_using_directive_placement = outside_namespace:silent

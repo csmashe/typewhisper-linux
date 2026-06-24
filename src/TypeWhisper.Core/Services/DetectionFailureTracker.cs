@@ -2,6 +2,10 @@ using TypeWhisper.Core.Interfaces;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Counts consecutive active-window detection failures, logs each one, and raises
+///     <see cref="OnFailure" /> — escalating to a persistent banner once failures pass a threshold.
+/// </summary>
 public sealed class DetectionFailureTracker : IDetectionFailureTracker
 {
     // Show the persistent "window detection unavailable" banner after this many consecutive failures.

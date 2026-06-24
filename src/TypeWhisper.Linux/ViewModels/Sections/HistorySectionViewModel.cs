@@ -119,7 +119,7 @@ public partial class HistorySectionViewModel : ObservableObject
         {
             _history.UpdateRecord(record.Record.Id, newText);
 
-            var suggestions = _correctionSuggestions.GenerateSuggestions(originalText, newText);
+            var suggestions = CorrectionSuggestionService.GenerateSuggestions(originalText, newText);
             if (_settings.Current.AutoAddDictionaryCorrections)
             {
                 LearnCorrections(

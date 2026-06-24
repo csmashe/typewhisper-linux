@@ -79,7 +79,7 @@ public partial class DictionarySection : UserControl
                 }
             );
 
-            var file = files.FirstOrDefault();
+            var file = files.Count > 0 ? files[0] : null;
             if (file is null)
             {
                 return;

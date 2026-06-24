@@ -18,13 +18,14 @@ internal static class VersionInfo
                 ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                 ?.InformationalVersion;
 
-            if (!string.IsNullOrWhiteSpace(info))
+            if (string.IsNullOrWhiteSpace(info))
             {
-                var plus = info.IndexOf('+');
-                return plus > 0 ? info[..plus] : info;
+                return Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "dev";
             }
 
-            return Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "dev";
+            var plus = info.IndexOf('+');
+            return plus > 0 ? info[..plus] : info;
+
         }
     }
 }

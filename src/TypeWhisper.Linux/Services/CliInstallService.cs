@@ -230,7 +230,7 @@ public sealed class CliInstallService
             .Any(path => string.Equals(path, full, StringComparison.Ordinal));
     }
 
-    private static IEnumerable<string> SplitPath(string value)
+    private static string[] SplitPath(string value)
     {
         return value.Split(
             Path.PathSeparator,

@@ -51,7 +51,7 @@ public class OpenAiPluginTests
         Assert.IsAssignableFrom<ITtsProviderPlugin>(sut);
         Assert.True(sut.IsConfigured);
         Assert.True(sut.IsAvailable);
-        Assert.Equal("gpt-5.5", sut.SupportedModels.First().Id);
+        Assert.Equal("gpt-5.5", sut.SupportedModels[0].Id);
         Assert.Equal("whisper-1", sut.SelectedModelId);
         Assert.Equal("marin", sut.SelectedVoiceId);
         // Default model is whisper-1 (non-streaming), so SupportsStreaming
@@ -378,7 +378,7 @@ public class OpenAiPluginTests
         Assert.Equal(OpenAiAuthMode.ChatGpt, sut.AuthMode);
         Assert.False(sut.IsConfigured);
         Assert.True(sut.IsAvailable);
-        Assert.Equal("gpt-5.5", sut.SupportedModels.First().Id);
+        Assert.Equal("gpt-5.5", sut.SupportedModels[0].Id);
     }
 
     [Fact]
@@ -865,7 +865,7 @@ public class OpenAiPluginTests
 
         Assert.Equal(0, requestCount);
         Assert.NotEmpty(models);
-        Assert.Equal("gpt-5.5", models.First().Id);
+        Assert.Equal("gpt-5.5", models[0].Id);
     }
 
     // C5 Phase 7 — realtime streaming session
@@ -1177,7 +1177,7 @@ public class OpenAiPluginTests
         host.Secrets["api-key"] = "sk-test";
         var sut = new OpenAiPlugin();
         await sut.ActivateAsync(host);
-        var asPlugin = (ITranscriptionEnginePlugin)sut;
+        OpenAiPlugin asPlugin = sut;
 
         // Default model is whisper-1 — non-streaming.
         Assert.Equal("whisper-1", sut.SelectedModelId);
@@ -1201,7 +1201,7 @@ public class OpenAiPluginTests
         host.Secrets["api-key"] = "sk-test";
         var sut = new OpenAiPlugin();
         await sut.ActivateAsync(host);
-        var asPlugin = (ITranscriptionEnginePlugin)sut;
+        OpenAiPlugin asPlugin = sut;
 
         // Non-realtime model selected → NotSupportedException with the
         // actionable "select GPT Realtime Whisper" message.
@@ -1369,7 +1369,7 @@ public class OpenAiPluginTests
     // host's PluginLocalization in production, instead of echoing raw keys.
     private sealed class TestPluginLocalization : IPluginLocalization
     {
-        private static readonly IPluginLocalization s_en = new PluginLocalization(
+        private static readonly PluginLocalization s_en = new PluginLocalization(
             Path.GetFullPath(
                 Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenAi"),
                 AppContext.BaseDirectory),

@@ -88,7 +88,7 @@ public class OpenRouterPluginTests
         await sut.ActivateAsync(host);
 
         Assert.Equal("openrouter/free", sut.SelectedLlmModelId);
-        Assert.Equal("openrouter/free", sut.SupportedModels.First().Id);
+        Assert.Equal("openrouter/free", sut.SupportedModels[0].Id);
         Assert.Equal("openrouter/free", host.GetSetting<string>("selectedLlmModel"));
     }
 
@@ -880,7 +880,7 @@ public class OpenRouterPluginTests
     // host's PluginLocalization in production, instead of echoing raw keys.
     private sealed class TestPluginLocalization : IPluginLocalization
     {
-        private static readonly IPluginLocalization s_en = new PluginLocalization(
+        private static readonly PluginLocalization s_en = new PluginLocalization(
             Path.GetFullPath(
                 Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenRouter"),
                 AppContext.BaseDirectory),

@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using System.Collections.ObjectModel;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.ViewModels;

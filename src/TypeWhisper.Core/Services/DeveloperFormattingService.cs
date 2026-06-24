@@ -2,6 +2,10 @@ using System.Text.RegularExpressions;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Converts spoken developer syntax into literal symbols (e.g. "open paren" → "(", "dash dash"
+///     → "--", "x dot ts") and applies camel/snake/kebab casing commands.
+/// </summary>
 public sealed partial class DeveloperFormattingService
 {
     private static readonly (Regex Pattern, string Replacement)[] s_symbolReplacements =

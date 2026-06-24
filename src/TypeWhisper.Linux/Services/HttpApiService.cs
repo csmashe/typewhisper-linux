@@ -1089,7 +1089,7 @@ public sealed class HttpApiService : IDisposable
             }
 
             var model = string.IsNullOrWhiteSpace(requestedModel)
-                ? engine.SelectedModelId ?? engine.TranscriptionModels.FirstOrDefault()?.Id
+                ? engine.SelectedModelId ?? (engine.TranscriptionModels.Count > 0 ? engine.TranscriptionModels[0] : null)?.Id
                 : requestedModel;
             if (
                 string.IsNullOrWhiteSpace(model)

@@ -108,7 +108,7 @@ public class SmallestAiPluginTests
         var sut = new SmallestAiPlugin();
         await sut.ActivateAsync(host);
 
-        IPluginSettingsProvider settings = sut;
+        SmallestAiPlugin settings = sut;
 
         var definition = Assert.Single(settings.GetSettingDefinitions());
         Assert.Equal("api-key", definition.Key);
@@ -134,7 +134,7 @@ public class SmallestAiPluginTests
         var sut = new SmallestAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        IPluginSettingsProvider settings = sut;
+        SmallestAiPlugin settings = sut;
 
         var missing = await settings.ValidateAsync();
         Assert.NotNull(missing);

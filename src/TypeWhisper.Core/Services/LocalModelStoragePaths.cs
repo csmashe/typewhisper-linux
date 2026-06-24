@@ -7,14 +7,9 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public static class LocalModelStoragePaths
 {
-    /// <summary>
-    /// Gets the plugin asset folder name under custom model storage.
-    /// </summary>
+    /// <summary>Name of the plugin-asset subfolder created under a custom model-storage root.</summary>
     public const string PluginDataFolderName = "PluginData";
 
-    /// <summary>
-    /// Gets the default local model storage path.
-    /// </summary>
     public static string DefaultModelStoragePath => TypeWhisperEnvironment.ModelsPath;
 
     /// <summary>

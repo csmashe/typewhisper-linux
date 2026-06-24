@@ -566,7 +566,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     // doesn't look hung, without flooding the log) AND forwards a fraction mapped into
     // [start, end] of the overall provisioning bar to the host's progress reporter, so
     // the UI can show a real download bar instead of a static spinner.
-    private IProgress<double> ProvisionProgress(
+    private Progress<double> ProvisionProgress(
         string label,
         IProgress<double>? forward,
         double start,

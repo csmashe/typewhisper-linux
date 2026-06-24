@@ -503,11 +503,11 @@ public sealed partial class OpenAiCompatiblePlugin
             PersistAdditionalProfiles(notify: true);
     }
 
-    private static bool CatalogChanged(List<FetchedModel> fetched, IReadOnlyList<FetchedModel> current) =>
+    private static bool CatalogChanged(List<FetchedModel> fetched, List<FetchedModel> current) =>
         fetched.Count != current.Count
         || !fetched.Select(m => m.Id).SequenceEqual(current.Select(m => m.Id));
 
-    private IReadOnlyList<PluginSettingOption>? BuildModelOptions()
+    private List<PluginSettingOption>? BuildModelOptions()
     {
         var models = _fetchedModels.Select(m => new PluginSettingOption(m.Id, m.Id)).ToList();
 
@@ -947,7 +947,7 @@ public sealed partial class OpenAiCompatiblePlugin
     // carries the profile prefix, and is not already taken; otherwise a fresh id is
     // generated. Centralizes the SetItemsAsync and LoadAdditionalProfilesAsync sites
     // so repaired/normalized ids replace invalid or duplicate ones.
-    private string NormalizeProfileId(string? rawId, ISet<string> taken)
+    private string NormalizeProfileId(string? rawId, HashSet<string> taken)
     {
         var id = (rawId ?? "").Trim();
         if (id.Length == 0
@@ -962,7 +962,7 @@ public sealed partial class OpenAiCompatiblePlugin
         return id;
     }
 
-    private string CreateProfileId(ISet<string> taken)
+    private string CreateProfileId(HashSet<string> taken)
     {
         string id;
         do

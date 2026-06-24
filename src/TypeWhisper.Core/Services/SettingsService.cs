@@ -6,9 +6,13 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     File-backed <see cref="ISettingsService" />: loads settings (falling back to a backup copy
+///     and then defaults), applies legacy-field migrations, and persists changes atomically.
+/// </summary>
 public sealed class SettingsService : ISettingsService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
@@ -69,7 +73,7 @@ public sealed class SettingsService : ISettingsService
         }
 
         // Atomic write via .tmp so a crash mid-write can't corrupt the primary file.
-        var json = JsonSerializer.Serialize(settings, JsonOptions);
+        var json = JsonSerializer.Serialize(settings, s_jsonOptions);
         File.WriteAllText(TempPath, json);
         File.Move(TempPath, _filePath, true);
 
@@ -88,7 +92,7 @@ public sealed class SettingsService : ISettingsService
             }
 
             var json = File.ReadAllText(path);
-            var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
+            var settings = JsonSerializer.Deserialize<AppSettings>(json, s_jsonOptions);
             if (settings is null)
             {
                 return null;
@@ -154,8 +158,7 @@ public sealed class SettingsService : ISettingsService
         }
 
         if (
-            settings.HistoryRetentionMode == HistoryRetentionMode.Duration
-            && settings.HistoryRetentionMinutes <= 0
+            settings is { HistoryRetentionMode: HistoryRetentionMode.Duration, HistoryRetentionMinutes: <= 0 }
         )
         {
             return settings with { HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes };
@@ -186,24 +189,25 @@ public sealed class SettingsService : ISettingsService
             };
         }
 
-        if (root is JsonObject obj
-            && !obj.ContainsKey("localModelAcceleration")
-            && obj.TryGetPropertyValue("computeBackend", out var legacyNode))
+        if (root is not JsonObject obj
+            || obj.ContainsKey("localModelAcceleration")
+            || !obj.TryGetPropertyValue("computeBackend", out var legacyNode))
         {
-            var legacy = legacyNode?.GetValue<string?>();
-            var migrated = string.Equals(legacy, "cuda", StringComparison.OrdinalIgnoreCase)
-                ? AppSettings.LocalModelAccelerationNvidiaCuda
-                : AppSettings.LocalModelAccelerationCpu;
-
-            return settings with { LocalModelAcceleration = migrated };
+            return settings with
+            {
+                LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
+                    settings.LocalModelAcceleration
+                )
+            };
         }
 
-        return settings with
-        {
-            LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
-                settings.LocalModelAcceleration
-            )
-        };
+        var legacy = legacyNode?.GetValue<string?>();
+        var migrated = string.Equals(legacy, "cuda", StringComparison.OrdinalIgnoreCase)
+            ? AppSettings.LocalModelAccelerationNvidiaCuda
+            : AppSettings.LocalModelAccelerationCpu;
+
+        return settings with { LocalModelAcceleration = migrated };
+
     }
 
     private static void LogWarning(string message)

@@ -122,7 +122,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
     ///     Deterministic because LLMs don't reliably honor these verbal commands.
     ///     Caveat: also fires when the phrase is literal content (e.g. "a new line of code").
     /// </summary>
-    internal static string NormalizeSpokenLineBreaks(string text)
+    private static string NormalizeSpokenLineBreaks(string text)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -140,7 +140,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
     ///     Caveat: also fires when the phrase is literal content (same trade-off as
     ///     <see cref="NormalizeSpokenLineBreaks" />). Whitespace cleanup is local to each replacement.
     /// </summary>
-    internal static string NormalizeSpokenPunctuation(string text)
+    private static string NormalizeSpokenPunctuation(string text)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -199,14 +199,14 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
 
         if (options.PluginPostProcessors is { Count: > 0 } processors)
         {
+            // ReSharper disable once LoopCanBeConvertedToQuery
             foreach (var processor in processors)
             {
-                var p = processor;
                 steps.Add(
                     (
-                        p.Priority,
-                        $"{PostProcessingStepNames.PluginPrefix}{p.Priority})",
-                        p.ProcessAsync
+                        processor.Priority,
+                        $"{PostProcessingStepNames.PluginPrefix}{processor.Priority})",
+                        processor.ProcessAsync
                     )
                 );
             }

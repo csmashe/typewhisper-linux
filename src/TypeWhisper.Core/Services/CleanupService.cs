@@ -3,6 +3,11 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Deterministic transcript cleanup: strips fillers and edge noise, applies spoken
+///     punctuation/backtrack/list formatting and sentence casing. Higher cleanup levels
+///     (Medium/High) supply the LLM system prompt used by the provider-backed pass.
+/// </summary>
 public sealed partial class CleanupService
 {
     public const string MediumSystemPrompt =
@@ -159,7 +164,7 @@ public sealed partial class CleanupService
         return items.Count < 2 ? null : string.Join('\n', items.Select(item => $"- {item}"));
     }
 
-    private static IReadOnlyList<string> SplitBulletItems(string body)
+    private static List<string> SplitBulletItems(string body)
     {
         var explicitItems = ExplicitBulletSeparatorRegex()
             .Split(body)
@@ -192,7 +197,7 @@ public sealed partial class CleanupService
         return IsConservativeSingleWordBulletList(words) ? words : [];
     }
 
-    private static bool IsConservativeSingleWordBulletList(IReadOnlyList<string> words)
+    private static bool IsConservativeSingleWordBulletList(List<string> words)
     {
         if (words.Count is < 2 or > 9)
         {
@@ -210,7 +215,7 @@ public sealed partial class CleanupService
         return item.Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
     }
 
-    private static IReadOnlySet<string> BulletListStopWords()
+    private static HashSet<string> BulletListStopWords()
     {
         return new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {

@@ -206,7 +206,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         NewTrigger = snippet.Trigger;
         NewReplacement = snippet.Replacement;
         NewTags = snippet.Tags;
-        NewProfileIds = string.Join(", ", snippet.ProfileIds);
+        NewProfileIds = string.Join(", ", snippet.ProfileIds ?? []);
         CaseSensitive = snippet.CaseSensitive;
         SelectedTriggerMode = snippet.TriggerMode;
         ShowEditor = true;
@@ -317,7 +317,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
             AvailableTags.Contains(current) ? current : Loc.Instance["Snippets.AllTags"];
     }
 
-    private static IReadOnlyList<string> ParseProfileIds(string value)
+    private static List<string> ParseProfileIds(string value)
     {
         return value
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

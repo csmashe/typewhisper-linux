@@ -2,11 +2,15 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Derives a learnable find/replace <see cref="CorrectionSuggestion" /> from a single user edit
+///     by diffing the inserted and corrected text, but only for small, safe word-level changes.
+/// </summary>
 public sealed class CorrectionSuggestionService
 {
     private const int MaxChangedWords = 5;
 
-    public IReadOnlyList<CorrectionSuggestion> GenerateSuggestions(
+    public static IReadOnlyList<CorrectionSuggestion> GenerateSuggestions(
         string insertedText,
         string correctedText
     )
@@ -140,7 +144,7 @@ public sealed class CorrectionSuggestionService
         return string.Equals(left.Normalized, right.Normalized, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IReadOnlyList<Token> Tokenize(string text)
+    private static List<Token> Tokenize(string text)
     {
         return text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(token =>

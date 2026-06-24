@@ -533,7 +533,7 @@ public sealed class AtSpiUrlExtractor
         return ParseFirstQuotedString(output);
     }
 
-    private static IReadOnlyList<AccessibleRef> GetAccessibleChildren(
+    private static List<AccessibleRef> GetAccessibleChildren(
         string address,
         AccessibleRef node
     )
@@ -560,7 +560,7 @@ public sealed class AtSpiUrlExtractor
         return children;
     }
 
-    private static IReadOnlyList<string> GetAccessibleInterfaces(string address, AccessibleRef node)
+    private static List<string> GetAccessibleInterfaces(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,

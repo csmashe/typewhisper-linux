@@ -69,13 +69,13 @@ public sealed partial class IdeFileReferenceService
         return LooksLikeFileName(normalized) ? normalized : Slug(normalized);
     }
 
-    public string ToAtReference(string spokenText)
+    public static string ToAtReference(string spokenText)
     {
         var fileReference = ToFileReference(spokenText);
         return string.IsNullOrWhiteSpace(fileReference) ? "" : "@" + fileReference;
     }
 
-    public string? TryFormatReferenceCommand(string spokenText)
+    public static string? TryFormatReferenceCommand(string spokenText)
     {
         if (string.IsNullOrWhiteSpace(spokenText))
         {
@@ -99,6 +99,7 @@ public sealed partial class IdeFileReferenceService
             return LooksLikeSpokenFileName(candidate) ? ToAtReference(candidate) : null;
         }
 
+        // ReSharper disable once LoopCanBeConvertedToQuery
         foreach (var prefix in s_plainReferencePrefixes)
         {
             if (!normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

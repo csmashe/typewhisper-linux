@@ -51,7 +51,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.True(suggestion.IsApproved);
         Assert.Equal("Kubernets", suggestion.Original);
         Assert.Equal("Kubernetes", suggestion.Replacement);
-        Assert.Single(history.Records.First().PendingCorrectionSuggestions);
+        Assert.Single(history.Records[0].PendingCorrectionSuggestions);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.Equal("Kubernets", entry.Original);
         Assert.Equal("Kubernetes", entry.Replacement);
         Assert.Empty(row.CorrectionSuggestions);
-        Assert.Empty(history.Records.First().PendingCorrectionSuggestions);
+        Assert.Empty(history.Records[0].PendingCorrectionSuggestions);
     }
 
     [Fact]

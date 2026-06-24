@@ -366,7 +366,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     // language, falling back to the manifest literal when the catalog has no
     // entry (third-party plugins, or keys not yet translated). PluginLocalization
     // returns the key itself on a miss, so an unchanged key signals "no entry".
-    private static string LocalizeManifest(IPluginLocalization loc, string key, string fallback)
+    private static string LocalizeManifest(PluginLocalization loc, string key, string fallback)
     {
         var localized = loc.GetString(key);
         return string.Equals(localized, key, StringComparison.Ordinal) ? fallback : localized;
@@ -623,7 +623,7 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         Options = options;
         Kind = ResolveKind(kind, options, isSecret);
         _value = value;
-        _selectedOption = Options.FirstOrDefault(o => o.Value == value) ?? Options.FirstOrDefault();
+        _selectedOption = Options.FirstOrDefault(o => o.Value == value) ?? (Options.Count > 0 ? Options[0] : null);
         if (_selectedOption is not null && string.IsNullOrEmpty(_value))
         {
             _value = _selectedOption.Value;

@@ -236,7 +236,7 @@ public partial class FileTranscriptionSection : UserControl
             new FolderPickerOpenOptions { Title = title, AllowMultiple = false }
         );
 
-        return folders.FirstOrDefault()?.TryGetLocalPath();
+        return (folders.Count > 0 ? folders[0] : null)?.TryGetLocalPath();
     }
 
     private void OnDragEnter(object? sender, DragEventArgs e)

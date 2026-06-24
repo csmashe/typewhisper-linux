@@ -49,7 +49,8 @@ public sealed class MemoryService
             return;
         }
 
-        var memoryPlugin = _pluginManager.GetPlugins<IMemoryStoragePlugin>().FirstOrDefault();
+        var plugins = _pluginManager.GetPlugins<IMemoryStoragePlugin>();
+        var memoryPlugin = plugins.Count > 0 ? plugins[0] : null;
         if (memoryPlugin is null)
         {
             return;
@@ -61,7 +62,7 @@ public sealed class MemoryService
             return;
         }
 
-        var model = llm.SupportedModels.FirstOrDefault()?.Id;
+        var model = (llm.SupportedModels.Count > 0 ? llm.SupportedModels[0] : null)?.Id;
         if (model is null)
         {
             return;
@@ -104,7 +105,8 @@ public sealed class MemoryService
             return null;
         }
 
-        var memoryPlugin = _pluginManager.GetPlugins<IMemoryStoragePlugin>().FirstOrDefault();
+        var plugins = _pluginManager.GetPlugins<IMemoryStoragePlugin>();
+        var memoryPlugin = plugins.Count > 0 ? plugins[0] : null;
         if (memoryPlugin is null)
         {
             return null;

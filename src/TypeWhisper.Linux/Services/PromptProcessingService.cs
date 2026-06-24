@@ -176,7 +176,7 @@ public sealed class PromptProcessingService
                 continue;
             }
 
-            var firstModel = provider.SupportedModels.FirstOrDefault();
+            var firstModel = provider.SupportedModels.Count > 0 ? provider.SupportedModels[0] : null;
             if (firstModel is not null)
             {
                 return (provider, firstModel.Id);

@@ -4,8 +4,14 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     File-backed <see cref="IProfileService" />: persists dictation profiles as JSON and resolves
+///     which profile matches the active window by app name, URL pattern, or global fallback.
+/// </summary>
 public sealed class ProfileService : IProfileService
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     private readonly string _filePath;
     private List<Profile> _cache = [];
     private bool _cacheLoaded;
@@ -213,7 +219,10 @@ public sealed class ProfileService : IProfileService
                 return uri.Host;
             }
         }
-        catch { }
+        catch
+        {
+            // Malformed URL → treat as having no host.
+        }
 
         return null;
     }
@@ -276,10 +285,7 @@ public sealed class ProfileService : IProfileService
                 Directory.CreateDirectory(dir);
             }
 
-            var json = JsonSerializer.Serialize(
-                profiles,
-                new JsonSerializerOptions { WriteIndented = true }
-            );
+            var json = JsonSerializer.Serialize(profiles, s_jsonOptions);
 
             tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(tempPath, json);
@@ -308,7 +314,10 @@ public sealed class ProfileService : IProfileService
                         File.Delete(tempPath);
                     }
                 }
-                catch { }
+                catch
+                {
+                    // Best-effort temp-file cleanup.
+                }
             }
         }
     }

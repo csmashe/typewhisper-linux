@@ -168,7 +168,7 @@ public sealed class FileTranscriptionProcessor(
             }
 
             var model = string.IsNullOrWhiteSpace(options.ModelId)
-                ? engine.SelectedModelId ?? engine.TranscriptionModels.FirstOrDefault()?.Id
+                ? engine.SelectedModelId ?? (engine.TranscriptionModels.Count > 0 ? engine.TranscriptionModels[0] : null)?.Id
                 : options.ModelId;
             if (
                 string.IsNullOrWhiteSpace(model)

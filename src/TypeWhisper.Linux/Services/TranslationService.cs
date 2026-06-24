@@ -65,7 +65,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         var llmProvider = GetConfiguredTranslationProvider();
         if (llmProvider is not null)
         {
-            var model = llmProvider.SupportedModels.First().Id;
+            var model = llmProvider.SupportedModels[0].Id;
             var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
             return await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
         }
@@ -262,7 +262,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         ]);
 
         var encoderHidden =
-            encoderResults.First().Value as DenseTensor<float>
+            encoderResults[0].Value as DenseTensor<float>
             ?? throw new InvalidOperationException("Encoder output is not a float tensor.");
 
         var maxTokens = Math.Min(model.Config.MaxLength, 200);
@@ -285,7 +285,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
             using var decoderResults = model.Decoder.Run(decoderInputs);
             var logits =
-                decoderResults.First().Value as DenseTensor<float>
+                decoderResults[0].Value as DenseTensor<float>
                 ?? throw new InvalidOperationException("Decoder output is not a float tensor.");
 
             var vocabSize = logits.Dimensions[2];

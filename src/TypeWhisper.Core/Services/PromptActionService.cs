@@ -1,11 +1,18 @@
+using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     File-backed <see cref="IPromptActionService" />: persists the user's LLM prompt actions as
+///     JSON and seeds the built-in presets and first-run defaults.
+/// </summary>
 public sealed class PromptActionService : IPromptActionService
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     private readonly string _filePath;
     private List<PromptAction> _cache = [];
     private bool _cacheLoaded;
@@ -192,12 +199,13 @@ public sealed class PromptActionService : IPromptActionService
                 Directory.CreateDirectory(dir);
             }
 
-            var json = JsonSerializer.Serialize(
-                _cache,
-                new JsonSerializerOptions { WriteIndented = true }
-            );
+            var json = JsonSerializer.Serialize(_cache, s_jsonOptions);
             File.WriteAllText(_filePath, json);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // Best-effort persistence: don't crash the caller, but log so a failing save is visible.
+            Trace.WriteLine($"[PromptActionService] Failed to save prompt actions to {_filePath}: {ex}");
+        }
     }
 }

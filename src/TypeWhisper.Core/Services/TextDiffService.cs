@@ -2,6 +2,10 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Word-level LCS diff between an original and an edited transcript, used to extract
+///     <see cref="CorrectionSuggestion" />s while skipping rewrites and punctuation-only churn.
+/// </summary>
 public static class TextDiffService
 {
     public static bool HasChanges(string rawText, string finalText)
@@ -73,40 +77,44 @@ public static class TextDiffService
                 }
 
                 var dist = Math.Abs(insertions[k].Position - rPos);
-                if (dist <= 3 && dist < bestDist)
+                if (dist > 3 || dist >= bestDist)
                 {
-                    bestDist = dist;
-                    bestIdx = k;
+                    continue;
                 }
+
+                bestDist = dist;
+                bestIdx = k;
             }
 
-            if (bestIdx >= 0)
+            if (bestIdx < 0)
             {
-                var iWord = insertions[bestIdx].Word;
-                usedInsertions.Add(bestIdx);
-
-                // Skip punctuation-only changes
-                if (IsPunctuationOnly(rWord) && IsPunctuationOnly(iWord))
-                {
-                    continue;
-                }
-
-                // Skip if the words differ only in trailing punctuation.
-                // The second condition (rClean == iClean) checks for exact equality after trimming —
-                // when combined with OrdinalIgnoreCase equality it means the words were identical
-                // before trimming but differed only in punctuation; case-only diffs fall through.
-                var rClean = rWord.TrimEnd('.', ',', '!', '?', ':', ';');
-                var iClean = iWord.TrimEnd('.', ',', '!', '?', ':', ';');
-                if (
-                    string.Equals(rClean, iClean, StringComparison.OrdinalIgnoreCase)
-                    && rClean == iClean
-                )
-                {
-                    continue;
-                }
-
-                suggestions.Add(new CorrectionSuggestion(rWord, iWord));
+                continue;
             }
+
+            var iWord = insertions[bestIdx].Word;
+            usedInsertions.Add(bestIdx);
+
+            // Skip punctuation-only changes
+            if (IsPunctuationOnly(rWord) && IsPunctuationOnly(iWord))
+            {
+                continue;
+            }
+
+            // Skip if the words differ only in trailing punctuation.
+            // The second condition (rClean == iClean) checks for exact equality after trimming —
+            // when combined with OrdinalIgnoreCase equality it means the words were identical
+            // before trimming but differed only in punctuation; case-only diffs fall through.
+            var rClean = rWord.TrimEnd('.', ',', '!', '?', ':', ';');
+            var iClean = iWord.TrimEnd('.', ',', '!', '?', ':', ';');
+            if (
+                string.Equals(rClean, iClean, StringComparison.OrdinalIgnoreCase)
+                && rClean == iClean
+            )
+            {
+                continue;
+            }
+
+            suggestions.Add(new CorrectionSuggestion(rWord, iWord));
         }
 
         return suggestions;

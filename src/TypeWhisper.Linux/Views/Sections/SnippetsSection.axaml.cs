@@ -65,7 +65,7 @@ public partial class SnippetsSection : UserControl
             }
         );
 
-        var path = files.FirstOrDefault()?.TryGetLocalPath();
+        var path = (files.Count > 0 ? files[0] : null)?.TryGetLocalPath();
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
             return;

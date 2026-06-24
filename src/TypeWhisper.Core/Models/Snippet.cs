@@ -18,5 +18,10 @@ public sealed record Snippet
     public DateTime? LastUsedAt { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public string Tags { get; init; } = "";
-    public IReadOnlyList<string> ProfileIds { get; init; } = [];
+    /// <summary>
+    ///     Profiles this snippet is scoped to; null/empty means "applies to all profiles".
+    ///     Nullable because JSON with an explicit <c>"profileIds": null</c> overrides the
+    ///     <c>[]</c> initializer, so consumers must null-guard before use.
+    /// </summary>
+    public IReadOnlyList<string>? ProfileIds { get; init; } = [];
 }

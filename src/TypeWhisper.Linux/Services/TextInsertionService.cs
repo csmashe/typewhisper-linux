@@ -534,7 +534,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         Task<(int exitCode, string stderr)>
     >? _processRunnerWithStderr;
 
-    private IReadOnlyList<InputBackend> _chain;
+    private List<InputBackend> _chain;
     private HashSet<InputBackend> _disabled = new();
 
     private LinuxCapabilitySnapshot _snapshot;
@@ -895,7 +895,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     ///     unknown wlroots-shaped sessions) keep wtype as the canonical
     ///     fast path; X11 stays xdotool-only.
     /// </summary>
-    private static IReadOnlyList<InputBackend> BuildChain(LinuxCapabilitySnapshot snapshot)
+    private static List<InputBackend> BuildChain(LinuxCapabilitySnapshot snapshot)
     {
         var chain = new List<InputBackend>();
 

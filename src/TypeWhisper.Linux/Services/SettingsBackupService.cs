@@ -21,6 +21,8 @@ public sealed class SettingsBackupService
 
     private static readonly string[] s_restoreDirectoryRoots = ["Data", "PluginData", "Plugins"];
 
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     private readonly string _basePath;
 
     public SettingsBackupService()
@@ -68,12 +70,7 @@ public sealed class SettingsBackupService
             var manifestEntry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
             using (var writer = new StreamWriter(manifestEntry.Open()))
             {
-                writer.Write(
-                    JsonSerializer.Serialize(
-                        manifest,
-                        new JsonSerializerOptions { WriteIndented = true }
-                    )
-                );
+                writer.Write(JsonSerializer.Serialize(manifest, s_jsonOptions));
             }
 
             foreach (var relativeFile in s_rootFiles)

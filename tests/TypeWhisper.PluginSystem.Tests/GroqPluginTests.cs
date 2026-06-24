@@ -96,8 +96,8 @@ public class GroqPluginTests
         var sut = new GroqPlugin();
         await sut.ActivateAsync(host);
 
-        Assert.Equal(sut.SupportedModels.First().Id, sut.SelectedLlmModelId);
-        Assert.Equal(sut.SupportedModels.First().Id, host.GetSetting<string>("selectedLlmModel"));
+        Assert.Equal(sut.SupportedModels[0].Id, sut.SelectedLlmModelId);
+        Assert.Equal(sut.SupportedModels[0].Id, host.GetSetting<string>("selectedLlmModel"));
     }
 
     [Fact]
@@ -266,9 +266,9 @@ public class GroqPluginTests
         await sut.SetApiKeyAsync("new-key");
 
         Assert.Empty(sut.FetchedLlmModels);
-        Assert.Equal(sut.SupportedModels.First().Id, sut.SelectedLlmModelId);
+        Assert.Equal(sut.SupportedModels[0].Id, sut.SelectedLlmModelId);
         Assert.Empty(host.GetSetting<List<FetchedLlmModel>>("fetchedLlmModels")!);
-        Assert.Equal(sut.SupportedModels.First().Id, host.GetSetting<string>("selectedLlmModel"));
+        Assert.Equal(sut.SupportedModels[0].Id, host.GetSetting<string>("selectedLlmModel"));
         Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
     }
 

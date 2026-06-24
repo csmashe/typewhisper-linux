@@ -1466,7 +1466,7 @@ public sealed class DictationOrchestrator : IDisposable
                 cancelToken
             );
 
-            var commandResult = _voiceCommands.Parse(pipelineResult.Text);
+            var commandResult = VoiceCommandParser.Parse(pipelineResult.Text);
             var finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
 
             TranscriptionCompleted?.Invoke(this, finalText);
@@ -1803,7 +1803,7 @@ public sealed class DictationOrchestrator : IDisposable
             return text;
         }
 
-        var fileReference = _ideFileReferences.TryFormatReferenceCommand(text);
+        var fileReference = IdeFileReferenceService.TryFormatReferenceCommand(text);
         return fileReference ?? DeveloperFormattingService.Format(text);
     }
 

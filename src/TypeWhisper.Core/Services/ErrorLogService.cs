@@ -7,8 +7,14 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     File-backed <see cref="IErrorLogService" />: keeps a capped, newest-first ring buffer of
+///     error entries persisted as JSON, and exports them with app/environment metadata for bug reports.
+/// </summary>
 public sealed class ErrorLogService : IErrorLogService
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     private const int MaxEntries = 200;
     private readonly List<ErrorLogEntry> _entries = [];
     private readonly Lock _lock = new();
@@ -93,7 +99,7 @@ public sealed class ErrorLogService : IErrorLogService
             })
         };
 
-        return JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
+        return JsonSerializer.Serialize(report, s_jsonOptions);
     }
 
     private void LoadFromDisk()
@@ -136,10 +142,7 @@ public sealed class ErrorLogService : IErrorLogService
         // the in-memory list; two concurrent writers could otherwise interleave.
         try
         {
-            var json = JsonSerializer.Serialize(
-                _entries,
-                new JsonSerializerOptions { WriteIndented = true }
-            );
+            var json = JsonSerializer.Serialize(_entries, s_jsonOptions);
 
             var dir = Path.GetDirectoryName(_logFilePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))

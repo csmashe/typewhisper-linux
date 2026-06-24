@@ -15,7 +15,7 @@ public sealed class VoiceCommandParserTests
         string expectedText
     )
     {
-        var result = _sut.Parse(input);
+        var result = VoiceCommandParser.Parse(input);
 
         Assert.Equal(expectedText, result.Text);
         Assert.True(result.AutoEnter);
@@ -25,7 +25,7 @@ public sealed class VoiceCommandParserTests
     [Fact]
     public void Parse_PressEnterAlone_SendsEnterWithoutText()
     {
-        var result = _sut.Parse("press enter");
+        var result = VoiceCommandParser.Parse("press enter");
 
         Assert.Equal("", result.Text);
         Assert.True(result.AutoEnter);
@@ -37,7 +37,7 @@ public sealed class VoiceCommandParserTests
     [InlineData("Hello new paragraph", "Hello\n\n")]
     public void Parse_LineBreakSuffixes_ConvertToNewlines(string input, string expectedText)
     {
-        var result = _sut.Parse(input);
+        var result = VoiceCommandParser.Parse(input);
 
         Assert.Equal(expectedText, result.Text);
         Assert.False(result.AutoEnter);
@@ -46,7 +46,7 @@ public sealed class VoiceCommandParserTests
     [Fact]
     public void Parse_ChainedSuffixCommands_AppliesAllSuffixes()
     {
-        var result = _sut.Parse("Hello new paragraph press enter");
+        var result = VoiceCommandParser.Parse("Hello new paragraph press enter");
 
         Assert.Equal("Hello\n\n", result.Text);
         Assert.True(result.AutoEnter);
@@ -58,7 +58,7 @@ public sealed class VoiceCommandParserTests
     [InlineData("press enter cancel")]
     public void Parse_CancelWithoutMeaningfulContent_CancelsInsertion(string input)
     {
-        var result = _sut.Parse(input);
+        var result = VoiceCommandParser.Parse(input);
 
         Assert.Equal("", result.Text);
         Assert.True(result.CancelInsertion);
@@ -67,7 +67,7 @@ public sealed class VoiceCommandParserTests
     [Fact]
     public void Parse_NonSuffixPhrasesRemainNormalText()
     {
-        var result = _sut.Parse("Please write the words press enter in the note");
+        var result = VoiceCommandParser.Parse("Please write the words press enter in the note");
 
         Assert.Equal("Please write the words press enter in the note", result.Text);
         Assert.False(result.AutoEnter);

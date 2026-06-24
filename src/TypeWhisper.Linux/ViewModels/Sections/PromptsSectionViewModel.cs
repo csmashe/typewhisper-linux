@@ -450,7 +450,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             return baseLabel;
         }
 
-        var fallbackModel = fallback.SupportedModels.FirstOrDefault();
+        var fallbackModel = fallback.SupportedModels.Count > 0 ? fallback.SupportedModels[0] : null;
         var fallbackLabel = fallbackModel is null
             ? fallback.ProviderName
             : $"{fallback.ProviderName} / {fallbackModel.DisplayName}";

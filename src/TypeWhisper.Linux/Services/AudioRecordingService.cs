@@ -267,7 +267,7 @@ public sealed class AudioRecordingService : IDisposable
             }
         }
 
-        return devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
+        return devices.FirstOrDefault(d => d.IsDefault) ?? (devices.Count > 0 ? devices[0] : null);
     }
 
     // Per-chunk AGC for "whisper mode": boosts quiet speech for noise-gated
@@ -601,7 +601,7 @@ public sealed class AudioRecordingService : IDisposable
         );
     }
 
-    private static IReadOnlyList<int> CandidateSampleRates(double defaultSampleRate)
+    private static List<int> CandidateSampleRates(double defaultSampleRate)
     {
         // Try the device's native rate first to avoid PortAudio internal resampling;
         // fall through common rates in descending order. Captured audio is always

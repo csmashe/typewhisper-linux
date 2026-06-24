@@ -1,6 +1,7 @@
 using Avalonia.Threading;
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.Views;
