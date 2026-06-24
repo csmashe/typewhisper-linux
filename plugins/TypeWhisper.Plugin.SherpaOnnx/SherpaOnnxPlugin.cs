@@ -502,17 +502,23 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         // while it is still safe to do so. ConfigureCudaRuntime dlopens a second
         // libonnxruntime.so RTLD_GLOBAL and redirects the import resolver, which must
         // happen "before the first recognizer is created" (see SherpaOnnxNativeRuntime).
-        // Once a recognizer has pinned the process to a non-CUDA provider — e.g. the user
-        // ran on CPU and is now clicking the host's "download CUDA runtime" button — wiring
-        // the GPU ORT into that live process would leave it in a mixed CPU/GPU native state.
-        // Skip it: the files are now on disk, and the host's restart prompt lets a fresh
-        // process wire the GPU runtime cleanly. (On the LoadModelAsync path desiredProvider
-        // can only be "cuda" when the process isn't CPU-pinned, so this never blocks it.)
+        // Don't wire the GPU ORT into a process that no longer wants CUDA — it would leave
+        // a mixed CPU/GPU native state until restart. Two cases this guards against:
+        //   1. A recognizer already pinned the process to CPU (the host's "download CUDA
+        //      runtime" button, clicked while running on CPU).
+        //   2. The user switched to CPU during the (slow) download, so the desired backend
+        //      (_computeBackend) is no longer "cuda" — the LoadModelAsync re-check would
+        //      abort the load anyway. Revalidate _computeBackend HERE, under _sync, right
+        //      before wiring, since the check happens after a long unlocked download.
+        // In both cases the files are now on disk and the host's restart prompt lets a fresh
+        // process wire the GPU runtime cleanly. _cudaOrtRuntimeWired is set only after this
+        // revalidation passes and ConfigureCudaRuntime actually wires the runtime.
         bool canWireIntoProcess;
         lock (_sync)
             canWireIntoProcess =
-                _loadedNativeProvider is null
-                || string.Equals(_loadedNativeProvider, "cuda", StringComparison.Ordinal);
+                (_loadedNativeProvider is null
+                    || string.Equals(_loadedNativeProvider, "cuda", StringComparison.Ordinal))
+                && string.Equals(_computeBackend, "cuda", StringComparison.Ordinal);
 
         if (canWireIntoProcess)
         {

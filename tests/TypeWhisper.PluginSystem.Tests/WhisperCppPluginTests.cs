@@ -2,6 +2,7 @@ extern alias SherpaOnnx;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Moq;
 using TypeWhisper.Plugin.WhisperCpp;
@@ -179,6 +180,12 @@ public class WhisperCppPluginTests
     [Fact]
     public async Task LoadModelAsync_BackendSwitchedDuringProvision_AbortsLoad()
     {
+        // EnsureCudaRuntimeReadyAsync's Linux-x64 platform gate throws before the fake
+        // provisioner runs on unsupported hosts, so `Started` would never complete and the
+        // await below would hang. The CI/dev target is Linux x64; skip elsewhere.
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            return;
+
         using var temp = new TempAssetDir();
         var host = CreateHostMock(temp.Path);
         var provisioner = new BlockingProvisioner();
@@ -501,12 +508,19 @@ public class SherpaOnnxPluginTests
 
     // CI-portable state-machine test mirroring the whisper one: a CUDA load whose backend
     // is switched to CPU mid provision must abort. The injected provisioner blocks inside
-    // EnsureReadyAsync; the fake installer's RuntimeDirectory points at a non-existent temp
-    // dir so the post-provision ConfigureCudaRuntime finds nothing to dlopen (no native
-    // load). The abort fires on the post-provision re-check, before any recognizer.
+    // EnsureReadyAsync; once the backend is switched to CPU the wiring guard skips
+    // ConfigureCudaRuntime entirely (the installer's RuntimeDirectory also points at a
+    // non-existent temp dir as a further safeguard against any dlopen). The abort fires on
+    // the post-provision re-check, before any recognizer.
     [Fact]
     public async Task LoadModelAsync_BackendSwitchedDuringProvision_AbortsLoad()
     {
+        // EnsureCudaRuntimeReadyAsync's Linux-x64 platform gate throws before the fake
+        // provisioner runs on unsupported hosts, so `Started` would never complete and the
+        // await below would hang. The CI/dev target is Linux x64; skip elsewhere.
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            return;
+
         using var temp = new TempAssetDir();
         var host = CreateHostMock(temp.Path);
         var provisioner = new SherpaBlockingProvisioner();
