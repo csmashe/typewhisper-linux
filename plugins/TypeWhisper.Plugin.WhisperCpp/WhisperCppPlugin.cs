@@ -896,13 +896,45 @@ public sealed class WhisperCppPlugin
             _gate.Release();
         }
 
-        // Clear whisper.cpp's CUDA build and the shared CUDA math-library cache (the
-        // latter is shared with sherpa-onnx; deleting it again from that plugin is an
-        // idempotent no-op).
-        if (_whisperCudaInstaller is not null)
-            await _whisperCudaInstaller.ClearCacheAsync(ct).ConfigureAwait(false);
-        if (_cudaProvisioner is not null)
-            await _cudaProvisioner.ClearCacheAsync(ct).ConfigureAwait(false);
+        // Clear BOTH whisper.cpp's CUDA build and the shared CUDA math-library cache, even
+        // if the first delete fails — the actually-corrupt one might be the shared set
+        // (the latter is shared with sherpa-onnx; deleting it again from that plugin is an
+        // idempotent no-op). Aggregate non-cancel faults and throw once both attempts have
+        // run; propagate cancellation immediately.
+        var failures = new List<string>();
+
+        try
+        {
+            if (_whisperCudaInstaller is not null)
+                await _whisperCudaInstaller.ClearCacheAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"whisper.cpp GPU runtime: {ex.Message}");
+        }
+
+        try
+        {
+            if (_cudaProvisioner is not null)
+                await _cudaProvisioner.ClearCacheAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"shared CUDA runtime: {ex.Message}");
+        }
+
+        if (failures.Count > 0)
+            throw new InvalidOperationException(
+                "Failed to clear whisper.cpp CUDA runtime cache: " + string.Join("; ", failures)
+            );
     }
 
     // Logs download progress in coarse 10% steps (so a first-time multi-hundred-MB fetch

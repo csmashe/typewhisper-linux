@@ -504,13 +504,45 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         // user's model selection intact.
         UnloadRecognizer();
 
-        // Clear the sherpa-onnx GPU build and the shared CUDA math-library cache (the
-        // latter is shared with whisper.cpp; deleting it again from that plugin is an
-        // idempotent no-op).
-        if (_cudaRuntimeInstaller is not null)
-            await _cudaRuntimeInstaller.ClearCacheAsync(ct).ConfigureAwait(false);
-        if (_cudaProvisioner is not null)
-            await _cudaProvisioner.ClearCacheAsync(ct).ConfigureAwait(false);
+        // Clear BOTH the sherpa-onnx GPU build and the shared CUDA math-library cache,
+        // even if the first delete fails — the actually-corrupt one might be the shared
+        // set (the latter is shared with whisper.cpp; deleting it again from that plugin
+        // is an idempotent no-op). Aggregate non-cancel faults and throw once both
+        // attempts have run; propagate cancellation immediately.
+        var failures = new List<string>();
+
+        try
+        {
+            if (_cudaRuntimeInstaller is not null)
+                await _cudaRuntimeInstaller.ClearCacheAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"sherpa-onnx GPU runtime: {ex.Message}");
+        }
+
+        try
+        {
+            if (_cudaProvisioner is not null)
+                await _cudaProvisioner.ClearCacheAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"shared CUDA runtime: {ex.Message}");
+        }
+
+        if (failures.Count > 0)
+            throw new InvalidOperationException(
+                "Failed to clear sherpa-onnx CUDA runtime cache: " + string.Join("; ", failures)
+            );
     }
 
     // Logs download progress in coarse 10% steps (so a first-time multi-hundred-MB fetch
