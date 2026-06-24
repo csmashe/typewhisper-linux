@@ -659,6 +659,69 @@ public class ModelManagerServiceTests
         Assert.Equal(firstLoadCallCount, fake.SetAccelerationPreferenceCount);
     }
 
+    [Fact]
+    public async Task ClearCudaRuntimeCacheAsync_ClearsEveryProvisioningEngine_AndSkipsOthers()
+    {
+        _settings.Setup(s => s.Current).Returns(new AppSettings());
+
+        var sherpa = new FakeTranscriptionPlugin("com.typewhisper.sherpa-onnx", true, null)
+        {
+            ProvisionsCudaRuntimeOnDemand = true,
+        };
+        var whisper = new FakeTranscriptionPlugin("com.typewhisper.whisper-cpp", true, null)
+        {
+            ProvisionsCudaRuntimeOnDemand = true,
+        };
+        var cloud = new FakeTranscriptionPlugin("com.typewhisper.openai", true, null)
+        {
+            ProvisionsCudaRuntimeOnDemand = false,
+        };
+        var sut = new ModelManagerService(
+            CreatePluginManager(sherpa, whisper, cloud),
+            _settings.Object
+        );
+
+        await sut.ClearCudaRuntimeCacheAsync();
+
+        Assert.True(sherpa.ClearCudaRuntimeCalled);
+        Assert.True(whisper.ClearCudaRuntimeCalled);
+        // A non-provisioning engine has nothing to clear and must be left alone.
+        Assert.False(cloud.ClearCudaRuntimeCalled);
+    }
+
+    [Fact]
+    public async Task ClearCudaRuntimeCacheAsync_AttemptsAllEngines_ThenThrowsAggregate_OnFailure()
+    {
+        // A swallowed delete failure would tell the user the corrupt runtime was cleared
+        // when it is still on disk. Every engine is still attempted, but the failure is
+        // surfaced so the UI reports failure instead of a false success.
+        _settings.Setup(s => s.Current).Returns(new AppSettings());
+
+        var failing = new FakeTranscriptionPlugin("com.typewhisper.sherpa-onnx", true, null)
+        {
+            ProvisionsCudaRuntimeOnDemand = true,
+            ClearCudaRuntimeError = "permission denied",
+        };
+        var succeeding = new FakeTranscriptionPlugin("com.typewhisper.whisper-cpp", true, null)
+        {
+            ProvisionsCudaRuntimeOnDemand = true,
+        };
+        var sut = new ModelManagerService(
+            CreatePluginManager(failing, succeeding),
+            _settings.Object
+        );
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.ClearCudaRuntimeCacheAsync()
+        );
+
+        // The other engine was still attempted (failure of one doesn't abort the rest)...
+        Assert.True(succeeding.ClearCudaRuntimeCalled);
+        // ...and the failure is reported with the offending provider + reason.
+        Assert.Contains("com.typewhisper.sherpa-onnx", ex.Message);
+        Assert.Contains("permission denied", ex.Message);
+    }
+
     private ModelManagerService CreateServiceWithLoadableModel(
         out string fullModelId,
         out ITranscriptionEnginePlugin plugin
@@ -807,6 +870,23 @@ public class ModelManagerServiceTests
             }
 
             SelectedModelId = null;
+        }
+
+        /// <summary>When set, <see cref="ClearCudaRuntimeAsync" /> throws this message.</summary>
+        public string? ClearCudaRuntimeError { get; set; }
+
+        /// <summary>Whether <see cref="ClearCudaRuntimeAsync" /> was invoked.</summary>
+        public bool ClearCudaRuntimeCalled { get; private set; }
+
+        public Task ClearCudaRuntimeAsync(CancellationToken ct)
+        {
+            ClearCudaRuntimeCalled = true;
+            if (ClearCudaRuntimeError is not null)
+            {
+                throw new InvalidOperationException(ClearCudaRuntimeError);
+            }
+
+            return Task.CompletedTask;
         }
 
         public Task<PluginTranscriptionResult> TranscribeAsync(

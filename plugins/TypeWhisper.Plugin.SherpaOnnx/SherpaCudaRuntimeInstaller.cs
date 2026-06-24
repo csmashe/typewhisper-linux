@@ -148,6 +148,45 @@ internal class SherpaCudaRuntimeInstaller
         }
     }
 
+    /// <summary>
+    ///     Deletes the entire sherpa-onnx GPU runtime cache tree
+    ///     (<c>…/Runtimes/sherpa-onnx-cuda</c>, every runtime version) so the next
+    ///     <see cref="EnsureInstalledAsync" /> re-downloads from scratch. Guarded by the
+    ///     same gate as install so it can't race an in-flight extraction — and awaits the
+    ///     gate with <paramref name="ct" /> so a cancel isn't stuck behind it. A missing
+    ///     cache is a no-op; a delete failure is logged and rethrown so the caller can
+    ///     surface it rather than report a corrupt runtime as repaired.
+    /// </summary>
+    public async Task ClearCacheAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var root = Directory.GetParent(_runtimeRoot)?.FullName;
+            if (root is null || !Directory.Exists(root))
+                return;
+
+            try
+            {
+                Directory.Delete(root, recursive: true);
+                _log?.Invoke($"sherpa-onnx GPU runtime: cleared cache at {root}.");
+            }
+            catch (Exception ex)
+            {
+                // Don't swallow: the caller reports "cleared" only when the cache is
+                // actually gone, so a corrupt runtime can't masquerade as repaired.
+                _log?.Invoke(
+                    $"sherpa-onnx GPU runtime: failed to clear cache at {root}: {ex.Message}"
+                );
+                throw;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     private Task DownloadAsync(string destination, IProgress<double>? progress, CancellationToken ct)
     {
         // Map the helper's cumulative bytes-on-disk to a progress fraction over the

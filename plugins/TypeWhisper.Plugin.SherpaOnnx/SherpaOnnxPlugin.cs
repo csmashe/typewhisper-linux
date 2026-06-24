@@ -511,6 +511,57 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         }
     }
 
+    public async Task ClearCudaRuntimeAsync(CancellationToken ct)
+    {
+        // Defensive: drop any live recognizer so its native handles aren't needlessly
+        // held while we delete the cache. (On Linux the .so files can be unlinked even
+        // while mapped, so a restart is still required for the fresh re-download to take
+        // effect — but releasing the recognizer first keeps the on-disk state clean.)
+        // UnloadRecognizer does NOT touch _selectedModelId, so cache repair leaves the
+        // user's model selection intact.
+        UnloadRecognizer();
+
+        // Clear BOTH the sherpa-onnx GPU build and the shared CUDA math-library cache,
+        // even if the first delete fails — the actually-corrupt one might be the shared
+        // set (the latter is shared with whisper.cpp; deleting it again from that plugin
+        // is an idempotent no-op). Aggregate non-cancel faults and throw once both
+        // attempts have run; propagate cancellation immediately.
+        var failures = new List<string>();
+
+        try
+        {
+            if (_cudaRuntimeInstaller is not null)
+                await _cudaRuntimeInstaller.ClearCacheAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"sherpa-onnx GPU runtime: {ex.Message}");
+        }
+
+        try
+        {
+            if (_cudaProvisioner is not null)
+                await _cudaProvisioner.ClearCacheAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"shared CUDA runtime: {ex.Message}");
+        }
+
+        if (failures.Count > 0)
+            throw new InvalidOperationException(
+                "Failed to clear sherpa-onnx CUDA runtime cache: " + string.Join("; ", failures)
+            );
+    }
+
     // Logs download progress in coarse 10% steps (so a first-time multi-hundred-MB fetch
     // doesn't look hung, without flooding the log) AND forwards a fraction mapped into
     // [start, end] of the overall provisioning bar to the host's progress reporter, so

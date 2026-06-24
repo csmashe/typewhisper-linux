@@ -66,6 +66,14 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _isDownloadingCudaRuntime;
 
     [ObservableProperty]
+    private bool _isClearingGpuRuntime;
+
+    // Set once the GPU runtime cache has been cleared this session. The deleted libs are
+    // re-downloaded only on the next process start (the old ones are held until exit), so
+    // this suppresses the Download action until restart (see ShowDownloadCudaRuntimeAction).
+    private bool _gpuRuntimeClearedPendingRestart;
+
+    [ObservableProperty]
     private string _engineName = Loc.Instance["Dictation.NoEngineSelected"];
 
     [ObservableProperty]
@@ -332,14 +340,32 @@ public partial class DictationSectionViewModel : ObservableObject
     // install where only some libraries are present (the engine downloads just the gaps).
     // Suppressed while a download is in flight, and when the libs exist on disk but only
     // need a loader-path fix (that's the ShowCudaLibraryPathAction button's job instead).
+    // Also suppressed once the GPU runtime has been cleared this session: clearing
+    // requires a restart to take effect (the old native libs are pinned until exit), so
+    // re-offering a multi-GB download in the same poisoned process would contradict the
+    // "restart to re-download" guidance. A fresh launch starts the flag false.
     public bool ShowDownloadCudaRuntimeAction =>
         _commands.HasCudaGpu
         && !CanUseCuda
         && !IsDownloadingCudaRuntime
         && !ShowCudaLibraryPathAction
+        && !_gpuRuntimeClearedPendingRestart
         && SelectedModelPlugin?.ProvisionsCudaRuntimeOnDemand == true;
 
     public string DownloadCudaRuntimeText => Loc.Instance["Dictation.DownloadCudaRuntime"];
+
+    // Offer "Clear GPU runtime" exactly in the corrupt-but-present case: a provisioning
+    // engine is selected and reports provisioned (the files exist on disk, so Download is
+    // hidden), yet a cached lib may be corrupt — deleting the cache so the next restart
+    // re-downloads is the only in-app repair. Mutually exclusive with the Download button
+    // (which shows only when NOT provisioned) and hidden while either action is running.
+    public bool ShowClearGpuRuntimeAction =>
+        SelectedModelPlugin?.ProvisionsCudaRuntimeOnDemand == true
+        && _selectedPluginCudaProvisioned
+        && !IsClearingGpuRuntime
+        && !IsDownloadingCudaRuntime;
+
+    public string ClearGpuRuntimeText => Loc.Instance["Dictation.ClearGpuRuntime"];
 
     public string AccelerationStatusText
     {
@@ -1040,7 +1066,56 @@ public partial class DictationSectionViewModel : ObservableObject
             IsDownloadingCudaRuntime = false;
             OnPropertyChanged(nameof(CanUseCuda));
             OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
+            OnPropertyChanged(nameof(ShowClearGpuRuntimeAction));
             OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
+            OnPropertyChanged(nameof(AccelerationStatusText));
+        }
+    }
+
+    // Recovery for a corrupt cached GPU runtime: delete every provisioning engine's
+    // cached CUDA runtime (the shared math libs + each engine's own GPU build) so the
+    // next process start re-provisions from scratch. The libs already dlopen'd this
+    // session are held until exit, so the success message prompts the user to restart.
+    [RelayCommand]
+    private async Task ClearGpuRuntimeAsync()
+    {
+        var plugin = SelectedModelPlugin;
+        if (plugin is not { ProvisionsCudaRuntimeOnDemand: true } || IsClearingGpuRuntime)
+        {
+            return;
+        }
+
+        IsClearingGpuRuntime = true;
+        OnPropertyChanged(nameof(ShowClearGpuRuntimeAction));
+        CudaSetupStatus = Loc.Instance["Dictation.ClearingGpuRuntime"];
+
+        try
+        {
+            // Run the (potentially multi-GB) recursive deletes off the UI thread: the
+            // service's awaits all complete synchronously on an uncontended lock, so the
+            // plugins' synchronous ClearCache()/Directory.Delete would otherwise run on the
+            // dispatcher and freeze the UI (the "Clearing…" status wouldn't even paint).
+            await Task.Run(() => _models.ClearCudaRuntimeCacheAsync());
+            // Re-provisioning happens on the next process start, so don't re-offer the
+            // in-session download (it would just re-fetch into a process that can't use it).
+            _gpuRuntimeClearedPendingRestart = true;
+            CudaSetupStatus = Loc.Instance["Dictation.GpuRuntimeCleared"];
+            StatusText = Loc.Instance["Dictation.GpuRuntimeCleared"];
+        }
+        catch (Exception ex)
+        {
+            CudaSetupStatus = Loc.Instance.GetString("Dictation.GpuRuntimeClearFailed", ex.Message);
+        }
+        finally
+        {
+            IsClearingGpuRuntime = false;
+            // The cache is now gone, so the engine reports unprovisioned: this flips
+            // _selectedPluginCudaProvisioned false, hiding the Clear button and re-showing
+            // Download (the off-thread probe is now cheap file-existence checks).
+            await RefreshSelectedPluginCudaProvisionedAsync();
+            OnPropertyChanged(nameof(ShowClearGpuRuntimeAction));
+            OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
+            OnPropertyChanged(nameof(CanUseCuda));
             OnPropertyChanged(nameof(AccelerationStatusText));
         }
     }
@@ -1093,6 +1168,7 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(CanUseCuda));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
         OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
+        OnPropertyChanged(nameof(ShowClearGpuRuntimeAction));
         _ = RefreshSelectedPluginCudaProvisionedAsync();
     }
 
@@ -1130,6 +1206,7 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(CanUseCuda));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
         OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
+        OnPropertyChanged(nameof(ShowClearGpuRuntimeAction));
         OnPropertyChanged(nameof(AccelerationStatusText));
     }
 
