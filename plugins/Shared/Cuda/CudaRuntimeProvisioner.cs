@@ -36,7 +36,11 @@ public enum CudaRuntimeProfile
 ///         <c>~/.local/share/TypeWhisper/Runtimes/cuda/&lt;BundleVersion&gt;</c>.
 ///     </para>
 /// </summary>
-public sealed class CudaRuntimeProvisioner
+// Not sealed: tests subclass it with a fake that overrides EnsureReadyAsync (the dlopen
+// half can't run in CI), injected into the plugins via their SetCudaDependenciesForTests
+// seam. The download/extract/marker/prune logic is still exercised directly through the
+// internal DownloadAndExtractAsync / ExtractSharedObjects / PruneStaleBundles members.
+public class CudaRuntimeProvisioner
 {
     // Bump when the wheel set/versions change; stale sibling dirs are pruned so a
     // bad or superseded cache can't surface as a confusing native load error.
@@ -180,7 +184,7 @@ public sealed class CudaRuntimeProvisioner
     ///     <c>RTLD_GLOBAL</c> in dependency order. A no-op for libraries the host
     ///     already provides and for sonames already preloaded this process.
     /// </summary>
-    public async Task EnsureReadyAsync(
+    public virtual async Task EnsureReadyAsync(
         CudaRuntimeProfile profile,
         IProgress<double>? progress,
         CancellationToken ct
@@ -204,6 +208,28 @@ public sealed class CudaRuntimeProvisioner
                 $"The NVIDIA CUDA driver is not usable: {driverError}"
             );
 
+        await DownloadAndExtractAsync(profile, progress, ct).ConfigureAwait(false);
+
+        // Preload the full set RTLD_GLOBAL in dependency order (the dlopen half). Kept
+        // OUT of DownloadAndExtractAsync so unit tests can drive the network+disk logic
+        // against a fake HttpMessageHandler + a temp cache dir without a GPU or driver.
+        // PreloadAll guards its own state with _preloadSync and is idempotent, so it is
+        // safe to run after DownloadAndExtractAsync has released _gate (the cache files it
+        // reads are only ever added under that gate, never removed).
+        PreloadAll(WheelsFor(profile));
+    }
+
+    // The network+disk half of EnsureReadyAsync: prune superseded bundles, then download
+    // and extract any wheels the host doesn't already satisfy (each stamped with a
+    // completion marker). Split out — and internal — so tests can exercise the
+    // marker/satisfied/extract/prune/progress/concurrency logic against a fake
+    // HttpMessageHandler and a temp cache dir, never touching dlopen or the driver probe.
+    internal async Task DownloadAndExtractAsync(
+        CudaRuntimeProfile profile,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
+    {
         var wheels = WheelsFor(profile);
 
         await _gate.WaitAsync(ct).ConfigureAwait(false);
@@ -234,8 +260,6 @@ public sealed class CudaRuntimeProvisioner
                 _log?.Invoke("CUDA runtime: all required libraries already present.");
                 progress?.Report(1.0);
             }
-
-            PreloadAll(wheels);
         }
         finally
         {
@@ -454,7 +478,9 @@ public sealed class CudaRuntimeProvisioner
     // A wheel is a zip. The CUDA libs live under nvidia/<component>/lib/*.so* —
     // pull every shared object out flat into the cache dir, ignoring everything
     // else (Python stubs, headers, metadata).
-    private void ExtractSharedObjects(string wheelPath)
+    // internal so a unit test can assert the /lib/ filter + flatten directly against a
+    // synthetic in-memory zip without a network download.
+    internal void ExtractSharedObjects(string wheelPath)
     {
         // Keep only the shared objects under nvidia/<component>/lib/, skipping
         // directory entries, Python stubs, headers, and metadata.
@@ -569,8 +595,18 @@ public sealed class CudaRuntimeProvisioner
         return null;
     }
 
-    private static bool IsResolvableOnSystem(string soname)
+    // Test seam: override the on-system library probe so unit tests get a deterministic
+    // "not on system" (or "on system") result regardless of the host's CUDA install. A
+    // dev box with the CUDA toolkit installed would otherwise satisfy every wheel and skip
+    // the download/extract/marker path under test. Null = production behavior (real system
+    // dirs + ldconfig). Only consulted here; PreloadAll's path resolution is untouched.
+    internal Func<string, bool>? SystemLibraryProbeForTests { get; set; }
+
+    private bool IsResolvableOnSystem(string soname)
     {
+        if (SystemLibraryProbeForTests is { } probe)
+            return probe(soname);
+
         foreach (var dir in EnumerateSystemSearchDirectories())
         {
             try
@@ -641,7 +677,9 @@ public sealed class CudaRuntimeProvisioner
 
     // Remove sibling bundle dirs from earlier BundleVersions so superseded caches
     // don't accumulate (cuDNN alone is ~1.7 GB unpacked).
-    private void PruneStaleBundles()
+    // internal so a unit test can assert a different-version sibling dir is deleted while
+    // the current version's dir is kept.
+    internal void PruneStaleBundles()
     {
         try
         {
