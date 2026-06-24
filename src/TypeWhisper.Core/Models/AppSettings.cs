@@ -1,5 +1,12 @@
 namespace TypeWhisper.Core.Models;
 
+/// <summary>
+///     The user's full application configuration, persisted to disk and applied
+///     across every feature (hotkeys, model/acceleration, audio, overlay,
+///     translation, watch folder, API server, dictionary, plugins, and more).
+///     Properties are init-only; <see cref="Default" /> yields the shipping
+///     defaults and the static helpers normalize or clamp individual values.
+/// </summary>
 public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
@@ -31,7 +38,7 @@ public record AppSettings
         get => _appInsertionStrategies;
         init =>
             _appInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
-                value ?? [],
+                value,
                 StringComparer.OrdinalIgnoreCase
             );
     }
@@ -148,6 +155,12 @@ public record AppSettings
 
     public static AppSettings Default => new();
 
+    /// <summary>
+    ///     Maps a stored/user acceleration string to a canonical value
+    ///     (<see cref="LocalModelAccelerationAuto" />, <c>…Cpu</c>, or
+    ///     <c>…NvidiaCuda</c>), accepting aliases like "cuda" and "nvidia cuda" and
+    ///     falling back to "auto" for blank or unrecognized input.
+    /// </summary>
     public static string NormalizeLocalModelAcceleration(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -181,10 +194,7 @@ public record AppSettings
     // Treats blank/whitespace as "use the default storage path" (null); trims otherwise.
     public static string? NormalizeLocalModelStoragePath(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        return value.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     public static int NormalizePreviewBubbleAutoHideMilliseconds(int milliseconds)
@@ -211,52 +221,4 @@ public record AppSettings
         var clampedTop = Math.Clamp(top, workAreaTop, maxTop);
         return (clampedLeft, clampedTop);
     }
-}
-
-public enum RecordingMode
-{
-    Toggle,
-    PushToTalk,
-    Hybrid
-}
-
-public enum CleanupLevel
-{
-    None,
-    Light,
-    Medium,
-    High
-}
-
-public enum TextInsertionStrategy
-{
-    Auto,
-    ClipboardPaste,
-    DirectTyping,
-    CopyOnly
-}
-
-public enum HistoryRetentionMode
-{
-    Duration,
-    Forever,
-    UntilAppCloses
-}
-
-public enum OverlayPosition
-{
-    Top,
-    Bottom
-}
-
-public enum OverlayWidget
-{
-    None,
-    Indicator,
-    Timer,
-    Waveform,
-    Clock,
-    Profile,
-    HotkeyMode,
-    AppName
 }

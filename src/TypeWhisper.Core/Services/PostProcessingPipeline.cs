@@ -64,7 +64,7 @@ public sealed class PostProcessingPipeline : IPostProcessingPipeline
         CancellationToken ct = default
     )
     {
-        if (options.RequireLlmSuccess && options.LlmHandler is null)
+        if (options is { RequireLlmSuccess: true, LlmHandler: null })
         {
             throw new InvalidOperationException(
                 "Required LLM post-processing is not configured."

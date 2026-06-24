@@ -55,8 +55,7 @@ public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 windowId,
                 null,
-                Name,
-                true
+                Name
             );
         }
         catch

@@ -1,5 +1,10 @@
 namespace TypeWhisper.Core.Models;
 
+/// <summary>
+///     Aggregate statistics computed over the transcription history — totals,
+///     per-dictation averages, insertion success rates, how often each processing
+///     step fired, and the most-used apps — for the dashboard.
+/// </summary>
 public sealed record HistoryInsights
 {
     public int TotalRecords { get; init; }
@@ -20,5 +25,3 @@ public sealed record HistoryInsights
     public int TranslationAppliedCount { get; init; }
     public IReadOnlyList<AppUsageInsight> TopApps { get; init; } = [];
 }
-
-public sealed record AppUsageInsight(string AppProcessName, int RecordCount, int WordCount);

@@ -93,8 +93,7 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 window.Id,
                 string.IsNullOrWhiteSpace(appId) ? null : appId,
-                Name,
-                true
+                Name
             );
         }
 

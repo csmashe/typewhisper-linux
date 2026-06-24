@@ -35,10 +35,10 @@ public sealed class LlmCleanupService
 
         if (level == CleanupLevel.Light)
         {
-            return _cleanup.Clean(text, CleanupLevel.Light);
+            return CleanupService.Clean(text, CleanupLevel.Light);
         }
 
-        var lightText = _cleanup.Clean(text, CleanupLevel.Light);
+        var lightText = CleanupService.Clean(text, CleanupLevel.Light);
         if (!_promptProcessing.IsAnyProviderAvailable)
         {
             await NotifyStatusAsync(

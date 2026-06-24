@@ -107,19 +107,21 @@ public sealed class ErrorLogService : IErrorLogService
 
             var json = File.ReadAllText(_logFilePath);
             var entries = JsonSerializer.Deserialize<List<ErrorLogEntry>>(json);
-            if (entries is not null)
+            if (entries is null)
             {
-                // Trim on load: an older build or hand-edited file may exceed MaxEntries.
-                if (entries.Count > MaxEntries)
-                {
-                    entries = entries.GetRange(0, MaxEntries);
-                }
+                return;
+            }
 
-                lock (_lock)
-                {
-                    _entries.Clear();
-                    _entries.AddRange(entries);
-                }
+            // Trim on load: an older build or hand-edited file may exceed MaxEntries.
+            if (entries.Count > MaxEntries)
+            {
+                entries = entries.GetRange(0, MaxEntries);
+            }
+
+            lock (_lock)
+            {
+                _entries.Clear();
+                _entries.AddRange(entries);
             }
         }
         catch
@@ -161,13 +163,15 @@ public sealed class ErrorLogService : IErrorLogService
             }
             catch
             {
-                if (File.Exists(tempPath))
+                if (!File.Exists(tempPath))
                 {
-                    try { File.Delete(tempPath); }
-                    catch
-                    {
-                        /* best effort */
-                    }
+                    throw;
+                }
+
+                try { File.Delete(tempPath); }
+                catch
+                {
+                    /* best effort */
                 }
 
                 throw;

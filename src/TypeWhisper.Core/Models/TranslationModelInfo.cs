@@ -1,21 +1,17 @@
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
-public sealed record TranslationFileInfo(string FileName, string DownloadUrl, int EstimatedSizeMB);
-
 /// <summary>
-///     Display item for translation target language ComboBoxes.
+///     Metadata and file manifest for one OPUS-MT translation model (a
+///     source→target language pair) hosted as Xenova ONNX exports on Hugging Face.
+///     Also the static catalog of <see cref="SupportedLanguages" /> and
+///     <see cref="AvailableModels" />, with <see cref="FindModel" /> to resolve a
+///     pair.
 /// </summary>
-public sealed record TranslationTargetOption(string? Code, string DisplayName, string BadgeText);
-
-/// <summary>
-///     Language metadata for UI display.
-/// </summary>
-public sealed record TranslationLanguage(string Code, string DisplayName, string BadgeCode);
-
 public sealed record TranslationModelInfo
 {
     // Base URL for Xenova ONNX exports on Hugging Face
-    private const string HF = "https://huggingface.co/Xenova";
+    private const string Hf = "https://huggingface.co/Xenova";
     public required string Id { get; init; }
     public required string SourceLanguage { get; init; }
     public required string TargetLanguage { get; init; }
@@ -25,7 +21,7 @@ public sealed record TranslationModelInfo
 
     // --- Supported target languages ---
 
-    public static IReadOnlyList<TranslationLanguage> SupportedLanguages { get; } =
+    private static IReadOnlyList<TranslationLanguage> SupportedLanguages { get; } =
     [
         new("en", "English", "EN"),
         new("de", "Deutsch", "DE"),
@@ -57,7 +53,7 @@ public sealed record TranslationModelInfo
     public static IReadOnlyList<TranslationTargetOption> ProfileTargetOptions { get; } =
         BuildOptions(true);
 
-    public static IReadOnlyList<TranslationModelInfo> AvailableModels { get; } =
+    private static IReadOnlyList<TranslationModelInfo> AvailableModels { get; } =
     [
         // X → EN (confirmed Xenova exports)
         Pair("de", "en"),
@@ -116,12 +112,12 @@ public sealed record TranslationModelInfo
 
         if (includeGlobal)
         {
-            list.Add(new TranslationTargetOption(null, "Globale Einstellung", ""));
-            list.Add(new TranslationTargetOption("", "Keine Übersetzung", ""));
+            list.Add(new TranslationTargetOption(null, "Use global setting", ""));
+            list.Add(new TranslationTargetOption("", "No translation", ""));
         }
         else
         {
-            list.Add(new TranslationTargetOption(null, "Keine Übersetzung", ""));
+            list.Add(new TranslationTargetOption(null, "No translation", ""));
         }
 
         foreach (var lang in SupportedLanguages)
@@ -148,16 +144,16 @@ public sealed record TranslationModelInfo
             [
                 new TranslationFileInfo(
                     "encoder_model_quantized.onnx",
-                    $"{HF}/opus-mt-{repo}/resolve/main/onnx/encoder_model_quantized.onnx",
+                    $"{Hf}/opus-mt-{repo}/resolve/main/onnx/encoder_model_quantized.onnx",
                     50
                 ),
                 new TranslationFileInfo(
                     "decoder_model_quantized.onnx",
-                    $"{HF}/opus-mt-{repo}/resolve/main/onnx/decoder_model_quantized.onnx",
+                    $"{Hf}/opus-mt-{repo}/resolve/main/onnx/decoder_model_quantized.onnx",
                     54
                 ),
-                new TranslationFileInfo("tokenizer.json", $"{HF}/opus-mt-{repo}/resolve/main/tokenizer.json", 2),
-                new TranslationFileInfo("config.json", $"{HF}/opus-mt-{repo}/resolve/main/config.json", 1)
+                new TranslationFileInfo("tokenizer.json", $"{Hf}/opus-mt-{repo}/resolve/main/tokenizer.json", 2),
+                new TranslationFileInfo("config.json", $"{Hf}/opus-mt-{repo}/resolve/main/config.json", 1)
             ]
         };
     }

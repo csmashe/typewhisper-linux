@@ -11,7 +11,7 @@ public sealed partial class CleanupService
     public const string HighSystemPrompt =
         "Rewrite as concise polished prose while preserving meaning, facts, tone, and terminology. Do not add new information. Return only the rewritten text.";
 
-    public string Clean(string text, CleanupLevel level)
+    public static string Clean(string text, CleanupLevel level)
     {
         if (level == CleanupLevel.None || string.IsNullOrWhiteSpace(text))
         {
@@ -261,12 +261,8 @@ public sealed partial class CleanupService
             expected++;
         }
 
-        if (items.Count < 2)
-        {
-            return null;
-        }
-
-        return string.Join('\n', items.Select((item, index) => $"{index + 1}. {item}"));
+        return items.Count < 2 ? null 
+            : string.Join('\n', items.Select((item, index) => $"{index + 1}. {item}"));
     }
 
     private static int SpokenNumberToInt(string number)

@@ -9,7 +9,7 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
     private const int BannerThreshold = 10;
 
     private readonly IErrorLogService _errorLog;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private int _consecutiveFailures;
     private string? _lastFailureReason;
 

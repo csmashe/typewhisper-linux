@@ -6,7 +6,7 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public static class AppFormatterService
 {
-    private static readonly Dictionary<string, string> ProcessFormatMap = new(
+    private static readonly Dictionary<string, string> s_processFormatMap = new(
         StringComparer.OrdinalIgnoreCase
     )
     {
@@ -54,13 +54,13 @@ public static class AppFormatterService
 
     private static string ResolveFormat(string processName)
     {
-        if (ProcessFormatMap.TryGetValue(processName, out var format))
+        if (s_processFormatMap.TryGetValue(processName, out var format))
         {
             return format;
         }
 
         // Partial match for process names that include version suffixes
-        foreach (var (key, value) in ProcessFormatMap)
+        foreach (var (key, value) in s_processFormatMap)
         {
             if (processName.Contains(key, StringComparison.OrdinalIgnoreCase))
             {

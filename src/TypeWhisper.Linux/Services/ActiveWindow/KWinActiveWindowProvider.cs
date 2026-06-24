@@ -64,8 +64,7 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 windowId,
                 string.IsNullOrWhiteSpace(klass) ? null : klass,
-                Name,
-                true
+                Name
             );
         }
         catch (OperationCanceledException)

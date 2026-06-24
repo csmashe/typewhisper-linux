@@ -14,7 +14,7 @@ public sealed class IdeFileReferenceServiceTests
     [InlineData("my script name", "my_script_name")]
     public void ToFileReference_ConvertsSpokenNames(string input, string expected)
     {
-        var result = _sut.ToFileReference(input);
+        var result = IdeFileReferenceService.ToFileReference(input);
 
         Assert.Equal(expected, result);
     }

@@ -4,7 +4,7 @@ namespace TypeWhisper.Core.Services;
 
 public sealed partial class DeveloperFormattingService
 {
-    private static readonly (Regex Pattern, string Replacement)[] SymbolReplacements =
+    private static readonly (Regex Pattern, string Replacement)[] s_symbolReplacements =
     [
         (DashDashRegex(), "--"),
         (BackslashRegex(), "\\"),
@@ -31,7 +31,7 @@ public sealed partial class DeveloperFormattingService
         (EqualsRegex(), "=")
     ];
 
-    public string Format(string text)
+    public static string Format(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -45,7 +45,7 @@ public sealed partial class DeveloperFormattingService
         }
 
         var formatted = text;
-        foreach (var (pattern, replacement) in SymbolReplacements)
+        foreach (var (pattern, replacement) in s_symbolReplacements)
         {
             formatted = pattern.Replace(formatted, replacement);
         }

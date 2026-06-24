@@ -11,7 +11,7 @@ public sealed class HistoryService : IHistoryService
 {
     private readonly string? _audioDirectory;
     private readonly string _filePath;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private List<TranscriptionRecord> _cache = [];
 

@@ -141,44 +141,46 @@ public sealed class DictionaryService : IDictionaryService
                 ? StringComparison.Ordinal
                 : StringComparison.OrdinalIgnoreCase;
 
-            if (text.Contains(entry.Original, comparison))
+            if (!text.Contains(entry.Original, comparison))
             {
-                var pattern = Regex.Escape(entry.Original);
-                var options = entry.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
-                // \b silently fails for originals like "C#" or ".NET" whose ends are non-word chars.
-                // Anchor each side based on what the original starts/ends with: \b on word-chars,
-                // lookaround on symbol-chars.
-                var prefix = char.IsLetterOrDigit(entry.Original[0]) || entry.Original[0] == '_'
-                    ? @"\b"
-                    : @"(?<=\W|^)";
-                var lastChar = entry.Original[^1];
-                var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
-                    ? @"\b"
-                    : @"(?=\W|$)";
-                // MatchEvaluator overload: prevents "$1"/"$&" in user replacements from being
-                // interpreted as regex substitution tokens; also counts each match individually.
-                var replacement = entry.Replacement!;
-                var matchCount = 0;
-                var replaced = Regex.Replace(
-                    text,
-                    prefix + pattern + suffix,
-                    _ =>
-                    {
-                        matchCount++;
-                        return replacement;
-                    },
-                    options
-                );
-                if (matchCount == 0 || string.Equals(replaced, text, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                text = replaced;
-                usedCounts[entry.Id] = usedCounts.TryGetValue(entry.Id, out var prior)
-                    ? prior + matchCount
-                    : matchCount;
+                continue;
             }
+
+            var pattern = Regex.Escape(entry.Original);
+            var options = entry.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
+            // \b silently fails for originals like "C#" or ".NET" whose ends are non-word chars.
+            // Anchor each side based on what the original starts/ends with: \b on word-chars,
+            // lookaround on symbol-chars.
+            var prefix = char.IsLetterOrDigit(entry.Original[0]) || entry.Original[0] == '_'
+                ? @"\b"
+                : @"(?<=\W|^)";
+            var lastChar = entry.Original[^1];
+            var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
+                ? @"\b"
+                : @"(?=\W|$)";
+            // MatchEvaluator overload: prevents "$1"/"$&" in user replacements from being
+            // interpreted as regex substitution tokens; also counts each match individually.
+            var replacement = entry.Replacement!;
+            var matchCount = 0;
+            var replaced = Regex.Replace(
+                text,
+                prefix + pattern + suffix,
+                _ =>
+                {
+                    matchCount++;
+                    return replacement;
+                },
+                options
+            );
+            if (matchCount == 0 || string.Equals(replaced, text, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            text = replaced;
+            usedCounts[entry.Id] = usedCounts.TryGetValue(entry.Id, out var prior)
+                ? prior + matchCount
+                : matchCount;
         }
 
         if (usedCounts.Count > 0)
@@ -194,12 +196,7 @@ public sealed class DictionaryService : IDictionaryService
         EnsureCacheLoaded();
         var terms = GetEnabledTerms();
 
-        if (terms.Count == 0)
-        {
-            return null;
-        }
-
-        return string.Join(", ", terms);
+        return terms.Count == 0 ? null : string.Join(", ", terms);
     }
 
     public IReadOnlyList<string> GetEnabledTerms()
@@ -246,6 +243,7 @@ public sealed class DictionaryService : IDictionaryService
             var existingKeys = existingTerms
                 .Select(e => TermKey(e.Original))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // ReSharper disable once LoopCanBeConvertedToQuery
             foreach (var term in normalized.Where(term => !existingKeys.Contains(TermKey(term))))
             {
                 newCache.Add(
@@ -835,13 +833,15 @@ public sealed class DictionaryService : IDictionaryService
         }
         catch
         {
-            if (File.Exists(tempPath))
+            if (!File.Exists(tempPath))
             {
-                try { File.Delete(tempPath); }
-                catch
-                {
-                    /* best effort */
-                }
+                throw;
+            }
+
+            try { File.Delete(tempPath); }
+            catch
+            {
+                /* best effort */
             }
 
             throw;
@@ -876,6 +876,7 @@ public sealed class DictionaryService : IDictionaryService
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var normalized = new List<string>();
 
+        // ReSharper disable once LoopCanBeConvertedToQuery
         foreach (var rawTerm in terms)
         {
             var term = rawTerm.Trim();

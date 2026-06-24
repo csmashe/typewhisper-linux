@@ -78,8 +78,7 @@ public sealed class HyprlandActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 string.IsNullOrWhiteSpace(address) ? null : address,
                 string.IsNullOrWhiteSpace(klass) ? null : klass,
-                Name,
-                true
+                Name
             );
         }
         catch

@@ -1804,7 +1804,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         var fileReference = _ideFileReferences.TryFormatReferenceCommand(text);
-        return fileReference ?? _developerFormatting.Format(text);
+        return fileReference ?? DeveloperFormattingService.Format(text);
     }
 
     private TextInsertionStrategy ResolveInsertionStrategy(string? processName)

@@ -96,8 +96,7 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 windowId,
                 string.IsNullOrWhiteSpace(appId) ? null : appId,
-                Name,
-                true
+                Name
             );
         }
         catch (OperationCanceledException)
