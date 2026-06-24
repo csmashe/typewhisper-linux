@@ -279,6 +279,55 @@ public class VocabularyBoostingServiceTests
             throw new NotSupportedException();
         }
 
+        public void ApplyIndustryPreset(string presetId)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void SetTerms(IEnumerable<string> terms, bool replaceExisting)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void RemoveAllTerms()
+        {
+            throw new NotSupportedException();
+        }
+
+        public bool DeleteTerm(string term)
+        {
+            throw new NotSupportedException();
+        }
+
+        public IReadOnlyList<DictionaryCorrection> GetCorrections()
+        {
+            throw new NotSupportedException();
+        }
+
+        public DictionaryCorrection UpsertCorrection(
+            string original,
+            string replacement,
+            bool caseSensitive
+        )
+        {
+            throw new NotSupportedException();
+        }
+
+        public bool DeleteCorrection(string original)
+        {
+            throw new NotSupportedException();
+        }
+
+        public string ExportToCsv()
+        {
+            throw new NotSupportedException();
+        }
+
+        public int ImportFromCsv(string csv)
+        {
+            throw new NotSupportedException();
+        }
+
         public void SetEntries(params DictionaryEntry[] entries)
         {
             Entries = entries;

@@ -2,6 +2,12 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Interfaces;
 
+/// <summary>
+///     Stores the user's dictionary — spoken-form term boosts and find/replace
+///     corrections — and applies them to transcribed text. Backed by a single
+///     production implementation; consumers depend on this contract so the store
+///     can be faked in tests.
+/// </summary>
 public interface IDictionaryService
 {
     IReadOnlyList<DictionaryEntry> Entries { get; }
@@ -12,78 +18,59 @@ public interface IDictionaryService
     void DeleteEntry(string id);
     void DeleteEntries(IEnumerable<string> ids);
 
+    /// <summary>Applies the enabled corrections to <paramref name="text" /> and returns the rewritten text.</summary>
     string ApplyCorrections(string text);
+
+    /// <summary>Comma-separated enabled terms for seeding an STT/LLM prompt, or <c>null</c> when there are none.</summary>
     string? GetTermsForPrompt();
 
+    /// <summary>Original strings of all enabled term entries (corrections excluded).</summary>
     IReadOnlyList<string> GetEnabledTerms()
     {
         return Entries
-            .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Term)
+            .Where(e => e is { IsEnabled: true, EntryType: DictionaryEntryType.Term })
             .Select(e => e.Original)
             .ToList();
     }
 
-    void SetTerms(IEnumerable<string> terms, bool replaceExisting)
-    {
-        throw new NotSupportedException();
-    }
+    /// <summary>
+    ///     Replaces the enabled term set. When <paramref name="replaceExisting" /> is <c>false</c>,
+    ///     existing terms are kept and the new ones merged in.
+    /// </summary>
+    void SetTerms(IEnumerable<string> terms, bool replaceExisting);
 
-    void RemoveAllTerms()
-    {
-        throw new NotSupportedException();
-    }
+    /// <summary>Removes every term entry, leaving corrections untouched.</summary>
+    void RemoveAllTerms();
 
-    bool DeleteTerm(string term)
-    {
-        throw new NotSupportedException();
-    }
+    /// <summary>Removes a single term by its original string; returns <c>true</c> if a term was removed.</summary>
+    bool DeleteTerm(string term);
 
-    IReadOnlyList<DictionaryCorrection> GetCorrections()
-    {
-        throw new NotSupportedException();
-    }
+    /// <summary>All correction (find/replace) entries.</summary>
+    IReadOnlyList<DictionaryCorrection> GetCorrections();
 
-    DictionaryCorrection UpsertCorrection(string original, string replacement, bool caseSensitive)
-    {
-        throw new NotSupportedException();
-    }
+    /// <summary>Adds or updates a correction keyed by <paramref name="original" />, returning the stored entry.</summary>
+    DictionaryCorrection UpsertCorrection(string original, string replacement, bool caseSensitive);
 
-    bool DeleteCorrection(string original)
-    {
-        throw new NotSupportedException();
-    }
+    /// <summary>Removes a correction by its original string; returns <c>true</c> if one was removed.</summary>
+    bool DeleteCorrection(string original);
 
+    /// <summary>Records a user-confirmed correction so the same mistake is auto-fixed next time.</summary>
     void LearnCorrection(string original, string replacement);
 
+    /// <summary>Adds the term pack's entries; idempotent, so re-activating an active pack is a no-op.</summary>
     void ActivatePack(TermPack pack);
+
+    /// <summary>Removes all entries that belong to the given term pack.</summary>
     void DeactivatePack(string packId);
 
-    void ApplyIndustryPreset(string presetId)
-    {
-        var preset = IndustryPreset.All.FirstOrDefault(p =>
-            string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (preset?.TermPackId is not { } packId)
-        {
-            return;
-        }
+    /// <summary>Activates the term pack mapped to an industry preset; a no-op when the preset or its pack is unknown.</summary>
+    void ApplyIndustryPreset(string presetId);
 
-        var pack = TermPack.FindById(packId);
-        if (pack is not null)
-        {
-            ActivatePack(pack);
-        }
-    }
+    /// <summary>Serializes all entries to CSV.</summary>
+    string ExportToCsv();
 
-    string ExportToCsv()
-    {
-        throw new NotSupportedException();
-    }
-
-    int ImportFromCsv(string csv)
-    {
-        throw new NotSupportedException();
-    }
+    /// <summary>Imports entries from CSV, returning the number of entries added.</summary>
+    int ImportFromCsv(string csv);
 
     event Action? EntriesChanged;
 }

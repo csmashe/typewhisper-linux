@@ -26,7 +26,7 @@ public static class WavEncoder
         }
 
         // Validate before any header writes: wrap-around sampleRate or truncated channels would corrupt the WAV silently.
-        if (sampleRate <= 0 || sampleRate > 192000)
+        if (sampleRate is <= 0 or > 192000)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(sampleRate),

@@ -9,9 +9,6 @@ namespace TypeWhisper.Core.Interfaces;
 /// </summary>
 public interface IDetectionFailureTracker
 {
-    /// <summary>Number of consecutive failures since the last <see cref="RecordSuccess" />.</summary>
-    int ConsecutiveFailures { get; }
-
     /// <summary>True once failures cross the banner threshold; resets on the next success.</summary>
     bool ShouldShowPersistentBanner { get; }
 
@@ -29,13 +26,9 @@ public interface IDetectionFailureTracker
 }
 
 /// <summary>
-///     Payload for <see cref="IDetectionFailureTracker.OnFailure" />. Includes the
-///     post-increment failure count, compositor, reason, and banner state so subscribers
-///     can branch on toast-vs-banner without re-querying the tracker.
+///     Payload for <see cref="IDetectionFailureTracker.OnFailure" />. Carries the
+///     compositor-specific remediation <see cref="Reason" /> and the
+///     <see cref="ShouldShowPersistentBanner" /> flag so subscribers can choose
+///     toast-vs-banner without re-querying the tracker.
 /// </summary>
-public sealed record DetectionFailureEvent(
-    int ConsecutiveFailures,
-    string Compositor,
-    string Reason,
-    bool ShouldShowPersistentBanner
-);
+public sealed record DetectionFailureEvent(string Reason, bool ShouldShowPersistentBanner);

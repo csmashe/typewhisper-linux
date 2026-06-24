@@ -18,17 +18,6 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
         _errorLog = errorLog;
     }
 
-    public int ConsecutiveFailures
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _consecutiveFailures;
-            }
-        }
-    }
-
     public bool ShouldShowPersistentBanner
     {
         get
@@ -66,14 +55,12 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
     {
         var augmented = AugmentReason(compositor, reason);
 
-        int failures;
         bool shouldShowBanner;
         lock (_lock)
         {
             _consecutiveFailures++;
             _lastFailureReason = augmented;
-            failures = _consecutiveFailures;
-            shouldShowBanner = failures >= BannerThreshold;
+            shouldShowBanner = _consecutiveFailures >= BannerThreshold;
         }
 
         _errorLog.AddEntry(
@@ -82,7 +69,7 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
 
         OnFailure?.Invoke(
             this,
-            new DetectionFailureEvent(failures, compositor, augmented, shouldShowBanner)
+            new DetectionFailureEvent(augmented, shouldShowBanner)
         );
     }
 

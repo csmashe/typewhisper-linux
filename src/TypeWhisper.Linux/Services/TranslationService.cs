@@ -20,7 +20,6 @@ public sealed class TranslationService : ITranslationService, IDisposable
     private readonly SemaphoreSlim _downloadSemaphore = new(1, 1);
     private readonly HttpClient _httpClient = new();
     private readonly Dictionary<string, LoadedTranslationModel> _loadedModels = new();
-    private readonly HashSet<string> _loadingModels = [];
 
     private readonly PluginManager _pluginManager;
     private bool _disposed;
@@ -49,21 +48,6 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
         _loadedModels.Clear();
         _disposed = true;
-    }
-
-    public bool IsModelReady(string sourceLang, string targetLang)
-    {
-        if (GetConfiguredTranslationProvider() is not null)
-        {
-            return true;
-        }
-
-        return _loadedModels.ContainsKey(ModelKey(sourceLang, targetLang));
-    }
-
-    public bool IsModelLoading(string sourceLang, string targetLang)
-    {
-        return _loadingModels.Contains(ModelKey(sourceLang, targetLang));
     }
 
     public async Task<string> TranslateAsync(
@@ -161,8 +145,6 @@ public sealed class TranslationService : ITranslationService, IDisposable
                 return existing;
             }
 
-            _loadingModels.Add(key);
-
             var modelInfo =
                 TranslationModelInfo.FindModel(sourceLang, targetLang)
                 ?? throw new NotSupportedException(
@@ -176,14 +158,8 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
             var loaded = LoadModel(modelDir);
             _loadedModels[key] = loaded;
-            _loadingModels.Remove(key);
 
             return loaded;
-        }
-        catch
-        {
-            _loadingModels.Remove(key);
-            throw;
         }
         finally
         {
@@ -354,7 +330,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         // Linux when published single-file/self-contained, so resolve manually.
         NativeLibrary.SetDllImportResolver(
             typeof(InferenceSession).Assembly,
-            (libraryName, assembly, searchPath) =>
+            (libraryName, _, _) =>
             {
                 if (!libraryName.Contains("onnxruntime", StringComparison.OrdinalIgnoreCase))
                 {

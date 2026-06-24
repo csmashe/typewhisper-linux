@@ -1,7 +1,7 @@
 using System.Collections.Specialized;
 using System.Net;
 using System.Text;
-using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services;
 

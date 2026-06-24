@@ -2,6 +2,7 @@ using System.Collections.Specialized;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using Xunit;
 

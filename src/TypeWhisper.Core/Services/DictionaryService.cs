@@ -10,7 +10,7 @@ namespace TypeWhisper.Core.Services;
 public sealed class DictionaryService : IDictionaryService
 {
     private readonly string _filePath;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private List<DictionaryEntry> _cache = [];
 
     private bool _cacheLoaded;
@@ -122,8 +122,7 @@ public sealed class DictionaryService : IDictionaryService
         {
             corrections = _cache
                 .Where(e =>
-                    e.IsEnabled
-                    && e.EntryType == DictionaryEntryType.Correction
+                    e is { IsEnabled: true, EntryType: DictionaryEntryType.Correction }
                     && !string.IsNullOrEmpty(e.Original)
                     && e.Replacement is not null
                 )
@@ -210,7 +209,7 @@ public sealed class DictionaryService : IDictionaryService
         {
             return NormalizeTerms(
                 _cache
-                    .Where(e => e.IsEnabled && e.EntryType == DictionaryEntryType.Term)
+                    .Where(e => e is { IsEnabled: true, EntryType: DictionaryEntryType.Term })
                     .Select(e => e.Original)
             );
         }
@@ -316,9 +315,7 @@ public sealed class DictionaryService : IDictionaryService
         {
             return _cache
                 .Where(e =>
-                    e.IsEnabled
-                    && e.EntryType == DictionaryEntryType.Correction
-                    && e.Replacement is not null
+                    e is { IsEnabled: true, EntryType: DictionaryEntryType.Correction, Replacement: not null }
                 )
                 .Select(e => new DictionaryCorrection(e.Original, e.Replacement!, e.CaseSensitive))
                 .ToList();
@@ -667,6 +664,23 @@ public sealed class DictionaryService : IDictionaryService
         if (changed)
         {
             EntriesChanged?.Invoke();
+        }
+    }
+
+    public void ApplyIndustryPreset(string presetId)
+    {
+        var preset = IndustryPreset.All.FirstOrDefault(p =>
+            string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)
+        );
+        if (preset?.TermPackId is not { } packId)
+        {
+            return;
+        }
+
+        var pack = TermPack.FindById(packId);
+        if (pack is not null)
+        {
+            ActivatePack(pack);
         }
     }
 
