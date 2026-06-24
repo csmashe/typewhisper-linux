@@ -68,6 +68,11 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _isClearingGpuRuntime;
 
+    // Set once the GPU runtime cache has been cleared this session. The deleted libs are
+    // re-downloaded only on the next process start (the old ones are held until exit), so
+    // this suppresses the Download action until restart (see ShowDownloadCudaRuntimeAction).
+    private bool _gpuRuntimeClearedPendingRestart;
+
     [ObservableProperty]
     private string _engineName = Loc.Instance["Dictation.NoEngineSelected"];
 
@@ -335,11 +340,16 @@ public partial class DictationSectionViewModel : ObservableObject
     // install where only some libraries are present (the engine downloads just the gaps).
     // Suppressed while a download is in flight, and when the libs exist on disk but only
     // need a loader-path fix (that's the ShowCudaLibraryPathAction button's job instead).
+    // Also suppressed once the GPU runtime has been cleared this session: clearing
+    // requires a restart to take effect (the old native libs are pinned until exit), so
+    // re-offering a multi-GB download in the same poisoned process would contradict the
+    // "restart to re-download" guidance. A fresh launch starts the flag false.
     public bool ShowDownloadCudaRuntimeAction =>
         _commands.HasCudaGpu
         && !CanUseCuda
         && !IsDownloadingCudaRuntime
         && !ShowCudaLibraryPathAction
+        && !_gpuRuntimeClearedPendingRestart
         && SelectedModelPlugin?.ProvisionsCudaRuntimeOnDemand == true;
 
     public string DownloadCudaRuntimeText => Loc.Instance["Dictation.DownloadCudaRuntime"];
@@ -1086,6 +1096,9 @@ public partial class DictationSectionViewModel : ObservableObject
             // plugins' synchronous ClearCache()/Directory.Delete would otherwise run on the
             // dispatcher and freeze the UI (the "Clearing…" status wouldn't even paint).
             await Task.Run(() => _models.ClearCudaRuntimeCacheAsync());
+            // Re-provisioning happens on the next process start, so don't re-offer the
+            // in-session download (it would just re-fetch into a process that can't use it).
+            _gpuRuntimeClearedPendingRestart = true;
             CudaSetupStatus = Loc.Instance["Dictation.GpuRuntimeCleared"];
             StatusText = Loc.Instance["Dictation.GpuRuntimeCleared"];
         }
