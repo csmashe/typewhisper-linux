@@ -115,7 +115,7 @@ public sealed class PluginLoader
 
     internal LoadedPlugin? LoadPlugin(string pluginDir)
     {
-        var manifestPath = Path.Combine(pluginDir, "manifest.json");
+        var manifestPath = Path.Join(pluginDir, "manifest.json");
         if (!File.Exists(manifestPath))
         {
             Trace.WriteLine($"[PluginLoader] No manifest.json in {pluginDir}, skipping");
@@ -136,7 +136,7 @@ public sealed class PluginLoader
             return null;
         }
 
-        var assemblyPath = Path.Combine(pluginDir, manifest.AssemblyName);
+        var assemblyPath = Path.Join(pluginDir, manifest.AssemblyName);
         if (!File.Exists(assemblyPath))
         {
             _lastLoadFailures.Add(
@@ -215,7 +215,7 @@ public sealed class PluginLoader
         if (instance is IPluginDataLocationAware dataLocationAware)
         {
             dataLocationAware.SetDataDirectory(
-                Path.Combine(TypeWhisperEnvironment.PluginDataPath, manifest.Id)
+                Path.Join(TypeWhisperEnvironment.PluginDataPath, manifest.Id)
             );
         }
 

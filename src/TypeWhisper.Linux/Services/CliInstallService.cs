@@ -40,8 +40,8 @@ public sealed class CliInstallService
     {
         var installDirectory = _installDirectoryProvider();
         var launcherDirectory = _launcherDirectoryProvider();
-        var installPath = Path.Combine(installDirectory, CliFileName);
-        var launcherPath = Path.Combine(launcherDirectory, CliFileName);
+        var installPath = Path.Join(installDirectory, CliFileName);
+        var launcherPath = Path.Join(launcherDirectory, CliFileName);
         var bundledPath = _bundledPathProvider();
         var installed =
             FileExistsWithExactName(installPath) && FileExistsWithExactName(launcherPath);
@@ -128,7 +128,7 @@ public sealed class CliInstallService
         foreach (var file in Directory.EnumerateFiles(sourceDirectory, "typewhisper.*"))
         {
             var fileName = Path.GetFileName(file);
-            File.Copy(file, Path.Combine(installDirectory, fileName), true);
+            File.Copy(file, Path.Join(installDirectory, fileName), true);
         }
     }
 
@@ -142,7 +142,7 @@ public sealed class CliInstallService
 
     private static string DefaultInstallDirectory()
     {
-        return Path.Combine(TypeWhisperEnvironment.BasePath, "Cli");
+        return Path.Join(TypeWhisperEnvironment.BasePath, "Cli");
     }
 
     private static string DefaultLauncherDirectory()
@@ -150,7 +150,7 @@ public sealed class CliInstallService
         // ~/.local/bin is the XDG-recommended per-user bin dir. Most distros
         // add it to PATH via /etc/profile.d or ~/.profile; if it's not there
         // yet the status text tells the user to add it.
-        return Path.Combine(
+        return Path.Join(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".local",
             "bin"

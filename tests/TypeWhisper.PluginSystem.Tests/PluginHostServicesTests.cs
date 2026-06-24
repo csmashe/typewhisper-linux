@@ -16,7 +16,7 @@ public class PluginHostServicesTests : IDisposable
     public PluginHostServicesTests()
     {
         _profiles.Setup(p => p.Profiles).Returns(new List<Profile>());
-        _tempDir = Path.Combine(Path.GetTempPath(), $"tw-test-{Guid.NewGuid():N}");
+        _tempDir = Path.Join(Path.GetTempPath(), $"tw-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
     }
 

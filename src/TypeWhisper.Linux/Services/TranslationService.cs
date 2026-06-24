@@ -169,7 +169,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
                     $"No translation model for {sourceLang} -> {targetLang}."
                 );
 
-            var modelDir = Path.Combine(TypeWhisperEnvironment.ModelsPath, modelInfo.SubDirectory);
+            var modelDir = Path.Join(TypeWhisperEnvironment.ModelsPath, modelInfo.SubDirectory);
             Directory.CreateDirectory(modelDir);
 
             await DownloadMissingFilesAsync(modelInfo, modelDir, ct);
@@ -199,7 +199,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
     {
         foreach (var file in modelInfo.Files)
         {
-            var filePath = Path.Combine(modelDir, file.FileName);
+            var filePath = Path.Join(modelDir, file.FileName);
             if (File.Exists(filePath))
             {
                 continue;
@@ -236,9 +236,9 @@ public sealed class TranslationService : ITranslationService, IDisposable
     private static LoadedTranslationModel LoadModel(string modelDir)
     {
         RegisterOnnxRuntimeResolver();
-        var config = MarianConfig.Load(Path.Combine(modelDir, "config.json"));
+        var config = MarianConfig.Load(Path.Join(modelDir, "config.json"));
         var tokenizer = MarianTokenizer.Load(
-            Path.Combine(modelDir, "tokenizer.json"),
+            Path.Join(modelDir, "tokenizer.json"),
             config.EosTokenId
         );
 
@@ -250,11 +250,11 @@ public sealed class TranslationService : ITranslationService, IDisposable
         };
 
         var encoder = new InferenceSession(
-            Path.Combine(modelDir, "encoder_model_quantized.onnx"),
+            Path.Join(modelDir, "encoder_model_quantized.onnx"),
             sessionOptions
         );
         var decoder = new InferenceSession(
-            Path.Combine(modelDir, "decoder_model_quantized.onnx"),
+            Path.Join(modelDir, "decoder_model_quantized.onnx"),
             sessionOptions
         );
 
@@ -367,7 +367,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
                     _ => "linux-x64"
                 };
 
-                var candidate = Path.Combine(
+                var candidate = Path.Join(
                     AppContext.BaseDirectory,
                     "runtimes",
                     rid,

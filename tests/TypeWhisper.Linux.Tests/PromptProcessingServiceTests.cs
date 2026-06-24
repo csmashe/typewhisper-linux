@@ -16,7 +16,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
     public PromptProcessingServiceTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.Linux.PromptTests_" + Guid.NewGuid().ToString("N")
         );
@@ -245,7 +245,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
     private LoadedPlugin CreateLoadedPlugin(string pluginId, ITypeWhisperPlugin plugin)
     {
-        var pluginDir = Path.Combine(_tempDir, pluginId);
+        var pluginDir = Path.Join(_tempDir, pluginId);
         Directory.CreateDirectory(pluginDir);
 
         return new LoadedPlugin(

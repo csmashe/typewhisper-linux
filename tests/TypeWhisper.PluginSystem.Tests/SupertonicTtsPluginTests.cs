@@ -109,7 +109,7 @@ public class SupertonicTtsPluginTests
         Assert.True(session.IsActive);
         Assert.Equal("Hallo Welt", synth.LastRequest?.Text);
         Assert.Equal("de", synth.LastRequest?.Language);
-        Assert.EndsWith(Path.Combine("voice_styles", "F3.json"), synth.LastRequest?.VoiceStylePath);
+        Assert.EndsWith(Path.Join("voice_styles", "F3.json"), synth.LastRequest?.VoiceStylePath);
         Assert.Equal(1.25, synth.LastRequest?.Speed);
         Assert.Equal(12, synth.LastRequest?.DenoisingSteps);
         Assert.NotNull(playedSamples);
@@ -120,7 +120,7 @@ public class SupertonicTtsPluginTests
     [Fact]
     public async Task AssetManager_DownloadsMissingFilesAtomicallyAndWritesSourceMetadata()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         var calls = new List<string>();
         var handler = new CapturingHandler(request =>
         {
@@ -145,10 +145,10 @@ public class SupertonicTtsPluginTests
 
             Assert.True(sut.AreAssetsReady);
             Assert.Equal(3, calls.Count);
-            Assert.True(File.Exists(Path.Combine(tempDir, "onnx", "a.onnx")));
-            Assert.True(File.Exists(Path.Combine(tempDir, "voice_styles", "M1.json")));
-            Assert.False(File.Exists(Path.Combine(tempDir, "onnx", "a.onnx.tmp")));
-            Assert.Contains("https://example.test/LICENSE", File.ReadAllText(Path.Combine(tempDir, "SOURCE.txt")));
+            Assert.True(File.Exists(Path.Join(tempDir, "onnx", "a.onnx")));
+            Assert.True(File.Exists(Path.Join(tempDir, "voice_styles", "M1.json")));
+            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx.tmp")));
+            Assert.Contains("https://example.test/LICENSE", File.ReadAllText(Path.Join(tempDir, "SOURCE.txt")));
             Assert.Equal(1.0, progressValues.Last(), precision: 3);
         }
         finally
@@ -234,7 +234,7 @@ public class SupertonicTtsPluginTests
     [Fact]
     public async Task AssetManager_RejectsTruncatedDownloadAndLeavesNoPartialFile()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         var handler = new CapturingHandler(_ =>
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK)
@@ -254,8 +254,8 @@ public class SupertonicTtsPluginTests
                 sut.DownloadMissingAssetsAsync(null, CancellationToken.None));
 
             Assert.False(sut.AreAssetsReady);
-            Assert.False(File.Exists(Path.Combine(tempDir, "onnx", "a.onnx")));
-            Assert.False(File.Exists(Path.Combine(tempDir, "onnx", "a.onnx.tmp")));
+            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx")));
+            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx.tmp")));
         }
         finally
         {
@@ -314,13 +314,13 @@ public class SupertonicTtsPluginTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray());
+            var candidate = Path.Join(new[] { dir.FullName }.Concat(parts).ToArray());
             if (File.Exists(candidate))
                 return candidate;
             dir = dir.Parent;
         }
 
-        throw new FileNotFoundException($"Could not find {Path.Combine(parts)}");
+        throw new FileNotFoundException($"Could not find {Path.Join(parts)}");
     }
 
     private sealed class FakeSupertonicAssets : ISupertonicAssetManager

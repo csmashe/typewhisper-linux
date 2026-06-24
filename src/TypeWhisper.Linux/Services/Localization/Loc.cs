@@ -96,7 +96,7 @@ public sealed class Loc : INotifyPropertyChanged
     {
         var localizationDir =
             localizationDirOverride
-            ?? Path.Combine(AppContext.BaseDirectory, "Resources", "Localization");
+            ?? Path.Join(AppContext.BaseDirectory, "Resources", "Localization");
         var available = new List<string>();
 
         if (Directory.Exists(localizationDir))

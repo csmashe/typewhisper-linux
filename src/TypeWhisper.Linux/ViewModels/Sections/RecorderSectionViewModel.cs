@@ -121,7 +121,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         }
 
         var fileName = $"recording-{DateTime.Now:yyyy-MM-dd-HHmmss}.wav";
-        var filePath = Path.Combine(TypeWhisperEnvironment.AudioPath, fileName);
+        var filePath = Path.Join(TypeWhisperEnvironment.AudioPath, fileName);
         await File.WriteAllBytesAsync(filePath, wav);
 
         StatusText = Loc.Instance["Recorder.StatusSavedTranscribing"];

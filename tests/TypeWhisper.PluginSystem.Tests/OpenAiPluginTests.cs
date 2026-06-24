@@ -506,9 +506,9 @@ public class OpenAiPluginTests
     [Fact]
     public async Task ImportExistingLogin_LoadsTokensFromCodexAuthFile()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
-        var authPath = Path.Combine(tempDir, "auth.json");
+        var authPath = Path.Join(tempDir, "auth.json");
         await File.WriteAllTextAsync(authPath, """
         {
           "tokens": {

@@ -17,14 +17,14 @@ public sealed class YdotoolSetupHelperTests
     public void UserUnitFilePath_honors_XDG_CONFIG_HOME_when_set()
     {
         var original = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        var custom = Path.Combine(Path.GetTempPath(), $"tw-xdg-{Guid.NewGuid():N}");
+        var custom = Path.Join(Path.GetTempPath(), $"tw-xdg-{Guid.NewGuid():N}");
         try
         {
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", custom);
 
             var path = YdotoolSetupHelper.UserUnitFilePath();
 
-            Assert.Equal(Path.Combine(custom, "systemd", "user", "ydotoold.service"), path);
+            Assert.Equal(Path.Join(custom, "systemd", "user", "ydotoold.service"), path);
         }
         finally
         {
@@ -44,7 +44,7 @@ public sealed class YdotoolSetupHelperTests
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             Assert.Equal(
-                Path.Combine(home, ".config", "systemd", "user", "ydotoold.service"),
+                Path.Join(home, ".config", "systemd", "user", "ydotoold.service"),
                 path
             );
         }
@@ -79,11 +79,11 @@ public sealed class YdotoolSetupHelperTests
     public void ResolveBinaryPath_finds_binary_on_PATH()
     {
         var original = Environment.GetEnvironmentVariable("PATH");
-        var dir = Path.Combine(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
+        var dir = Path.Join(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
         try
         {
             Directory.CreateDirectory(dir);
-            var fake = Path.Combine(dir, "fake-binary");
+            var fake = Path.Join(dir, "fake-binary");
             File.WriteAllText(fake, "#!/bin/sh\n");
 
             Environment.SetEnvironmentVariable("PATH", dir);
@@ -116,7 +116,7 @@ public sealed class YdotoolSetupHelperTests
             Assert.False(YdotoolSetupHelper.IsFileOwnedByTypeWhisper(withoutMarker));
             Assert.False(
                 YdotoolSetupHelper.IsFileOwnedByTypeWhisper(
-                    Path.Combine(Path.GetTempPath(), $"tw-missing-{Guid.NewGuid():N}")
+                    Path.Join(Path.GetTempPath(), $"tw-missing-{Guid.NewGuid():N}")
                 )
             );
         }
@@ -246,7 +246,7 @@ public sealed class YdotoolSetupHelperTests
     /// </summary>
     private sealed class TempEnvironment : IDisposable
     {
-        private readonly string _configHome = Path.Combine(
+        private readonly string _configHome = Path.Join(
             Path.GetTempPath(),
             $"tw-cfg-{Guid.NewGuid():N}"
         );
@@ -257,7 +257,7 @@ public sealed class YdotoolSetupHelperTests
             "XDG_CONFIG_HOME"
         );
 
-        private readonly string _pathDir = Path.Combine(
+        private readonly string _pathDir = Path.Join(
             Path.GetTempPath(),
             $"tw-path-{Guid.NewGuid():N}"
         );
@@ -270,7 +270,7 @@ public sealed class YdotoolSetupHelperTests
         // never reaches the privileged pkexec scripts in production.
         private readonly string? _originalSysConf = YdotoolSetupHelper.SysConfDirOverride;
 
-        private readonly string _sysConfDir = Path.Combine(
+        private readonly string _sysConfDir = Path.Join(
             Path.GetTempPath(),
             $"tw-etc-{Guid.NewGuid():N}"
         );
@@ -326,7 +326,7 @@ public sealed class YdotoolSetupHelperTests
 
         public void PutFakeBinaryOnPath(string name)
         {
-            File.WriteAllText(Path.Combine(_pathDir, name), "#!/bin/sh\n");
+            File.WriteAllText(Path.Join(_pathDir, name), "#!/bin/sh\n");
         }
     }
 }

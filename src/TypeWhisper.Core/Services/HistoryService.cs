@@ -596,7 +596,7 @@ public sealed class HistoryService : IHistoryService
                 directoryRoot += separator;
             }
 
-            var candidate = Path.GetFullPath(Path.Combine(_audioDirectory, safeName));
+            var candidate = Path.GetFullPath(Path.Join(_audioDirectory, safeName));
             if (!candidate.StartsWith(directoryRoot, StringComparison.Ordinal))
             {
                 return;

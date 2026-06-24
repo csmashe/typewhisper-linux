@@ -17,7 +17,7 @@ public sealed class ErrorLogService : IErrorLogService
 
     public ErrorLogService(string dataDirectory)
     {
-        _logFilePath = Path.Combine(dataDirectory, "error-log.json");
+        _logFilePath = Path.Join(dataDirectory, "error-log.json");
         LoadFromDisk();
     }
 

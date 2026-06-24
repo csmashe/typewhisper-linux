@@ -18,7 +18,7 @@ public class PluginLoaderDataLocationTests : IDisposable
 
     public PluginLoaderDataLocationTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "tw-loader-data-" + Guid.NewGuid().ToString("N")
         );
@@ -73,7 +73,7 @@ public class PluginLoaderDataLocationTests : IDisposable
         Assert.NotNull(dataDirField);
         var receivedDir = (string?)dataDirField.GetValue(scriptPlugin.Instance);
         Assert.Equal(
-            Path.Combine(TypeWhisperEnvironment.PluginDataPath, scriptPlugin.Manifest.Id),
+            Path.Join(TypeWhisperEnvironment.PluginDataPath, scriptPlugin.Manifest.Id),
             receivedDir
         );
     }
@@ -87,14 +87,14 @@ public class PluginLoaderDataLocationTests : IDisposable
         var sourceDir = Path.GetDirectoryName(
             typeof(ScriptPlugin).Assembly.Location
         )!;
-        var pluginDir = Path.Combine(_tempDir, "com.typewhisper.script");
+        var pluginDir = Path.Join(_tempDir, "com.typewhisper.script");
         Directory.CreateDirectory(pluginDir);
 
         // Copy the plugin assembly.
         var asmName = Path.GetFileName(typeof(ScriptPlugin).Assembly.Location);
         File.Copy(
-            Path.Combine(sourceDir, asmName),
-            Path.Combine(pluginDir, asmName),
+            Path.Join(sourceDir, asmName),
+            Path.Join(pluginDir, asmName),
             true
         );
 
@@ -108,7 +108,7 @@ public class PluginLoaderDataLocationTests : IDisposable
                          "pluginClass": "TypeWhisper.Plugin.Script.ScriptPlugin"
                        }
                        """;
-        File.WriteAllText(Path.Combine(pluginDir, "manifest.json"), manifest);
+        File.WriteAllText(Path.Join(pluginDir, "manifest.json"), manifest);
 
         return pluginDir;
     }

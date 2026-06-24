@@ -13,7 +13,7 @@ public class GroqPluginTests
     public void PluginVersion_MatchesManifestVersion()
     {
         var manifestPath = Path.GetFullPath(
-            Path.Combine(
+            Path.Join(
                 AppContext.BaseDirectory,
                 "..",
                 "..",

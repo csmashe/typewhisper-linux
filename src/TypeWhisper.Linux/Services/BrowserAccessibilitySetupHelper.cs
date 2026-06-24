@@ -128,7 +128,7 @@ public sealed class BrowserAccessibilitySetupHelper
         {
             foreach (var profileDir in EnumerateFirefoxProfileDirs())
             {
-                var userJsPath = Path.Combine(profileDir, "user.js");
+                var userJsPath = Path.Join(profileDir, "user.js");
                 try
                 {
                     var existing = File.Exists(userJsPath) ? File.ReadAllText(userJsPath) : "";
@@ -336,7 +336,7 @@ public sealed class BrowserAccessibilitySetupHelper
             && !status.FirefoxAccessibilityForceEnabled
         )
         {
-            var profiles = EnumerateFirefoxProfileDirs().Select(d => Path.Combine(d, "user.js"));
+            var profiles = EnumerateFirefoxProfileDirs().Select(d => Path.Join(d, "user.js"));
             actions.Add(
                 "• Write user.js in your Firefox profile(s) to force-enable accessibility:\n"
                 + string.Join("\n", profiles.Select(p => "    " + p))
@@ -418,7 +418,7 @@ public sealed class BrowserAccessibilitySetupHelper
         }
 
         return EnumerateFirefoxProfileDirs()
-            .Any(dir => UserJsHasOwnedAccessibilityEntry(Path.Combine(dir, "user.js")));
+            .Any(dir => UserJsHasOwnedAccessibilityEntry(Path.Join(dir, "user.js")));
     }
 
     /// <summary>
@@ -444,7 +444,7 @@ public sealed class BrowserAccessibilitySetupHelper
             foreach (var path in ownedLaunchers)
             {
                 var name = Path.GetFileName(path);
-                var backupExists = File.Exists(Path.Combine(LauncherBackupDir(), name));
+                var backupExists = File.Exists(Path.Join(LauncherBackupDir(), name));
                 sb.Append("    ").Append(path);
                 sb.Append(backupExists ? "  (restore from backup)" : "  (delete)");
                 sb.Append('\n');
@@ -454,8 +454,8 @@ public sealed class BrowserAccessibilitySetupHelper
         }
 
         var profilesWithOwnership = EnumerateFirefoxProfileDirs()
-            .Where(dir => UserJsHasOwnedAccessibilityEntry(Path.Combine(dir, "user.js")))
-            .Select(dir => Path.Combine(dir, "user.js"))
+            .Where(dir => UserJsHasOwnedAccessibilityEntry(Path.Join(dir, "user.js")))
+            .Select(dir => Path.Join(dir, "user.js"))
             .ToList();
         if (profilesWithOwnership.Count > 0)
         {
@@ -537,7 +537,7 @@ public sealed class BrowserAccessibilitySetupHelper
         // prefs.js — whichever already has the right value satisfies us.
         foreach (var name in new[] { "user.js", "prefs.js" })
         {
-            var path = Path.Combine(profileDir, name);
+            var path = Path.Join(profileDir, name);
             if (!File.Exists(path))
             {
                 continue;
@@ -590,8 +590,8 @@ public sealed class BrowserAccessibilitySetupHelper
                 // run) or times.json (created on profile bootstrap). Filter
                 // out the Crash Reports / Pending Pings sibling dirs.
                 if (
-                    File.Exists(Path.Combine(dir, "prefs.js"))
-                    || File.Exists(Path.Combine(dir, "times.json"))
+                    File.Exists(Path.Join(dir, "prefs.js"))
+                    || File.Exists(Path.Join(dir, "times.json"))
                 )
                 {
                     yield return dir;
@@ -610,7 +610,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
         foreach (var name in s_firefoxLauncherNames.Concat(s_chromiumLauncherNames))
         {
-            var path = Path.Combine(dir, name);
+            var path = Path.Join(dir, name);
             if (File.Exists(path) && FileStartsWithOwnershipMarker(path))
             {
                 yield return path;
@@ -644,7 +644,7 @@ public sealed class BrowserAccessibilitySetupHelper
         var cleaned = new List<string>();
         foreach (var profileDir in EnumerateFirefoxProfileDirs())
         {
-            var userJsPath = Path.Combine(profileDir, "user.js");
+            var userJsPath = Path.Join(profileDir, "user.js");
             if (!UserJsHasOwnedAccessibilityEntry(userJsPath))
             {
                 continue;
@@ -713,7 +713,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
         foreach (var name in names)
         {
-            var userCopy = Path.Combine(userAppsDir, name);
+            var userCopy = Path.Join(userAppsDir, name);
             var userCopyExists = File.Exists(userCopy);
 
             if (userCopyExists && FileStartsWithOwnershipMarker(userCopy))
@@ -779,7 +779,7 @@ public sealed class BrowserAccessibilitySetupHelper
         {
             var backupDir = LauncherBackupDir();
             Directory.CreateDirectory(backupDir);
-            var backupPath = Path.Combine(backupDir, name);
+            var backupPath = Path.Join(backupDir, name);
             // Preserve the oldest backup if we ran setup multiple times.
             if (!File.Exists(backupPath))
             {
@@ -851,7 +851,7 @@ public sealed class BrowserAccessibilitySetupHelper
     {
         foreach (var dir in s_systemLauncherDirectories)
         {
-            var candidate = Path.Combine(dir, name);
+            var candidate = Path.Join(dir, name);
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -871,7 +871,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
         foreach (var name in launcherNames)
         {
-            var path = Path.Combine(dir, name);
+            var path = Path.Join(dir, name);
             if (File.Exists(path) && FileStartsWithOwnershipMarker(path))
             {
                 return true;
@@ -900,7 +900,7 @@ public sealed class BrowserAccessibilitySetupHelper
                 continue;
             }
 
-            var ownedShadow = Path.Combine(userDir, name);
+            var ownedShadow = Path.Join(userDir, name);
             if (!File.Exists(ownedShadow) || !FileStartsWithOwnershipMarker(ownedShadow))
             {
                 return false;
@@ -912,7 +912,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
     private static bool HasUserOwnedOrNonOwnedLauncher(string userDir, string name)
     {
-        var path = Path.Combine(userDir, name);
+        var path = Path.Join(userDir, name);
         return File.Exists(path);
     }
 
@@ -923,7 +923,7 @@ public sealed class BrowserAccessibilitySetupHelper
         {
             // A patched shadow doesn't count as "installed" — only non-owned user launchers
             // and system launchers do, so an env-file-only run isn't treated as installed.
-            var userPath = Path.Combine(userDir, name);
+            var userPath = Path.Join(userDir, name);
             if (File.Exists(userPath) && !FileStartsWithOwnershipMarker(userPath))
             {
                 return true;
@@ -956,7 +956,7 @@ public sealed class BrowserAccessibilitySetupHelper
             }
 
             var name = Path.GetFileName(file);
-            var backupPath = Path.Combine(backupDir, name);
+            var backupPath = Path.Join(backupDir, name);
 
             try
             {
@@ -1048,19 +1048,19 @@ public sealed class BrowserAccessibilitySetupHelper
     private static string EnvFilePath()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".config", "environment.d", EnvFileName);
+        return Path.Join(home, ".config", "environment.d", EnvFileName);
     }
 
     private static string UserApplicationsDir()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".local", "share", "applications");
+        return Path.Join(home, ".local", "share", "applications");
     }
 
     private static string LauncherBackupDir()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".local", "share", "typewhisper", "launcher-backups");
+        return Path.Join(home, ".local", "share", "typewhisper", "launcher-backups");
     }
 
     public sealed record Status(

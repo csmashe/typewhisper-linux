@@ -11,7 +11,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
 
     public ShortcutsSectionViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.Linux.ShortcutsVmTests_" + Guid.NewGuid().ToString("N")
         );
@@ -36,7 +36,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     [Fact]
     public void ApplyPromptPaletteHotkey_SavesConfiguredBinding()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
@@ -51,7 +51,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     [Fact]
     public void ApplyPromptPaletteHotkey_BlankInputClearsBinding()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
         hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+P");
@@ -68,7 +68,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     [Fact]
     public void ApplyTransformSelectionHotkey_SavesConfiguredBinding()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
@@ -83,7 +83,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     [Fact]
     public void ApplyTransformSelectionHotkey_BlankInputClearsBinding()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
         hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+Shift+T");
@@ -103,7 +103,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     [Fact]
     public void ApplyTransformSelectionHotkey_RejectsCollisionWithPromptPalette()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
         hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+P");
@@ -123,7 +123,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     [Fact]
     public void WaylandEvdevHotkeysEnabled_PersistsToSettings()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
@@ -137,7 +137,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     [Fact]
     public void ShowCapabilityMismatch_FalseInDefaultState()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
@@ -150,7 +150,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     [Fact]
     public void ActiveBackendId_DefaultsToNotInitialized()
     {
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);

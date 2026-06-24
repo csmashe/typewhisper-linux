@@ -573,10 +573,10 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     {
         try
         {
-            var dir = Path.Combine(TypeWhisperEnvironment.BasePath, "backups");
+            var dir = Path.Join(TypeWhisperEnvironment.BasePath, "backups");
             Directory.CreateDirectory(dir);
             var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
-            var file = Path.Combine(dir, $"gnome-keybindings-{stamp}.txt");
+            var file = Path.Join(dir, $"gnome-keybindings-{stamp}.txt");
             var contents =
                 $"# GNOME custom-keybindings list snapshot taken {DateTime.UtcNow:O}\n"
                 + $"# Restore with:\n"

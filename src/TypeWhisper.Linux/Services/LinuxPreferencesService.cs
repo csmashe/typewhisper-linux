@@ -60,7 +60,7 @@ public sealed class LinuxPreferencesService
 
     public LinuxPreferencesService()
     {
-        _path = Path.Combine(TypeWhisperEnvironment.BasePath, "linux-preferences.json");
+        _path = Path.Join(TypeWhisperEnvironment.BasePath, "linux-preferences.json");
         Load();
     }
 

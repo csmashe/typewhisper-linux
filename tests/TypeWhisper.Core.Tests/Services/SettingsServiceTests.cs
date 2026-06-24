@@ -11,9 +11,9 @@ public class SettingsServiceTests : IDisposable
 
     public SettingsServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"tw_settings_test_{Guid.NewGuid():N}");
+        _tempDir = Path.Join(Path.GetTempPath(), $"tw_settings_test_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
-        _filePath = Path.Combine(_tempDir, "settings.json");
+        _filePath = Path.Join(_tempDir, "settings.json");
     }
 
     public void Dispose()

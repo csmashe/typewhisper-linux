@@ -19,7 +19,7 @@ public class PluginManagerTests : IDisposable
 
     public PluginManagerTests()
     {
-        _pluginSearchDir = Path.Combine(
+        _pluginSearchDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.PluginManagerTests_" + Guid.NewGuid().ToString("N")
         );

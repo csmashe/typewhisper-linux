@@ -31,17 +31,17 @@ public sealed class ApiDiscoveryFile
             var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
             if (string.IsNullOrWhiteSpace(configHome))
             {
-                configHome = Path.Combine(
+                configHome = Path.Join(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     ".config"
                 );
             }
 
-            return Path.Combine(configHome, "typewhisper");
+            return Path.Join(configHome, "typewhisper");
         }
     }
 
-    public static string FilePath => Path.Combine(DirectoryPath, FileName);
+    public static string FilePath => Path.Join(DirectoryPath, FileName);
 
     public void Write(int port, string token)
     {

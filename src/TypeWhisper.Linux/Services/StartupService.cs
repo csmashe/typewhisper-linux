@@ -18,17 +18,17 @@ public static class StartupService
             var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
             if (string.IsNullOrWhiteSpace(configHome))
             {
-                configHome = Path.Combine(
+                configHome = Path.Join(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     ".config"
                 );
             }
 
-            return Path.Combine(configHome, "autostart");
+            return Path.Join(configHome, "autostart");
         }
     }
 
-    private static string DesktopFilePath => Path.Combine(AutostartDir, DesktopFileName);
+    private static string DesktopFilePath => Path.Join(AutostartDir, DesktopFileName);
 
     public static bool IsEnabled => File.Exists(DesktopFilePath);
 
@@ -42,10 +42,10 @@ public static class StartupService
         // Prefer an absolute path to the bundled PNG so the entry works even
         // when no icon theme on the system defines "typewhisper". Falls back
         // to the theme name if the PNG is missing for any reason.
-        var iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "typewhisper-128.png");
+        var iconPath = Path.Join(AppContext.BaseDirectory, "Resources", "typewhisper-128.png");
         if (!File.Exists(iconPath))
         {
-            iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "typewhisper-64.png");
+            iconPath = Path.Join(AppContext.BaseDirectory, "Resources", "typewhisper-64.png");
         }
 
         if (!File.Exists(iconPath))

@@ -157,7 +157,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
             )
         )
         {
-            if (File.Exists(Path.Combine(dir, name)))
+            if (File.Exists(Path.Join(dir, name)))
             {
                 return true;
             }

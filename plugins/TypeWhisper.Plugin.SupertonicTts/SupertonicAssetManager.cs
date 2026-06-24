@@ -172,7 +172,7 @@ internal sealed class SupertonicAssetManager : ISupertonicAssetManager, IDisposa
             ct);
 
     private string GetPath(string relativePath) =>
-        Path.Combine(AssetRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Path.Join(AssetRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
     private static double ClampProgress(double value) =>
         Math.Max(0.0, Math.Min(1.0, value));

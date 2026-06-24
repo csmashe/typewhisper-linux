@@ -13,7 +13,7 @@ public class ScriptCollectionSettingsTests : IDisposable
 
     public ScriptCollectionSettingsTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "tw-script-test-" + Guid.NewGuid().ToString("N")
         );
@@ -254,7 +254,7 @@ public class ScriptCollectionSettingsTests : IDisposable
         Assert.Contains(scripts.ItemFields, f => f.Key == "__id");
     }
 
-    private string ConfigPath => Path.Combine(_tempDir, "scripts.json");
+    private string ConfigPath => Path.Join(_tempDir, "scripts.json");
 
     private static PluginCollectionItem Item(
         string name,

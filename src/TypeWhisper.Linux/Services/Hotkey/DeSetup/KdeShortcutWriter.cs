@@ -129,9 +129,9 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
-        var dataHome = string.IsNullOrEmpty(xdg) ? Path.Combine(home, ".local", "share") : xdg;
-        var dir = Path.Combine(dataHome, "kglobalaccel");
-        return (dir, Path.Combine(dir, FileName(shortcutId)));
+        var dataHome = string.IsNullOrEmpty(xdg) ? Path.Join(home, ".local", "share") : xdg;
+        var dir = Path.Join(dataHome, "kglobalaccel");
+        return (dir, Path.Join(dir, FileName(shortcutId)));
     }
 
     private static string FileName(string shortcutId)

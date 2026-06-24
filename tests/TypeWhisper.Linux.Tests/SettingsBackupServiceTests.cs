@@ -6,7 +6,7 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class SettingsBackupServiceTests : IDisposable
 {
-    private readonly string _tempDir = Path.Combine(
+    private readonly string _tempDir = Path.Join(
         Path.GetTempPath(),
         $"tw-backup-test-{Guid.NewGuid():N}"
     );
@@ -22,14 +22,14 @@ public sealed class SettingsBackupServiceTests : IDisposable
     [Fact]
     public void CreateBackup_includes_settings_and_user_data_but_skips_generated_content()
     {
-        var appData = Path.Combine(_tempDir, "app-data");
-        var backupPath = Path.Combine(_tempDir, "backup.zip");
-        Write(Path.Combine(appData, "settings.json"), "{}");
-        Write(Path.Combine(appData, "linux-preferences.json"), "{}");
-        Write(Path.Combine(appData, "Data", "profiles.json"), "profiles");
-        Write(Path.Combine(appData, "PluginData", "FileMemory", "memories.json"), "memories");
+        var appData = Path.Join(_tempDir, "app-data");
+        var backupPath = Path.Join(_tempDir, "backup.zip");
+        Write(Path.Join(appData, "settings.json"), "{}");
+        Write(Path.Join(appData, "linux-preferences.json"), "{}");
+        Write(Path.Join(appData, "Data", "profiles.json"), "profiles");
+        Write(Path.Join(appData, "PluginData", "FileMemory", "memories.json"), "memories");
         Write(
-            Path.Combine(
+            Path.Join(
                 appData,
                 "PluginData",
                 "com.typewhisper.whisper-cpp",
@@ -39,7 +39,7 @@ public sealed class SettingsBackupServiceTests : IDisposable
             "model"
         );
         Write(
-            Path.Combine(
+            Path.Join(
                 appData,
                 "PluginData",
                 "com.typewhisper.sherpa-onnx",
@@ -49,10 +49,10 @@ public sealed class SettingsBackupServiceTests : IDisposable
             ),
             "model"
         );
-        Write(Path.Combine(appData, "Plugins", "Sample", "manifest.json"), "plugin");
-        Write(Path.Combine(appData, "Models", "large.bin"), "model");
-        Write(Path.Combine(appData, "Audio", "capture.wav"), "audio");
-        Write(Path.Combine(appData, "Logs", "app.log"), "log");
+        Write(Path.Join(appData, "Plugins", "Sample", "manifest.json"), "plugin");
+        Write(Path.Join(appData, "Models", "large.bin"), "model");
+        Write(Path.Join(appData, "Audio", "capture.wav"), "audio");
+        Write(Path.Join(appData, "Logs", "app.log"), "log");
 
         var service = new SettingsBackupService(appData);
 
@@ -83,14 +83,14 @@ public sealed class SettingsBackupServiceTests : IDisposable
     [Fact]
     public void RestoreBackup_overwrites_settings_and_user_data()
     {
-        var sourceData = Path.Combine(_tempDir, "source");
-        var targetData = Path.Combine(_tempDir, "target");
-        var backupPath = Path.Combine(_tempDir, "backup.zip");
-        Write(Path.Combine(sourceData, "settings.json"), "{\"language\":\"de\"}");
-        Write(Path.Combine(sourceData, "Data", "snippets.json"), "[\"restored\"]");
-        Write(Path.Combine(sourceData, "PluginData", "FileMemory", "memories.json"), "restored");
+        var sourceData = Path.Join(_tempDir, "source");
+        var targetData = Path.Join(_tempDir, "target");
+        var backupPath = Path.Join(_tempDir, "backup.zip");
+        Write(Path.Join(sourceData, "settings.json"), "{\"language\":\"de\"}");
+        Write(Path.Join(sourceData, "Data", "snippets.json"), "[\"restored\"]");
+        Write(Path.Join(sourceData, "PluginData", "FileMemory", "memories.json"), "restored");
         Write(
-            Path.Combine(
+            Path.Join(
                 sourceData,
                 "PluginData",
                 "com.typewhisper.whisper-cpp",
@@ -99,8 +99,8 @@ public sealed class SettingsBackupServiceTests : IDisposable
             ),
             "model"
         );
-        Write(Path.Combine(targetData, "settings.json"), "{\"language\":\"en\"}");
-        Write(Path.Combine(targetData, "Data", "snippets.json"), "[\"old\"]");
+        Write(Path.Join(targetData, "settings.json"), "{\"language\":\"en\"}");
+        Write(Path.Join(targetData, "Data", "snippets.json"), "[\"old\"]");
 
         new SettingsBackupService(sourceData).CreateBackup(backupPath);
         var service = new SettingsBackupService(targetData);
@@ -108,18 +108,18 @@ public sealed class SettingsBackupServiceTests : IDisposable
         var result = service.RestoreBackup(backupPath);
 
         Assert.Equal(3, result.FileCount);
-        Assert.Contains("de", File.ReadAllText(Path.Combine(targetData, "settings.json")));
+        Assert.Contains("de", File.ReadAllText(Path.Join(targetData, "settings.json")));
         Assert.Equal(
             "[\"restored\"]",
-            File.ReadAllText(Path.Combine(targetData, "Data", "snippets.json"))
+            File.ReadAllText(Path.Join(targetData, "Data", "snippets.json"))
         );
         Assert.Equal(
             "restored",
-            File.ReadAllText(Path.Combine(targetData, "PluginData", "FileMemory", "memories.json"))
+            File.ReadAllText(Path.Join(targetData, "PluginData", "FileMemory", "memories.json"))
         );
         Assert.False(
             File.Exists(
-                Path.Combine(
+                Path.Join(
                     targetData,
                     "PluginData",
                     "com.typewhisper.whisper-cpp",
@@ -133,8 +133,8 @@ public sealed class SettingsBackupServiceTests : IDisposable
     [Fact]
     public void RestoreBackup_skips_models_from_older_backup_archives()
     {
-        var backupPath = Path.Combine(_tempDir, "old-backup.zip");
-        var targetData = Path.Combine(_tempDir, "target");
+        var backupPath = Path.Join(_tempDir, "old-backup.zip");
+        var targetData = Path.Join(_tempDir, "target");
         Directory.CreateDirectory(_tempDir);
         using (var archive = ZipFile.Open(backupPath, ZipArchiveMode.Create))
         {
@@ -153,10 +153,10 @@ public sealed class SettingsBackupServiceTests : IDisposable
         var result = service.RestoreBackup(backupPath);
 
         Assert.Equal(2, result.FileCount);
-        Assert.True(File.Exists(Path.Combine(targetData, "settings.json")));
+        Assert.True(File.Exists(Path.Join(targetData, "settings.json")));
         Assert.True(
             File.Exists(
-                Path.Combine(
+                Path.Join(
                     targetData,
                     "PluginData",
                     "com.typewhisper.whisper-cpp",
@@ -166,7 +166,7 @@ public sealed class SettingsBackupServiceTests : IDisposable
         );
         Assert.False(
             File.Exists(
-                Path.Combine(
+                Path.Join(
                     targetData,
                     "PluginData",
                     "com.typewhisper.whisper-cpp",
@@ -180,7 +180,7 @@ public sealed class SettingsBackupServiceTests : IDisposable
     [Fact]
     public void RestoreBackup_rejects_unsupported_paths()
     {
-        var backupPath = Path.Combine(_tempDir, "bad.zip");
+        var backupPath = Path.Join(_tempDir, "bad.zip");
         Directory.CreateDirectory(_tempDir);
         using (var archive = ZipFile.Open(backupPath, ZipArchiveMode.Create))
         {
@@ -190,7 +190,7 @@ public sealed class SettingsBackupServiceTests : IDisposable
             writer.Write("bad");
         }
 
-        var service = new SettingsBackupService(Path.Combine(_tempDir, "target"));
+        var service = new SettingsBackupService(Path.Join(_tempDir, "target"));
 
         Assert.Throws<InvalidDataException>(() => service.RestoreBackup(backupPath));
     }

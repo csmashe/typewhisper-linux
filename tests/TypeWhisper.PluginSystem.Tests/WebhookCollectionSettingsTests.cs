@@ -13,7 +13,7 @@ public class WebhookCollectionSettingsTests : IDisposable
 
     public WebhookCollectionSettingsTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "tw-webhook-test-" + Guid.NewGuid().ToString("N")
         );
@@ -292,7 +292,7 @@ public class WebhookCollectionSettingsTests : IDisposable
         Assert.Empty(items);
     }
 
-    private string ConfigPath => Path.Combine(_tempDir, "webhooks.json");
+    private string ConfigPath => Path.Join(_tempDir, "webhooks.json");
 
     private static PluginCollectionItem Item(
         string name,

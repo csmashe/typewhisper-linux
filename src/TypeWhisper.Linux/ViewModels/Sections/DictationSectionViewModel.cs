@@ -1125,15 +1125,15 @@ public partial class DictationSectionViewModel : ObservableObject
         var shell = Environment.GetEnvironmentVariable("SHELL") ?? string.Empty;
         if (shell.EndsWith("/zsh", StringComparison.Ordinal))
         {
-            return Path.Combine(home, ".zshrc");
+            return Path.Join(home, ".zshrc");
         }
 
         if (shell.EndsWith("/fish", StringComparison.Ordinal))
         {
-            return Path.Combine(home, ".config", "fish", "config.fish");
+            return Path.Join(home, ".config", "fish", "config.fish");
         }
 
-        return Path.Combine(home, ".bashrc");
+        return Path.Join(home, ".bashrc");
     }
 
     private static string GetCudaLibraryPathExport(string profilePath, string cudaLibraryPath)
@@ -1147,10 +1147,10 @@ public partial class DictationSectionViewModel : ObservableObject
     // on Wayland, covering app-menu launches where the shell profile isn't sourced.
     private static string WriteDesktopEnvironmentFile(string home, string cudaLibraryPath)
     {
-        var environmentDir = Path.Combine(home, ".config", "environment.d");
+        var environmentDir = Path.Join(home, ".config", "environment.d");
         Directory.CreateDirectory(environmentDir);
 
-        var path = Path.Combine(environmentDir, "typewhisper-cuda.conf");
+        var path = Path.Join(environmentDir, "typewhisper-cuda.conf");
         File.WriteAllText(
             path,
             $"# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}{Environment.NewLine}"

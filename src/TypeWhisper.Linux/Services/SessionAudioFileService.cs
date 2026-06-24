@@ -16,7 +16,7 @@ public sealed class SessionAudioFileService
     {
         Directory.CreateDirectory(TypeWhisperEnvironment.AudioPath);
         var fileName = $"dictation-{Guid.NewGuid():N}.wav";
-        var path = Path.Combine(TypeWhisperEnvironment.AudioPath, fileName);
+        var path = Path.Join(TypeWhisperEnvironment.AudioPath, fileName);
         File.WriteAllBytes(path, wav);
         return path;
     }
@@ -28,7 +28,7 @@ public sealed class SessionAudioFileService
             return null;
         }
 
-        var path = Path.Combine(TypeWhisperEnvironment.AudioPath, audioFileName);
+        var path = Path.Join(TypeWhisperEnvironment.AudioPath, audioFileName);
         return File.Exists(path) ? path : null;
     }
 

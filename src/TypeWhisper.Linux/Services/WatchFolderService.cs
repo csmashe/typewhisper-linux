@@ -50,8 +50,8 @@ public sealed class WatchFolderService : IDisposable
     internal WatchFolderService(string dataPath)
     {
         Directory.CreateDirectory(dataPath);
-        _processedFingerprintsPath = Path.Combine(dataPath, "watch-folder-processed.json");
-        _historyPath = Path.Combine(dataPath, "watch-folder-history.json");
+        _processedFingerprintsPath = Path.Join(dataPath, "watch-folder-processed.json");
+        _historyPath = Path.Join(dataPath, "watch-folder-history.json");
         LoadProcessedFingerprints();
         LoadHistory();
     }
@@ -333,7 +333,7 @@ public sealed class WatchFolderService : IDisposable
                 ResolveEngineName(result),
                 DateTime.Now
             );
-            var outputPath = Path.Combine(
+            var outputPath = Path.Join(
                 outputFolder,
                 Path.GetFileNameWithoutExtension(filePath) + "." + artifact.FileExtension
             );

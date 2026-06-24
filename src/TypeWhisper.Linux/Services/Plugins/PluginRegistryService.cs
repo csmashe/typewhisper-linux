@@ -134,7 +134,7 @@ public sealed class PluginRegistryService
         CancellationToken ct = default
     )
     {
-        var pluginDir = Path.Combine(TypeWhisperEnvironment.PluginsPath, registryPlugin.Id);
+        var pluginDir = Path.Join(TypeWhisperEnvironment.PluginsPath, registryPlugin.Id);
 
         if (_pluginManager.GetPlugin(registryPlugin.Id) is not null)
         {
@@ -216,7 +216,7 @@ public sealed class PluginRegistryService
     {
         await _pluginManager.UnloadPluginAsync(pluginId);
 
-        var pluginDir = Path.Combine(TypeWhisperEnvironment.PluginsPath, pluginId);
+        var pluginDir = Path.Join(TypeWhisperEnvironment.PluginsPath, pluginId);
         if (Directory.Exists(pluginDir))
         {
             try

@@ -29,7 +29,7 @@ public sealed class BundledPluginDeployer
         foreach (var pluginDir in Directory.GetDirectories(source))
         {
             var name = Path.GetFileName(pluginDir);
-            var dest = Path.Combine(destRoot, name);
+            var dest = Path.Join(destRoot, name);
 
             try
             {
@@ -58,7 +58,7 @@ public sealed class BundledPluginDeployer
     private static string? FindBundledPluginsDir()
     {
         var exeDir = AppContext.BaseDirectory;
-        var candidate = Path.Combine(exeDir, "Plugins");
+        var candidate = Path.Join(exeDir, "Plugins");
         return Directory.Exists(candidate) ? candidate : null;
     }
 
@@ -72,7 +72,7 @@ public sealed class BundledPluginDeployer
         foreach (var srcFile in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(src, srcFile);
-            var dstFile = Path.Combine(dst, relativePath);
+            var dstFile = Path.Join(dst, relativePath);
             if (!File.Exists(dstFile))
             {
                 return true;
@@ -97,12 +97,12 @@ public sealed class BundledPluginDeployer
         Directory.CreateDirectory(dst);
         foreach (var file in Directory.GetFiles(src))
         {
-            File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite);
+            File.Copy(file, Path.Join(dst, Path.GetFileName(file)), overwrite);
         }
 
         foreach (var sub in Directory.GetDirectories(src))
         {
-            CopyDirectory(sub, Path.Combine(dst, Path.GetFileName(sub)), overwrite);
+            CopyDirectory(sub, Path.Join(dst, Path.GetFileName(sub)), overwrite);
         }
     }
 }

@@ -13,7 +13,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
 
     public HistorySectionViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.History.Tests_" + Guid.NewGuid().ToString("N")
         );
@@ -114,18 +114,18 @@ public sealed class HistorySectionViewModelTests : IDisposable
 
     private HistoryService CreateHistoryService()
     {
-        return new HistoryService(Path.Combine(_tempDir, "history.json"), Path.Combine(_tempDir, "audio"));
+        return new HistoryService(Path.Join(_tempDir, "history.json"), Path.Join(_tempDir, "audio"));
     }
 
     private DictionaryService CreateDictionaryService()
     {
-        return new DictionaryService(Path.Combine(_tempDir, "dictionary.json"));
+        return new DictionaryService(Path.Join(_tempDir, "dictionary.json"));
     }
 
     private SettingsService CreateSettingsService(bool autoAddCorrections = false)
     {
         var settings = new SettingsService(
-            Path.Combine(_tempDir, $"settings-{Guid.NewGuid():N}.json")
+            Path.Join(_tempDir, $"settings-{Guid.NewGuid():N}.json")
         );
         settings.Save(
             AppSettings.Default with

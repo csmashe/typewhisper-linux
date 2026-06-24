@@ -249,7 +249,7 @@ public sealed class AudioPlaybackService : IDisposable
         try
         {
             root = Path.GetFullPath(TypeWhisperEnvironment.AudioPath);
-            candidate = Path.GetFullPath(Path.Combine(root, audioFileName));
+            candidate = Path.GetFullPath(Path.Join(root, audioFileName));
         }
         catch
         {

@@ -388,11 +388,11 @@ public sealed class YdotoolSetupHelper
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         var configHome = !string.IsNullOrEmpty(xdg)
             ? xdg
-            : Path.Combine(
+            : Path.Join(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".config"
             );
-        return Path.Combine(configHome, "systemd", "user", UserUnitName);
+        return Path.Join(configHome, "systemd", "user", UserUnitName);
     }
 
     /// <summary>
@@ -449,7 +449,7 @@ public sealed class YdotoolSetupHelper
 
             try
             {
-                var candidate = Path.Combine(dir, name);
+                var candidate = Path.Join(dir, name);
                 if (File.Exists(candidate))
                 {
                     return candidate;

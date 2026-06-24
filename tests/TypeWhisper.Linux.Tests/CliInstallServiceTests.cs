@@ -7,7 +7,7 @@ public sealed class CliInstallServiceTests : IDisposable
 {
     private readonly string? _originalPath = Environment.GetEnvironmentVariable("PATH");
 
-    private readonly string _tempDir = Path.Combine(
+    private readonly string _tempDir = Path.Join(
         Path.GetTempPath(),
         $"tw-cli-test-{Guid.NewGuid():N}"
     );
@@ -26,8 +26,8 @@ public sealed class CliInstallServiceTests : IDisposable
     {
         var service = new CliInstallService(
             () => null,
-            () => Path.Combine(_tempDir, "install"),
-            () => Path.Combine(_tempDir, "bin")
+            () => Path.Join(_tempDir, "install"),
+            () => Path.Join(_tempDir, "bin")
         );
 
         var state = service.GetState();
@@ -40,17 +40,17 @@ public sealed class CliInstallServiceTests : IDisposable
     [Fact]
     public void Install_copies_payload_and_writes_launcher()
     {
-        var sourceDir = Path.Combine(_tempDir, "bundle");
-        var installDir = Path.Combine(_tempDir, "install");
-        var launcherDir = Path.Combine(_tempDir, "bin");
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var launcherDir = Path.Join(_tempDir, "bin");
         Directory.CreateDirectory(sourceDir);
-        File.WriteAllText(Path.Combine(sourceDir, "typewhisper"), "apphost");
-        File.WriteAllText(Path.Combine(sourceDir, "typewhisper.dll"), "dll");
-        File.WriteAllText(Path.Combine(sourceDir, "typewhisper.runtimeconfig.json"), "{}");
+        File.WriteAllText(Path.Join(sourceDir, "typewhisper"), "apphost");
+        File.WriteAllText(Path.Join(sourceDir, "typewhisper.dll"), "dll");
+        File.WriteAllText(Path.Join(sourceDir, "typewhisper.runtimeconfig.json"), "{}");
         Environment.SetEnvironmentVariable("PATH", launcherDir);
 
         var service = new CliInstallService(
-            () => Path.Combine(sourceDir, "typewhisper"),
+            () => Path.Join(sourceDir, "typewhisper"),
             () => installDir,
             () => launcherDir
         );
@@ -60,12 +60,12 @@ public sealed class CliInstallServiceTests : IDisposable
         Assert.True(state.BundledCliAvailable);
         Assert.True(state.Installed);
         Assert.True(state.LauncherDirectoryInPath);
-        Assert.True(File.Exists(Path.Combine(installDir, "typewhisper")));
-        Assert.True(File.Exists(Path.Combine(installDir, "typewhisper.dll")));
-        Assert.True(File.Exists(Path.Combine(installDir, "typewhisper.runtimeconfig.json")));
+        Assert.True(File.Exists(Path.Join(installDir, "typewhisper")));
+        Assert.True(File.Exists(Path.Join(installDir, "typewhisper.dll")));
+        Assert.True(File.Exists(Path.Join(installDir, "typewhisper.runtimeconfig.json")));
         Assert.Contains(
-            Path.Combine(installDir, "typewhisper"),
-            File.ReadAllText(Path.Combine(launcherDir, "typewhisper"))
+            Path.Join(installDir, "typewhisper"),
+            File.ReadAllText(Path.Join(launcherDir, "typewhisper"))
         );
     }
 

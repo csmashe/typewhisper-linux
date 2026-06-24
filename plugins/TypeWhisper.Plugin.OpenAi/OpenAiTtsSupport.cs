@@ -101,7 +101,7 @@ internal sealed class OpenAiPcmTtsPlaybackSession : ITtsPlaybackSession, IDispos
         string wavFilePath;
         try
         {
-            wavFilePath = Path.Combine(
+            wavFilePath = Path.Join(
                 Path.GetTempPath(),
                 $"typewhisper-openai-tts-{Guid.NewGuid():N}.wav");
             File.WriteAllBytes(wavFilePath, BuildWav(pcm16Audio, sampleRate));

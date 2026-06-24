@@ -16,7 +16,7 @@ internal static class BootTrace
     {
         try
         {
-            var path = Path.Combine(TypeWhisperEnvironment.LogsPath, "boot.log");
+            var path = Path.Join(TypeWhisperEnvironment.LogsPath, "boot.log");
             var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
             s_fileWriter = new StreamWriter(stream) { AutoFlush = true };
             s_fileWriter.WriteLine($"=== boot trace @ {DateTime.Now:O} ===");

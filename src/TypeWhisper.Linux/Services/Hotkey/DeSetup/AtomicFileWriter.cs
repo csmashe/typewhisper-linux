@@ -18,7 +18,7 @@ internal static class AtomicFileWriter
             throw new ArgumentException("Target path must include a directory.", nameof(target));
         }
 
-        var tmp = Path.Combine(dir, $".{Path.GetFileName(target)}.{Path.GetRandomFileName()}.tmp");
+        var tmp = Path.Join(dir, $".{Path.GetFileName(target)}.{Path.GetRandomFileName()}.tmp");
         try
         {
             await File.WriteAllTextAsync(tmp, contents, ct).ConfigureAwait(false);

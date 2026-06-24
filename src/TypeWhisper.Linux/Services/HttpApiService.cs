@@ -432,7 +432,7 @@ public sealed class HttpApiService : IDisposable
         );
         var transcribeRequest = HttpApiRequestParser.ParseTranscribe(apiRequest);
 
-        var tempPath = Path.Combine(
+        var tempPath = Path.Join(
             Path.GetTempPath(),
             $"typewhisper-api-{Guid.NewGuid():N}.{SanitizeExtension(transcribeRequest.FileExtension)}"
         );

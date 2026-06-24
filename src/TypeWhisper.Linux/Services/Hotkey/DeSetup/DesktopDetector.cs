@@ -129,7 +129,7 @@ public static class DesktopDetector
 
             try
             {
-                var candidate = Path.Combine(dir, name);
+                var candidate = Path.Join(dir, name);
                 if (File.Exists(candidate))
                 {
                     return true;

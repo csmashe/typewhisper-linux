@@ -691,7 +691,7 @@ public sealed class OpenAiPlugin
 
     internal async Task ImportExistingLoginAsync(string? authFilePath = null)
     {
-        authFilePath ??= Path.Combine(
+        authFilePath ??= Path.Join(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".codex",
             "auth.json");

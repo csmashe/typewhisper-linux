@@ -13,7 +13,7 @@ public class ApiDiscoveryFileTests : IDisposable
     public ApiDiscoveryFileTests()
     {
         _originalXdgConfigHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        _xdgConfigHome = Path.Combine(Path.GetTempPath(), "typewhisper-tests-" + Guid.NewGuid().ToString("N"));
+        _xdgConfigHome = Path.Join(Path.GetTempPath(), "typewhisper-tests-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _xdgConfigHome);
     }
 
@@ -33,7 +33,7 @@ public class ApiDiscoveryFileTests : IDisposable
 
         sut.Write(9876, "supersecret");
 
-        var path = Path.Combine(_xdgConfigHome, "typewhisper", "api-discovery.json");
+        var path = Path.Join(_xdgConfigHome, "typewhisper", "api-discovery.json");
         Assert.True(File.Exists(path));
 
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
@@ -49,7 +49,7 @@ public class ApiDiscoveryFileTests : IDisposable
         var sut = new ApiDiscoveryFile();
         sut.Write(9876, "tok");
 
-        var dir = Path.Combine(_xdgConfigHome, "typewhisper");
+        var dir = Path.Join(_xdgConfigHome, "typewhisper");
         var leftoverTmp = Directory.GetFiles(dir, "*.tmp");
         Assert.Empty(leftoverTmp);
     }
@@ -59,7 +59,7 @@ public class ApiDiscoveryFileTests : IDisposable
     {
         var sut = new ApiDiscoveryFile();
         sut.Write(9876, "tok");
-        var path = Path.Combine(_xdgConfigHome, "typewhisper", "api-discovery.json");
+        var path = Path.Join(_xdgConfigHome, "typewhisper", "api-discovery.json");
         Assert.True(File.Exists(path));
 
         sut.Delete();
@@ -86,7 +86,7 @@ public class ApiDiscoveryFileTests : IDisposable
         var sut = new ApiDiscoveryFile();
         sut.Write(9876, "tok");
 
-        var path = Path.Combine(_xdgConfigHome, "typewhisper", "api-discovery.json");
+        var path = Path.Join(_xdgConfigHome, "typewhisper", "api-discovery.json");
         var mode = File.GetUnixFileMode(path);
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
     }
@@ -102,7 +102,7 @@ public class ApiDiscoveryFileTests : IDisposable
         var sut = new ApiDiscoveryFile();
         sut.Write(9876, "tok");
 
-        var dir = Path.Combine(_xdgConfigHome, "typewhisper");
+        var dir = Path.Join(_xdgConfigHome, "typewhisper");
         var mode = File.GetUnixFileMode(dir);
         Assert.Equal(
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
@@ -117,7 +117,7 @@ public class ApiDiscoveryFileTests : IDisposable
         sut.Write(1234, "old");
         sut.Write(9876, "new");
 
-        var path = Path.Combine(_xdgConfigHome, "typewhisper", "api-discovery.json");
+        var path = Path.Join(_xdgConfigHome, "typewhisper", "api-discovery.json");
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
         Assert.Equal(9876, doc.RootElement.GetProperty("port").GetInt32());
         Assert.Equal("new", doc.RootElement.GetProperty("token").GetString());
@@ -129,15 +129,15 @@ public class ApiDiscoveryFileTests : IDisposable
         // Simulate a crash that left an orphaned tmp from a previous run.
         // Without the stale-delete, FileMode.CreateNew would throw IOException
         // here and the new write would be lost.
-        var dir = Path.Combine(_xdgConfigHome, "typewhisper");
+        var dir = Path.Join(_xdgConfigHome, "typewhisper");
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, "api-discovery.json.tmp"), "leftover");
+        File.WriteAllText(Path.Join(dir, "api-discovery.json.tmp"), "leftover");
 
         var sut = new ApiDiscoveryFile();
         sut.Write(9876, "tok");
 
-        var path = Path.Combine(dir, "api-discovery.json");
+        var path = Path.Join(dir, "api-discovery.json");
         Assert.True(File.Exists(path));
-        Assert.False(File.Exists(Path.Combine(dir, "api-discovery.json.tmp")));
+        Assert.False(File.Exists(Path.Join(dir, "api-discovery.json.tmp")));
     }
 }

@@ -11,7 +11,7 @@ public sealed class DashboardSectionViewModelTests : IDisposable
 
     public DashboardSectionViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.Dashboard.Tests_" + Guid.NewGuid().ToString("N")
         );
@@ -36,7 +36,7 @@ public sealed class DashboardSectionViewModelTests : IDisposable
     [Fact]
     public void Refresh_BuildsHistoryInsightsForSelectedRange()
     {
-        var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
+        var history = new HistoryService(Path.Join(_tempDir, "history.json"));
         history.AddRecord(
             CreateRecord(
                 "one two three four",
@@ -69,7 +69,7 @@ public sealed class DashboardSectionViewModelTests : IDisposable
                 translationApplied: true
             )
         );
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
 
         sut.SelectedRange = DashboardSectionViewModel.TimeRange.AllTime;
@@ -95,11 +95,11 @@ public sealed class DashboardSectionViewModelTests : IDisposable
     [Fact]
     public void Refresh_CalculatesTimeSavedFromManualTypingBaseline()
     {
-        var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
+        var history = new HistoryService(Path.Join(_tempDir, "history.json"));
         history.AddRecord(
             CreateRecord("one two three four five six seven eight", "code", 4, DateTime.UtcNow)
         );
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
 
         sut.SelectedRange = DashboardSectionViewModel.TimeRange.AllTime;
@@ -110,11 +110,11 @@ public sealed class DashboardSectionViewModelTests : IDisposable
     [Fact]
     public void Refresh_CountsWordsSeparatedByNewlines()
     {
-        var history = new HistoryService(Path.Combine(_tempDir, "history.json"));
+        var history = new HistoryService(Path.Join(_tempDir, "history.json"));
         history.AddRecord(
             CreateRecord("Hi Ryan,\n\nThis has spacing.", "browser", 1, DateTime.UtcNow)
         );
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         var sut = new DashboardSectionViewModel(history, settings, new HistoryInsightsService());
 
         sut.SelectedRange = DashboardSectionViewModel.TimeRange.AllTime;

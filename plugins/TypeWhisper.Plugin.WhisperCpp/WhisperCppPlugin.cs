@@ -448,7 +448,7 @@ public sealed class WhisperCppPlugin
                 return;
             }
 
-            var tempPath = Path.Combine(
+            var tempPath = Path.Join(
                 modelDirectory,
                 $"{Path.GetFileName(modelPath)}.{Guid.NewGuid():N}.tmp"
             );

@@ -276,8 +276,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        var configHome = string.IsNullOrEmpty(xdg) ? Path.Combine(home, ".config") : xdg;
-        return Path.Combine(configHome, "hypr", "hyprland.conf");
+        var configHome = string.IsNullOrEmpty(xdg) ? Path.Join(home, ".config") : xdg;
+        return Path.Join(configHome, "hypr", "hyprland.conf");
     }
 
     private static async Task<(bool ok, string stdout, string stderr)> RunAsync(

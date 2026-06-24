@@ -79,7 +79,7 @@ internal static class SocketPathResolver
             return CreatePrivateSocketPath(uid);
         }
 
-        return Path.Combine(fallback, SocketFileName);
+        return Path.Join(fallback, SocketFileName);
     }
 
     /// <summary>Best-effort <c>chmod</c>; logs on failure but never throws.</summary>
@@ -103,7 +103,7 @@ internal static class SocketPathResolver
 
     private static string CreatePrivateSocketPath(int uid)
     {
-        var privatePath = Path.Combine(
+        var privatePath = Path.Join(
             Path.GetTempPath(),
             $"typewhisper-{uid}-{Environment.ProcessId}"
         );
@@ -128,7 +128,7 @@ internal static class SocketPathResolver
         }
 
         Trace.WriteLine($"[SocketPathResolver] Using private socket directory {privatePath}.");
-        return Path.Combine(privatePath, SocketFileName);
+        return Path.Join(privatePath, SocketFileName);
     }
 
     private static bool IsDirectoryPrivateAndOwned(string path, int uid)

@@ -97,7 +97,7 @@ internal sealed class XaiPcmTtsPlaybackSession : ITtsPlaybackSession, IDisposabl
         string wavFilePath;
         try
         {
-            wavFilePath = Path.Combine(
+            wavFilePath = Path.Join(
                 Path.GetTempPath(),
                 $"typewhisper-xai-tts-{Guid.NewGuid():N}.wav");
             File.WriteAllBytes(wavFilePath, BuildWav(pcm16Audio, sampleRate));

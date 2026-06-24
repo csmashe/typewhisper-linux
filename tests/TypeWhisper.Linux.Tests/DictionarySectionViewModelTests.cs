@@ -11,7 +11,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
 
     public DictionarySectionViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.Dictionary.Tests_" + Guid.NewGuid().ToString("N")
         );
@@ -116,7 +116,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
     public void ReconcileEnabledPacksFromSettings_PicksUpExternallySavedEnabledPackId()
     {
         var dictionary = CreateDictionaryService();
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         var sut = new DictionarySectionViewModel(dictionary, settings);
         var realEstatePack = sut.Packs.Single(p => p.Pack.Id == "real-estate");
         Assert.False(realEstatePack.IsEnabled);
@@ -134,7 +134,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
     public void ReconcileEnabledPacksFromSettings_IsNoOpWhenAlreadyInSync()
     {
         var dictionary = CreateDictionaryService();
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Save(settings.Current with { EnabledPackIds = ["real-estate"] });
         var sut = new DictionarySectionViewModel(dictionary, settings);
         var realEstatePack = sut.Packs.Single(p => p.Pack.Id == "real-estate");
@@ -149,7 +149,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
     public void ReconcileEnabledPacksFromSettings_DeactivatesPackTermsWhenRemovedFromSettings()
     {
         var dictionary = CreateDictionaryService();
-        var settings = new SettingsService(Path.Combine(_tempDir, "settings.json"));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         var sut = new DictionarySectionViewModel(dictionary, settings);
         settings.Save(settings.Current with { EnabledPackIds = ["real-estate"] });
         sut.ReconcileEnabledPacksFromSettings();
@@ -166,11 +166,11 @@ public sealed class DictionarySectionViewModelTests : IDisposable
 
     private DictionaryService CreateDictionaryService()
     {
-        return new DictionaryService(Path.Combine(_tempDir, "dictionary.json"));
+        return new DictionaryService(Path.Join(_tempDir, "dictionary.json"));
     }
 
     private DictionarySectionViewModel CreateViewModel(DictionaryService dictionary)
     {
-        return new DictionarySectionViewModel(dictionary, new SettingsService(Path.Combine(_tempDir, "settings.json")));
+        return new DictionarySectionViewModel(dictionary, new SettingsService(Path.Join(_tempDir, "settings.json")));
     }
 }

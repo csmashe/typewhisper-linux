@@ -408,7 +408,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         var dir = GetModelDirectory(modelId);
         Directory.CreateDirectory(dir);
 
-        var filePath = Path.Combine(dir, model.FileName);
+        var filePath = Path.Join(dir, model.FileName);
         if (File.Exists(filePath))
         {
             progress?.Report(1.0);

@@ -11,11 +11,11 @@ public class SessionAudioFileServiceTests
     {
         Directory.CreateDirectory(TypeWhisperEnvironment.AudioPath);
 
-        var dictationFile = Path.Combine(
+        var dictationFile = Path.Join(
             TypeWhisperEnvironment.AudioPath,
             $"dictation-{Guid.NewGuid():N}.wav"
         );
-        var otherFile = Path.Combine(
+        var otherFile = Path.Join(
             TypeWhisperEnvironment.AudioPath,
             $"recording-{Guid.NewGuid():N}.wav"
         );

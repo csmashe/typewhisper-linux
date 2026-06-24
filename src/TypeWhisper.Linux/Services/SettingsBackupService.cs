@@ -78,13 +78,13 @@ public sealed class SettingsBackupService
 
             foreach (var relativeFile in s_rootFiles)
             {
-                var path = Path.Combine(_basePath, relativeFile);
+                var path = Path.Join(_basePath, relativeFile);
                 AddFileIfExists(archive, path, relativeFile, ref fileCount, ref bytes);
             }
 
             foreach (var root in s_backupDirectoryRoots)
             {
-                var rootPath = Path.Combine(_basePath, root);
+                var rootPath = Path.Join(_basePath, root);
                 if (!Directory.Exists(rootPath))
                 {
                     continue;
@@ -120,7 +120,7 @@ public sealed class SettingsBackupService
 
         // Extract into a temp dir first; only copy into _basePath after all
         // entries are validated, so a corrupt archive can't leave a mixed state.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"typewhisper-restore-{Guid.NewGuid():N}");
+        var tempDir = Path.Join(Path.GetTempPath(), $"typewhisper-restore-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
 
         try
@@ -162,26 +162,26 @@ public sealed class SettingsBackupService
 
             foreach (var relativeFile in s_rootFiles)
             {
-                var restoredPath = Path.Combine(tempDir, relativeFile);
+                var restoredPath = Path.Join(tempDir, relativeFile);
                 if (!File.Exists(restoredPath))
                 {
                     continue;
                 }
 
-                var targetPath = Path.Combine(_basePath, relativeFile);
+                var targetPath = Path.Join(_basePath, relativeFile);
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
                 File.Copy(restoredPath, targetPath, true);
             }
 
             foreach (var root in s_restoreDirectoryRoots)
             {
-                var restoredRoot = Path.Combine(tempDir, root);
+                var restoredRoot = Path.Join(tempDir, root);
                 if (!Directory.Exists(restoredRoot))
                 {
                     continue;
                 }
 
-                var targetRoot = Path.Combine(_basePath, root);
+                var targetRoot = Path.Join(_basePath, root);
                 Directory.CreateDirectory(targetRoot);
 
                 foreach (
@@ -193,7 +193,7 @@ public sealed class SettingsBackupService
                 )
                 {
                     var relativePath = Path.GetRelativePath(restoredRoot, restoredFile);
-                    var targetPath = Path.Combine(targetRoot, relativePath);
+                    var targetPath = Path.Join(targetRoot, relativePath);
                     Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
                     File.Copy(restoredFile, targetPath, true);
                 }

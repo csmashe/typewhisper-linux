@@ -52,8 +52,8 @@ public sealed class PluginHostServices : IPluginHostServices
         _settings = settings;
         _onCapabilitiesChanged = onCapabilitiesChanged;
         _localization = new PluginLocalization(pluginDirectory);
-        _pluginDataDirectory = Path.Combine(TypeWhisperEnvironment.PluginDataPath, pluginId);
-        _settingsFilePath = Path.Combine(_pluginDataDirectory, "settings.json");
+        _pluginDataDirectory = Path.Join(TypeWhisperEnvironment.PluginDataPath, pluginId);
+        _settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
     }
 
     public string PluginDataDirectory

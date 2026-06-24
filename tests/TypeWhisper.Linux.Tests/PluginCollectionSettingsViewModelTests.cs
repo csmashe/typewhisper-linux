@@ -17,7 +17,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
     public PluginCollectionSettingsViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "tw-vm-collection-" + Guid.NewGuid().ToString("N")
         );

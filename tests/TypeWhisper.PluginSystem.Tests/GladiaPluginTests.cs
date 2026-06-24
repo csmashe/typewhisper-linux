@@ -13,7 +13,7 @@ public class GladiaPluginTests
     public void PluginVersion_MatchesManifestVersion()
     {
         var manifestPath = Path.GetFullPath(
-            Path.Combine(
+            Path.Join(
                 AppContext.BaseDirectory,
                 "..",
                 "..",
@@ -45,7 +45,7 @@ public class GladiaPluginTests
         // real labels — not raw keys like "Settings.ApiKey" — before the user
         // enables the plugin.
         var pluginDir = Path.GetFullPath(
-            Path.Combine(
+            Path.Join(
                 AppContext.BaseDirectory,
                 "..", "..", "..", "..", "..",
                 "plugins", "TypeWhisper.Plugin.Gladia"
@@ -82,7 +82,7 @@ public class GladiaPluginTests
         // to the manifest literal. Guard that the keys exist and German is
         // actually translated (not just echoing English / the raw key).
         var pluginDir = Path.GetFullPath(
-            Path.Combine(
+            Path.Join(
                 AppContext.BaseDirectory,
                 "..", "..", "..", "..", "..",
                 "plugins", "TypeWhisper.Plugin.Gladia"

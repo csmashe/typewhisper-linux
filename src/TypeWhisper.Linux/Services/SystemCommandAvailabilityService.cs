@@ -200,8 +200,8 @@ public sealed class SystemCommandAvailabilityService
             try
             {
                 if (
-                    File.Exists(Path.Combine(path, "libcudart.so.12"))
-                    && File.Exists(Path.Combine(path, "libcublas.so.12"))
+                    File.Exists(Path.Join(path, "libcudart.so.12"))
+                    && File.Exists(Path.Join(path, "libcublas.so.12"))
                 )
                 {
                     return path;
@@ -243,7 +243,7 @@ public sealed class SystemCommandAvailabilityService
 
             foreach (var library in new[] { "libcudart.so.12", "libcublas.so.12" })
             {
-                var path = Path.Combine(directory, library);
+                var path = Path.Join(directory, library);
                 var handle = dlopen(path, RtldNow | RtldGlobal);
                 if (handle == IntPtr.Zero)
                 {
@@ -394,7 +394,7 @@ public sealed class SystemCommandAvailabilityService
         {
             try
             {
-                var candidate = Path.Combine(directory, commandName);
+                var candidate = Path.Join(directory, commandName);
                 if (File.Exists(candidate))
                 {
                     return true;
@@ -438,7 +438,7 @@ public sealed class SystemCommandAvailabilityService
         var runtimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         if (!string.IsNullOrWhiteSpace(runtimeDir))
         {
-            candidates.Add(Path.Combine(runtimeDir, ".ydotool_socket"));
+            candidates.Add(Path.Join(runtimeDir, ".ydotool_socket"));
         }
 
         candidates.Add("/tmp/.ydotool_socket");
@@ -601,7 +601,7 @@ public sealed class SystemCommandAvailabilityService
         {
             try
             {
-                if (File.Exists(Path.Combine(directory, libraryName)))
+                if (File.Exists(Path.Join(directory, libraryName)))
                 {
                     return true;
                 }
@@ -632,7 +632,7 @@ public sealed class SystemCommandAvailabilityService
         {
             try
             {
-                if (File.Exists(Path.Combine(directory, libraryName)))
+                if (File.Exists(Path.Join(directory, libraryName)))
                 {
                     return true;
                 }

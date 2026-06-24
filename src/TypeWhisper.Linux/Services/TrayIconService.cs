@@ -129,8 +129,8 @@ public sealed class TrayIconService : IDisposable
         // 32x32 PNG is preferred; most SNI hosts downscale cleanly from there.
         // Fall back to the .ico if the PNG is missing.
         var baseDir = AppContext.BaseDirectory;
-        var png = Path.Combine(baseDir, "Resources", "typewhisper-32.png");
-        var ico = Path.Combine(baseDir, "Resources", "typewhisper.ico");
+        var png = Path.Join(baseDir, "Resources", "typewhisper-32.png");
+        var ico = Path.Join(baseDir, "Resources", "typewhisper.ico");
 
         try
         {

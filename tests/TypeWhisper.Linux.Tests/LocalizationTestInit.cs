@@ -21,7 +21,7 @@ internal static class LocalizationTestInit
     {
         var testDir = Path.GetDirectoryName(thisFile)!;
         return Path.GetFullPath(
-            Path.Combine(testDir, "..", "..", "src", "TypeWhisper.Linux", "Resources", "Localization")
+            Path.Join(testDir, "..", "..", "src", "TypeWhisper.Linux", "Resources", "Localization")
         );
     }
 }

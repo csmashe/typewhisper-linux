@@ -11,7 +11,7 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
 
     public SnippetsSectionViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.Snippets.Tests_" + Guid.NewGuid().ToString("N")
         );
@@ -145,12 +145,12 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
 
     private SnippetService CreateSnippetService()
     {
-        return new SnippetService(Path.Combine(_tempDir, "snippets.json"));
+        return new SnippetService(Path.Join(_tempDir, "snippets.json"));
     }
 
     private DictionaryService CreateDictionaryService()
     {
-        return new DictionaryService(Path.Combine(_tempDir, "dictionary.json"));
+        return new DictionaryService(Path.Join(_tempDir, "dictionary.json"));
     }
 
     private SnippetsSectionViewModel CreateViewModel(
