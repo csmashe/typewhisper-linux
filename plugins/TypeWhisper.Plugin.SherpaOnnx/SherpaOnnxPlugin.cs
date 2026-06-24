@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using SherpaOnnx;
 using TypeWhisper.Plugins.Shared.Cuda;
+using TypeWhisper.Plugins.Shared.Net;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -60,15 +61,17 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     private readonly object _sync = new();
 
-    // Drives both the model-file downloads and the on-demand CUDA runtime fetches
-    // (the ~224 MB sherpa GPU tarball plus the cudart/cuBLAS/cuFFT/cuRAND/cuDNN
-    // wheels, the largest of which is ~685 MB). HttpClient.Timeout bounds the WHOLE
-    // request including the streamed body — even with ResponseHeadersRead — so the
-    // default 100 s deadline would cancel these large fetches mid-stream on any
-    // ordinary link. Use a generous ceiling (matching GemmaLocal's large-model
-    // client) and rely on the per-call CancellationToken for cancellation; the
-    // ceiling also bounds a stalled-but-open socket so it can't hang forever.
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
+    // Drives the model-file downloads and the on-demand CUDA runtime fetches (the
+    // ~224 MB sherpa tarball plus CUDA wheels up to ~685 MB). HttpClient.Timeout bounds
+    // the WHOLE request including the streamed body, so a short ceiling would cancel these
+    // large fetches mid-stream; use a generous 2 h ceiling and rely on the per-call token
+    // for cancellation. ConnectTimeout bounds a socket that never establishes, and
+    // ResilientDownloader's idle watchdog bounds a half-open socket mid-body to seconds.
+    private readonly HttpClient _httpClient =
+        new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
+        {
+            Timeout = TimeSpan.FromHours(2)
+        };
     private IPluginHostServices? _host;
     private OfflineRecognizer? _recognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
@@ -78,9 +81,18 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private string? _selectedModelId;
     private string _computeBackend = "cpu";
 
-    // The ORT/CUDA native provider is pinned to whichever backend loads first in
-    // the process; it can't be hot-swapped, so a later mismatch requires a restart.
+    // The WIRED ORT native runtime, pinned to whichever loads first in the process
+    // ("cuda" once the CUDA ORT runtime is wired in, else "cpu"). It can't be
+    // hot-swapped, so reaching CUDA from a CPU-only-wired runtime requires a restart.
+    // Distinct from the recognizer's active provider (_computeBackend): a CUDA-wired
+    // runtime can still run a CPU recognizer, and swapping between them needs no restart.
     private string? _loadedNativeProvider;
+
+    // True once ConfigureCudaRuntime has wired the CUDA ORT runtime into the process (a
+    // second libonnxruntime.so dlopen'd RTLD_GLOBAL + the import resolver redirected).
+    // Lets a first-load CUDA-recognizer failure pin "cuda" (the runtime is CUDA-capable)
+    // rather than "cpu", so a later CPU↔CUDA recognizer swap doesn't read as restart-required.
+    private bool _cudaOrtRuntimeWired;
     private TranscriptionAccelerationPreference _accelerationPreference =
         TranscriptionAccelerationPreference.Auto;
     private TranscriptionAccelerationStatus _accelerationStatus =
@@ -184,14 +196,15 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (_computeBackend == normalized)
                 return Task.CompletedTask;
 
-            // Once a recognizer has loaded, the native provider is pinned for the
-            // process lifetime. Refuse to desync _computeBackend from it — keeping
-            // them equal means the requested switch is surfaced as restart-required
-            // via the acceleration status (derived from the saved preference) and a
-            // reload can't silently rebuild on the wrong backend.
+            // Reason about the WIRED native runtime (_loadedNativeProvider), not the
+            // recognizer's active provider. A CUDA-wired runtime accepts CPU↔CUDA
+            // recognizer swaps with no restart; only a CPU-only-wired runtime needs a
+            // restart to reach CUDA. Refuse just that one case so it surfaces as
+            // restart-required via the acceleration status (and a reload can't silently
+            // rebuild on a backend the runtime can't provide).
             if (
-                _loadedNativeProvider is not null
-                && !string.Equals(_loadedNativeProvider, normalized, StringComparison.Ordinal)
+                string.Equals(_loadedNativeProvider, "cpu", StringComparison.Ordinal)
+                && string.Equals(normalized, "cuda", StringComparison.Ordinal)
             )
                 return Task.CompletedTask;
 
@@ -218,7 +231,9 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _ = ConfigureComputeBackendAsync(desired);
         _accelerationStatus = _loadedNativeProvider is null
             ? CreatePendingAccelerationStatus(preference)
-            : CreateLoadedAccelerationStatus(_loadedNativeProvider, preference);
+            // Pass the EFFECTIVE provider (_computeBackend) for the "active backend"; the
+            // restart flag is derived from the wired runtime inside the helper.
+            : CreateLoadedAccelerationStatus(_computeBackend, preference);
     }
 
     public bool IsModelDownloaded(string modelId)
@@ -260,73 +275,50 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
         var totalBytes = model.Files.Sum(f => (long)f.EstimatedSizeMB * 1024 * 1024);
         long cumulativeBytesRead = 0;
+        // Single throttle across all files (MinValue so the first report always fires).
+        var lastReport = DateTime.MinValue;
 
         foreach (var file in model.Files)
         {
             var filePath = Path.Combine(dir, file.FileName);
             if (File.Exists(filePath))
+            {
+                // Credit an already-downloaded file's size so a resumed multi-file
+                // download starts the bar where it really is instead of at 0.
+                cumulativeBytesRead += new FileInfo(filePath).Length;
                 continue;
+            }
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, file.DownloadUrl);
-            using var response = await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
+            // Model files have no published checksum, so resume can't be made safe.
+            // allowResume:false still gives the idle/connect watchdog (a stall aborts and
+            // restarts clean instead of hanging) but each file re-downloads from zero.
+            long fileOnDisk = 0;
+            await ResilientDownloader.DownloadToFileAsync(
+                _httpClient,
+                file.DownloadUrl,
+                filePath,
+                approxTotalBytes: null,
+                idleTimeout: TimeSpan.FromSeconds(60),
+                allowResume: false,
+                onBytesOnDisk: onDisk =>
+                {
+                    fileOnDisk = onDisk;
+                    var now = DateTime.UtcNow;
+                    if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
+                    {
+                        // Clamp: real on-disk sizes sum against an estimated total, so a
+                        // slight overshoot past 1.0 is possible.
+                        progress?.Report(
+                            Math.Min(1.0, (double)(cumulativeBytesRead + onDisk) / totalBytes)
+                        );
+                        lastReport = now;
+                    }
+                },
+                verifyComplete: null,
                 ct
             );
-            response.EnsureSuccessStatusCode();
 
-            var buffer = new byte[81920];
-            long fileBytesRead = 0;
-            var lastReport = DateTime.UtcNow;
-
-            // Per-invocation temp name so a concurrent duplicate download can't
-            // unlink an in-flight writer's file via its own catch-block cleanup.
-            var tmpPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-            try
-            {
-                await using (
-                    var fileStream = new FileStream(
-                        tmpPath,
-                        FileMode.Create,
-                        FileAccess.Write,
-                        FileShare.None,
-                        81920,
-                        true
-                    )
-                )
-                {
-                    int read;
-                    while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
-                    {
-                        await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                        fileBytesRead += read;
-
-                        var now = DateTime.UtcNow;
-                        if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
-                        {
-                            progress?.Report(
-                                (double)(cumulativeBytesRead + fileBytesRead) / totalBytes
-                            );
-                            lastReport = now;
-                        }
-                    }
-                }
-
-                File.Move(tmpPath, filePath, overwrite: true);
-            }
-            catch
-            {
-                // Cancellation or I/O failure: don't leave a partial .tmp file behind
-                // to consume disk and confuse the next download attempt.
-                if (File.Exists(tmpPath))
-                {
-                    try { File.Delete(tmpPath); } catch { /* best effort */ }
-                }
-                throw;
-            }
-
-            cumulativeBytesRead += fileBytesRead;
+            cumulativeBytesRead += fileOnDisk;
         }
 
         progress?.Report(1.0);
@@ -420,17 +412,29 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                             : CreateParakeetRecognizer(dir, activeProvider);
                     }
 
-                    // First successful load pins the native provider for the process.
-                    _loadedNativeProvider ??= activeProvider;
+                    // First successful load pins the native runtime for the process.
+                    // Record the WIRED runtime (CUDA-capable vs CPU-only), not the
+                    // recognizer's active provider: a CUDA-wired runtime whose recognizer
+                    // fell back to CPU is still CUDA-capable, so it pins "cuda" and a later
+                    // CPU↔CUDA swap needs no restart.
+                    _loadedNativeProvider ??= _cudaOrtRuntimeWired ? "cuda" : activeProvider;
 
                     _loadedModelId = modelId;
                     _loadedModelDir = dir;
                     _selectedModelId = modelId;
                     _canarySrcLang = "en";
                     _canaryTgtLang = "en";
+                    // Restart is required only if the wired runtime is CPU-only (a
+                    // provisioning failure). A CUDA-wired runtime whose recognizer fell back
+                    // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
+                    // restart (matches CreateLoadedAccelerationStatus / the swap logic).
                     _accelerationStatus = cudaUnavailableDetail is null
                         ? CreateLoadedAccelerationStatus(activeProvider, _accelerationPreference)
-                        : CreateCudaUnavailableStatus(cudaUnavailableDetail);
+                        : CreateCudaUnavailableStatus(
+                            cudaUnavailableDetail,
+                            requiresRestart: string.Equals(
+                                _loadedNativeProvider, "cpu", StringComparison.Ordinal)
+                        );
 
                     Debug.WriteLine(
                         $"[SherpaOnnx] Model {modelId} loaded from {dir} ({activeProvider})"
@@ -478,20 +482,33 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         // while it is still safe to do so. ConfigureCudaRuntime dlopens a second
         // libonnxruntime.so RTLD_GLOBAL and redirects the import resolver, which must
         // happen "before the first recognizer is created" (see SherpaOnnxNativeRuntime).
-        // Once a recognizer has pinned the process to a non-CUDA provider — e.g. the user
-        // ran on CPU and is now clicking the host's "download CUDA runtime" button — wiring
-        // the GPU ORT into that live process would leave it in a mixed CPU/GPU native state.
-        // Skip it: the files are now on disk, and the host's restart prompt lets a fresh
-        // process wire the GPU runtime cleanly. (On the LoadModelAsync path desiredProvider
-        // can only be "cuda" when the process isn't CPU-pinned, so this never blocks it.)
+        // Don't wire the GPU ORT into a process that no longer wants CUDA — it would leave
+        // a mixed CPU/GPU native state until restart. Two cases this guards against:
+        //   1. A recognizer already pinned the process to CPU (the host's "download CUDA
+        //      runtime" button, clicked while running on CPU).
+        //   2. The user switched to CPU during the (slow) download, so the desired backend
+        //      (_computeBackend) is no longer "cuda" — the LoadModelAsync re-check would
+        //      abort the load anyway. Revalidate _computeBackend HERE, under _sync, right
+        //      before wiring, since the check happens after a long unlocked download.
+        // In both cases the files are now on disk and the host's restart prompt lets a fresh
+        // process wire the GPU runtime cleanly. _cudaOrtRuntimeWired is set only after this
+        // revalidation passes and ConfigureCudaRuntime actually wires the runtime.
         bool canWireIntoProcess;
         lock (_sync)
             canWireIntoProcess =
-                _loadedNativeProvider is null
-                || string.Equals(_loadedNativeProvider, "cuda", StringComparison.Ordinal);
+                (_loadedNativeProvider is null
+                    || string.Equals(_loadedNativeProvider, "cuda", StringComparison.Ordinal))
+                && string.Equals(_computeBackend, "cuda", StringComparison.Ordinal);
 
         if (canWireIntoProcess)
+        {
             SherpaOnnxNativeRuntime.ConfigureCudaRuntime(installer.RuntimeDirectory);
+            // The CUDA ORT runtime is now wired into the process. Record it so a later
+            // recognizer that falls back to CPU still pins "cuda" (the runtime stays
+            // CUDA-capable) and a CPU↔CUDA swap isn't misreported as restart-required.
+            lock (_sync)
+                _cudaOrtRuntimeWired = true;
+        }
     }
 
     public async Task ClearCudaRuntimeAsync(CancellationToken ct)
@@ -644,19 +661,43 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         return Path.Join(_host?.PluginAssetDirectory ?? ".", "Models", safeModelId);
     }
 
-    // Test seam: simulate the process having pinned its native ORT provider to a
-    // backend, without creating a real recognizer, so the CPU↔CUDA restart-required
-    // status logic can be unit-tested.
-    internal void MarkNativeRuntimeLoadedForTests(string provider)
+    // Test seam: simulate the process having wired its native ORT runtime, without
+    // creating a real recognizer, so the CPU↔CUDA restart-required status logic can be
+    // unit-tested. effectiveProvider defaults to the wired runtime but can differ for a
+    // CUDA-wired runtime running a CPU recognizer (the first-load CUDA-recognizer-failure
+    // case): MarkNativeRuntimeLoadedForTests("cuda", effectiveProvider: "cpu").
+    internal void MarkNativeRuntimeLoadedForTests(
+        string wiredRuntime,
+        string? effectiveProvider = null
+    )
     {
-        var normalized = string.Equals(provider, "cuda", StringComparison.OrdinalIgnoreCase)
+        var wired = string.Equals(wiredRuntime, "cuda", StringComparison.OrdinalIgnoreCase)
             ? "cuda"
             : "cpu";
+        var effective =
+            effectiveProvider is null
+                ? wired
+                : string.Equals(effectiveProvider, "cuda", StringComparison.OrdinalIgnoreCase)
+                    ? "cuda"
+                    : "cpu";
         lock (_sync)
         {
-            _computeBackend = normalized;
-            _loadedNativeProvider = normalized;
+            _loadedNativeProvider = wired;
+            _cudaOrtRuntimeWired = wired == "cuda";
+            _computeBackend = effective;
         }
+    }
+
+    // Test seam: pre-seed the CUDA provisioner + installer with fakes before ActivateAsync
+    // (whose ??= lazy-create then skips), so the LoadModelAsync provisioning/fallback state
+    // machine can be driven without a network or GPU.
+    internal void SetCudaDependenciesForTests(
+        CudaRuntimeProvisioner provisioner,
+        SherpaCudaRuntimeInstaller installer
+    )
+    {
+        _cudaProvisioner = provisioner;
+        _cudaRuntimeInstaller = installer;
     }
 
     private static ModelDefinition GetModelDefinition(string modelId) =>
@@ -714,45 +755,38 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         return new OfflineRecognizer(config);
     }
 
-    // Status for the currently-loaded provider, made restart-required when the
-    // user's saved preference can't be honoured by the pinned native provider.
-    // Deriving from the preference (rather than stamping a one-shot status) means a
-    // later reload re-computes the same restart-required state instead of clobbering
-    // it with a plain "Using X".
-    private static TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
-        string loadedProvider,
+    // Status for the user's current EFFECTIVE provider (effectiveProvider: whether the
+    // active recognizer runs on GPU). RequiresRestart is derived from the WIRED native
+    // runtime (_loadedNativeProvider), not the effective provider: only a CPU-only-wired
+    // runtime can't reach CUDA without a restart. A CUDA-wired runtime running a CPU
+    // recognizer reports ActiveBackend=Cpu with no restart flag — a CUDA preference simply
+    // triggers a reload. Instance (not static) so it can read the wired-runtime pin.
+    private TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
+        string effectiveProvider,
         TranscriptionAccelerationPreference preference
     )
     {
-        var loaded = string.Equals(loadedProvider, "cuda", StringComparison.Ordinal)
+        var active = string.Equals(effectiveProvider, "cuda", StringComparison.Ordinal)
             ? TranscriptionAccelerationBackend.NvidiaCuda
             : TranscriptionAccelerationBackend.Cpu;
         var displayText =
-            loaded == TranscriptionAccelerationBackend.NvidiaCuda ? "Using NVIDIA CUDA" : "Using CPU";
+            active == TranscriptionAccelerationBackend.NvidiaCuda ? "Using NVIDIA CUDA" : "Using CPU";
 
-        var requested = preference switch
-        {
-            TranscriptionAccelerationPreference.NvidiaCuda =>
-                TranscriptionAccelerationBackend.NvidiaCuda,
-            TranscriptionAccelerationPreference.Cpu => TranscriptionAccelerationBackend.Cpu,
-            // Auto (not normally seen by plugins) imposes no mismatch.
-            _ => loaded,
-        };
+        // The only toggle that needs a restart is reaching CUDA on a CPU-only-wired
+        // runtime. CPU↔CUDA on a CUDA-wired runtime is a reload, not a restart.
+        var requiresRestart =
+            string.Equals(_loadedNativeProvider, "cpu", StringComparison.Ordinal)
+            && preference == TranscriptionAccelerationPreference.NvidiaCuda;
 
-        if (requested != loaded)
-        {
-            var target = requested == TranscriptionAccelerationBackend.NvidiaCuda
-                ? "NVIDIA CUDA"
-                : "CPU";
+        if (requiresRestart)
             return new TranscriptionAccelerationStatus(
-                loaded,
+                active,
                 displayText,
-                $"Restart TypeWhisper to switch sherpa-onnx to {target}.",
+                "Restart TypeWhisper to switch sherpa-onnx to NVIDIA CUDA.",
                 true
             );
-        }
 
-        return new TranscriptionAccelerationStatus(loaded, displayText);
+        return new TranscriptionAccelerationStatus(active, displayText);
     }
 
     private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
@@ -772,16 +806,19 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             ),
         };
 
-    // The CUDA request fell back to CPU, but the native ORT provider is now pinned to
-    // CPU for the process; retrying CUDA needs a restart. Flag it so the status stays
-    // consistent with the requested-vs-loaded mismatch path (which a later reload
-    // would otherwise re-derive as RequiresRestart=true).
-    private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(string detail) =>
+    // The CUDA request fell back to CPU. requiresRestart is decided by the caller from the
+    // WIRED runtime: if provisioning failed the runtime is CPU-only-wired and reaching CUDA
+    // needs a restart, but if the CUDA ORT runtime was wired and only the recognizer fell
+    // back, CUDA is reachable again by a reload — no restart (the point of M6).
+    private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(
+        string detail,
+        bool requiresRestart
+    ) =>
         new(
             TranscriptionAccelerationBackend.Cpu,
             "Using CPU",
             $"CUDA unavailable: {detail}",
-            RequiresRestart: true
+            RequiresRestart: requiresRestart
         );
 
     private void EnsureCanaryLanguage(string? language, bool translate)
@@ -795,16 +832,17 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         if (srcLang == _canarySrcLang && tgtLang == _canaryTgtLang)
             return;
 
-        // Canary bakes src/tgt language into the recognizer config, so a
-        // language or translation change requires recreating the recognizer.
-        // Reuse the provider the model was loaded with (the native provider is
-        // pinned for the process anyway).
+        // Canary bakes src/tgt language into the recognizer config, so a language or
+        // translation change requires recreating the recognizer. Reuse the EFFECTIVE
+        // provider the recognizer actually runs on (_computeBackend), NOT the wired
+        // runtime (_loadedNativeProvider): a CUDA-wired runtime whose recognizer fell back
+        // to CPU must rebuild on CPU, or this would re-trigger the same CUDA failure.
         _recognizer?.Dispose();
         _recognizer = CreateCanaryRecognizer(
             _loadedModelDir,
             srcLang,
             tgtLang,
-            _loadedNativeProvider ?? "cpu"
+            _computeBackend
         );
         _canarySrcLang = srcLang;
         _canaryTgtLang = tgtLang;

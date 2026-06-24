@@ -1,9 +1,20 @@
+extern alias SherpaOnnx;
+using System.Net;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Moq;
 using TypeWhisper.Plugin.WhisperCpp;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+// The WhisperCpp plugin's (global) copy of the shared provisioner; the WhisperCpp ref is
+// not aliased, so this is the unambiguous CudaRuntimeProvisioner/CudaRuntimeProfile.
+using TypeWhisper.Plugins.Shared.Cuda;
+// SherpaOnnx's own types live behind the extern alias (see the test csproj).
+using SherpaOnnx::TypeWhisper.Plugin.SherpaOnnx;
+// SherpaOnnx's separate copy of the shared provisioner (for the sherpa injection fakes).
+using SherpaCuda = SherpaOnnx::TypeWhisper.Plugins.Shared.Cuda;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -78,7 +89,7 @@ public class WhisperCppPluginTests
     }
 
     [Fact]
-    public void SetAccelerationPreference_Cpu_WhenRuntimePinnedToCuda_RequiresRestart()
+    public void SetAccelerationPreference_Cpu_WhenRuntimePinnedToCuda_DoesNotRequireRestart()
     {
         var plugin = new WhisperCppPlugin();
         plugin.MarkNativeRuntimeLoadedForTests("cuda");
@@ -86,15 +97,32 @@ public class WhisperCppPluginTests
         plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
 
         Assert.Equal(TranscriptionAccelerationPreference.Cpu, plugin.AccelerationPreference);
+        // A [Cuda]-pinned native runtime can run CPU compute by rebuilding the factory
+        // with UseGpu=false — no restart, just a reload. The status reflects the pending
+        // switch to CPU rather than reporting a (false) restart requirement.
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
+    }
+
+    [Fact]
+    public void SetAccelerationPreference_WhenCudaPinnedRunningCpu_TogglesWithoutRestart()
+    {
+        var plugin = new WhisperCppPlugin();
+        // Models a first-load GPU-context failure: the native runtime pinned [Cuda] but
+        // the factory fell back to CPU compute. A later CUDA preference must NOT report
+        // restart-required (the [Cuda] .so set is already loaded; GPU is a reload away).
+        plugin.MarkNativeRuntimeLoadedForTests("cuda", effectiveCompute: "cpu");
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
         Assert.Equal(
             TranscriptionAccelerationBackend.NvidiaCuda,
             plugin.AccelerationStatus.ActiveBackend);
-        Assert.True(plugin.AccelerationStatus.RequiresRestart);
-        Assert.NotNull(plugin.AccelerationStatus.Detail);
-        Assert.Contains(
-            "restart",
-            plugin.AccelerationStatus.Detail!,
-            StringComparison.OrdinalIgnoreCase);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
+
+        // And switching back to CPU stays on CPU, still without a restart.
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
     }
 
     // The on-demand CUDA runtime is downloaded into NativeDirectory, but Whisper.net
@@ -145,6 +173,135 @@ public class WhisperCppPluginTests
         Assert.Equal(WhisperCudaRuntimeInstaller.RuntimeVersion, runtime.Groups[1].Value);
     }
 
+    // CI-portable state-machine test: a CUDA load whose backend is switched to CPU mid
+    // provision must abort rather than pin the process to a backend the user no longer
+    // wants. The injected provisioner blocks inside EnsureReadyAsync so the test can flip
+    // the backend before the post-provision re-check runs. No native load is reached.
+    [Fact]
+    public async Task LoadModelAsync_BackendSwitchedDuringProvision_AbortsLoad()
+    {
+        // EnsureCudaRuntimeReadyAsync's Linux-x64 platform gate throws before the fake
+        // provisioner runs on unsupported hosts, so `Started` would never complete and the
+        // await below would hang. The CI/dev target is Linux x64; skip elsewhere.
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            return;
+
+        using var temp = new TempAssetDir();
+        var host = CreateHostMock(temp.Path);
+        var provisioner = new BlockingProvisioner();
+        var installer = new NoopWhisperInstaller(temp.Path);
+
+        var plugin = new WhisperCppPlugin();
+        plugin.SetCudaDependenciesForTests(provisioner, installer);
+        await plugin.ActivateAsync(host.Object);
+        WriteDummyModel(temp.Path, "ggml-tiny.bin");
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+        var loadTask = plugin.LoadModelAsync("tiny", CancellationToken.None);
+
+        await provisioner.Started;
+        // User switches to CPU while the (blocked) CUDA provision is in flight.
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+        provisioner.Release();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => loadTask);
+        Assert.Contains("Compute backend changed", ex.Message);
+    }
+
+    // Once Whisper.net's one-shot native loader has failed (poisoned static), a subsequent
+    // load must fail fast with the restart-required message and NOT re-enter FromPath.
+    [Fact]
+    public async Task LoadModelAsync_AfterNativeRuntimeLoadFailed_FailsFastWithRestartMessage()
+    {
+        using var temp = new TempAssetDir();
+        var host = CreateHostMock(temp.Path);
+
+        var plugin = new WhisperCppPlugin();
+        await plugin.ActivateAsync(host.Object);
+        WriteDummyModel(temp.Path, "ggml-tiny.bin");
+        plugin.MarkNativeRuntimeLoadFailedForTests();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => plugin.LoadModelAsync("tiny", CancellationToken.None));
+        Assert.Contains("restart", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Mock<IPluginHostServices> CreateHostMock(string assetDir)
+    {
+        var host = new Mock<IPluginHostServices>();
+        host.Setup(h => h.PluginDataDirectory).Returns(assetDir);
+        host.Setup(h => h.PluginAssetDirectory).Returns(assetDir);
+        return host;
+    }
+
+    private static void WriteDummyModel(string assetDir, string fileName)
+    {
+        var modelsDir = Path.Join(assetDir, "Models");
+        Directory.CreateDirectory(modelsDir);
+        File.WriteAllText(Path.Join(modelsDir, fileName), "dummy");
+    }
+
+    // A provisioner that blocks inside EnsureReadyAsync until released, signalling when it
+    // has started so a test can deterministically interleave a backend switch.
+    private sealed class BlockingProvisioner : CudaRuntimeProvisioner
+    {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public BlockingProvisioner()
+            : base(Path.GetTempPath(), new HttpClient()) { }
+
+        public Task Started => _started.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        public override async Task EnsureReadyAsync(
+            CudaRuntimeProfile profile,
+            IProgress<double>? progress,
+            CancellationToken ct)
+        {
+            _started.TrySetResult();
+            await _release.Task.WaitAsync(ct);
+        }
+    }
+
+    private sealed class NoopWhisperInstaller : WhisperCudaRuntimeInstaller
+    {
+        public NoopWhisperInstaller(string root)
+            : base(root, new HttpClient()) { }
+
+        public override Task EnsureInstalledAsync(IProgress<double>? progress, CancellationToken ct)
+        {
+            progress?.Report(1.0);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TempAssetDir : IDisposable
+    {
+        public TempAssetDir() =>
+            Path = System.IO.Path.Join(
+                System.IO.Path.GetTempPath(),
+                "tw-whisper-asset-" + Guid.NewGuid().ToString("N"));
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(Path))
+                    Directory.Delete(Path, recursive: true);
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+    }
+
     // Resolve the plugin csproj relative to THIS test file so the assertion doesn't
     // depend on the csproj being copied to test output (mirrors LocalizationResourcesTests).
     private static string WhisperCppCsprojPath([CallerFilePath] string thisFile = "")
@@ -163,7 +320,7 @@ public class SherpaOnnxPluginTests
     [Fact]
     public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
     {
-        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        var plugin = new SherpaOnnxPlugin();
 
         Assert.Contains(TranscriptionAccelerationBackend.Cpu, plugin.SupportedAccelerationBackends);
         Assert.Contains(
@@ -174,7 +331,7 @@ public class SherpaOnnxPluginTests
     [Fact]
     public void DefaultAccelerationStatus_ReportsCpu()
     {
-        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        var plugin = new SherpaOnnxPlugin();
 
         Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
         Assert.False(plugin.AccelerationStatus.RequiresRestart);
@@ -183,7 +340,7 @@ public class SherpaOnnxPluginTests
     [Fact]
     public async Task SetAccelerationPreference_NvidiaCuda_TracksPreferenceAndShowsPending()
     {
-        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        var plugin = new SherpaOnnxPlugin();
         var host = CreateHost(out _);
         await plugin.ActivateAsync(host);
 
@@ -201,7 +358,7 @@ public class SherpaOnnxPluginTests
     [Fact]
     public void SetAccelerationPreference_NvidiaCuda_WhenRuntimePinnedToCpu_RequiresRestart()
     {
-        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        var plugin = new SherpaOnnxPlugin();
         plugin.MarkNativeRuntimeLoadedForTests("cpu");
 
         plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
@@ -219,23 +376,36 @@ public class SherpaOnnxPluginTests
     }
 
     [Fact]
-    public void SetAccelerationPreference_Cpu_WhenRuntimePinnedToCuda_RequiresRestart()
+    public void SetAccelerationPreference_Cpu_WhenRuntimePinnedToCuda_DoesNotRequireRestart()
     {
-        var plugin = new TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin();
+        var plugin = new SherpaOnnxPlugin();
         plugin.MarkNativeRuntimeLoadedForTests("cuda");
 
         plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
 
         Assert.Equal(TranscriptionAccelerationPreference.Cpu, plugin.AccelerationPreference);
-        Assert.Equal(
-            TranscriptionAccelerationBackend.NvidiaCuda,
-            plugin.AccelerationStatus.ActiveBackend);
-        Assert.True(plugin.AccelerationStatus.RequiresRestart);
-        Assert.NotNull(plugin.AccelerationStatus.Detail);
-        Assert.Contains(
-            "restart",
-            plugin.AccelerationStatus.Detail!,
-            StringComparison.OrdinalIgnoreCase);
+        // A CUDA-wired ORT runtime can build a CPU recognizer with no restart — just a
+        // reload. The status reflects the switch to CPU rather than a (false) restart flag.
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
+    }
+
+    [Fact]
+    public void SetAccelerationPreference_WhenCudaWiredRunningCpu_TogglesWithoutRestart()
+    {
+        var plugin = new SherpaOnnxPlugin();
+        // Models a first-load CUDA-recognizer failure: the CUDA ORT runtime is wired into
+        // the process, but the recognizer fell back to CPU. A later CUDA preference must
+        // NOT report restart-required (a CUDA recognizer is just a reload away).
+        plugin.MarkNativeRuntimeLoadedForTests("cuda", effectiveProvider: "cpu");
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
+
+        // Switching back to CPU stays on CPU, still without a restart.
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+        Assert.False(plugin.AccelerationStatus.RequiresRestart);
     }
 
     // The GPU runtime tarball is downloaded then dlopen'd, so its integrity is pinned
@@ -252,7 +422,7 @@ public class SherpaOnnxPluginTests
         try
         {
             var ex = Assert.Throws<InvalidOperationException>(
-                () => TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.VerifySha256(path));
+                () => SherpaCudaRuntimeInstaller.VerifySha256(path));
             Assert.Contains("Checksum mismatch", ex.Message);
         }
         finally
@@ -273,10 +443,10 @@ public class SherpaOnnxPluginTests
     {
         Assert.Contains(
             "libonnxruntime_providers_cuda.so",
-            TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.CoreRuntimeFiles);
+            SherpaCudaRuntimeInstaller.CoreRuntimeFiles);
         Assert.DoesNotContain(
             "libonnxruntime_providers_cuda.so",
-            TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxNativeRuntime.PreloadOrder);
+            SherpaOnnxNativeRuntime.PreloadOrder);
     }
 
     // The csproj pins org.k2fsa.sherpa.onnx, and the on-demand GPU build is the
@@ -303,13 +473,13 @@ public class SherpaOnnxPluginTests
         // RuntimeVersion is the tag form ("v1.12.23"); the csproj pins the bare version.
         Assert.Equal(
             version,
-            TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.RuntimeVersion.TrimStart('v'));
+            SherpaCudaRuntimeInstaller.RuntimeVersion.TrimStart('v'));
         Assert.Contains(
             version,
-            TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.AssetFileName);
+            SherpaCudaRuntimeInstaller.AssetFileName);
         Assert.Contains(
             version,
-            TypeWhisper.Plugin.SherpaOnnx.SherpaCudaRuntimeInstaller.DownloadUrl);
+            SherpaCudaRuntimeInstaller.DownloadUrl);
     }
 
     // Resolve the plugin csproj relative to THIS test file (mirrors WhisperCppCsprojPath).
@@ -334,5 +504,120 @@ public class SherpaOnnxPluginTests
         host.Setup(h => h.Log(It.IsAny<PluginLogLevel>(), It.IsAny<string>()))
             .Callback<PluginLogLevel, string>((lvl, msg) => entries.Add((lvl, msg)));
         return host.Object;
+    }
+
+    // CI-portable state-machine test mirroring the whisper one: a CUDA load whose backend
+    // is switched to CPU mid provision must abort. The injected provisioner blocks inside
+    // EnsureReadyAsync; once the backend is switched to CPU the wiring guard skips
+    // ConfigureCudaRuntime entirely (the installer's RuntimeDirectory also points at a
+    // non-existent temp dir as a further safeguard against any dlopen). The abort fires on
+    // the post-provision re-check, before any recognizer.
+    [Fact]
+    public async Task LoadModelAsync_BackendSwitchedDuringProvision_AbortsLoad()
+    {
+        // EnsureCudaRuntimeReadyAsync's Linux-x64 platform gate throws before the fake
+        // provisioner runs on unsupported hosts, so `Started` would never complete and the
+        // await below would hang. The CI/dev target is Linux x64; skip elsewhere.
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            return;
+
+        using var temp = new TempAssetDir();
+        var host = CreateHostMock(temp.Path);
+        var provisioner = new SherpaBlockingProvisioner();
+        var installer = new NoopSherpaInstaller(temp.Path);
+
+        var plugin = new SherpaOnnxPlugin();
+        plugin.SetCudaDependenciesForTests(provisioner, installer);
+        await plugin.ActivateAsync(host.Object);
+        WriteParakeetModelFiles(temp.Path);
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+        var loadTask = plugin.LoadModelAsync("parakeet-tdt-0.6b", CancellationToken.None);
+
+        await provisioner.Started;
+        // User switches to CPU while the (blocked) CUDA provision is in flight.
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+        provisioner.Release();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => loadTask);
+        Assert.Contains("Compute backend changed", ex.Message);
+    }
+
+    private static Mock<IPluginHostServices> CreateHostMock(string assetDir)
+    {
+        var host = new Mock<IPluginHostServices>();
+        host.Setup(h => h.PluginDataDirectory).Returns(assetDir);
+        host.Setup(h => h.PluginAssetDirectory).Returns(assetDir);
+        return host;
+    }
+
+    private static void WriteParakeetModelFiles(string assetDir)
+    {
+        var dir = Path.Join(assetDir, "Models", "parakeet-tdt-0.6b");
+        Directory.CreateDirectory(dir);
+        foreach (var f in new[]
+                 {
+                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt",
+                 })
+            File.WriteAllText(Path.Join(dir, f), "dummy");
+    }
+
+    private sealed class SherpaBlockingProvisioner : SherpaCuda.CudaRuntimeProvisioner
+    {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public SherpaBlockingProvisioner()
+            : base(Path.GetTempPath(), new HttpClient()) { }
+
+        public Task Started => _started.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        public override async Task EnsureReadyAsync(
+            SherpaCuda.CudaRuntimeProfile profile,
+            IProgress<double>? progress,
+            CancellationToken ct)
+        {
+            _started.TrySetResult();
+            await _release.Task.WaitAsync(ct);
+        }
+    }
+
+    private sealed class NoopSherpaInstaller : SherpaCudaRuntimeInstaller
+    {
+        public NoopSherpaInstaller(string root)
+            : base(root, new HttpClient()) { }
+
+        public override Task EnsureInstalledAsync(IProgress<double>? progress, CancellationToken ct)
+        {
+            progress?.Report(1.0);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TempAssetDir : IDisposable
+    {
+        public TempAssetDir() =>
+            Path = System.IO.Path.Join(
+                System.IO.Path.GetTempPath(),
+                "tw-sherpa-asset-" + Guid.NewGuid().ToString("N"));
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(Path))
+                    Directory.Delete(Path, recursive: true);
+            }
+            catch
+            {
+                // best effort
+            }
+        }
     }
 }

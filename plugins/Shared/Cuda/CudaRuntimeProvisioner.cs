@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugins.Shared.Cuda;
 
@@ -36,7 +37,11 @@ public enum CudaRuntimeProfile
 ///         <c>~/.local/share/TypeWhisper/Runtimes/cuda/&lt;BundleVersion&gt;</c>.
 ///     </para>
 /// </summary>
-public sealed class CudaRuntimeProvisioner
+// Not sealed: tests subclass it with a fake that overrides EnsureReadyAsync (the dlopen
+// half can't run in CI), injected into the plugins via their SetCudaDependenciesForTests
+// seam. The download/extract/marker/prune logic is still exercised directly through the
+// internal DownloadAndExtractAsync / ExtractSharedObjects / PruneStaleBundles members.
+public class CudaRuntimeProvisioner
 {
     // Bump when the wheel set/versions change; stale sibling dirs are pruned so a
     // bad or superseded cache can't surface as a confusing native load error.
@@ -180,7 +185,7 @@ public sealed class CudaRuntimeProvisioner
     ///     <c>RTLD_GLOBAL</c> in dependency order. A no-op for libraries the host
     ///     already provides and for sonames already preloaded this process.
     /// </summary>
-    public async Task EnsureReadyAsync(
+    public virtual async Task EnsureReadyAsync(
         CudaRuntimeProfile profile,
         IProgress<double>? progress,
         CancellationToken ct
@@ -204,6 +209,28 @@ public sealed class CudaRuntimeProvisioner
                 $"The NVIDIA CUDA driver is not usable: {driverError}"
             );
 
+        await DownloadAndExtractAsync(profile, progress, ct).ConfigureAwait(false);
+
+        // Preload the full set RTLD_GLOBAL in dependency order (the dlopen half). Kept
+        // OUT of DownloadAndExtractAsync so unit tests can drive the network+disk logic
+        // against a fake HttpMessageHandler + a temp cache dir without a GPU or driver.
+        // PreloadAll guards its own state with _preloadSync and is idempotent, so it is
+        // safe to run after DownloadAndExtractAsync has released _gate (the cache files it
+        // reads are only ever added under that gate, never removed).
+        PreloadAll(WheelsFor(profile));
+    }
+
+    // The network+disk half of EnsureReadyAsync: prune superseded bundles, then download
+    // and extract any wheels the host doesn't already satisfy (each stamped with a
+    // completion marker). Split out — and internal — so tests can exercise the
+    // marker/satisfied/extract/prune/progress/concurrency logic against a fake
+    // HttpMessageHandler and a temp cache dir, never touching dlopen or the driver probe.
+    internal async Task DownloadAndExtractAsync(
+        CudaRuntimeProfile profile,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
+    {
         var wheels = WheelsFor(profile);
 
         await _gate.WaitAsync(ct).ConfigureAwait(false);
@@ -234,8 +261,6 @@ public sealed class CudaRuntimeProvisioner
                 _log?.Invoke("CUDA runtime: all required libraries already present.");
                 progress?.Report(1.0);
             }
-
-            PreloadAll(wheels);
         }
         finally
         {
@@ -345,8 +370,9 @@ public sealed class CudaRuntimeProvisioner
         );
     }
 
-    // Returns the number of bytes actually downloaded, so the caller can advance its
-    // cumulative progress counter even when PyPI omitted this wheel's metadata size.
+    // Returns the cumulative bytes-on-disk for the wheel (the full file size on a
+    // resumed download), so the caller can advance its cumulative progress counter
+    // even when PyPI omitted this wheel's metadata size.
     private async Task<long> DownloadAndExtractWheelAsync(
         CudaWheel wheel,
         string url,
@@ -355,47 +381,46 @@ public sealed class CudaRuntimeProvisioner
         CancellationToken ct
     )
     {
-        var tmpPath = Path.Join(
-            CacheDirectory,
-            $"{wheel.Package}.{Guid.NewGuid():N}.whl.tmp"
-        );
+        // Per-package staging name so two wheels never share a .partial and a dropped
+        // download resumes via Range. The shared cache means two provisioners (or two app
+        // processes) can pick the same path, which the per-instance _gate doesn't cover —
+        // so guard it with a cross-process lock (see InterProcessFileLock).
+        var wheelPath = Path.Join(CacheDirectory, $"{wheel.Package}.whl");
 
-        long readTotal = 0;
+        await using var stagingLock =
+            await InterProcessFileLock.AcquireAsync(wheelPath + ".lock", ct).ConfigureAwait(false);
+
+        // A sibling that held the lock first may have just completed this wheel — re-check
+        // so we don't redundantly re-fetch a hundreds-of-MB wheel.
+        if (IsWheelSatisfied(wheel))
+            return 0;
+
+        long lastOnDisk = 0;
         try
         {
-            using (var response = await _httpClient
-                .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false))
-            {
-                response.EnsureSuccessStatusCode();
-                await using var contentStream = await response.Content
-                    .ReadAsStreamAsync(ct)
-                    .ConfigureAwait(false);
-                await using var fileStream = new FileStream(
-                    tmpPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    81920,
-                    useAsync: true
-                );
-
-                var buffer = new byte[81920];
-                int read;
-                while ((read = await contentStream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+            // The helper verifies the SHA-256 over the completed partial before its
+            // atomic move (expectedSha256 is always present — ResolveWheelAsync fails
+            // closed when PyPI omits it), so a corrupt/truncated download never reaches
+            // extraction. Resume is safe precisely because of that full-file hash.
+            await ResilientDownloader.DownloadToFileAsync(
+                _httpClient,
+                url,
+                wheelPath,
+                approxTotalBytes: null,
+                idleTimeout: TimeSpan.FromSeconds(60),
+                allowResume: true,
+                onBytesOnDisk: onDisk =>
                 {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                    readTotal += read;
-                    onBytesRead(readTotal);
-                }
-            }
+                    // On resume onDisk is the FULL wheel size (pre-existing + new), so
+                    // the caller's baseline math advances the bar to the right place.
+                    lastOnDisk = onDisk;
+                    onBytesRead(onDisk);
+                },
+                verifyComplete: path => VerifySha256(path, expectedSha256, wheel.Package),
+                ct
+            ).ConfigureAwait(false);
 
-            // Guard against a corrupt/truncated download surfacing later as a
-            // confusing native load error. expectedSha256 is always present
-            // (ResolveWheelAsync fails closed when PyPI omits it).
-            VerifySha256(tmpPath, expectedSha256, wheel.Package);
-
-            ExtractSharedObjects(tmpPath);
+            ExtractSharedObjects(wheelPath);
 
             // Stamp completion only after every .so is extracted. A wheel like cuDNN
             // ships its primary soname (libcudnn.so.9) alongside companion engine
@@ -404,11 +429,11 @@ public sealed class CudaRuntimeProvisioner
             // re-download, then fail when cuDNN dlopens a missing companion.
             WriteCompletionMarker(wheel);
 
-            return readTotal;
+            return lastOnDisk;
         }
         finally
         {
-            TryDelete(tmpPath);
+            TryDelete(wheelPath);
         }
     }
 
@@ -454,7 +479,9 @@ public sealed class CudaRuntimeProvisioner
     // A wheel is a zip. The CUDA libs live under nvidia/<component>/lib/*.so* —
     // pull every shared object out flat into the cache dir, ignoring everything
     // else (Python stubs, headers, metadata).
-    private void ExtractSharedObjects(string wheelPath)
+    // internal so a unit test can assert the /lib/ filter + flatten directly against a
+    // synthetic in-memory zip without a network download.
+    internal void ExtractSharedObjects(string wheelPath)
     {
         // Keep only the shared objects under nvidia/<component>/lib/, skipping
         // directory entries, Python stubs, headers, and metadata.
@@ -569,8 +596,18 @@ public sealed class CudaRuntimeProvisioner
         return null;
     }
 
-    private static bool IsResolvableOnSystem(string soname)
+    // Test seam: override the on-system library probe so unit tests get a deterministic
+    // "not on system" (or "on system") result regardless of the host's CUDA install. A
+    // dev box with the CUDA toolkit installed would otherwise satisfy every wheel and skip
+    // the download/extract/marker path under test. Null = production behavior (real system
+    // dirs + ldconfig). Only consulted here; PreloadAll's path resolution is untouched.
+    internal Func<string, bool>? SystemLibraryProbeForTests { get; set; }
+
+    private bool IsResolvableOnSystem(string soname)
     {
+        if (SystemLibraryProbeForTests is { } probe)
+            return probe(soname);
+
         foreach (var dir in EnumerateSystemSearchDirectories())
         {
             try
@@ -681,7 +718,9 @@ public sealed class CudaRuntimeProvisioner
 
     // Remove sibling bundle dirs from earlier BundleVersions so superseded caches
     // don't accumulate (cuDNN alone is ~1.7 GB unpacked).
-    private void PruneStaleBundles()
+    // internal so a unit test can assert a different-version sibling dir is deleted while
+    // the current version's dir is kept.
+    internal void PruneStaleBundles()
     {
         try
         {

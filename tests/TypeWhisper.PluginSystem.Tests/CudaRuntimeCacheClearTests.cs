@@ -1,10 +1,10 @@
-extern alias SherpaCuda;
+extern alias SherpaOnnx;
 
 using System.IO;
 using System.Net.Http;
-using TypeWhisper.Plugin.SherpaOnnx;
+using SherpaOnnx::TypeWhisper.Plugin.SherpaOnnx;
 using TypeWhisper.Plugin.WhisperCpp;
-using Provisioner = SherpaCuda::TypeWhisper.Plugins.Shared.Cuda.CudaRuntimeProvisioner;
+using Provisioner = SherpaOnnx::TypeWhisper.Plugins.Shared.Cuda.CudaRuntimeProvisioner;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
