@@ -555,10 +555,27 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             {
                 SetStatus(modelId, ModelStatus.DownloadingModel(0));
 
+                // Progress<T> posts callbacks asynchronously to the captured
+                // SynchronizationContext, so a late download report can run AFTER the load
+                // below sets the terminal Ready status and clobber it with a stale
+                // DownloadingModel(1.0) — leaving the UI pinned at 100% and never flipping to
+                // "Ready". Gate the handler so it no-ops once the download has returned
+                // (mirrors the load-progress gate in LoadModelCoreAsync).
+                var downloadInProgress = true;
                 var progress = new Progress<double>(p =>
-                    SetStatus(modelId, ModelStatus.DownloadingModel(p))
-                );
-                await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
+                {
+                    if (!Volatile.Read(ref downloadInProgress))
+                        return;
+                    SetStatus(modelId, ModelStatus.DownloadingModel(p));
+                });
+                try
+                {
+                    await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
+                }
+                finally
+                {
+                    Volatile.Write(ref downloadInProgress, false);
+                }
             }
 
             await LoadModelCoreAsync(modelId, cancellationToken);
