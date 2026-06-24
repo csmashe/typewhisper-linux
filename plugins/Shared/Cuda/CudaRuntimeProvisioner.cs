@@ -357,24 +357,17 @@ public sealed class CudaRuntimeProvisioner
         CancellationToken ct
     )
     {
-        // Stable, per-package staging name (no GUID) so two wheels never share a
-        // .partial and a dropped download resumes via Range instead of from zero. The
-        // flip side of a stable name in a SHARED cache is that two provisioners can pick
-        // the same path: the cache is used by both local engines (Sherpa + Whisper both
-        // need cudart/cuBLAS), each has its OWN CudaRuntimeProvisioner+_gate, and the type
-        // is file-linked into both plugin assemblies so a process-static lock would be
-        // duplicated per-assembly and serialize nothing. Hold a cross-process advisory
-        // lock on a sentinel beside the staging file instead — .NET honors FileShare via
-        // flock on Unix, so this serializes the two in-process copies AND two app
-        // processes sharing the cache.
+        // Per-package staging name so two wheels never share a .partial and a dropped
+        // download resumes via Range. The shared cache means two provisioners (or two app
+        // processes) can pick the same path, which the per-instance _gate doesn't cover —
+        // so guard it with a cross-process lock (see InterProcessFileLock).
         var wheelPath = Path.Join(CacheDirectory, $"{wheel.Package}.whl");
 
         await using var stagingLock =
             await InterProcessFileLock.AcquireAsync(wheelPath + ".lock", ct).ConfigureAwait(false);
 
-        // A sibling provisioner sharing the cache may have completed this very wheel while
-        // we waited for the lock — re-check so we don't redundantly re-fetch a
-        // hundreds-of-MB wheel that is already extracted and marked complete.
+        // A sibling that held the lock first may have just completed this wheel — re-check
+        // so we don't redundantly re-fetch a hundreds-of-MB wheel.
         if (IsWheelSatisfied(wheel))
             return 0;
 

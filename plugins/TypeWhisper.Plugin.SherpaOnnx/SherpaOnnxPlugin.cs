@@ -61,16 +61,12 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     private readonly object _sync = new();
 
-    // Drives both the model-file downloads and the on-demand CUDA runtime fetches
-    // (the ~224 MB sherpa GPU tarball plus the cudart/cuBLAS/cuFFT/cuRAND/cuDNN
-    // wheels, the largest of which is ~685 MB). HttpClient.Timeout bounds the WHOLE
-    // request including the streamed body — even with ResponseHeadersRead — so the
-    // default 100 s deadline would cancel these large fetches mid-stream on any
-    // ordinary link. Use a generous ceiling (matching GemmaLocal's large-model
-    // client) and rely on the per-call CancellationToken for cancellation. The
-    // SocketsHttpHandler.ConnectTimeout bounds a socket that never establishes (the
-    // 2 h total timeout doesn't catch that quickly); ResilientDownloader's per-read
-    // idle watchdog bounds a half-open socket mid-body to seconds, not the 2 h ceiling.
+    // Drives the model-file downloads and the on-demand CUDA runtime fetches (the
+    // ~224 MB sherpa tarball plus CUDA wheels up to ~685 MB). HttpClient.Timeout bounds
+    // the WHOLE request including the streamed body, so a short ceiling would cancel these
+    // large fetches mid-stream; use a generous 2 h ceiling and rely on the per-call token
+    // for cancellation. ConnectTimeout bounds a socket that never establishes, and
+    // ResilientDownloader's idle watchdog bounds a half-open socket mid-body to seconds.
     private readonly HttpClient _httpClient =
         new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
         {
@@ -275,18 +271,15 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             var filePath = Path.Combine(dir, file.FileName);
             if (File.Exists(filePath))
             {
-                // Already-downloaded file: credit its size to the baseline so a resumed
-                // multi-file download starts the bar where it really is instead of at 0.
+                // Credit an already-downloaded file's size so a resumed multi-file
+                // download starts the bar where it really is instead of at 0.
                 cumulativeBytesRead += new FileInfo(filePath).Length;
                 continue;
             }
 
-            // Model files have no published checksum, so resume can't be made safe
-            // (a corrupt prefix could re-append forever). Run with allowResume:false:
-            // the helper still gives the idle/connect watchdog — a stalled connection
-            // now aborts within the idle window and restarts clean instead of hanging
-            // on the socket — but each file re-downloads from zero. allowResume:false
-            // also deletes the helper's .partial on any failure.
+            // Model files have no published checksum, so resume can't be made safe.
+            // allowResume:false still gives the idle/connect watchdog (a stall aborts and
+            // restarts clean instead of hanging) but each file re-downloads from zero.
             long fileOnDisk = 0;
             await ResilientDownloader.DownloadToFileAsync(
                 _httpClient,
@@ -301,8 +294,8 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                     var now = DateTime.UtcNow;
                     if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
                     {
-                        // Clamp: cumulativeBytesRead now sums real on-disk sizes against an
-                        // estimated total, so a slight overshoot past 1.0 is possible.
+                        // Clamp: real on-disk sizes sum against an estimated total, so a
+                        // slight overshoot past 1.0 is possible.
                         progress?.Report(
                             Math.Min(1.0, (double)(cumulativeBytesRead + onDisk) / totalBytes)
                         );

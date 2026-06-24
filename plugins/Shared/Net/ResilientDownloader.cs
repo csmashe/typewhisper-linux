@@ -37,7 +37,6 @@ namespace TypeWhisper.Plugins.Shared.Net;
 /// </summary>
 internal static class ResilientDownloader
 {
-    // Match the buffer size the per-call loops this replaces used.
     private const int BufferSize = 81920;
 
     /// <summary>
@@ -199,16 +198,13 @@ internal static class ResilientDownloader
                     }
                 }
 
-                // Completeness gate: if the server declared a total and we have less,
-                // the body was truncated. approxTotalBytes is never used here — only a
-                // server-declared total counts, so a missing total falls through to the
-                // caller's verifyComplete instead of a false incomplete.
+                // Only a server-declared total gates here (approxTotalBytes never does); a
+                // missing total falls through to verifyComplete rather than a false incomplete.
                 if (declaredTotal.HasValue && onDisk < declaredTotal.Value)
                     throw new DownloadIncompleteException(
                         $"Download incomplete: wrote {onDisk} of {declaredTotal.Value} "
                             + "declared bytes before the stream ended.");
 
-                // Body fully received; no further attempt needed.
                 break;
             }
         }

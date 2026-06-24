@@ -99,10 +99,8 @@ internal sealed class SherpaCudaRuntimeInstaller
             Directory.CreateDirectory(RuntimeDirectory);
 
             // Stable staging name (no per-call GUID) so a dropped download's .partial
-            // survives to the next attempt and resumes via Range instead of from zero.
-            // The _gate only serializes THIS instance; a cross-process advisory lock on a
-            // sentinel beside the tarball serializes a second app process sharing the same
-            // cache, so two of them can't drive the same .partial / extract concurrently.
+            // resumes via Range. _gate only serializes this instance, so a cross-process
+            // lock guards a second app process sharing the cache (see InterProcessFileLock).
             var tarballPath = Path.Join(_runtimeRoot, AssetFileName);
 
             await using (await InterProcessFileLock
@@ -114,9 +112,8 @@ internal sealed class SherpaCudaRuntimeInstaller
                     try
                     {
                         _log?.Invoke($"sherpa-onnx GPU runtime: downloading {AssetFileName}");
-                        // The helper runs VerifySha256 over the completed partial before its
-                        // atomic move, so the tarball at tarballPath is already integrity-
-                        // checked — a corrupt/tampered download never reaches extraction.
+                        // The helper verifies the SHA-256 before its atomic move, so a
+                        // corrupt/tampered download never reaches extraction.
                         await DownloadAsync(tarballPath, progress, ct).ConfigureAwait(false);
 
                         _log?.Invoke("sherpa-onnx GPU runtime: extracting native libraries");
@@ -150,10 +147,8 @@ internal sealed class SherpaCudaRuntimeInstaller
 
     private Task DownloadAsync(string destination, IProgress<double>? progress, CancellationToken ct)
     {
-        // The caller owns the IProgress<double> fraction model: convert the helper's
-        // cumulative bytes-on-disk into a fraction over the documented approximate size
-        // (the helper no longer surfaces the response Content-Length — negligible drift),
-        // throttled to ~4 Hz. lastReport = MinValue seeds the throttle so the first
+        // Map the helper's cumulative bytes-on-disk to a progress fraction over the
+        // approximate size, throttled to ~4 Hz. MinValue seeds the throttle so the first
         // report (the resume baseline jump) always fires.
         var lastReport = DateTime.MinValue;
 

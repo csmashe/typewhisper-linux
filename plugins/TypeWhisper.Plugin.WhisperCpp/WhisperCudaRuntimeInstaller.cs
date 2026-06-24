@@ -117,10 +117,8 @@ internal sealed class WhisperCudaRuntimeInstaller
             Directory.CreateDirectory(NativeDirectory);
 
             // Stable staging name (no per-call GUID) so a dropped download's .partial
-            // survives to the next attempt and resumes via Range instead of from zero.
-            // The _gate only serializes THIS instance; a cross-process advisory lock on a
-            // sentinel beside the nupkg serializes a second app process sharing the same
-            // cache, so two of them can't drive the same .partial / extract concurrently.
+            // resumes via Range. _gate only serializes this instance, so a cross-process
+            // lock guards a second app process sharing the cache (see InterProcessFileLock).
             var nupkgPath = Path.Join(_runtimeRoot, $"{PackageId}.nupkg");
 
             await using (await InterProcessFileLock
@@ -134,9 +132,8 @@ internal sealed class WhisperCudaRuntimeInstaller
                         _log?.Invoke(
                             $"whisper.cpp GPU runtime: downloading {PackageId} {RuntimeVersion}"
                         );
-                        // The helper runs VerifySha256 over the completed partial before its
-                        // atomic move, so the nupkg at nupkgPath is already integrity-checked
-                        // — a corrupt/tampered download never reaches extraction.
+                        // The helper verifies the SHA-256 before its atomic move, so a
+                        // corrupt/tampered download never reaches extraction.
                         await DownloadAsync(nupkgPath, progress, ct).ConfigureAwait(false);
 
                         _log?.Invoke("whisper.cpp GPU runtime: extracting native libraries");
@@ -174,10 +171,8 @@ internal sealed class WhisperCudaRuntimeInstaller
         CancellationToken ct
     )
     {
-        // The caller owns the IProgress<double> fraction model: convert the helper's
-        // cumulative bytes-on-disk into a fraction over the documented approximate size
-        // (the helper no longer surfaces the response Content-Length — negligible drift),
-        // throttled to ~4 Hz. lastReport = MinValue seeds the throttle so the first
+        // Map the helper's cumulative bytes-on-disk to a progress fraction over the
+        // approximate size, throttled to ~4 Hz. MinValue seeds the throttle so the first
         // report (the resume baseline jump) always fires.
         var lastReport = DateTime.MinValue;
 

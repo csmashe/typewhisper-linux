@@ -40,7 +40,6 @@ public sealed class ResilientDownloaderTests
         return dir;
     }
 
-    // 1. Clean 200 → final written, no .partial left.
     [Fact]
     public async Task CleanDownload_WritesFinal_AndLeavesNoPartial()
     {
@@ -66,8 +65,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 2. 206 resume → pre-seed .partial of N bytes; final == full body and one request
-    //    carried Range: bytes=N-.
     [Fact]
     public async Task Resume_FromSeededPartial_SendsRange_AndCompletes()
     {
@@ -95,8 +92,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 3. Server ignores range (200 with range sent) → truncate-restart; final correct,
-    //    not double-length.
     [Fact]
     public async Task ServerIgnoresRange_TruncatesAndRestarts_NoDoubleLength()
     {
@@ -125,7 +120,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 4. 416 → delete partial, refetch clean; 2 requests, second carried no range.
     [Fact]
     public async Task RangeNotSatisfiable_DiscardsPartial_AndRefetchesClean()
     {
@@ -153,8 +147,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 5. Mid-stream drop with allowResume:true → partial retained at K bytes; a second
-    //    call resumes and completes.
     [Fact]
     public async Task MidStreamDrop_RetainsPartial_AndSecondCallResumes()
     {
@@ -194,7 +186,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 6. Idle stall (short timeout) → DownloadStalledException, partial retained.
     [Fact]
     public async Task IdleStall_ThrowsStalled_AndRetainsPartial()
     {
@@ -224,7 +215,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 7. User cancellation → OperationCanceledException, NOT classified as a stall.
     [Fact]
     public async Task UserCancellation_ThrowsCanceled_NotStalled()
     {
@@ -254,7 +244,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 8. Truncated body (declared length > served) → DownloadIncompleteException, partial kept.
     [Fact]
     public async Task TruncatedBody_ThrowsIncomplete_AndKeepsPartial()
     {
@@ -284,7 +273,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 9. Checksum mismatch (verifyComplete throws) → propagates and partial deleted.
     [Fact]
     public async Task ChecksumMismatch_Propagates_AndDeletesPartial()
     {
@@ -311,7 +299,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 10. allowResume:true + verifyComplete:null → ArgumentException.
     [Fact]
     public async Task ResumeWithoutVerify_ThrowsArgumentException()
     {
@@ -330,7 +317,6 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 11. allowResume:false failure → partial deleted (model-watchdog semantics).
     [Fact]
     public async Task NonResumableFailure_DeletesPartial()
     {
@@ -359,9 +345,8 @@ public sealed class ResilientDownloaderTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // 12. Two concurrent non-resumable downloads of the same destination must not collide
-    //     on one FileShare.None partial (regression: the non-resume path uses a unique
-    //     partial name, restoring the isolation the GUID-temp callers had).
+    // Regression: the non-resume path uses a unique partial name, so concurrent
+    // same-destination downloads don't collide on one FileShare.None partial.
     [Fact]
     public async Task ConcurrentNonResumableDownloads_DoNotCollide()
     {
