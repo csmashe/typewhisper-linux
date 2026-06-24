@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using SherpaOnnx;
 using TypeWhisper.Plugins.Shared.Cuda;
+using TypeWhisper.Plugins.Shared.Net;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -66,9 +67,15 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     // request including the streamed body — even with ResponseHeadersRead — so the
     // default 100 s deadline would cancel these large fetches mid-stream on any
     // ordinary link. Use a generous ceiling (matching GemmaLocal's large-model
-    // client) and rely on the per-call CancellationToken for cancellation; the
-    // ceiling also bounds a stalled-but-open socket so it can't hang forever.
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
+    // client) and rely on the per-call CancellationToken for cancellation. The
+    // SocketsHttpHandler.ConnectTimeout bounds a socket that never establishes (the
+    // 2 h total timeout doesn't catch that quickly); ResilientDownloader's per-read
+    // idle watchdog bounds a half-open socket mid-body to seconds, not the 2 h ceiling.
+    private readonly HttpClient _httpClient =
+        new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
+        {
+            Timeout = TimeSpan.FromHours(2)
+        };
     private IPluginHostServices? _host;
     private OfflineRecognizer? _recognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
@@ -260,6 +267,8 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
         var totalBytes = model.Files.Sum(f => (long)f.EstimatedSizeMB * 1024 * 1024);
         long cumulativeBytesRead = 0;
+        // Single throttle across all files (MinValue so the first report always fires).
+        var lastReport = DateTime.MinValue;
 
         foreach (var file in model.Files)
         {
@@ -267,66 +276,37 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (File.Exists(filePath))
                 continue;
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, file.DownloadUrl);
-            using var response = await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
+            // Model files have no published checksum, so resume can't be made safe
+            // (a corrupt prefix could re-append forever). Run with allowResume:false:
+            // the helper still gives the idle/connect watchdog — a stalled connection
+            // now aborts within the idle window and restarts clean instead of hanging
+            // on the socket — but each file re-downloads from zero. allowResume:false
+            // also deletes the helper's .partial on any failure.
+            long fileOnDisk = 0;
+            await ResilientDownloader.DownloadToFileAsync(
+                _httpClient,
+                file.DownloadUrl,
+                filePath,
+                approxTotalBytes: null,
+                idleTimeout: TimeSpan.FromSeconds(60),
+                allowResume: false,
+                onBytesOnDisk: onDisk =>
+                {
+                    fileOnDisk = onDisk;
+                    var now = DateTime.UtcNow;
+                    if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
+                    {
+                        progress?.Report(
+                            (double)(cumulativeBytesRead + onDisk) / totalBytes
+                        );
+                        lastReport = now;
+                    }
+                },
+                verifyComplete: null,
                 ct
             );
-            response.EnsureSuccessStatusCode();
 
-            var buffer = new byte[81920];
-            long fileBytesRead = 0;
-            var lastReport = DateTime.UtcNow;
-
-            // Per-invocation temp name so a concurrent duplicate download can't
-            // unlink an in-flight writer's file via its own catch-block cleanup.
-            var tmpPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-            try
-            {
-                await using (
-                    var fileStream = new FileStream(
-                        tmpPath,
-                        FileMode.Create,
-                        FileAccess.Write,
-                        FileShare.None,
-                        81920,
-                        true
-                    )
-                )
-                {
-                    int read;
-                    while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
-                    {
-                        await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                        fileBytesRead += read;
-
-                        var now = DateTime.UtcNow;
-                        if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
-                        {
-                            progress?.Report(
-                                (double)(cumulativeBytesRead + fileBytesRead) / totalBytes
-                            );
-                            lastReport = now;
-                        }
-                    }
-                }
-
-                File.Move(tmpPath, filePath, overwrite: true);
-            }
-            catch
-            {
-                // Cancellation or I/O failure: don't leave a partial .tmp file behind
-                // to consume disk and confuse the next download attempt.
-                if (File.Exists(tmpPath))
-                {
-                    try { File.Delete(tmpPath); } catch { /* best effort */ }
-                }
-                throw;
-            }
-
-            cumulativeBytesRead += fileBytesRead;
+            cumulativeBytesRead += fileOnDisk;
         }
 
         progress?.Report(1.0);

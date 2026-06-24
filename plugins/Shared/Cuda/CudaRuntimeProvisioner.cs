@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugins.Shared.Cuda;
 
@@ -345,8 +346,9 @@ public sealed class CudaRuntimeProvisioner
         );
     }
 
-    // Returns the number of bytes actually downloaded, so the caller can advance its
-    // cumulative progress counter even when PyPI omitted this wheel's metadata size.
+    // Returns the cumulative bytes-on-disk for the wheel (the full file size on a
+    // resumed download), so the caller can advance its cumulative progress counter
+    // even when PyPI omitted this wheel's metadata size.
     private async Task<long> DownloadAndExtractWheelAsync(
         CudaWheel wheel,
         string url,
@@ -355,47 +357,53 @@ public sealed class CudaRuntimeProvisioner
         CancellationToken ct
     )
     {
-        var tmpPath = Path.Join(
-            CacheDirectory,
-            $"{wheel.Package}.{Guid.NewGuid():N}.whl.tmp"
-        );
+        // Stable, per-package staging name (no GUID) so two wheels never share a
+        // .partial and a dropped download resumes via Range instead of from zero. The
+        // flip side of a stable name in a SHARED cache is that two provisioners can pick
+        // the same path: the cache is used by both local engines (Sherpa + Whisper both
+        // need cudart/cuBLAS), each has its OWN CudaRuntimeProvisioner+_gate, and the type
+        // is file-linked into both plugin assemblies so a process-static lock would be
+        // duplicated per-assembly and serialize nothing. Hold a cross-process advisory
+        // lock on a sentinel beside the staging file instead — .NET honors FileShare via
+        // flock on Unix, so this serializes the two in-process copies AND two app
+        // processes sharing the cache.
+        var wheelPath = Path.Join(CacheDirectory, $"{wheel.Package}.whl");
 
-        long readTotal = 0;
+        await using var stagingLock =
+            await InterProcessFileLock.AcquireAsync(wheelPath + ".lock", ct).ConfigureAwait(false);
+
+        // A sibling provisioner sharing the cache may have completed this very wheel while
+        // we waited for the lock — re-check so we don't redundantly re-fetch a
+        // hundreds-of-MB wheel that is already extracted and marked complete.
+        if (IsWheelSatisfied(wheel))
+            return 0;
+
+        long lastOnDisk = 0;
         try
         {
-            using (var response = await _httpClient
-                .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false))
-            {
-                response.EnsureSuccessStatusCode();
-                await using var contentStream = await response.Content
-                    .ReadAsStreamAsync(ct)
-                    .ConfigureAwait(false);
-                await using var fileStream = new FileStream(
-                    tmpPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    81920,
-                    useAsync: true
-                );
-
-                var buffer = new byte[81920];
-                int read;
-                while ((read = await contentStream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+            // The helper verifies the SHA-256 over the completed partial before its
+            // atomic move (expectedSha256 is always present — ResolveWheelAsync fails
+            // closed when PyPI omits it), so a corrupt/truncated download never reaches
+            // extraction. Resume is safe precisely because of that full-file hash.
+            await ResilientDownloader.DownloadToFileAsync(
+                _httpClient,
+                url,
+                wheelPath,
+                approxTotalBytes: null,
+                idleTimeout: TimeSpan.FromSeconds(60),
+                allowResume: true,
+                onBytesOnDisk: onDisk =>
                 {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                    readTotal += read;
-                    onBytesRead(readTotal);
-                }
-            }
+                    // On resume onDisk is the FULL wheel size (pre-existing + new), so
+                    // the caller's baseline math advances the bar to the right place.
+                    lastOnDisk = onDisk;
+                    onBytesRead(onDisk);
+                },
+                verifyComplete: path => VerifySha256(path, expectedSha256, wheel.Package),
+                ct
+            ).ConfigureAwait(false);
 
-            // Guard against a corrupt/truncated download surfacing later as a
-            // confusing native load error. expectedSha256 is always present
-            // (ResolveWheelAsync fails closed when PyPI omits it).
-            VerifySha256(tmpPath, expectedSha256, wheel.Package);
-
-            ExtractSharedObjects(tmpPath);
+            ExtractSharedObjects(wheelPath);
 
             // Stamp completion only after every .so is extracted. A wheel like cuDNN
             // ships its primary soname (libcudnn.so.9) alongside companion engine
@@ -404,11 +412,11 @@ public sealed class CudaRuntimeProvisioner
             // re-download, then fail when cuDNN dlopens a missing companion.
             WriteCompletionMarker(wheel);
 
-            return readTotal;
+            return lastOnDisk;
         }
         finally
         {
-            TryDelete(tmpPath);
+            TryDelete(wheelPath);
         }
     }
 

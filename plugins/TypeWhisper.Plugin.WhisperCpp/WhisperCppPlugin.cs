@@ -209,9 +209,15 @@ public sealed class WhisperCppPlugin
     // streamed body — even with ResponseHeadersRead — so the default 100 s deadline
     // would cancel these multi-hundred-MB fetches mid-stream on any ordinary link.
     // Use a generous ceiling (matching GemmaLocal's large-model client) and rely on
-    // the per-call CancellationToken for user-initiated cancellation; the ceiling also
-    // bounds a stalled-but-open socket so a half-open connection can't hang forever.
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
+    // the per-call CancellationToken for user-initiated cancellation. The
+    // SocketsHttpHandler.ConnectTimeout bounds a socket that never establishes (the
+    // 2 h total timeout doesn't catch that quickly); ResilientDownloader's per-read
+    // idle watchdog bounds a half-open socket mid-body to seconds, not the 2 h ceiling.
+    private readonly HttpClient _httpClient =
+        new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
+        {
+            Timeout = TimeSpan.FromHours(2)
+        };
     private IPluginHostServices? _host;
     private WhisperFactory? _factory;
     private CudaRuntimeProvisioner? _cudaProvisioner;

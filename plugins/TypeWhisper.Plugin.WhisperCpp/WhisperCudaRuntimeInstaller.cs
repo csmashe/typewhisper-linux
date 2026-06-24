@@ -2,6 +2,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Security.Cryptography;
+using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugin.WhisperCpp;
 
@@ -115,25 +116,37 @@ internal sealed class WhisperCudaRuntimeInstaller
 
             Directory.CreateDirectory(NativeDirectory);
 
-            var nupkgPath = Path.Join(_runtimeRoot, $"{PackageId}.{Guid.NewGuid():N}.tmp");
-            try
-            {
-                _log?.Invoke(
-                    $"whisper.cpp GPU runtime: downloading {PackageId} {RuntimeVersion}"
-                );
-                await DownloadAsync(nupkgPath, progress, ct).ConfigureAwait(false);
+            // Stable staging name (no per-call GUID) so a dropped download's .partial
+            // survives to the next attempt and resumes via Range instead of from zero.
+            // The _gate only serializes THIS instance; a cross-process advisory lock on a
+            // sentinel beside the nupkg serializes a second app process sharing the same
+            // cache, so two of them can't drive the same .partial / extract concurrently.
+            var nupkgPath = Path.Join(_runtimeRoot, $"{PackageId}.nupkg");
 
-                // Verify before extracting so a corrupt/tampered download can't drop
-                // a bad libggml-cuda-whisper.so into the cache and surface later as a
-                // confusing native load error.
-                VerifySha256(nupkgPath);
-
-                _log?.Invoke("whisper.cpp GPU runtime: extracting native libraries");
-                ExtractCoreRuntimeFiles(nupkgPath);
-            }
-            finally
+            await using (await InterProcessFileLock
+                .AcquireAsync(nupkgPath + ".lock", ct).ConfigureAwait(false))
             {
-                TryDelete(nupkgPath);
+                // Another process may have finished installing while we waited for the lock.
+                if (!IsInstalled)
+                {
+                    try
+                    {
+                        _log?.Invoke(
+                            $"whisper.cpp GPU runtime: downloading {PackageId} {RuntimeVersion}"
+                        );
+                        // The helper runs VerifySha256 over the completed partial before its
+                        // atomic move, so the nupkg at nupkgPath is already integrity-checked
+                        // — a corrupt/tampered download never reaches extraction.
+                        await DownloadAsync(nupkgPath, progress, ct).ConfigureAwait(false);
+
+                        _log?.Invoke("whisper.cpp GPU runtime: extracting native libraries");
+                        ExtractCoreRuntimeFiles(nupkgPath);
+                    }
+                    finally
+                    {
+                        TryDelete(nupkgPath);
+                    }
+                }
             }
 
             if (!IsInstalled)
@@ -155,47 +168,40 @@ internal sealed class WhisperCudaRuntimeInstaller
         }
     }
 
-    private async Task DownloadAsync(
+    private Task DownloadAsync(
         string destination,
         IProgress<double>? progress,
         CancellationToken ct
     )
     {
-        using var response = await _httpClient
-            .GetAsync(DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct)
-            .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        // The caller owns the IProgress<double> fraction model: convert the helper's
+        // cumulative bytes-on-disk into a fraction over the documented approximate size
+        // (the helper no longer surfaces the response Content-Length — negligible drift),
+        // throttled to ~4 Hz. lastReport = MinValue seeds the throttle so the first
+        // report (the resume baseline jump) always fires.
+        var lastReport = DateTime.MinValue;
 
-        var totalBytes = response.Content.Headers.ContentLength ?? ApproxDownloadBytes;
-
-        await using var contentStream = await response.Content
-            .ReadAsStreamAsync(ct)
-            .ConfigureAwait(false);
-        await using var fileStream = new FileStream(
-            destination,
-            FileMode.Create,
-            FileAccess.Write,
-            FileShare.None,
-            81920,
-            useAsync: true
-        );
-
-        var buffer = new byte[81920];
-        long readTotal = 0;
-        var lastReport = DateTime.UtcNow;
-        int read;
-        while ((read = await contentStream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+        void OnBytesOnDisk(long onDisk)
         {
-            await fileStream.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-            readTotal += read;
-
             var now = DateTime.UtcNow;
-            if (totalBytes > 0 && (now - lastReport).TotalMilliseconds > 250)
+            if ((now - lastReport).TotalMilliseconds > 250)
             {
-                progress?.Report(Math.Min(1.0, (double)readTotal / totalBytes));
+                progress?.Report(Math.Min(1.0, (double)onDisk / ApproxDownloadBytes));
                 lastReport = now;
             }
         }
+
+        return ResilientDownloader.DownloadToFileAsync(
+            _httpClient,
+            DownloadUrl,
+            destination,
+            approxTotalBytes: ApproxDownloadBytes,
+            idleTimeout: TimeSpan.FromSeconds(60),
+            allowResume: true,
+            onBytesOnDisk: OnBytesOnDisk,
+            verifyComplete: path => VerifySha256(path),
+            ct
+        );
     }
 
     // Instance (not static) so the mismatch message can name NativeDirectory — the exact

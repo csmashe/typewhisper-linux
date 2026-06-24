@@ -21,6 +21,12 @@
         <!-- Shared on-demand CUDA provisioner, compiled into the plugin assembly. -->
         <Compile Include="..\Shared\Cuda\CudaRuntimeProvisioner.cs"
                  Link="Shared\Cuda\CudaRuntimeProvisioner.cs" />
+        <!-- Shared resumable/idle-watchdog downloader, compiled into the plugin assembly. -->
+        <Compile Include="..\Shared\Net\ResilientDownloader.cs"
+                 Link="Shared\Net\ResilientDownloader.cs" />
+        <!-- Shared cross-process lock guarding the resumable shared-cache staging files. -->
+        <Compile Include="..\Shared\Net\InterProcessFileLock.cs"
+                 Link="Shared\Net\InterProcessFileLock.cs" />
     </ItemGroup>
     <ItemGroup>
         <Content Include="manifest.json">

@@ -2,6 +2,7 @@ using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
 using SharpCompress.Readers;
+using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
 
@@ -97,27 +98,35 @@ internal sealed class SherpaCudaRuntimeInstaller
 
             Directory.CreateDirectory(RuntimeDirectory);
 
-            var tarballPath = Path.Join(
-                _runtimeRoot,
-                $"{AssetFileName}.{Guid.NewGuid():N}.tmp"
-            );
+            // Stable staging name (no per-call GUID) so a dropped download's .partial
+            // survives to the next attempt and resumes via Range instead of from zero.
+            // The _gate only serializes THIS instance; a cross-process advisory lock on a
+            // sentinel beside the tarball serializes a second app process sharing the same
+            // cache, so two of them can't drive the same .partial / extract concurrently.
+            var tarballPath = Path.Join(_runtimeRoot, AssetFileName);
 
-            try
+            await using (await InterProcessFileLock
+                .AcquireAsync(tarballPath + ".lock", ct).ConfigureAwait(false))
             {
-                _log?.Invoke($"sherpa-onnx GPU runtime: downloading {AssetFileName}");
-                await DownloadAsync(tarballPath, progress, ct).ConfigureAwait(false);
+                // Another process may have finished installing while we waited for the lock.
+                if (!IsInstalled)
+                {
+                    try
+                    {
+                        _log?.Invoke($"sherpa-onnx GPU runtime: downloading {AssetFileName}");
+                        // The helper runs VerifySha256 over the completed partial before its
+                        // atomic move, so the tarball at tarballPath is already integrity-
+                        // checked — a corrupt/tampered download never reaches extraction.
+                        await DownloadAsync(tarballPath, progress, ct).ConfigureAwait(false);
 
-                // Verify before extracting so a corrupt/tampered download can't drop
-                // bad native .so files into the cache — code we then dlopen and trust
-                // on every later run.
-                VerifySha256(tarballPath, RuntimeDirectory);
-
-                _log?.Invoke("sherpa-onnx GPU runtime: extracting native libraries");
-                ExtractCoreRuntimeFiles(tarballPath);
-            }
-            finally
-            {
-                TryDelete(tarballPath);
+                        _log?.Invoke("sherpa-onnx GPU runtime: extracting native libraries");
+                        ExtractCoreRuntimeFiles(tarballPath);
+                    }
+                    finally
+                    {
+                        TryDelete(tarballPath);
+                    }
+                }
             }
 
             if (!IsInstalled)
@@ -139,43 +148,36 @@ internal sealed class SherpaCudaRuntimeInstaller
         }
     }
 
-    private async Task DownloadAsync(string destination, IProgress<double>? progress, CancellationToken ct)
+    private Task DownloadAsync(string destination, IProgress<double>? progress, CancellationToken ct)
     {
-        using var response = await _httpClient
-            .GetAsync(DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct)
-            .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        // The caller owns the IProgress<double> fraction model: convert the helper's
+        // cumulative bytes-on-disk into a fraction over the documented approximate size
+        // (the helper no longer surfaces the response Content-Length — negligible drift),
+        // throttled to ~4 Hz. lastReport = MinValue seeds the throttle so the first
+        // report (the resume baseline jump) always fires.
+        var lastReport = DateTime.MinValue;
 
-        var totalBytes = response.Content.Headers.ContentLength ?? ApproxDownloadBytes;
-
-        await using var contentStream = await response.Content
-            .ReadAsStreamAsync(ct)
-            .ConfigureAwait(false);
-        await using var fileStream = new FileStream(
-            destination,
-            FileMode.Create,
-            FileAccess.Write,
-            FileShare.None,
-            81920,
-            useAsync: true
-        );
-
-        var buffer = new byte[81920];
-        long readTotal = 0;
-        var lastReport = DateTime.UtcNow;
-        int read;
-        while ((read = await contentStream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+        void OnBytesOnDisk(long onDisk)
         {
-            await fileStream.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-            readTotal += read;
-
             var now = DateTime.UtcNow;
-            if (totalBytes > 0 && (now - lastReport).TotalMilliseconds > 250)
+            if ((now - lastReport).TotalMilliseconds > 250)
             {
-                progress?.Report(Math.Min(1.0, (double)readTotal / totalBytes));
+                progress?.Report(Math.Min(1.0, (double)onDisk / ApproxDownloadBytes));
                 lastReport = now;
             }
         }
+
+        return ResilientDownloader.DownloadToFileAsync(
+            _httpClient,
+            DownloadUrl,
+            destination,
+            approxTotalBytes: ApproxDownloadBytes,
+            idleTimeout: TimeSpan.FromSeconds(60),
+            allowResume: true,
+            onBytesOnDisk: OnBytesOnDisk,
+            verifyComplete: path => VerifySha256(path, RuntimeDirectory),
+            ct
+        );
     }
 
     // internal (not private) so a unit test can pin the fail-closed contract without
