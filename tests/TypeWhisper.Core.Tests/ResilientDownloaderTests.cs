@@ -397,12 +397,19 @@ public sealed class ResilientDownloaderTests
         public int RequestCount { get; private set; }
         public List<string?> ReceivedRanges { get; } = [];
 
+        // The concurrent test (12) drives one handler from several SendAsync calls at
+        // once, so guard the shared bookkeeping to keep it deterministic.
+        private readonly object _sync = new();
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            RequestCount++;
             var range = request.Headers.Range;
-            ReceivedRanges.Add(range?.ToString());
+            lock (_sync)
+            {
+                RequestCount++;
+                ReceivedRanges.Add(range?.ToString());
+            }
 
             long from = 0;
             var hasRange = HonorRange && range is not null && range.Ranges.Count == 1;

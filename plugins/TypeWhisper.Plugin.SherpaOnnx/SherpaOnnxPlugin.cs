@@ -274,7 +274,12 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         {
             var filePath = Path.Combine(dir, file.FileName);
             if (File.Exists(filePath))
+            {
+                // Already-downloaded file: credit its size to the baseline so a resumed
+                // multi-file download starts the bar where it really is instead of at 0.
+                cumulativeBytesRead += new FileInfo(filePath).Length;
                 continue;
+            }
 
             // Model files have no published checksum, so resume can't be made safe
             // (a corrupt prefix could re-append forever). Run with allowResume:false:
@@ -296,8 +301,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                     var now = DateTime.UtcNow;
                     if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
                     {
+                        // Clamp: cumulativeBytesRead now sums real on-disk sizes against an
+                        // estimated total, so a slight overshoot past 1.0 is possible.
                         progress?.Report(
-                            (double)(cumulativeBytesRead + onDisk) / totalBytes
+                            Math.Min(1.0, (double)(cumulativeBytesRead + onDisk) / totalBytes)
                         );
                         lastReport = now;
                     }
