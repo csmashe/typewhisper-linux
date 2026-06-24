@@ -333,6 +333,13 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 {
                     await plugin.ClearCudaRuntimeAsync(cancellationToken);
                 }
+                catch (OperationCanceledException)
+                {
+                    // The caller asked to stop: propagate immediately instead of
+                    // continuing to delete other engines' caches and folding the cancel
+                    // into the aggregate failure below.
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     // Attempt every engine, but record the failure so it can be surfaced:

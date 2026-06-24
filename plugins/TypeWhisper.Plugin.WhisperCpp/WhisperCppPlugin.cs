@@ -882,13 +882,27 @@ public sealed class WhisperCppPlugin
         // while we delete the cache. (On Linux the .so files can be unlinked even while
         // loaded, so a restart is still required for the fresh re-download to take
         // effect — but releasing the factory first keeps the on-disk state clean.)
-        await UnloadModelAsync().ConfigureAwait(false);
+        // NOT UnloadModelAsync(): the host clears every provisioning engine, so this must
+        // not deselect whisper.cpp's model as a side effect when it isn't the active
+        // engine. Drop only the live factory and preserve _selectedModelId.
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            DisposeFactoryUnsafe();
+            _loadedModelId = null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
 
         // Clear whisper.cpp's CUDA build and the shared CUDA math-library cache (the
         // latter is shared with sherpa-onnx; deleting it again from that plugin is an
         // idempotent no-op).
-        _whisperCudaInstaller?.ClearCache();
-        _cudaProvisioner?.ClearCache();
+        if (_whisperCudaInstaller is not null)
+            await _whisperCudaInstaller.ClearCacheAsync(ct).ConfigureAwait(false);
+        if (_cudaProvisioner is not null)
+            await _cudaProvisioner.ClearCacheAsync(ct).ConfigureAwait(false);
     }
 
     // Logs download progress in coarse 10% steps (so a first-time multi-hundred-MB fetch

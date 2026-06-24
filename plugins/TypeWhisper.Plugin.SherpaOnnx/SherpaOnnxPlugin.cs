@@ -494,21 +494,23 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             SherpaOnnxNativeRuntime.ConfigureCudaRuntime(installer.RuntimeDirectory);
     }
 
-    public Task ClearCudaRuntimeAsync(CancellationToken ct)
+    public async Task ClearCudaRuntimeAsync(CancellationToken ct)
     {
         // Defensive: drop any live recognizer so its native handles aren't needlessly
         // held while we delete the cache. (On Linux the .so files can be unlinked even
         // while mapped, so a restart is still required for the fresh re-download to take
         // effect — but releasing the recognizer first keeps the on-disk state clean.)
+        // UnloadRecognizer does NOT touch _selectedModelId, so cache repair leaves the
+        // user's model selection intact.
         UnloadRecognizer();
 
         // Clear the sherpa-onnx GPU build and the shared CUDA math-library cache (the
         // latter is shared with whisper.cpp; deleting it again from that plugin is an
         // idempotent no-op).
-        _cudaRuntimeInstaller?.ClearCache();
-        _cudaProvisioner?.ClearCache();
-
-        return Task.CompletedTask;
+        if (_cudaRuntimeInstaller is not null)
+            await _cudaRuntimeInstaller.ClearCacheAsync(ct).ConfigureAwait(false);
+        if (_cudaProvisioner is not null)
+            await _cudaProvisioner.ClearCacheAsync(ct).ConfigureAwait(false);
     }
 
     // Logs download progress in coarse 10% steps (so a first-time multi-hundred-MB fetch

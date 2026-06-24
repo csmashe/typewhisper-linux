@@ -159,13 +159,14 @@ internal sealed class WhisperCudaRuntimeInstaller
     ///     Deletes the entire whisper.cpp CUDA runtime cache tree
     ///     (<c>…/Runtimes/whisper-cuda</c>, every runtime version) so the next
     ///     <see cref="EnsureInstalledAsync" /> re-downloads from scratch. Guarded by the
-    ///     same gate as install so it can't race an in-flight extraction. A missing cache
-    ///     is a no-op; a delete failure is logged and rethrown so the caller can surface
-    ///     it rather than report a corrupt runtime as repaired.
+    ///     same gate as install so it can't race an in-flight extraction — and awaits the
+    ///     gate with <paramref name="ct" /> so a cancel isn't stuck behind it. A missing
+    ///     cache is a no-op; a delete failure is logged and rethrown so the caller can
+    ///     surface it rather than report a corrupt runtime as repaired.
     /// </summary>
-    public void ClearCache()
+    public async Task ClearCacheAsync(CancellationToken ct)
     {
-        _gate.Wait();
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var root = Directory.GetParent(_runtimeRoot)?.FullName;

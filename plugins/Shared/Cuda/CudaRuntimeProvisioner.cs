@@ -644,14 +644,16 @@ public sealed class CudaRuntimeProvisioner
     ///     <see cref="CacheDirectory" /> — every bundle version, not just the current
     ///     one) so the next <see cref="EnsureReadyAsync" /> re-downloads from scratch.
     ///     Guarded by the same gate as provisioning so it can't race an in-flight
-    ///     download. A missing cache is a no-op (already clear); a delete failure is
-    ///     logged and rethrown so the caller can surface it rather than report a corrupt
-    ///     runtime as repaired. Note: libraries already dlopen'd this process are held
-    ///     until exit, so a restart is required for a fresh re-provision to take effect.
+    ///     download — and awaits the gate with <paramref name="ct" /> so a cancel isn't
+    ///     stuck behind that download. A missing cache is a no-op (already clear); a
+    ///     delete failure is logged and rethrown so the caller can surface it rather than
+    ///     report a corrupt runtime as repaired. Note: libraries already dlopen'd this
+    ///     process are held until exit, so a restart is required for a fresh re-provision
+    ///     to take effect.
     /// </summary>
-    public void ClearCache()
+    public async Task ClearCacheAsync(CancellationToken ct)
     {
-        _gate.Wait();
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var root = Directory.GetParent(CacheDirectory)?.FullName;

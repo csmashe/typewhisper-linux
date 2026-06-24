@@ -14,7 +14,7 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class CudaRuntimeCacheClearTests
 {
     [Fact]
-    public void CudaRuntimeProvisioner_ClearCache_RemovesEntireCacheRoot()
+    public async Task CudaRuntimeProvisioner_ClearCache_RemovesEntireCacheRoot()
     {
         var temp = CreateTempDir();
         try
@@ -29,7 +29,7 @@ public class CudaRuntimeCacheClearTests
             File.WriteAllText(Path.Join(provisioner.CacheDirectory, "libcudart.so.12"), "dummy");
             Assert.True(Directory.Exists(cacheRoot));
 
-            provisioner.ClearCache();
+            await provisioner.ClearCacheAsync(CancellationToken.None);
 
             Assert.False(Directory.Exists(cacheRoot));
             // Only the cache root is removed, not whatever happens to contain it.
@@ -42,7 +42,7 @@ public class CudaRuntimeCacheClearTests
     }
 
     [Fact]
-    public void SherpaCudaRuntimeInstaller_ClearCache_RemovesRuntimeTree()
+    public async Task SherpaCudaRuntimeInstaller_ClearCache_RemovesRuntimeTree()
     {
         var temp = CreateTempDir();
         try
@@ -57,7 +57,7 @@ public class CudaRuntimeCacheClearTests
             var runtimeTree = Path.Join(temp, "Runtimes", "sherpa-onnx-cuda");
             Assert.True(Directory.Exists(runtimeTree));
 
-            installer.ClearCache();
+            await installer.ClearCacheAsync(CancellationToken.None);
 
             Assert.False(Directory.Exists(runtimeTree));
             Assert.True(Directory.Exists(temp));
@@ -69,7 +69,7 @@ public class CudaRuntimeCacheClearTests
     }
 
     [Fact]
-    public void WhisperCudaRuntimeInstaller_ClearCache_RemovesRuntimeTree()
+    public async Task WhisperCudaRuntimeInstaller_ClearCache_RemovesRuntimeTree()
     {
         var temp = CreateTempDir();
         try
@@ -84,7 +84,7 @@ public class CudaRuntimeCacheClearTests
             var runtimeTree = Path.Join(temp, "Runtimes", "whisper-cuda");
             Assert.True(Directory.Exists(runtimeTree));
 
-            installer.ClearCache();
+            await installer.ClearCacheAsync(CancellationToken.None);
 
             Assert.False(Directory.Exists(runtimeTree));
             Assert.True(Directory.Exists(temp));
