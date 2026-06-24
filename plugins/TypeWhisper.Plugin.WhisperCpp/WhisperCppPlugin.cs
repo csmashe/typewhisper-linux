@@ -224,6 +224,15 @@ public sealed class WhisperCppPlugin
     private string _computeBackend = "cpu";
     private bool _runtimeLibraryOrderInitialized;
 
+    // The RuntimeLibraryOrder actually loaded for the process ("cpu" or "cuda"), set
+    // once when the native runtime first pins. Distinct from _computeBackend, which is
+    // the per-factory UseGpu choice and CAN differ: a [Cuda]-pinned runtime can run CPU
+    // compute (UseGpu=false) with no reload. Restart-required logic reasons about THIS
+    // (the native pin), not _computeBackend — only a [Cpu]-pinned runtime genuinely
+    // needs a restart to reach CUDA. Set together with _runtimeLibraryOrderInitialized
+    // at the single pin site so the two can never drift.
+    private string? _pinnedRuntimeBackend;
+
     // Set when WhisperFactory.FromPath throws at the native LIBRARY-load layer.
     // Whisper.net caches that failure in a process-wide static Lazy, so once it
     // happens no later FromPath (on any backend) can succeed — the only recovery is
@@ -364,15 +373,20 @@ public sealed class WhisperCppPlugin
             if (_computeBackend == normalized)
                 return true;
 
-            // RuntimeLibraryOrder is consulted once when the native library first
-            // loads (see EnsureRuntimeLibraryOrderInitialized). Once that has run,
-            // further backend swaps would desync the managed factory's UseGpu flag
-            // from the actual loaded native runtime, so refuse the change.
-            if (_runtimeLibraryOrderInitialized)
+            // Reason about the NATIVE pin (_pinnedRuntimeBackend), not the effective
+            // compute. The [Cuda] .so set can build a UseGpu=false factory, and the
+            // [Cpu] set can never load CUDA, so:
+            //   - not pinned yet   → apply the choice; the first load pins it.
+            //   - pinned to "cuda" → accept CPU or CUDA; just rebuild the factory with the
+            //                        new UseGpu (no RuntimeLibraryOrder change needed).
+            //   - pinned to "cpu"  → CPU stays fine; CUDA genuinely needs the [Cuda] .so
+            //                        set, which can't load twice — refuse (restart only).
+            if (_pinnedRuntimeBackend == "cpu" && normalized == "cuda")
             {
                 _host?.Log(
                     PluginLogLevel.Warning,
-                    $"Cannot switch compute backend to '{normalized}' after the native runtime has loaded ({_computeBackend}). Restart the app to change backends."
+                    "Cannot switch compute backend to 'cuda': the native runtime is pinned "
+                        + "to CPU. Restart the app to load the CUDA runtime."
                 );
                 return false;
             }
@@ -607,6 +621,13 @@ public sealed class WhisperCppPlugin
                 RuntimeOptions.LibraryPath = _whisperCudaInstaller.LibraryPath;
 
             DisposeFactoryUnsafe();
+            // The order ApplyRuntimeLibraryOrderUnsafe is about to apply (it reads
+            // _computeBackend) IS the native pin. Capture it now, before the GPU-context
+            // fallback below can downgrade _computeBackend to "cpu", so the pin records
+            // "cuda" even when this load ends up running CPU compute.
+            var appliedOrder = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+                ? "cuda"
+                : "cpu";
             ApplyRuntimeLibraryOrderUnsafe();
 
             // Two distinct failure layers here, handled differently:
@@ -656,8 +677,12 @@ public sealed class WhisperCppPlugin
                     $"whisper.cpp CUDA native runtime failed to load ({ex.Message}); "
                         + "restart required to use CPU."
                 );
+                // The one-shot native loader is poisoned for the process; only a restart
+                // can recover, so this is genuinely restart-required (the pin isn't even
+                // set yet here — it's recorded only after a successful validation below).
                 _accelerationStatus = CreateCudaUnavailableStatus(
-                    "The GPU runtime could not be loaded. Restart TypeWhisper to use CPU."
+                    "The GPU runtime could not be loaded. Restart TypeWhisper to use CPU.",
+                    requiresRestart: true
                 );
                 throw new InvalidOperationException(
                     $"Failed to load the whisper.cpp CUDA runtime for model '{modelId}'; "
@@ -675,9 +700,13 @@ public sealed class WhisperCppPlugin
                 );
                 cudaUnavailableDetail ??= "The GPU context could not be created; using CPU.";
                 DisposeFactoryUnsafe();
+                // Effective compute is now CPU — harmless to record, since the pin is
+                // tracked separately in _pinnedRuntimeBackend (= "cuda" here). Rebuild
+                // with an explicit UseGpu=false rather than re-reading _computeBackend, so
+                // the intent is local and can't be misread as a pin change.
                 _computeBackend = "cpu";
                 // Same pinned native runtime; only the context is rebuilt (UseGpu=false).
-                _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
+                _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions(useGpu: false));
             }
 
             if (!TryValidateFactory(_factory))
@@ -688,15 +717,26 @@ public sealed class WhisperCppPlugin
                 );
             }
 
-            // First successful factory creation loads + pins the native runtime; from
-            // here on the backend can't be swapped without a restart.
+            // First successful factory creation loads + pins the native runtime. Record
+            // the NATIVE order that was applied (appliedOrder, captured before any
+            // GPU-context fallback downgraded _computeBackend) — distinct from the
+            // effective compute. From here a CPU↔GPU toggle on a [Cuda]-pinned runtime
+            // needs no restart; only [Cpu]→CUDA does (see TryConfigureComputeBackend).
+            _pinnedRuntimeBackend ??= appliedOrder;
             _runtimeLibraryOrderInitialized = true;
             _loadedModelId = modelId;
             _selectedModelId = modelId;
             _host?.SetSetting("selectedModel", modelId);
+            // Restart is required only if the process pinned the [Cpu] .so set (a
+            // provisioning-failure downgrade). A GPU-context fallback pinned [Cuda], so CUDA
+            // is reachable again by a reload — no restart (matches CreateLoadedAcceleration
+            // Status / TryConfigureComputeBackend).
             _accelerationStatus = cudaUnavailableDetail is null
                 ? CreateLoadedAccelerationStatus(_computeBackend, _accelerationPreference)
-                : CreateCudaUnavailableStatus(cudaUnavailableDetail);
+                : CreateCudaUnavailableStatus(
+                    cudaUnavailableDetail,
+                    requiresRestart: _pinnedRuntimeBackend == "cpu"
+                );
             _host?.Log(
                 PluginLogLevel.Info,
                 $"Loaded model {modelId} using {_computeBackend.ToUpperInvariant()}"
@@ -1036,11 +1076,13 @@ public sealed class WhisperCppPlugin
         }
     }
 
+    private static WhisperFactoryOptions CreateFactoryOptions(bool useGpu) =>
+        new() { UseGpu = useGpu };
+
     private WhisperFactoryOptions CreateFactoryOptions() =>
-        new()
-        {
-            UseGpu = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase),
-        };
+        CreateFactoryOptions(
+            string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+        );
 
     // Points Whisper.net's runtime order at the current _computeBackend. The order
     // is consulted only when the native library first loads and ignored for the
@@ -1071,22 +1113,62 @@ public sealed class WhisperCppPlugin
 
     // Test seam: simulate the native runtime having loaded and pinned itself to a
     // backend, without a real model file or WhisperFactory, so the CPU↔CUDA
-    // restart-required status logic can be unit-tested.
-    internal void MarkNativeRuntimeLoadedForTests(string backend)
+    // restart-required status logic can be unit-tested. effectiveCompute defaults to the
+    // pin but can differ for a [Cuda]-pinned runtime running CPU compute (the first-load
+    // GPU-context-failure case): MarkNativeRuntimeLoadedForTests("cuda", "cpu").
+    internal void MarkNativeRuntimeLoadedForTests(
+        string pinnedBackend,
+        string? effectiveCompute = null
+    )
     {
-        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
+        var pin = string.Equals(pinnedBackend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? "cuda"
             : "cpu";
+        var effective =
+            effectiveCompute is null
+                ? pin
+                : string.Equals(effectiveCompute, "cuda", StringComparison.OrdinalIgnoreCase)
+                    ? "cuda"
+                    : "cpu";
         _gate.Wait();
         try
         {
-            _computeBackend = normalized;
+            _pinnedRuntimeBackend = pin;
+            _computeBackend = effective;
             _runtimeLibraryOrderInitialized = true;
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    // Test seam: simulate Whisper.net's one-shot native LIBRARY load having FAILED and
+    // poisoned its process-wide static loader, so the next LoadModelAsync short-circuits
+    // with the restart-required message instead of re-entering FromPath.
+    internal void MarkNativeRuntimeLoadFailedForTests()
+    {
+        _gate.Wait();
+        try
+        {
+            _nativeRuntimeLoadFailed = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    // Test seam: pre-seed the CUDA provisioner + installer with fakes before ActivateAsync
+    // (whose ??= lazy-create then skips), so the LoadModelAsync provisioning/fallback state
+    // machine can be driven without a network or GPU.
+    internal void SetCudaDependenciesForTests(
+        CudaRuntimeProvisioner provisioner,
+        WhisperCudaRuntimeInstaller installer
+    )
+    {
+        _cudaProvisioner = provisioner;
+        _whisperCudaInstaller = installer;
     }
 
     private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
@@ -1113,51 +1195,59 @@ public sealed class WhisperCppPlugin
         };
     }
 
+    // Status for the user's current EFFECTIVE compute (effectiveBackend = _computeBackend:
+    // whether they're actually getting GPU speed). RequiresRestart is derived from the
+    // NATIVE pin, not the effective compute: only a [Cpu]-pinned process can't reach CUDA
+    // without a restart. A [Cuda]-pinned runtime currently running CPU compute therefore
+    // reports ActiveBackend=Cpu with no restart flag — a CUDA preference just triggers a
+    // reload, which the caller can do.
     private TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
-        string loadedBackend,
+        string effectiveBackend,
         TranscriptionAccelerationPreference preference
     )
     {
-        var loaded = string.Equals(loadedBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+        var active = string.Equals(effectiveBackend, "cuda", StringComparison.OrdinalIgnoreCase)
             ? TranscriptionAccelerationBackend.NvidiaCuda
             : TranscriptionAccelerationBackend.Cpu;
 
         var displayText =
-            loaded == TranscriptionAccelerationBackend.NvidiaCuda
+            active == TranscriptionAccelerationBackend.NvidiaCuda
                 ? "Using NVIDIA CUDA"
                 : "Using CPU";
 
-        var requestedBackend = preference switch
-        {
-            TranscriptionAccelerationPreference.NvidiaCuda =>
-                TranscriptionAccelerationBackend.NvidiaCuda,
-            TranscriptionAccelerationPreference.Cpu => TranscriptionAccelerationBackend.Cpu,
-            _ => loaded,
-        };
+        // The ONLY toggle that needs a restart is loading the [Cuda] .so set on a process
+        // pinned to [Cpu]. CPU↔GPU on a [Cuda] pin, and CPU on a [Cpu] pin, are reloads.
+        var requiresRestart =
+            _pinnedRuntimeBackend == "cpu"
+            && preference == TranscriptionAccelerationPreference.NvidiaCuda;
 
-        if (requestedBackend != loaded)
-        {
-            var detail = loaded == TranscriptionAccelerationBackend.Cpu
-                ? "Process is pinned to CPU. Restart to switch to NVIDIA CUDA."
-                : "Process is pinned to NVIDIA CUDA. Restart to switch to CPU.";
-            return new TranscriptionAccelerationStatus(loaded, displayText, detail, true);
-        }
+        if (requiresRestart)
+            return new TranscriptionAccelerationStatus(
+                active,
+                displayText,
+                "Process is pinned to CPU. Restart to switch to NVIDIA CUDA.",
+                true
+            );
 
-        return new TranscriptionAccelerationStatus(loaded, displayText);
+        return new TranscriptionAccelerationStatus(active, displayText);
     }
 
-    // An explicit NVIDIA CUDA request that couldn't be honoured (no usable GPU, a
-    // failed runtime download, missing CUDA libraries): the model still loaded on
-    // CPU, so report CPU as active and carry the reason for the UI to surface. The
-    // native runtime is now pinned to CPU for the process, so retrying CUDA needs a
-    // restart — flag it, matching the requested-vs-loaded mismatch path (a later
-    // reload would otherwise re-derive RequiresRestart=true and flip this status).
-    private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(string detail) =>
+    // An explicit NVIDIA CUDA request that couldn't be honoured (no usable GPU, a failed
+    // runtime download, missing CUDA libraries, or a GPU-context failure): the model still
+    // loaded on CPU, so report CPU active and carry the reason for the UI. requiresRestart
+    // is decided by the caller from the NATIVE pin — a [Cpu]-pinned process (provisioning
+    // or library-load failure) genuinely needs a restart to reach CUDA, but a [Cuda]-pinned
+    // process that merely fell back to CPU compute (GPU-context failure) can retry CUDA with
+    // a reload, so it must NOT claim a restart is required (the whole point of M6).
+    private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(
+        string detail,
+        bool requiresRestart
+    ) =>
         new(
             TranscriptionAccelerationBackend.Cpu,
             "Using CPU",
             $"CUDA unavailable: {detail}",
-            RequiresRestart: true
+            RequiresRestart: requiresRestart
         );
 
     private static void TryDeleteFile(string path)

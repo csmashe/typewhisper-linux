@@ -20,7 +20,10 @@ namespace TypeWhisper.Plugin.WhisperCpp;
 ///         is pointed here.
 ///     </para>
 /// </summary>
-internal sealed class WhisperCudaRuntimeInstaller
+// Not sealed: tests subclass it with a fake that overrides EnsureInstalledAsync (it would
+// otherwise download ~167 MB from nuget.org), injected via the plugin's
+// SetCudaDependenciesForTests seam.
+internal class WhisperCudaRuntimeInstaller
 {
     // Must stay in lock-step with the Whisper.net / Whisper.net.Runtime package
     // version referenced by the csproj — whisper.cpp's native ABI is not stable
@@ -97,7 +100,7 @@ internal sealed class WhisperCudaRuntimeInstaller
     ///     Ensures the CUDA runtime is unpacked, downloading and extracting the
     ///     package if needed. Concurrency-safe and idempotent.
     /// </summary>
-    public async Task EnsureInstalledAsync(IProgress<double>? progress, CancellationToken ct)
+    public virtual async Task EnsureInstalledAsync(IProgress<double>? progress, CancellationToken ct)
     {
         if (IsInstalled)
         {

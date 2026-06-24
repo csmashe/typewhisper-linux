@@ -13,7 +13,10 @@ namespace TypeWhisper.Plugin.SherpaOnnx;
 ///     bundle, so it is fetched at first CUDA use and cached under the plugin's
 ///     asset directory.
 /// </summary>
-internal sealed class SherpaCudaRuntimeInstaller
+// Not sealed: tests subclass it with a fake that overrides EnsureInstalledAsync (it would
+// otherwise download ~224 MB from GitHub), injected via the plugin's
+// SetCudaDependenciesForTests seam.
+internal class SherpaCudaRuntimeInstaller
 {
     // Must stay in lock-step with the managed org.k2fsa.sherpa.onnx package version
     // referenced by the csproj — the C API is not ABI-stable across releases.
@@ -79,7 +82,7 @@ internal sealed class SherpaCudaRuntimeInstaller
     ///     Ensures the GPU runtime is unpacked, downloading and extracting the
     ///     tarball if needed. Concurrency-safe and idempotent.
     /// </summary>
-    public async Task EnsureInstalledAsync(IProgress<double>? progress, CancellationToken ct)
+    public virtual async Task EnsureInstalledAsync(IProgress<double>? progress, CancellationToken ct)
     {
         if (IsInstalled)
         {
