@@ -29,7 +29,13 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenRouter\TypeWhisper.Plugin.OpenRouter.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Reson8\TypeWhisper.Plugin.Reson8.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Script\TypeWhisper.Plugin.Script.csproj"/>
-        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.SherpaOnnx\TypeWhisper.Plugin.SherpaOnnx.csproj"/>
+        <!-- CudaRuntimeProvisioner is compiled into BOTH the SherpaOnnx and WhisperCpp
+             plugin assemblies, so its type name is ambiguous across them. Expose the
+             SherpaOnnx copy under an extern alias so a test can reference it unambiguously
+             (keep `global` so the existing SherpaOnnx references still resolve). -->
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.SherpaOnnx\TypeWhisper.Plugin.SherpaOnnx.csproj">
+            <Aliases>global,SherpaCuda</Aliases>
+        </ProjectReference>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.SmallestAi\TypeWhisper.Plugin.SmallestAi.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Soniox\TypeWhisper.Plugin.Soniox.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Speechmatics\TypeWhisper.Plugin.Speechmatics.csproj"/>

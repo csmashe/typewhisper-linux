@@ -152,6 +152,10 @@
                                     Content="{Binding DownloadCudaRuntimeText}"
                                     Command="{Binding DownloadCudaRuntimeCommand}"
                                     IsVisible="{Binding ShowDownloadCudaRuntimeAction}" />
+                            <Button Grid.Column="2"
+                                    Content="{Binding ClearGpuRuntimeText}"
+                                    Command="{Binding ClearGpuRuntimeCommand}"
+                                    IsVisible="{Binding ShowClearGpuRuntimeAction}" />
                         </Grid>
                     </Border>
 

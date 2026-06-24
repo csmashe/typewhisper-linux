@@ -304,6 +304,60 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         _ = DeleteModelAsync(modelId);
     }
 
+    /// <summary>
+    ///     Deletes every on-demand-provisioning engine's cached CUDA runtime (the shared
+    ///     CUDA math libraries plus each engine's own GPU build) so a corrupt cache can
+    ///     be recovered: the next process start re-provisions from scratch. The active
+    ///     model is unloaded first so no <c>.so</c> is in use. Every engine is attempted
+    ///     (one failing doesn't stop the others), but if any clear fails the collected
+    ///     failures are thrown as an aggregate — so a corrupt runtime is never reported to
+    ///     the user as repaired when it is still on disk. Note: libraries already loaded
+    ///     this session are held until exit, so a restart is required for the fresh
+    ///     re-download to take effect.
+    /// </summary>
+    public async Task ClearCudaRuntimeCacheAsync(CancellationToken cancellationToken = default)
+    {
+        await _modelLock.WaitAsync(cancellationToken);
+        try
+        {
+            await UnloadModelCoreAsync();
+
+            var failures = new List<string>();
+            foreach (
+                var plugin in PluginManager.TranscriptionEngines.Where(e =>
+                    e.ProvisionsCudaRuntimeOnDemand
+                )
+            )
+            {
+                try
+                {
+                    await plugin.ClearCudaRuntimeAsync(cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // Attempt every engine, but record the failure so it can be surfaced:
+                    // a swallowed delete failure would tell the user the corrupt runtime
+                    // was cleared when it is still on disk.
+                    Debug.WriteLine(
+                        $"ClearCudaRuntimeAsync failed for {plugin.ProviderId}: {ex.Message}"
+                    );
+                    failures.Add($"{plugin.ProviderId}: {ex.Message}");
+                }
+            }
+
+            if (failures.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "Failed to clear the GPU runtime cache: " + string.Join("; ", failures)
+                );
+            }
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
     public async Task<bool> EnsureModelLoadedAsync(
         string? modelId = null,
         CancellationToken cancellationToken = default

@@ -639,6 +639,44 @@ public sealed class CudaRuntimeProvisioner
         }
     }
 
+    /// <summary>
+    ///     Deletes the entire shared CUDA cache root (the parent of
+    ///     <see cref="CacheDirectory" /> — every bundle version, not just the current
+    ///     one) so the next <see cref="EnsureReadyAsync" /> re-downloads from scratch.
+    ///     Guarded by the same gate as provisioning so it can't race an in-flight
+    ///     download. A missing cache is a no-op (already clear); a delete failure is
+    ///     logged and rethrown so the caller can surface it rather than report a corrupt
+    ///     runtime as repaired. Note: libraries already dlopen'd this process are held
+    ///     until exit, so a restart is required for a fresh re-provision to take effect.
+    /// </summary>
+    public void ClearCache()
+    {
+        _gate.Wait();
+        try
+        {
+            var root = Directory.GetParent(CacheDirectory)?.FullName;
+            if (root is null || !Directory.Exists(root))
+                return;
+
+            try
+            {
+                Directory.Delete(root, recursive: true);
+                _log?.Invoke($"CUDA runtime: cleared cache at {root}.");
+            }
+            catch (Exception ex)
+            {
+                // Don't swallow: the caller reports "cleared" to the user only when the
+                // cache is actually gone, so a corrupt runtime can't masquerade as repaired.
+                _log?.Invoke($"CUDA runtime: failed to clear cache at {root}: {ex.Message}");
+                throw;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     // Remove sibling bundle dirs from earlier BundleVersions so superseded caches
     // don't accumulate (cuDNN alone is ~1.7 GB unpacked).
     private void PruneStaleBundles()

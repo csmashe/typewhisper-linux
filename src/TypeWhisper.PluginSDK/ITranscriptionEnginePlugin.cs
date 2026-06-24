@@ -76,6 +76,15 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    ///     Deletes this engine's provisioned CUDA runtime caches (the shared CUDA math
+    ///     libraries plus any per-engine GPU build) so the next CUDA load re-provisions
+    ///     from scratch. Best-effort. Note: libraries already dlopen'd this session are
+    ///     held until process exit, so a restart is required for a fresh re-download to
+    ///     take effect. Default: no-op (engines with nothing provisioned).
+    /// </summary>
+    Task ClearCudaRuntimeAsync(CancellationToken ct) => Task.CompletedTask;
+
     /// <summary>Acceleration preference last requested by the host. Default: Auto.</summary>
     TranscriptionAccelerationPreference AccelerationPreference =>
         TranscriptionAccelerationPreference.Auto;
