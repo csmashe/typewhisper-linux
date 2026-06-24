@@ -16,4 +16,19 @@
     <ItemGroup>
         <ProjectReference Include="../../src/TypeWhisper.Core/TypeWhisper.Core.csproj"/>
     </ItemGroup>
+
+    <ItemGroup>
+        <!--
+            Single, unambiguous copy of the shared downloader for its unit tests.
+            Core.Tests references only TypeWhisper.Core (no plugin refs), so file-linking
+            the source here compiles exactly one copy of the internal type — visible to
+            these tests without InternalsVisibleTo. (PluginSystem.Tests references both
+            plugins, which already compile the type, so referencing it there would be a
+            CS0433 duplicate.)
+        -->
+        <Compile Include="../../plugins/Shared/Net/ResilientDownloader.cs"
+                 Link="Shared/Net/ResilientDownloader.cs" />
+        <Compile Include="../../plugins/Shared/Net/InterProcessFileLock.cs"
+                 Link="Shared/Net/InterProcessFileLock.cs" />
+    </ItemGroup>
 </Project>

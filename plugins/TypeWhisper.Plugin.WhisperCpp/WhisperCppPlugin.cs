@@ -206,12 +206,15 @@ public sealed class WhisperCppPlugin
 
     // Drives the on-demand CUDA runtime downloads (cudart/cuBLAS wheels + the ~167 MB
     // whisper CUDA nupkg). HttpClient.Timeout bounds the WHOLE request including the
-    // streamed body — even with ResponseHeadersRead — so the default 100 s deadline
-    // would cancel these multi-hundred-MB fetches mid-stream on any ordinary link.
-    // Use a generous ceiling (matching GemmaLocal's large-model client) and rely on
-    // the per-call CancellationToken for user-initiated cancellation; the ceiling also
-    // bounds a stalled-but-open socket so a half-open connection can't hang forever.
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
+    // streamed body, so a short ceiling would cancel these multi-hundred-MB fetches
+    // mid-stream; use a generous 2 h ceiling and rely on the per-call token for
+    // cancellation. ConnectTimeout bounds a socket that never establishes, and
+    // ResilientDownloader's idle watchdog bounds a half-open socket mid-body to seconds.
+    private readonly HttpClient _httpClient =
+        new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
+        {
+            Timeout = TimeSpan.FromHours(2)
+        };
     private IPluginHostServices? _host;
     private WhisperFactory? _factory;
     private CudaRuntimeProvisioner? _cudaProvisioner;
