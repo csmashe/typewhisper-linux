@@ -1,3 +1,12 @@
+// Non-"unused" inspections kept file-level (they cannot mask a future unused member): the
+// 7-param overload is deliberate binary back-compat (test-pinned) so its redundant-looking
+// defaults are required, and "Groq" is a provider name.
+// ReSharper disable RedundantOverload.Global
+// ReSharper disable MethodOverloadWithOptionalParameter
+// ReSharper disable CommentTypo
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -9,8 +18,46 @@ namespace TypeWhisper.PluginSDK.Helpers;
 ///     Static helper for OpenAI-compatible chat completion API calls. Shared by
 ///     LLM provider plugins so each plugin doesn't reimplement request shaping.
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public static class OpenAiChatHelper
 {
+    /// <summary>
+    ///     Convenience overload that sends a chat completion using the default token cap
+    ///     (2048 via <c>max_tokens</c>), no reasoning-effort hint, and temperature 0.1.
+    /// </summary>
+    /// <returns>The assistant's response content text.</returns>
+    /// <remarks>
+    ///     Kept as a distinct signature for binary back-compat with plugins compiled
+    ///     against it; pinned by the <c>PreservesLegacySevenParameterOverload</c> test.
+    ///     (Rider flags it "redundant overload" — a false positive given that guarantee.)
+    /// </remarks>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
+    public static Task<string> SendChatCompletionAsync(
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        string systemPrompt,
+        string userText,
+        CancellationToken ct
+    )
+    {
+        return SendChatCompletionAsync(
+            httpClient,
+            baseUrl,
+            apiKey,
+            model,
+            systemPrompt,
+            userText,
+            ct,
+            2048,
+            "max_tokens",
+            null,
+            0.1
+        );
+    }
+
     /// <summary>
     ///     Sends a chat completion request to an OpenAI-compatible API endpoint.
     /// </summary>
@@ -40,32 +87,8 @@ public static class OpenAiChatHelper
     ///     reject the parameter outright.
     /// </param>
     /// <returns>The assistant's response content text.</returns>
-    public static Task<string> SendChatCompletionAsync(
-        HttpClient httpClient,
-        string baseUrl,
-        string apiKey,
-        string model,
-        string systemPrompt,
-        string userText,
-        CancellationToken ct
-    )
-    {
-        return SendChatCompletionAsync(
-            httpClient,
-            baseUrl,
-            apiKey,
-            model,
-            systemPrompt,
-            userText,
-            ct,
-            2048,
-            "max_tokens",
-            null,
-            0.1
-        );
-    }
-
-    /// <inheritdoc cref="SendChatCompletionAsync(HttpClient, string, string, string, string, string, CancellationToken)" />
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
     public static async Task<string> SendChatCompletionAsync(
         HttpClient httpClient,
         string baseUrl,
@@ -101,6 +124,8 @@ public static class OpenAiChatHelper
     ///     Sends the same body with <c>"stream": true</c> and yields each <c>choices[0].delta.content</c> token
     ///     over SSE. Covers the full OpenAI-compatible cohort (OpenAI, Groq, Cerebras, Fireworks, Gemini, Cohere, OpenRouter).
     /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
     public static async IAsyncEnumerable<string> SendChatCompletionStreamingAsync(
         HttpClient httpClient,
         string baseUrl,
@@ -190,6 +215,8 @@ public static class OpenAiChatHelper
     ///     or <c>null</c> for contentless/unparseable frames (heartbeats, role-only, finish).
     ///     Reflection-free via <see cref="JsonDocument" />.
     /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
     internal static string? ParseChatCompletionStreamDelta(string dataPayload)
     {
         JsonDocument doc;
@@ -220,11 +247,13 @@ public static class OpenAiChatHelper
     }
 
     /// <summary>
-    ///     Returns an error message when a SSE <c>data:</c> payload is a top-level
+    ///     Returns an error message when an SSE <c>data:</c> payload is a top-level
     ///     <c>error</c> frame (OpenAI-compatible providers emit these mid-stream after a 200),
     ///     otherwise <c>null</c>. A literal <c>"error": null</c> is not treated as failure.
     ///     Reflection-free via <see cref="JsonDocument" />.
     /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
     internal static string? ParseChatCompletionStreamError(string dataPayload)
     {
         JsonDocument doc;
@@ -264,24 +293,28 @@ public static class OpenAiChatHelper
     }
 
     /// <summary>Returns <c>choices[0].message.content</c> from a chat completion JSON response.</summary>
-    internal static string ParseChatCompletionResponse(string json)
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
+    private static string ParseChatCompletionResponse(string json)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
+        if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
         {
-            var firstChoice = choices[0];
-            if (
-                firstChoice.TryGetProperty("message", out var message)
-                && message.TryGetProperty("content", out var content)
-            )
-            {
-                return content.GetString()?.Trim() ?? "";
-            }
+            return "";
         }
 
-        return "";
+        var firstChoice = choices[0];
+        if (
+            !firstChoice.TryGetProperty("message", out var message)
+            || !message.TryGetProperty("content", out var content)
+        )
+        {
+            return "";
+        }
+
+        return content.GetString()?.Trim() ?? "";
     }
 
     private static Dictionary<string, object?> BuildRequestBody(

@@ -3,39 +3,31 @@
 // the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 namespace TypeWhisper.PluginSDK.Models;
 
-/// <summary>
-///     Describes a model available from a plugin provider.
-/// </summary>
-/// <param name="Id">Model identifier (e.g. "gpt-4o", "whisper-1").</param>
-/// <param name="DisplayName">Human-readable name for the UI.</param>
+/// <summary>Raised when an action plugin completes execution.</summary>
 // ReSharper disable once UnusedType.Global
-public sealed record PluginModelInfo(string Id, string DisplayName)
+public sealed record ActionCompletedEvent : PluginEvent
 {
-    /// <summary>Human-readable size description (e.g. "~670 MB").</summary>
+    /// <summary>ID of the action that completed.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public string? SizeDescription { get; init; }
+    public required string ActionId { get; init; }
 
-    // Public SDK API: renaming to the rule's suggested "Mb" would break binary compat for
-    // external plugins compiled against this name, so the pascal-case suggestion is not
-    // applied here. 
-    /// <summary>Estimated download size in megabytes.</summary>
-    // ReSharper disable once InconsistentNaming
+    /// <summary>Whether the action succeeded.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public long EstimatedSizeMB { get; init; }
+    public bool Success { get; init; }
 
-    /// <summary>Whether this model is recommended for new users.</summary>
+    /// <summary>Result message from the action.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public bool IsRecommended { get; init; }
+    public string? Message { get; init; }
 
-    /// <summary>Number of languages supported by this model.</summary>
+    /// <summary>Name of the foreground application.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public int LanguageCount { get; init; }
+    public string? AppName { get; init; }
 }

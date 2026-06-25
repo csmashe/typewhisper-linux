@@ -3,39 +3,37 @@
 // the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 namespace TypeWhisper.PluginSDK.Models;
 
-/// <summary>
-///     Describes a model available from a plugin provider.
-/// </summary>
-/// <param name="Id">Model identifier (e.g. "gpt-4o", "whisper-1").</param>
-/// <param name="DisplayName">Human-readable name for the UI.</param>
+/// <summary>Raised as an LLM response streams in, carrying the accumulated text.</summary>
 // ReSharper disable once UnusedType.Global
-public sealed record PluginModelInfo(string Id, string DisplayName)
+public sealed record LlmResponseTokenEvent : PluginEvent
 {
-    /// <summary>Human-readable size description (e.g. "~670 MB").</summary>
+    /// <summary>Full accumulated response text so far.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public string? SizeDescription { get; init; }
+    public required string AccumulatedText { get; init; }
 
-    // Public SDK API: renaming to the rule's suggested "Mb" would break binary compat for
-    // external plugins compiled against this name, so the pascal-case suggestion is not
-    // applied here. 
-    /// <summary>Estimated download size in megabytes.</summary>
-    // ReSharper disable once InconsistentNaming
+    /// <summary>The delta appended since the previous event (for bus subscribers).</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public long EstimatedSizeMB { get; init; }
+    public string DeltaText { get; init; } = "";
 
-    /// <summary>Whether this model is recommended for new users.</summary>
+    /// <summary>True on the terminal flush (stream completed or faulted).</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public bool IsRecommended { get; init; }
+    public bool IsFinal { get; init; }
 
-    /// <summary>Number of languages supported by this model.</summary>
+    /// <summary>True when the terminal flush is due to a mid-stream fault.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public int LanguageCount { get; init; }
+    public bool Faulted { get; init; }
+
+    /// <summary>Pipeline step that produced this text. Bare string to avoid SDK dependency on TypeWhisper.Core.</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public string? StepName { get; init; }
 }

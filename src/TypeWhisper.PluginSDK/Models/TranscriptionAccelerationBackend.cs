@@ -3,16 +3,14 @@
 // the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 namespace TypeWhisper.PluginSDK.Models;
 
-/// <summary>Log severity level passed to <see cref="IPluginHostServices.Log" />.</summary>
+/// <summary>
+///     A concrete compute backend a transcription engine can resolve to.
+/// </summary>
 // ReSharper disable once UnusedType.Global
-public enum PluginLogLevel
+public enum TranscriptionAccelerationBackend
 {
     // ReSharper disable once UnusedMember.Global
-    Debug,
+    Cpu,
     // ReSharper disable once UnusedMember.Global
-    Info,
-    // ReSharper disable once UnusedMember.Global
-    Warning,
-    // ReSharper disable once UnusedMember.Global
-    Error
+    NvidiaCuda
 }

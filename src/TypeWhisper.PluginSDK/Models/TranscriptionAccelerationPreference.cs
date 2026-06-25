@@ -4,21 +4,15 @@
 namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>
-///     Describes why text-to-speech playback is being requested.
-///     Providers may use this to adjust voice, speed, or volume for different contexts.
+///     User preference for transcription compute acceleration.
 /// </summary>
 // ReSharper disable once UnusedType.Global
-public enum TtsPurpose
+public enum TranscriptionAccelerationPreference
 {
-    /// <summary>Short status announcement (e.g. "Recording started").</summary>
     // ReSharper disable once UnusedMember.Global
-    Status,
-
-    /// <summary>Reading back the transcribed text after dictation.</summary>
+    Auto,
     // ReSharper disable once UnusedMember.Global
-    Transcription,
-
-    /// <summary>User explicitly requested the text to be read aloud.</summary>
+    Cpu,
     // ReSharper disable once UnusedMember.Global
-    ManualReadback
+    NvidiaCuda
 }

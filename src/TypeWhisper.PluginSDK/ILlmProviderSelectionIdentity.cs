@@ -4,13 +4,13 @@
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Optional capability expansion for plugins that expose additional transcription engine roles.
+///     Optional stable selection identity for LLM provider roles.
 /// </summary>
 // ReSharper disable once UnusedType.Global
-public interface IAdditionalTranscriptionEnginesProvider
+public interface ILlmProviderSelectionIdentity
 {
-    /// <summary>Additional transcription engine roles exposed by this plugin.</summary>
+    /// <summary>Stable identifier used in plugin LLM selection IDs.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedMemberInSuper.Global
-    IReadOnlyList<ITranscriptionEnginePlugin> AdditionalTranscriptionEngines { get; }
+    string LlmSelectionId { get; }
 }

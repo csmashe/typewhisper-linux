@@ -1,3 +1,6 @@
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>
@@ -8,6 +11,7 @@ namespace TypeWhisper.PluginSDK.Models;
 /// <param name="Url">Optional URL to open or display after the action completes.</param>
 /// <param name="Icon">Optional icon system name for the result notification.</param>
 /// <param name="DisplayDuration">How long to display the result notification, in seconds.</param>
+// ReSharper disable once UnusedType.Global
 public sealed record ActionResult(
     bool Success,
     string? Message = null,

@@ -3,69 +3,67 @@
 // the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 namespace TypeWhisper.PluginSDK.Models;
 
-/// <summary>
-///     Describes a plugin's metadata, loaded from plugin.json in the plugin directory.
-/// </summary>
+/// <summary>Raised after a successful transcription.</summary>
 // ReSharper disable once UnusedType.Global
-public sealed record PluginManifest
+public sealed record TranscriptionCompletedEvent : PluginEvent
 {
-    /// <summary>Unique plugin identifier (e.g. "com.typewhisper.openai").</summary>
+    /// <summary>The raw transcribed text (before post-processing).</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public required string Id { get; init; }
+    public string? RawText { get; init; }
 
-    /// <summary>Human-readable plugin name.</summary>
+    /// <summary>The final text (after post-processing).</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public required string Name { get; init; }
+    public required string Text { get; init; }
 
-    /// <summary>Semantic version (e.g. "1.0.0").</summary>
+    /// <summary>Detected language (ISO code), or null.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public required string Version { get; init; }
+    public string? DetectedLanguage { get; init; }
 
-    /// <summary>Minimum host version required, or null for any.</summary>
+    /// <summary>Audio duration in seconds.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public string? MinHostVersion { get; init; }
+    public double DurationSeconds { get; init; }
 
-    /// <summary>Plugin author name.</summary>
+    /// <summary>Engine used for transcription.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public string? Author { get; init; }
+    public string? EngineUsed { get; init; }
 
-    /// <summary>Short description of the plugin.</summary>
+    /// <summary>Model ID used for transcription, or null.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public string? Description { get; init; }
+    public string? ModelId { get; init; }
 
-    /// <summary>Plugin category for UI grouping (e.g. "transcription", "llm", "memory", "action", "utility").</summary>
+    /// <summary>Name of the dictation profile used, or null.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public string? Category { get; init; }
+    public string? ProfileName { get; init; }
 
-    /// <summary>Whether this is a local (on-device) or cloud-based plugin.</summary>
+    /// <summary>Name of the foreground application.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public bool IsLocal { get; init; }
+    public string? AppName { get; init; }
 
-    /// <summary>DLL file name containing the plugin type (e.g. "MyPlugin.dll").</summary>
+    /// <summary>Process name of the foreground application.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public required string AssemblyName { get; init; }
+    public string? AppProcessName { get; init; }
 
-    /// <summary>Fully-qualified class name implementing ITypeWhisperPlugin.</summary>
+    /// <summary>URL of the active browser tab, or null.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public required string PluginClass { get; init; }
+    public string? Url { get; init; }
 }
