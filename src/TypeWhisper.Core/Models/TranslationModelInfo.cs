@@ -1,12 +1,17 @@
 // ReSharper disable UnusedAutoPropertyAccessor.Global
+
+using System.Diagnostics;
+
 namespace TypeWhisper.Core.Models;
 
 /// <summary>
 ///     Metadata and file manifest for one OPUS-MT translation model (a
 ///     source→target language pair) hosted as Xenova ONNX exports on Hugging Face.
-///     Also the static catalog of <see cref="SupportedLanguages" /> and
-///     <see cref="AvailableModels" />, with <see cref="FindModel" /> to resolve a
-///     pair.
+///     Also the static <see cref="LanguageCatalog" /> (display metadata) and
+///     <see cref="AvailableModels" /> (the models that actually exist), with
+///     <see cref="FindModel" /> to resolve a pair. The target picker's membership is
+///     derived from <see cref="AvailableModels" /> so it can never offer a target no
+///     model can produce.
 /// </summary>
 public sealed record TranslationModelInfo
 {
@@ -19,9 +24,14 @@ public sealed record TranslationModelInfo
     public required IReadOnlyList<TranslationFileInfo> Files { get; init; }
     public required string SubDirectory { get; init; }
 
-    // --- Supported target languages ---
+    // --- Display catalog (names + badges only) ---
 
-    private static IReadOnlyList<TranslationLanguage> SupportedLanguages { get; } =
+    // How each language is *rendered* (display name, badge) and the order it appears
+    // in. This does NOT decide which targets are offered — membership comes from
+    // ProducibleTargets below. A code listed here with no model (today: "pl") is
+    // simply dropped from the picker; it stays in the catalog ready for the day a
+    // model ships. Keep it ordered for the UI.
+    private static IReadOnlyList<TranslationLanguage> LanguageCatalog { get; } =
     [
         new("en", "English", "EN"),
         new("de", "Deutsch", "DE"),
@@ -45,15 +55,11 @@ public sealed record TranslationModelInfo
         new("id", "Bahasa Indonesia", "ID")
     ];
 
-    /// <summary>Options list for the Settings (global) ComboBox; first item is "no translation".</summary>
-    public static IReadOnlyList<TranslationTargetOption> GlobalTargetOptions { get; } =
-        BuildOptions(false);
-
-    /// <summary>Options list for the Profile ComboBox; first item is "use global setting".</summary>
-    public static IReadOnlyList<TranslationTargetOption> ProfileTargetOptions { get; } =
-        BuildOptions(true);
-
-    private static IReadOnlyList<TranslationModelInfo> AvailableModels { get; } =
+    // The OPUS-MT models that actually exist (confirmed Xenova ONNX exports). The
+    // single source of truth for which targets the picker may offer. Queried by
+    // FindModel and projected into ProducibleTargets. Internal so the guard test can
+    // assert the offered targets match the producible ones.
+    internal static IReadOnlyList<TranslationModelInfo> AvailableModels { get; } =
     [
         // X → EN (confirmed Xenova exports)
         Pair("de", "en"),
@@ -99,6 +105,21 @@ public sealed record TranslationModelInfo
         Pair("de", "es")
     ];
 
+    // Distinct target languages across every model pair — the targets we can
+    // actually produce (directly, or as the en→X leg of the English pivot).
+    // Declaration order is preserved so the fallback branch in BuildOptions is
+    // deterministic.
+    private static readonly IReadOnlyList<string> ProducibleTargets =
+        AvailableModels.Select(m => m.TargetLanguage).Distinct().ToList();
+
+    /// <summary>Options list for the Settings (global) ComboBox; first item is "no translation".</summary>
+    public static IReadOnlyList<TranslationTargetOption> GlobalTargetOptions { get; } =
+        BuildOptions(false);
+
+    /// <summary>Options list for the Profile ComboBox; first item is "use global setting".</summary>
+    public static IReadOnlyList<TranslationTargetOption> ProfileTargetOptions { get; } =
+        BuildOptions(true);
+
     public static TranslationModelInfo? FindModel(string sourceLang, string targetLang)
     {
         return AvailableModels.FirstOrDefault(m =>
@@ -120,9 +141,30 @@ public sealed record TranslationModelInfo
             list.Add(new TranslationTargetOption(null, "No translation", ""));
         }
 
-        foreach (var lang in SupportedLanguages)
+        // Curated order, but only languages we can actually produce a model for. A
+        // catalog entry with no producible model (today: "pl") is dropped here, so
+        // the picker can never offer a target that silently no-ops.
+        foreach (var lang in LanguageCatalog)
         {
-            list.Add(new TranslationTargetOption(lang.Code, lang.DisplayName, lang.BadgeCode));
+            if (ProducibleTargets.Contains(lang.Code))
+            {
+                list.Add(new TranslationTargetOption(lang.Code, lang.DisplayName, lang.BadgeCode));
+            }
+        }
+
+        // Fail-open: a producible target with no catalog entry (a newly added model)
+        // stays selectable, rendered with a raw-code fallback, and is flagged so
+        // someone adds curated metadata. Appended after the curated block.
+        foreach (var code in ProducibleTargets)
+        {
+            if (LanguageCatalog.All(l => l.Code != code))
+            {
+                Debug.WriteLine(
+                    $"TranslationModelInfo: producible target '{code}' has no LanguageCatalog "
+                    + "entry; showing the raw code. Add a curated entry for a display name/badge."
+                );
+                list.Add(new TranslationTargetOption(code, code, code.ToUpperInvariant()));
+            }
         }
 
         return list;

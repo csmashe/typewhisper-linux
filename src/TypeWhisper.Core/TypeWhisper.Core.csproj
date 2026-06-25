@@ -7,4 +7,9 @@
         <RootNamespace>TypeWhisper.Core</RootNamespace>
         <AssemblyName>TypeWhisper.Core</AssemblyName>
     </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Exposes internal AvailableModels to the translation-target guard test. -->
+        <InternalsVisibleTo Include="TypeWhisper.Core.Tests"/>
+    </ItemGroup>
 </Project>
