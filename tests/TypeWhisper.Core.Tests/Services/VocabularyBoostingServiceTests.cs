@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="VocabularyBoostingService" />: fuzzy rewriting of recognized text toward stored dictionary terms.</summary>
 public class VocabularyBoostingServiceTests
 {
     [Fact]

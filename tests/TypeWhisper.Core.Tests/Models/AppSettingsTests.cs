@@ -2,6 +2,7 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Tests.Models;
 
+/// <summary>Covers <see cref="AppSettings" /> defaults and its normalize/clamp helpers (auto-hide, acceleration, overlay position).</summary>
 public class AppSettingsTests
 {
     [Fact]

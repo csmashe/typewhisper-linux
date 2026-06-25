@@ -3,8 +3,10 @@ using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Core.Tests;
 
-// Validates the mutual-exclusion + cancellation contract the resumable GPU downloaders
-// rely on. The type is file-linked into this project (see the .csproj).
+/// <summary>
+///     Validates the mutual-exclusion + cancellation contract the resumable GPU downloaders
+///     rely on. The type is file-linked into this project (see the .csproj).
+/// </summary>
 public sealed class InterProcessFileLockTests
 {
     private static string NewTempDir()

@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="HistoryService" />: record persistence, exports, retention purging, and audio-file cleanup.</summary>
 public class HistoryServiceTests : IDisposable
 {
     private readonly string _audioDirectory;

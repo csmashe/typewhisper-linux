@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="SnippetService" />: trigger expansion, placeholders, tags, profile scoping, and JSON import/export.</summary>
 public class SnippetServiceTests : IDisposable
 {
     private readonly string _filePath;

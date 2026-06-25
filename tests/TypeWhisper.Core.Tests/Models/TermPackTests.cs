@@ -2,6 +2,7 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Tests.Models;
 
+/// <summary>Guards the built-in <see cref="TermPack" /> catalog and <see cref="IndustryPreset" /> lookup/merge behavior.</summary>
 public class TermPackTests
 {
     [Fact]

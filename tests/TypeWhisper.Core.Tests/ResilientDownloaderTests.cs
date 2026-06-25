@@ -6,9 +6,11 @@ using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Core.Tests;
 
-// Exercises the shared resumable/idle-watchdog downloader. The type is file-linked into
-// this project (see the .csproj), so it compiles as a single, unambiguous copy whose
-// internal surface is visible here without InternalsVisibleTo.
+/// <summary>
+///     Exercises the shared resumable/idle-watchdog downloader. The type is file-linked into
+///     this project (see the .csproj), so it compiles as a single, unambiguous copy whose
+///     internal surface is visible here without InternalsVisibleTo.
+/// </summary>
 public sealed class ResilientDownloaderTests
 {
     private const string Url = "https://example.test/artifact.bin";

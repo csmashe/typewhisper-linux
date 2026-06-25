@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers the corrections/terms surface of <see cref="DictionaryService" /> (upsert, delete, enabled-only filtering).</summary>
 public class DictionaryServiceCorrectionsTests : IDisposable
 {
     private readonly string _filePath;

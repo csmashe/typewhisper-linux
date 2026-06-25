@@ -2,6 +2,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Verifies <see cref="DeveloperFormattingService" /> converts spoken code symbols/casing while leaving ordinary prose alone.</summary>
 public sealed class DeveloperFormattingServiceTests
 {
     [Theory]

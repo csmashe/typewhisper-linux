@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="SettingsService" />: save/load round-trips, atomic-write/backup recovery, and legacy-field migrations.</summary>
 public class SettingsServiceTests : IDisposable
 {
     private readonly string _filePath;

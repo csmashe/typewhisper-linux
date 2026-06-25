@@ -2,6 +2,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="VoiceCommandParser" />: trailing voice commands (press enter, new line/paragraph, cancel) vs. literal text.</summary>
 public sealed class VoiceCommandParserTests
 {
     private readonly VoiceCommandParser _sut = new();

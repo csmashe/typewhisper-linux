@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="CleanupService" /> light cleanup (fillers, spoken punctuation/lists, backtrack corrections) and LLM prompt selection.</summary>
 public sealed class CleanupServiceTests
 {
     [Fact]

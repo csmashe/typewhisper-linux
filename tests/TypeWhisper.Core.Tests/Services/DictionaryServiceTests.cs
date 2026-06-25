@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="DictionaryService" />: entries, term packs, corrections, CSV round-trip, and change notifications.</summary>
 public class DictionaryServiceTests : IDisposable
 {
     private readonly string _filePath;

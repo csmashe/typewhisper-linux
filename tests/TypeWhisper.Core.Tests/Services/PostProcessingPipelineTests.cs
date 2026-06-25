@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="PostProcessingPipeline" />: step ordering, spoken normalization, translation gating, cancellation, and error resilience.</summary>
 public class PostProcessingPipelineTests
 {
     private readonly PostProcessingPipeline _sut = new();

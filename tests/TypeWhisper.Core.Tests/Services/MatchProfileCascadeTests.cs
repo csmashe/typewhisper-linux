@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Guards <see cref="ProfileService" />'s profile-match cascade: app/website/global tiers, priority ties, and manual override.</summary>
 public class MatchProfileCascadeTests : IDisposable
 {
     private readonly string _filePath;

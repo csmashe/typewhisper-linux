@@ -2,6 +2,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Verifies <see cref="IdeFileReferenceService" /> turns spoken file names into references (and @-mentions) without touching normal text.</summary>
 public sealed class IdeFileReferenceServiceTests
 {
     [Theory]

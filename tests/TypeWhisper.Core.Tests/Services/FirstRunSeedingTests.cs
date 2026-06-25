@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Verifies first-run seeding of the default cleanup prompt action and auto-format profile is correct and idempotent.</summary>
 public class FirstRunSeedingTests : IDisposable
 {
     private readonly string _dir;

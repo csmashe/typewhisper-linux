@@ -2,6 +2,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="CorrectionSuggestionService" />: which inserted-vs-corrected edits become suggestions and which are deliberately ignored.</summary>
 public sealed class CorrectionSuggestionServiceTests
 {
     [Fact]

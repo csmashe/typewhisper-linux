@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="LocalModelStorageService" /> and path resolution: custom-path normalization, asset migration, and reset.</summary>
 public sealed class LocalModelStorageServiceTests : IDisposable
 {
     private readonly string _tempRoot =

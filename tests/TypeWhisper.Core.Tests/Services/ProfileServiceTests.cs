@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="ProfileService" /> persistence/round-tripping and forced/hotkey-only profile matching rules.</summary>
 public class ProfileServiceTests : IDisposable
 {
     private readonly string _filePath;
