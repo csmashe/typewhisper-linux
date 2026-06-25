@@ -5,8 +5,6 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public sealed class CleanupServiceTests
 {
-    private readonly CleanupService _sut = new();
-
     [Fact]
     public void Clean_None_ReturnsOriginalText()
     {

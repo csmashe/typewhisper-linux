@@ -4,8 +4,6 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public sealed class IdeFileReferenceServiceTests
 {
-    private readonly IdeFileReferenceService _sut = new();
-
     [Theory]
     [InlineData("index dot ts", "index.ts")]
     [InlineData("app settings dot json", "app_settings.json")]

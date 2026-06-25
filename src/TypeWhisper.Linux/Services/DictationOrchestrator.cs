@@ -77,7 +77,6 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
-    private readonly VoiceCommandParser _voiceCommands = new();
     private CancellationTokenSource? _activeDictationCts;
     private EventHandler? _cancelHandler;
     private volatile bool _cancelRequested;

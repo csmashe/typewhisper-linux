@@ -272,15 +272,10 @@ public partial class AboutSectionViewModel : ObservableObject
     {
         // Distinct categories present, sorted for a stable dropdown order, behind an
         // "All categories" option (null Key) that clears the filter.
-        var present = new List<string>();
-        foreach (var entry in ErrorEntries)
-        {
-            if (!present.Contains(entry.Category))
-            {
-                present.Add(entry.Category);
-            }
-        }
-
+        var present = ErrorEntries
+            .Select(entry => entry.Category)
+            .Distinct()
+            .ToList();
         present.Sort(StringComparer.Ordinal);
 
         var desired = new List<CategoryFilterOption>
@@ -316,12 +311,9 @@ public partial class AboutSectionViewModel : ObservableObject
         var key = SelectedCategoryFilter?.Key;
 
         FilteredErrorEntries.Clear();
-        foreach (var entry in ErrorEntries)
+        foreach (var entry in ErrorEntries.Where(entry => key is null || entry.Category == key))
         {
-            if (key is null || entry.Category == key)
-            {
-                FilteredErrorEntries.Add(entry);
-            }
+            FilteredErrorEntries.Add(entry);
         }
 
         OnPropertyChanged(nameof(HasVisibleErrors));

@@ -37,10 +37,14 @@ public record AppSettings
     {
         get => _appInsertionStrategies;
         init =>
-            _appInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
-                value,
-                StringComparer.OrdinalIgnoreCase
-            );
+            // JsonSerializer can pass null for a null JSON value; fall back to an empty map
+            // instead of letting the Dictionary copy-constructor throw on a null source.
+            _appInsertionStrategies = value is null
+                ? new Dictionary<string, TextInsertionStrategy>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, TextInsertionStrategy>(
+                    value,
+                    StringComparer.OrdinalIgnoreCase
+                );
     }
 
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;

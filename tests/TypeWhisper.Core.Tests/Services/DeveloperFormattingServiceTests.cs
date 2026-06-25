@@ -4,8 +4,6 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public sealed class DeveloperFormattingServiceTests
 {
-    private readonly DeveloperFormattingService _sut = new();
-
     [Theory]
     [InlineData("git checkout dash dash force", "git checkout --force")]
     [InlineData("cat file pipe grep error", "cat file|grep error")]

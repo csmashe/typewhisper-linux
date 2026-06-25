@@ -16,6 +16,24 @@ public sealed partial class CleanupService
     public const string HighSystemPrompt =
         "Rewrite as concise polished prose while preserving meaning, facts, tone, and terminology. Do not add new information. Return only the rewritten text.";
 
+    // Common filler/connective words that shouldn't seed a single-word bullet list. Cached once
+    // (OrdinalIgnoreCase) because IsConservativeSingleWordBulletList probes it per candidate word.
+    private static readonly HashSet<string> s_bulletListStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a",
+        "an",
+        "and",
+        "for",
+        "need",
+        "of",
+        "or",
+        "the",
+        "things",
+        "to",
+        "we",
+        "with"
+    };
+
     public static string Clean(string text, CleanupLevel level)
     {
         if (level == CleanupLevel.None || string.IsNullOrWhiteSpace(text))
@@ -206,32 +224,13 @@ public sealed partial class CleanupService
 
         return words.All(word =>
             SingleWordListItemRegex().IsMatch(word)
-            && !BulletListStopWords().Contains(word, StringComparer.OrdinalIgnoreCase)
+            && !s_bulletListStopWords.Contains(word)
         );
     }
 
     private static string CleanListItem(string item)
     {
         return item.Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
-    }
-
-    private static HashSet<string> BulletListStopWords()
-    {
-        return new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "a",
-            "an",
-            "and",
-            "for",
-            "need",
-            "of",
-            "or",
-            "the",
-            "things",
-            "to",
-            "we",
-            "with"
-        };
     }
 
     private static string? TryFormatSpokenNumberedList(string text)

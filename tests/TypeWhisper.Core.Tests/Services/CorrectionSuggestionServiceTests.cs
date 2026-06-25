@@ -4,8 +4,6 @@ namespace TypeWhisper.Core.Tests.Services;
 
 public sealed class CorrectionSuggestionServiceTests
 {
-    private readonly CorrectionSuggestionService _sut = new();
-
     [Fact]
     public void GenerateSuggestions_ReturnsPhraseCorrectionForSmallEdit()
     {

@@ -17,6 +17,7 @@ public sealed class PromptActionService : IPromptActionService
     private readonly IErrorLogService? _errorLog;
     private List<PromptAction> _cache = [];
     private bool _cacheLoaded;
+    private bool _loadFailed;
 
     public PromptActionService(string filePath, IErrorLogService? errorLog = null)
     {
@@ -180,7 +181,13 @@ public sealed class PromptActionService : IPromptActionService
             if (File.Exists(_filePath))
             {
                 var json = File.ReadAllText(_filePath);
-                _cache = JsonSerializer.Deserialize<List<PromptAction>>(json) ?? [];
+                // A blank file is a benign "no actions yet" state (e.g. freshly created), not
+                // corruption — leave the cache empty so normal saves still happen. Only non-empty
+                // content that fails to parse is treated as a load failure below.
+                if (!string.IsNullOrWhiteSpace(json))
+                {
+                    _cache = JsonSerializer.Deserialize<List<PromptAction>>(json) ?? [];
+                }
             }
         }
         catch (Exception ex)
@@ -192,6 +199,9 @@ public sealed class PromptActionService : IPromptActionService
                 ErrorCategory.Prompt
             );
             _cache = [];
+            // The file exists but couldn't be parsed. Treat the cache as untrustworthy so a
+            // later add/update doesn't overwrite the (possibly recoverable) file with an empty set.
+            _loadFailed = true;
         }
 
         _cacheLoaded = true;
@@ -199,6 +209,19 @@ public sealed class PromptActionService : IPromptActionService
 
     private void SaveToDisk()
     {
+        if (_loadFailed)
+        {
+            // We couldn't read the existing actions file, so the in-memory cache is incomplete.
+            // Persisting now would clobber the user's saved actions with a partial set, so refuse
+            // until the file loads cleanly again (e.g. after the user repairs it and relaunches).
+            _errorLog?.AddEntry(
+                $"Not saving prompt actions: the existing file at {_filePath} could not be loaded, "
+                + "so writing now would overwrite your saved actions.",
+                ErrorCategory.Prompt
+            );
+            return;
+        }
+
         try
         {
             var dir = Path.GetDirectoryName(_filePath);
