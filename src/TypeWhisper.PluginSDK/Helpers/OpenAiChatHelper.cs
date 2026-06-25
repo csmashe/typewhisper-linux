@@ -51,10 +51,12 @@ public static class OpenAiChatHelper
             systemPrompt,
             userText,
             ct,
-            2048,
-            "max_tokens",
-            null,
-            0.1
+            // maxOutputTokens (2048) is passed explicitly to bind this call to the
+            // 11-parameter overload; without it the 7-arg call would resolve back to
+            // this same overload and recurse. The remaining optionals
+            // (maxOutputTokenParameter, reasoningEffort, temperature) are left at their
+            // defaults, which already match what this convenience overload documents.
+            2048
         );
     }
 
