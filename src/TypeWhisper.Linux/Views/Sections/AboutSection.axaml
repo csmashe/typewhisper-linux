@@ -108,16 +108,22 @@
                     <Border Padding="16,12"
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,0,0,1">
-                        <Grid ColumnDefinitions="*,Auto,Auto"
+                        <Grid ColumnDefinitions="*,Auto,Auto,Auto"
                               ColumnSpacing="10">
                             <TextBlock Text="{loc:Str About.ErrorLog}"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
-                            <Button Grid.Column="1"
+                            <ComboBox Grid.Column="1"
+                                      MinWidth="150"
+                                      ItemsSource="{Binding CategoryFilters}"
+                                      SelectedItem="{Binding SelectedCategoryFilter}"
+                                      IsVisible="{Binding HasErrors}"
+                                      VerticalAlignment="Center" />
+                            <Button Grid.Column="2"
                                     Content="{loc:Str Common.Clear}"
                                     Command="{Binding ClearErrorsCommand}"
                                     IsVisible="{Binding HasErrors}" />
-                            <Button Grid.Column="2"
+                            <Button Grid.Column="3"
                                     Content="{loc:Str About.ExportDiagnostics}"
                                     Click="OnExportDiagnostics" />
                         </Grid>
@@ -137,10 +143,17 @@
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
+                        <TextBlock Text="{loc:Str About.NoErrorsInCategory}"
+                                   FontSize="13"
+                                   Foreground="#8A9AAE"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   IsVisible="{Binding ShowEmptyCategoryNotice}" />
+
                         <ScrollViewer VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled"
-                                      IsVisible="{Binding HasErrors}">
-                            <ItemsControl ItemsSource="{Binding ErrorEntries}">
+                                      IsVisible="{Binding HasVisibleErrors}">
+                            <ItemsControl ItemsSource="{Binding FilteredErrorEntries}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="models:ErrorLogEntry">
                                         <Border Padding="16,12"

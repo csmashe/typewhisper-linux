@@ -11,7 +11,7 @@ public interface IErrorLogService
     IReadOnlyList<ErrorLogEntry> Entries { get; }
 
     /// <summary>Appends a message under the given <paramref name="category" />, evicting the oldest entry once full.</summary>
-    void AddEntry(string message, string category = "general");
+    void AddEntry(string message, string category = ErrorCategory.General);
 
     void ClearAll();
 

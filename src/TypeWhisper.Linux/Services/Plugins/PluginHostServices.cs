@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -27,6 +28,9 @@ public sealed class PluginHostServices : IPluginHostServices
     private readonly Action? _onCapabilitiesChanged;
     private readonly string _pluginDataDirectory;
     private readonly ISettingsService? _settings;
+    private readonly IErrorLogService? _errorLog;
+    private readonly string _pluginErrorCategory;
+    private readonly string _pluginDisplayName;
 
     private readonly string _pluginId;
     private readonly IProfileService _profiles;
@@ -42,7 +46,10 @@ public sealed class PluginHostServices : IPluginHostServices
         IPluginEventBus eventBus,
         IProfileService profiles,
         ISettingsService? settings = null,
-        Action? onCapabilitiesChanged = null
+        Action? onCapabilitiesChanged = null,
+        IErrorLogService? errorLog = null,
+        string? errorCategory = null,
+        string? pluginDisplayName = null
     )
     {
         _pluginId = pluginId;
@@ -51,6 +58,10 @@ public sealed class PluginHostServices : IPluginHostServices
         _profiles = profiles;
         _settings = settings;
         _onCapabilitiesChanged = onCapabilitiesChanged;
+        _errorLog = errorLog;
+        // Already resolved by the host (PluginManager) from manifest + capabilities.
+        _pluginErrorCategory = string.IsNullOrWhiteSpace(errorCategory) ? ErrorCategory.Plugin : errorCategory;
+        _pluginDisplayName = string.IsNullOrWhiteSpace(pluginDisplayName) ? pluginId : pluginDisplayName;
         _localization = new PluginLocalization(pluginDirectory);
         _pluginDataDirectory = Path.Join(TypeWhisperEnvironment.PluginDataPath, pluginId);
         _settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
@@ -92,6 +103,22 @@ public sealed class PluginHostServices : IPluginHostServices
     public void Log(PluginLogLevel level, string message)
     {
         Trace.WriteLine($"[Plugin:{_pluginId}] [{level}] {message}");
+
+        // Bridge plugin-reported errors onto the user-facing error log so failures that
+        // would otherwise vanish into Trace (invalid key, model load, provider outage)
+        // show up in About and bug-report diagnostics. Lower levels stay diagnostic-only
+        // to keep the 200-entry buffer signal-rich.
+        if (level == PluginLogLevel.Error)
+        {
+            try
+            {
+                _errorLog?.AddEntry($"{_pluginDisplayName}: {message}", _pluginErrorCategory);
+            }
+            catch
+            {
+                // Diagnostics must never destabilize a plugin's own logging call.
+            }
+        }
     }
 
     public void NotifyCapabilitiesChanged()

@@ -10,9 +10,9 @@ public sealed record ErrorLogEntry
     public required string Id { get; init; }
     public required DateTime Timestamp { get; init; }
     public required string Message { get; init; }
-    public string Category { get; init; } = "general";
+    public string Category { get; init; } = ErrorCategory.General;
 
-    public static ErrorLogEntry Create(string message, string category = "general")
+    public static ErrorLogEntry Create(string message, string category = ErrorCategory.General)
     {
         return new ErrorLogEntry
         {

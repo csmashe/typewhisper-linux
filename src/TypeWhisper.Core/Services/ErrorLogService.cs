@@ -40,7 +40,7 @@ public sealed class ErrorLogService : IErrorLogService
 
     public event Action? EntriesChanged;
 
-    public void AddEntry(string message, string category = "general")
+    public void AddEntry(string message, string category = ErrorCategory.General)
     {
         var entry = ErrorLogEntry.Create(message, category);
 

@@ -1,4 +1,5 @@
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
@@ -68,7 +69,8 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
         }
 
         _errorLog.AddEntry(
-            $"Window detection failed on {compositor}: {augmented}"
+            $"Window detection failed on {compositor}: {augmented}",
+            ErrorCategory.Detection
         );
 
         OnFailure?.Invoke(

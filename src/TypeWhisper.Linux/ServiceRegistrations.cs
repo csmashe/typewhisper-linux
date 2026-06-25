@@ -50,8 +50,11 @@ internal static class ServiceRegistrations
         services.AddSingleton<IProfileService>(
             new ProfileService(Path.Join(dataPath, "profiles.json"))
         );
-        services.AddSingleton<IPromptActionService>(
-            new PromptActionService(Path.Join(dataPath, "prompt-actions.json"))
+        services.AddSingleton<IPromptActionService>(sp =>
+            new PromptActionService(
+                Path.Join(dataPath, "prompt-actions.json"),
+                sp.GetRequiredService<IErrorLogService>()
+            )
         );
         services.AddSingleton<CleanupService>();
         services.AddSingleton<CorrectionSuggestionService>();

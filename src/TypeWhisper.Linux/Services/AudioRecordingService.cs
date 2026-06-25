@@ -2,6 +2,8 @@ using Avalonia.Threading;
 using PortAudioSharp;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using PaStream = PortAudioSharp.Stream;
 
 namespace TypeWhisper.Linux.Services;
@@ -39,11 +41,19 @@ public sealed class AudioRecordingService : IDisposable
     private Action<float[]>? _liveFrameSink;
     private int _sampleCount;
     private PaStream? _stream;
+    private readonly IErrorLogService? _errorLog;
     internal int CaptureSampleRate { get; private set; } = SampleRate;
 
     // PortAudio is initialized lazily via EnsurePortAudioInitialized, so
     // constructing this service doesn't load the native library and the
     // buffer-processing path can be unit-tested without portaudio.
+
+    // errorLog is optional so the buffer-processing path can still be unit-tested
+    // with a bare `new AudioRecordingService()`; DI supplies the real instance.
+    public AudioRecordingService(IErrorLogService? errorLog = null)
+    {
+        _errorLog = errorLog;
+    }
 
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
     public bool IsPreviewing => Volatile.Read(ref _isPreviewing) == 1;
@@ -133,9 +143,27 @@ public sealed class AudioRecordingService : IDisposable
             // CreateInputStream. Resetting early would tag samples at the wrong rate.
         }
 
-        if (!EnsureInputStreamStarted())
+        try
         {
-            return;
+            if (!EnsureInputStreamStarted())
+            {
+                _errorLog?.AddEntry(
+                    "Recording could not start: no usable microphone was found. "
+                    + "Check that an input device is connected and selected in Recorder settings.",
+                    ErrorCategory.Recording
+                );
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Surface a stuck-at-silent dictation: the user pressed the hotkey but no
+            // input stream could be opened (device busy, all sample rates rejected, …).
+            _errorLog?.AddEntry(
+                $"Recording could not start: the microphone could not be opened ({ex.Message}).",
+                ErrorCategory.Recording
+            );
+            throw;
         }
 
         Trace.WriteLine(
@@ -219,6 +247,10 @@ public sealed class AudioRecordingService : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
+            _errorLog?.AddEntry(
+                $"Microphone preview could not start: {ex.Message}",
+                ErrorCategory.Recording
+            );
             Volatile.Write(ref _isPreviewing, 0);
             if (!IsRecording)
             {

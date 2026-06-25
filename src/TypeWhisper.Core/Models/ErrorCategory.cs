@@ -9,4 +9,7 @@ public static class ErrorCategory
     public const string Prompt = "prompt";
     public const string Plugin = "plugin";
     public const string Insertion = "insertion";
+
+    /// <summary>Active-window / URL detection failures (e.g. compositor query, AT-SPI walk).</summary>
+    public const string Detection = "detection";
 }

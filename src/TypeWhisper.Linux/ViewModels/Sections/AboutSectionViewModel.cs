@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -36,6 +37,14 @@ public partial class AboutSectionViewModel : ObservableObject
     [ObservableProperty]
     private string _updateStatusText = Loc.Instance["About.UpdateStatusDefault"];
 
+    // Active error-log category filter; null Key means "All categories".
+    [ObservableProperty]
+    private CategoryFilterOption? _selectedCategoryFilter;
+
+    // Set while RefreshErrors rebuilds the filter list so reseating the selection
+    // doesn't re-run ApplyFilter mid-rebuild (RefreshErrors applies it once at the end).
+    private bool _suppressFilter;
+
     public AboutSectionViewModel(
         IErrorLogService errorLog,
         ISettingsService settings,
@@ -50,7 +59,11 @@ public partial class AboutSectionViewModel : ObservableObject
         _settingsBackup = settingsBackup;
         _updateCheck = updateCheck;
         RefreshErrors();
-        _errorLog.EntriesChanged += RefreshErrors;
+        // EntriesChanged fires synchronously on whichever thread called AddEntry —
+        // and producers now log from background threads (transcription, detection,
+        // plugin host). Marshal to the UI thread so refreshing the bound collections
+        // can't throw a cross-thread mutation back into the producer's failure path.
+        _errorLog.EntriesChanged += OnErrorEntriesChanged;
 
         _updateCheck.ResultChanged += OnUpdateResultChanged;
         // Reflect any check that already ran (e.g. the startup check).
@@ -78,8 +91,20 @@ public partial class AboutSectionViewModel : ObservableObject
 
     public bool CanCheckForUpdates => !IsCheckingForUpdates;
 
+    // Full, unfiltered backing list; drives HasErrors and the category options.
     public ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
+
+    // The entries actually shown — ErrorEntries narrowed by SelectedCategoryFilter.
+    public ObservableCollection<ErrorLogEntry> FilteredErrorEntries { get; } = [];
+
+    // "All categories" + one option per category currently present in the log.
+    public ObservableCollection<CategoryFilterOption> CategoryFilters { get; } = [];
+
     public bool HasErrors => ErrorEntries.Count > 0;
+    public bool HasVisibleErrors => FilteredErrorEntries.Count > 0;
+
+    // Errors exist, but the active category filter hides all of them.
+    public bool ShowEmptyCategoryNotice => HasErrors && !HasVisibleErrors;
 
     public string ExportDiagnostics()
     {
@@ -216,6 +241,20 @@ public partial class AboutSectionViewModel : ObservableObject
         RefreshErrors();
     }
 
+    private void OnErrorEntriesChanged()
+    {
+        // Mirror OnUpdateResultChanged: hop to the UI thread before touching
+        // ObservableCollections bound to the About view.
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            RefreshErrors();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(RefreshErrors);
+        }
+    }
+
     private void RefreshErrors()
     {
         ErrorEntries.Clear();
@@ -224,6 +263,95 @@ public partial class AboutSectionViewModel : ObservableObject
             ErrorEntries.Add(entry);
         }
 
+        RebuildCategoryFilters();
+        ApplyFilter();
         OnPropertyChanged(nameof(HasErrors));
+    }
+
+    private void RebuildCategoryFilters()
+    {
+        // Distinct categories present, sorted for a stable dropdown order, behind an
+        // "All categories" option (null Key) that clears the filter.
+        var present = new List<string>();
+        foreach (var entry in ErrorEntries)
+        {
+            if (!present.Contains(entry.Category))
+            {
+                present.Add(entry.Category);
+            }
+        }
+
+        present.Sort(StringComparer.Ordinal);
+
+        var desired = new List<CategoryFilterOption>
+        {
+            new(null, Loc.Instance["About.ErrorFilterAll"])
+        };
+        desired.AddRange(present.Select(c => new CategoryFilterOption(c, FormatCategory(c))));
+
+        // Option set unchanged → keep the current selection object as-is.
+        if (CategoryFilters.Select(o => o.Key).SequenceEqual(desired.Select(o => o.Key)))
+        {
+            return;
+        }
+
+        var previousKey = SelectedCategoryFilter?.Key;
+
+        _suppressFilter = true;
+        CategoryFilters.Clear();
+        foreach (var option in desired)
+        {
+            CategoryFilters.Add(option);
+        }
+
+        // Preserve the user's selection across refreshes when its category still exists,
+        // otherwise fall back to "All categories".
+        SelectedCategoryFilter =
+            CategoryFilters.FirstOrDefault(o => o.Key == previousKey) ?? CategoryFilters[0];
+        _suppressFilter = false;
+    }
+
+    private void ApplyFilter()
+    {
+        var key = SelectedCategoryFilter?.Key;
+
+        FilteredErrorEntries.Clear();
+        foreach (var entry in ErrorEntries)
+        {
+            if (key is null || entry.Category == key)
+            {
+                FilteredErrorEntries.Add(entry);
+            }
+        }
+
+        OnPropertyChanged(nameof(HasVisibleErrors));
+        OnPropertyChanged(nameof(ShowEmptyCategoryNotice));
+    }
+
+    partial void OnSelectedCategoryFilterChanged(CategoryFilterOption? value)
+    {
+        if (_suppressFilter)
+        {
+            return;
+        }
+
+        ApplyFilter();
+    }
+
+    private static string FormatCategory(string category)
+    {
+        return string.IsNullOrEmpty(category)
+            ? category
+            : CultureInfo.CurrentCulture.TextInfo.ToTitleCase(category);
+    }
+
+    /// <summary>A selectable error-log category filter; a null <paramref name="Key" /> matches every entry.</summary>
+    public sealed record CategoryFilterOption(string? Key, string Display)
+    {
+        // ComboBox renders items via ToString when no ItemTemplate is set.
+        public override string ToString()
+        {
+            return Display;
+        }
     }
 }

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
@@ -185,7 +186,7 @@ public sealed class AtSpiUrlExtractor
             _lastDiagnosticKey = message;
         }
 
-        _errorLog.AddEntry(message);
+        _errorLog.AddEntry(message, ErrorCategory.Detection);
     }
 
     private static string BuildDiagnosticLine(

@@ -46,6 +46,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly SystemCommandAvailabilityService _commands;
     private readonly DeveloperFormattingService _developerFormatting = new();
     private readonly IDictionaryService _dictionary;
+    private readonly IErrorLogService _errorLog;
     private readonly IDetectionFailureTracker _failureTracker;
     private readonly IHistoryService _history;
     private readonly HotkeyService _hotkey;
@@ -139,7 +140,8 @@ public sealed class DictationOrchestrator : IDisposable
         RecentTranscriptionsService recentTranscriptions,
         IdeFileReferenceService ideFileReferences,
         SystemCommandAvailabilityService commands,
-        IDetectionFailureTracker failureTracker
+        IDetectionFailureTracker failureTracker,
+        IErrorLogService errorLog
     )
     {
         _hotkey = hotkey;
@@ -168,6 +170,7 @@ public sealed class DictationOrchestrator : IDisposable
         _ideFileReferences = ideFileReferences;
         _commands = commands;
         _failureTracker = failureTracker;
+        _errorLog = errorLog;
     }
 
     public bool IsRecording => _audio.IsRecording;
@@ -1212,6 +1215,10 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine(
                 $"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}"
             );
+            _errorLog.AddEntry(
+                $"Transcription model '{effectiveModelId}' failed to load: {ex.Message}",
+                ErrorCategory.Transcription
+            );
             ReportStatus(context, $"Failed to load configured model: {ex.Message}");
             ShowFeedback(context, "Model load failed.", true);
             PublishSessionTerminal(context.SessionId, "failed", ex.Message);
@@ -1306,6 +1313,10 @@ public sealed class DictationOrchestrator : IDisposable
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Dictation] Transcription failed: {ex}");
+                _errorLog.AddEntry(
+                    $"Transcription failed via {plugin.ProviderDisplayName} ({engineModelId}): {ex.Message}",
+                    ErrorCategory.Transcription
+                );
                 _models.PluginManager.EventBus.Publish(
                     new TranscriptionFailedEvent
                     {
