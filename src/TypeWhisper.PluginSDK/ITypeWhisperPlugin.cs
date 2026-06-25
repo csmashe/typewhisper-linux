@@ -12,20 +12,15 @@ namespace TypeWhisper.PluginSDK;
 public interface ITypeWhisperPlugin : IDisposable
 {
     /// <summary>Unique identifier for the plugin (e.g. "com.example.my-plugin").</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     string PluginId { get; }
 
     /// <summary>Human-readable display name.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     string PluginName { get; }
 
     /// <summary>Semantic version string (e.g. "1.0.0").</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     string PluginVersion { get; }
 
+    // ReSharper disable once UnusedParameter.Global
     Task ActivateAsync(IPluginHostServices host);
 
     Task DeactivateAsync();

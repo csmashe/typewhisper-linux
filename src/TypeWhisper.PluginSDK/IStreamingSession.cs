@@ -13,15 +13,9 @@ namespace TypeWhisper.PluginSDK;
 public interface IStreamingSession : IAsyncDisposable
 {
     /// <summary>Sends a chunk of PCM16 mono 16 kHz audio to the streaming endpoint.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct);
 
     /// <summary>Signals end of audio input and flushes any remaining transcript.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task FinalizeAsync(CancellationToken ct);
 
     /// <summary>Fired when transcript text arrives. Raised from a background thread; marshal to UI as needed.</summary>

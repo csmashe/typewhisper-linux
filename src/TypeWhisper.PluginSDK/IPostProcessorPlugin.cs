@@ -15,19 +15,15 @@ public interface IPostProcessorPlugin : ITypeWhisperPlugin
 {
     /// <summary>Display name for this processor.</summary>
     // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     string ProcessorName { get; }
 
     /// <summary>Execution priority. Lower values run first.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     int Priority { get; }
 
     /// <summary>Processes the transcribed text and returns the modified version.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
+    // ReSharper disable UnusedParameter.Global
     Task<string> ProcessAsync(string text, PostProcessingContext context, CancellationToken ct);
+    // ReSharper restore UnusedParameter.Global
 
     /// <summary>
     ///     Streams post-processed text token-by-token. The default implementation
@@ -35,9 +31,6 @@ public interface IPostProcessorPlugin : ITypeWhisperPlugin
     ///     keeping non-overriding processors correct. True per-token pipeline piping
     ///     is a deferred follow-up.
     /// </summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     async IAsyncEnumerable<string> ProcessStreamingAsync(
         string text,
         PostProcessingContext context,

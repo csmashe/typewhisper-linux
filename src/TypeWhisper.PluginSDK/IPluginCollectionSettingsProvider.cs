@@ -12,17 +12,14 @@ namespace TypeWhisper.PluginSDK;
 public interface IPluginCollectionSettingsProvider
 {
     /// <summary>Returns metadata for each collection the plugin exposes.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions();
 
     /// <summary>Returns the current items for the given collection key.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
+        // ReSharper disable UnusedParameter.Global
         string collectionKey,
         CancellationToken ct = default
+        // ReSharper restore UnusedParameter.Global
     );
 
     /// <summary>
@@ -30,13 +27,12 @@ public interface IPluginCollectionSettingsProvider
     ///     <see cref="PluginSettingsValidationResult" /> — check <c>IsSuccess</c>;
     ///     on failure <c>Message</c> explains why the items were rejected.
     /// </summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task<PluginSettingsValidationResult> SetItemsAsync(
+        // ReSharper disable UnusedParameter.Global
         string collectionKey,
         IReadOnlyList<PluginCollectionItem> items,
         CancellationToken ct = default
+        // ReSharper restore UnusedParameter.Global
     );
 }
 

@@ -10,7 +10,5 @@ namespace TypeWhisper.PluginSDK;
 public interface ITranscriptionEngineSelectionIdentity
 {
     /// <summary>Stable identifier used in plugin model selection IDs.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     string TranscriptionSelectionId { get; }
 }

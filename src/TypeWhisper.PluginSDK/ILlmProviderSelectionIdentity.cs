@@ -10,7 +10,5 @@ namespace TypeWhisper.PluginSDK;
 public interface ILlmProviderSelectionIdentity
 {
     /// <summary>Stable identifier used in plugin LLM selection IDs.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     string LlmSelectionId { get; }
 }

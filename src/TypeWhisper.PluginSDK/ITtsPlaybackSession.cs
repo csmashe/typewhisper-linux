@@ -10,13 +10,9 @@ namespace TypeWhisper.PluginSDK;
 public interface ITtsPlaybackSession
 {
     /// <summary>Whether playback is still active.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     bool IsActive { get; }
 
     /// <summary>Stops playback if it is still active.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     void Stop();
 
     /// <summary>Raised when playback finishes or is stopped.</summary>

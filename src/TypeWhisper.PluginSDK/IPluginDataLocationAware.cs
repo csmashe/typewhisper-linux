@@ -15,8 +15,5 @@ public interface IPluginDataLocationAware
     ///     Called by the host with the plugin's dedicated data directory path.
     ///     The directory is guaranteed to exist when this method is called.
     /// </summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     void SetDataDirectory(string pluginDataDirectory);
 }

@@ -10,7 +10,5 @@ namespace TypeWhisper.PluginSDK;
 public interface IAdditionalTranscriptionEnginesProvider
 {
     /// <summary>Additional transcription engine roles exposed by this plugin.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     IReadOnlyList<ITranscriptionEnginePlugin> AdditionalTranscriptionEngines { get; }
 }

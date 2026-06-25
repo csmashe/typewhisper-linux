@@ -16,8 +16,5 @@ namespace TypeWhisper.PluginSDK;
 public interface IPluginLocalizationAware
 {
     /// <summary>Supplies the plugin's localization catalog. Called once at load, before activation.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     void SetLocalization(IPluginLocalization localization);
 }

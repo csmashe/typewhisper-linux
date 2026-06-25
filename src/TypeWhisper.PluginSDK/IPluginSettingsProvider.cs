@@ -13,28 +13,19 @@ namespace TypeWhisper.PluginSDK;
 public interface IPluginSettingsProvider
 {
     /// <summary>Returns the list of settings this plugin exposes to the host UI.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions();
 
     /// <summary>Returns the current value for the given setting key, or null if unset.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default);
 
     /// <summary>Persists a new value for the given setting key. Null clears the value.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default);
 
     /// <summary>
     ///     Validates the current settings (e.g. connectivity or key-format check).
     ///     Returns null to skip validation entirely.
     /// </summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
+
     // ReSharper disable once UnusedParameter.Global
     Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {

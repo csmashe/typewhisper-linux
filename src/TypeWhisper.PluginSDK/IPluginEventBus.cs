@@ -14,9 +14,7 @@ namespace TypeWhisper.PluginSDK;
 public interface IPluginEventBus
 {
     /// <summary>Publishes an event to all subscribers of type <typeparamref name="T" />.</summary>
-    // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     void Publish<T>(T pluginEvent)
         where T : PluginEvent;
 
@@ -24,9 +22,7 @@ public interface IPluginEventBus
     ///     Subscribes to events of type <typeparamref name="T" />.
     ///     Dispose the returned handle to unsubscribe.
     /// </summary>
-    // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     IDisposable Subscribe<T>(Func<T, Task> handler)
         where T : PluginEvent;
 }

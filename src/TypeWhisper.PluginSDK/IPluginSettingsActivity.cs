@@ -14,7 +14,6 @@ public interface IPluginSettingsActivity
     ///     Current progress (0.0 to 1.0) or null if indeterminate.
     /// </summary>
     // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     double? SettingsProgress { get; }
 
     /// <summary>

@@ -17,8 +17,5 @@ public interface IModelCatalogProvider
     ///     Re-fetches the model list and refreshes the plugin's cached catalog (raising a capabilities
     ///     change if it differs). Leave the cache untouched on failure rather than clearing it.
     /// </summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task RefreshModelCatalogAsync(CancellationToken ct = default);
 }

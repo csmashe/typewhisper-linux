@@ -13,24 +13,15 @@ namespace TypeWhisper.PluginSDK;
 public interface ILlmProviderPlugin : ITypeWhisperPlugin
 {
     /// <summary>Provider name shown in the UI (e.g. "OpenAI", "Groq").</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     string ProviderName { get; }
 
     /// <summary>Whether the provider is ready to accept requests (API key configured, etc.).</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     bool IsAvailable { get; }
 
     /// <summary>Models supported by this provider.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     IReadOnlyList<PluginModelInfo> SupportedModels { get; }
 
     /// <summary>Sends a chat completion request and returns the response text.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task<string> ProcessAsync(
         string systemPrompt,
         string userText,
@@ -43,9 +34,6 @@ public interface ILlmProviderPlugin : ITypeWhisperPlugin
     ///     <see cref="ProcessAsync" /> and yields a single chunk, so non-streaming
     ///     providers remain correct without overriding this method.
     /// </summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     async IAsyncEnumerable<string> ProcessStreamingAsync(
         string systemPrompt,
         string userText,

@@ -11,15 +11,9 @@ namespace TypeWhisper.PluginSDK;
 public interface IMemoryStoragePlugin : ITypeWhisperPlugin
 {
     /// <summary>Stores a memory entry. Duplicate content should be deduplicated by the plugin.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task StoreAsync(string content, CancellationToken ct = default);
 
     /// <summary>Searches stored memories by query. Returns relevant entries ranked by relevance.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task<IReadOnlyList<string>> SearchAsync(
         string query,
         int maxResults = 5,
@@ -28,25 +22,17 @@ public interface IMemoryStoragePlugin : ITypeWhisperPlugin
 
     /// <summary>Returns all stored memory entries.</summary>
     // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task<IReadOnlyList<string>> GetAllAsync(CancellationToken ct = default);
 
     /// <summary>Deletes a specific memory entry by its content.</summary>
     // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task DeleteAsync(string content, CancellationToken ct = default);
 
     /// <summary>Deletes all stored memory entries.</summary>
     // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task ClearAllAsync(CancellationToken ct = default);
 
     /// <summary>Number of stored memory entries.</summary>
     // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
-    // ReSharper disable once UnusedParameter.Global
     Task<int> CountAsync(CancellationToken ct = default);
 }

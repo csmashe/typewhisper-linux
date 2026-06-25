@@ -10,7 +10,5 @@ namespace TypeWhisper.PluginSDK;
 public interface IAdditionalLlmProvidersProvider
 {
     /// <summary>Additional LLM provider roles exposed by this plugin.</summary>
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedMemberInSuper.Global
     IReadOnlyList<ILlmProviderPlugin> AdditionalLlmProviders { get; }
 }
