@@ -27,21 +27,21 @@ public sealed partial class DictionaryService
 
         foreach (var entry in entries)
         {
-            sb.Append(CsvEscape(entry.EntryType.ToString()));
+            sb.Append(Csv.Escape(entry.EntryType.ToString()));
             sb.Append(',');
-            sb.Append(CsvEscape(entry.Original));
+            sb.Append(Csv.Escape(entry.Original));
             sb.Append(',');
-            sb.Append(CsvEscape(entry.Replacement ?? string.Empty));
+            sb.Append(Csv.Escape(entry.Replacement ?? string.Empty));
             sb.Append(',');
-            sb.Append(CsvEscape(entry.CaseSensitive.ToString()));
+            sb.Append(Csv.Escape(entry.CaseSensitive.ToString()));
             sb.Append(',');
-            sb.Append(CsvEscape(entry.IsEnabled.ToString()));
+            sb.Append(Csv.Escape(entry.IsEnabled.ToString()));
             sb.Append(',');
-            sb.Append(CsvEscape(entry.IsStarred.ToString()));
+            sb.Append(Csv.Escape(entry.IsStarred.ToString()));
             sb.Append(',');
-            sb.Append(CsvEscape(entry.Priority.ToString()));
+            sb.Append(Csv.Escape(entry.Priority.ToString()));
             sb.Append(',');
-            sb.Append(CsvEscape(entry.Source.ToString()));
+            sb.Append(Csv.Escape(entry.Source.ToString()));
             sb.AppendLine();
         }
 
@@ -176,21 +176,6 @@ public sealed partial class DictionaryService
                && Enum.TryParse<DictionaryEntrySource>(row[index], true, out var source)
             ? source
             : DictionaryEntrySource.Import;
-    }
-
-    private static string CsvEscape(string value)
-    {
-        if (
-            !value.Contains(',')
-            && !value.Contains('"')
-            && !value.Contains('\n')
-            && !value.Contains('\r')
-        )
-        {
-            return value;
-        }
-
-        return "\"" + value.Replace("\"", "\"\"") + "\"";
     }
 
     private static List<List<string>> ParseCsv(string csv)

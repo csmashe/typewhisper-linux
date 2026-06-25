@@ -44,12 +44,12 @@ public sealed partial class HistoryService
         sb.AppendLine(
             string.Join(
                 ',',
-                CsvEscape(l.Timestamp),
-                CsvEscape(l.App),
-                CsvEscape(l.Text),
-                CsvEscape(l.Duration),
-                CsvEscape(l.Words),
-                CsvEscape(l.Language)
+                Csv.Escape(l.Timestamp),
+                Csv.Escape(l.App),
+                Csv.Escape(l.Text),
+                Csv.Escape(l.Duration),
+                Csv.Escape(l.Words),
+                Csv.Escape(l.Language)
             )
         );
 
@@ -58,14 +58,14 @@ public sealed partial class HistoryService
             sb.AppendLine(
                 string.Join(
                     ',',
-                    CsvEscape(
+                    Csv.Escape(
                         r.Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
                     ),
-                    CsvEscape(r.AppProcessName ?? ""),
-                    CsvEscape(r.FinalText),
-                    CsvEscape(r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)),
-                    CsvEscape(r.WordCount.ToString(CultureInfo.InvariantCulture)),
-                    CsvEscape(r.Language ?? "")
+                    Csv.Escape(r.AppProcessName ?? ""),
+                    Csv.Escape(r.FinalText),
+                    Csv.Escape(r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)),
+                    Csv.Escape(r.WordCount.ToString(CultureInfo.InvariantCulture)),
+                    Csv.Escape(r.Language ?? "")
                 )
             );
         }
@@ -133,20 +133,5 @@ public sealed partial class HistoryService
         });
 
         return JsonSerializer.Serialize(data, s_jsonOptions);
-    }
-
-    private static string CsvEscape(string value)
-    {
-        if (
-            !value.Contains(',')
-            && !value.Contains('"')
-            && !value.Contains('\n')
-            && !value.Contains('\r')
-        )
-        {
-            return value;
-        }
-
-        return "\"" + value.Replace("\"", "\"\"") + "\"";
     }
 }
