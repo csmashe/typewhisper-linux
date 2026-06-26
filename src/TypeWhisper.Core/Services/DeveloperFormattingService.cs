@@ -236,6 +236,6 @@ public sealed partial class DeveloperFormattingService
     [GeneratedRegex(@"^(?<mode>camel|snake|kebab)\s+case\s+(?<text>.+)$", RegexOptions.IgnoreCase)]
     private static partial Regex CasingCommandRegex();
 
-    [GeneratedRegex(@"[A-Za-z0-9]+")]
+    [GeneratedRegex("[A-Za-z0-9]+")]
     private static partial Regex WordRegex();
 }

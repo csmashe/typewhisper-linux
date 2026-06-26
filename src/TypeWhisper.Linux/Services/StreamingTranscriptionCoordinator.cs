@@ -95,7 +95,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
         _disposed = true;
 
-        try { _cts?.Cancel(); }
+        try { await _cts?.CancelAsync(); }
         catch
         {
             /* ignore */
@@ -262,7 +262,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         // Pre-publish path: cancel _cts so a well-behaved plugin exits its connect.
         if (session is null)
         {
-            try { _cts?.Cancel(); }
+            try { await _cts?.CancelAsync(); }
             catch
             {
                 /* ignore */

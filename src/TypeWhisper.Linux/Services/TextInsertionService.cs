@@ -619,7 +619,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         _isWayland
         && (
             _snapshot.HasYdotoolAvailable
-            || (_snapshot.HasWtype && !_snapshot.CompositorRejectsWtype)
+            || _snapshot is { HasWtype: true, CompositorRejectsWtype: false }
         );
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
@@ -901,7 +901,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
         if (snapshot.SessionType == "Wayland")
         {
-            var ydotoolUsable = snapshot.HasYdotool && snapshot.HasYdotoolSocket;
+            var ydotoolUsable = snapshot is { HasYdotool: true, HasYdotoolSocket: true };
             if (snapshot.CompositorRejectsWtype)
             {
                 if (ydotoolUsable)

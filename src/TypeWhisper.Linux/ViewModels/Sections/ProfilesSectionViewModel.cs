@@ -777,9 +777,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         _contextWindow = new ProfilesContextWindow(this);
         if (
             Application.Current?.ApplicationLifetime
-                is IClassicDesktopStyleApplicationLifetime desktop
-            && desktop.MainWindow is { } owner
-        )
+            is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
         {
             _contextWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner;
             _contextWindow.Show(owner);

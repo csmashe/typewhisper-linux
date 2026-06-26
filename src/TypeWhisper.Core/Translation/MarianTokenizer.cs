@@ -55,17 +55,23 @@ public sealed class MarianTokenizer
         }
 
         // Some tokenizer.json files override token→id mapping in added_tokens.
-        if (root.TryGetProperty("added_tokens", out var addedTokens))
+        if (!root.TryGetProperty("added_tokens", out var addedTokens))
+        {
+            return new MarianTokenizer(vocab, idToToken, unkId, eosTokenId);
+        }
+
         {
             foreach (var at in addedTokens.EnumerateArray())
             {
                 var content = at.GetProperty("content").GetString()!;
                 var id = at.GetProperty("id").GetInt32();
-                if (!vocab.ContainsKey(content))
+                if (vocab.ContainsKey(content))
                 {
-                    vocab[content] = (id, 0f);
-                    idToToken[id] = content;
+                    continue;
                 }
+
+                vocab[content] = (id, 0f);
+                idToToken[id] = content;
             }
         }
 
@@ -86,9 +92,9 @@ public sealed class MarianTokenizer
         var tokens = new List<int>();
 
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        for (var w = 0; w < words.Length; w++)
+        foreach (var t in words)
         {
-            var word = MetaspacePrefix + words[w];
+            var word = MetaspacePrefix + t;
             var wordTokens = ViterbiSegment(word);
             tokens.AddRange(wordTokens);
         }
@@ -143,19 +149,23 @@ public sealed class MarianTokenizer
                 }
 
                 var candidate = bestScore[start] + entry.Score;
-                if (candidate > bestScore[end])
+                if (!(candidate > bestScore[end]))
                 {
-                    bestScore[end] = candidate;
-                    bestLen[end] = end - start;
+                    continue;
                 }
+
+                bestScore[end] = candidate;
+                bestLen[end] = end - start;
             }
 
             // No vocab entry covers this position — emit single-char UNK with penalty.
-            if (bestScore[end] == float.NegativeInfinity)
+            if (!float.IsNegativeInfinity(bestScore[end]))
             {
-                bestScore[end] = bestScore[end - 1] + -100f;
-                bestLen[end] = 1;
+                continue;
             }
+
+            bestScore[end] = bestScore[end - 1] + -100f;
+            bestLen[end] = 1;
         }
 
         var result = new List<int>();
@@ -164,14 +174,7 @@ public sealed class MarianTokenizer
         {
             var len = bestLen[pos];
             var substr = word[(pos - len)..pos];
-            if (_vocab.TryGetValue(substr, out var entry))
-            {
-                result.Add(entry.Id);
-            }
-            else
-            {
-                result.Add(_unkTokenId);
-            }
+            result.Add(_vocab.TryGetValue(substr, out var entry) ? entry.Id : _unkTokenId);
 
             pos -= len;
         }

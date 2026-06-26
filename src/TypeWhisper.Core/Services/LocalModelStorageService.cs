@@ -41,8 +41,6 @@ public sealed class LocalModelStorageService
     public string ResolvedModelStoragePath =>
         LocalModelStoragePaths.ResolveModelStoragePath(_settings.Current);
 
-    public static string DefaultModelStoragePath => LocalModelStoragePaths.DefaultModelStoragePath;
-
     /// <summary>
     /// Resolves and validates the active local model storage path.
     /// </summary>

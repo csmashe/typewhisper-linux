@@ -11,7 +11,11 @@ public interface ITranscriptionEngine
     /// <summary>True once a model has been loaded and is ready to transcribe.</summary>
     bool IsModelLoaded { get; }
 
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable UnusedParameter.Global
     Task LoadModelAsync(string modelPath, CancellationToken cancellationToken = default);
+    // ReSharper restore UnusedParameter.Global
+    // ReSharper disable once UnusedMember.Global
     void UnloadModel();
 
     /// <summary>
@@ -19,6 +23,7 @@ public interface ITranscriptionEngine
     ///     optional hint (auto-detected when <c>null</c>); <paramref name="task" /> selects plain
     ///     transcription or speech translation to English.
     /// </summary>
+    // ReSharper disable once UnusedMember.Global
     Task<TranscriptionResult> TranscribeAsync(
         float[] audioSamples,
         string? language = null,

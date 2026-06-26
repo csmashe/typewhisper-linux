@@ -28,7 +28,7 @@ public sealed class OpenAiChatHelperTests
         );
 
         Assert.NotNull(method);
-        Assert.Equal(typeof(Task<string>), method!.ReturnType);
+        Assert.Equal(typeof(Task<string>), method.ReturnType);
     }
 
     [Fact]

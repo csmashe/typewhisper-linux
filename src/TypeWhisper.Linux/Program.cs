@@ -111,7 +111,7 @@ public static class Program
             return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
-            when (ex is SocketException sx && sx.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            when (ex is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse })
         {
             // Startup raced another instance to the bind; same outcome as a probe finding a live peer.
             Console.Error.WriteLine("TypeWhisper is already running.");
@@ -125,7 +125,7 @@ public static class Program
         }
     }
 
-    public static AppBuilder BuildAvaloniaApp()
+    private static AppBuilder BuildAvaloniaApp()
     {
         var builder = AppBuilder
             .Configure<App>()

@@ -5,6 +5,13 @@ using TypeWhisper.Plugin.Claude;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
+// The CapturingHandler lambdas assert on the outgoing request (method, URI,
+// headers, body) and return a canned response. ReSharper reads xUnit asserts
+// as precondition checks and concludes those parameters are only validated,
+// never used — but asserting on the request is exactly what these tests
+// verify, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
+
 namespace TypeWhisper.PluginSystem.Tests;
 
 // C7 Phase 5: Claude is bespoke Anthropic Messages SSE (content_block_delta →
@@ -42,13 +49,13 @@ public sealed class ClaudePluginTests
             Assert.Equal("https://api.anthropic.com/v1/messages", request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
             };
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "sk-ant-test";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new ClaudePlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -59,7 +66,7 @@ public sealed class ClaudePluginTests
             chunks.Add(chunk);
         }
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
         Assert.Equal("claude-haiku-4-5-20251001", doc.RootElement.GetProperty("model").GetString());
@@ -72,13 +79,13 @@ public sealed class ClaudePluginTests
         {
             Content = new StringContent(
                 """{"content":[{"type":"text","text":"bulk"}]}""",
-                Encoding.UTF8, "application/json"),
+                Encoding.UTF8, "application/json")
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "sk-ant-test";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
         host.SetSetting("streamResponses", false);
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new ClaudePlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -109,12 +116,12 @@ public sealed class ClaudePluginTests
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "sk-ant-test";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new ClaudePlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -128,7 +135,7 @@ public sealed class ClaudePluginTests
             }
         });
 
-        Assert.Equal(new[] { "Hel" }, chunks);
+        Assert.Equal(["Hel"], chunks);
         Assert.Equal("Overloaded", ex.Message);
     }
 
@@ -170,9 +177,9 @@ public sealed class ClaudePluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true,
+            PropertyNameCaseInsensitive = true
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
@@ -185,7 +192,7 @@ public sealed class ClaudePluginTests
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            Task.FromResult(Secrets.GetValueOrDefault(key));
 
         public Task DeleteSecretAsync(string key)
         {
@@ -194,10 +201,10 @@ public sealed class ClaudePluginTests
         }
 
         public T? GetSetting<T>(string key) =>
-            _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(JsonOptions) : default;
+            _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(s_jsonOptions) : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

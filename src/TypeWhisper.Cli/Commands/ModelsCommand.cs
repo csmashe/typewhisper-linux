@@ -29,7 +29,7 @@ internal static class ModelsCommand
             using var doc = JsonDocument.Parse(body);
             if (!doc.RootElement.TryGetProperty("models", out var models))
             {
-                Console.Error.WriteLine(
+                await Console.Error.WriteLineAsync(
                     "Warning: response is missing the 'models' field; the API contract may have changed."
                 );
                 return 0;

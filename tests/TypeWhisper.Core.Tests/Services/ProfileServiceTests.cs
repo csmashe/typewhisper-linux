@@ -4,7 +4,7 @@ using TypeWhisper.Core.Services;
 namespace TypeWhisper.Core.Tests.Services;
 
 /// <summary>Covers <see cref="ProfileService" /> persistence/round-tripping and forced/hotkey-only profile matching rules.</summary>
-public class ProfileServiceTests : IDisposable
+public sealed class ProfileServiceTests : IDisposable
 {
     private readonly string _filePath;
     private readonly ProfileService _sut;
@@ -218,7 +218,7 @@ public class ProfileServiceTests : IDisposable
 
         Assert.Equal(MatchKind.ManualOverride, result.Kind);
         Assert.NotNull(result.Profile);
-        Assert.Equal("forced", result.Profile!.Id);
+        Assert.Equal("forced", result.Profile.Id);
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class ProfileServiceTests : IDisposable
 
         Assert.Equal(MatchKind.Global, result.Kind);
         Assert.NotNull(result.Profile);
-        Assert.Equal("fallback", result.Profile!.Id);
+        Assert.Equal("fallback", result.Profile.Id);
     }
 
     [Fact]
@@ -251,7 +251,7 @@ public class ProfileServiceTests : IDisposable
 
         Assert.Equal(MatchKind.Global, result.Kind);
         Assert.NotNull(result.Profile);
-        Assert.Equal("fallback", result.Profile!.Id);
+        Assert.Equal("fallback", result.Profile.Id);
     }
 
     [Fact]

@@ -599,7 +599,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId)
             ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
 
-        if (!plugin.IsConfigured && !plugin.SupportsModelDownload)
+        if (plugin is { IsConfigured: false, SupportsModelDownload: false })
         {
             throw new InvalidOperationException(
                 $"{plugin.ProviderDisplayName}: not configured (missing API key or model)."
@@ -902,7 +902,7 @@ internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
         _plugin = plugin;
     }
 
-    public bool IsModelLoaded => _plugin.IsConfigured && _plugin.SelectedModelId is not null;
+    public bool IsModelLoaded => _plugin is { IsConfigured: true, SelectedModelId: not null };
 
     public Task LoadModelAsync(string modelPath, CancellationToken cancellationToken = default)
     {

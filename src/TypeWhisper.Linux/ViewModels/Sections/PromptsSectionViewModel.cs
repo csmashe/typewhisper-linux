@@ -370,6 +370,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             // Build the resolved list first to determine whether the "Use default
             // provider" placeholder needs a fallback suffix.
             var resolvedOptions = new List<ProviderOption>();
+            // ReSharper disable once LoopCanBeConvertedToQuery
             foreach (
                 var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
             )
@@ -380,6 +381,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 // lookup would skip them. For normal plugins the selection ID is the
                 // plugin/manifest ID, so existing selections are unchanged.
                 var selectionId = provider.GetLlmSelectionId();
+                // ReSharper disable once LoopCanBeConvertedToQuery
                 foreach (var model in provider.SupportedModels)
                 {
                     resolvedOptions.Add(

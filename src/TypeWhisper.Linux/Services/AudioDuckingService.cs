@@ -11,16 +11,15 @@ namespace TypeWhisper.Linux.Services;
 ///     Uses <c>pactl</c> — available on PipeWire via pipewire-pulse as well as
 ///     on native PulseAudio. Silently no-ops when pactl is absent.
 /// </summary>
-public sealed class AudioDuckingService : IAudioDuckingService
+public sealed partial class AudioDuckingService : IAudioDuckingService
 {
     // "Sink Input #593" — block header in `pactl list sink-inputs` output.
-    private static readonly Regex s_sinkInputIdRegex = new(
-        @"^Sink Input #(\d+)",
-        RegexOptions.Compiled
-    );
+    [GeneratedRegex(@"^Sink Input #(\d+)")]
+    private static partial Regex SinkInputIdRegex();
 
     // First percentage on a "Volume:" line (e.g. "... / 65% / -9.30 dB").
-    private static readonly Regex s_volumePercentRegex = new(@"(\d+)%", RegexOptions.Compiled);
+    [GeneratedRegex(@"(\d+)%")]
+    private static partial Regex VolumePercentRegex();
 
     private readonly Dictionary<string, string> _savedVolumes = new(StringComparer.Ordinal);
     private bool _isDucked;
@@ -94,7 +93,7 @@ public sealed class AudioDuckingService : IAudioDuckingService
 
         foreach (var line in listing.Split('\n').Select(raw => raw.Trim()))
         {
-            var idMatch = s_sinkInputIdRegex.Match(line);
+            var idMatch = SinkInputIdRegex().Match(line);
             if (idMatch.Success)
             {
                 currentId = idMatch.Groups[1].Value;
@@ -103,7 +102,7 @@ public sealed class AudioDuckingService : IAudioDuckingService
 
             if (currentId is not null && line.StartsWith("Volume:", StringComparison.Ordinal))
             {
-                var volMatch = s_volumePercentRegex.Match(line);
+                var volMatch = VolumePercentRegex().Match(line);
                 if (volMatch.Success)
                 {
                     yield return (currentId, volMatch.Groups[1].Value + "%");

@@ -72,8 +72,8 @@ public sealed class LocalModelStorageServiceTests : IDisposable
         var target = Path.Join(_tempRoot, "target");
         var modelDir = Path.Join(source, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models");
         Directory.CreateDirectory(modelDir);
-        File.WriteAllText(Path.Join(modelDir, "ggml-base.bin"), "weights");
-        File.WriteAllText(Path.Join(source, "root-asset.txt"), "top-level");
+        await File.WriteAllTextAsync(Path.Join(modelDir, "ggml-base.bin"), "weights");
+        await File.WriteAllTextAsync(Path.Join(source, "root-asset.txt"), "top-level");
 
         // Start with the source already as the active custom path so the test never
         // touches the real default models directory.
@@ -86,7 +86,7 @@ public sealed class LocalModelStorageServiceTests : IDisposable
         var movedModel = Path.Join(target, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin");
         Assert.True(unloaded);
         Assert.True(File.Exists(movedModel));
-        Assert.Equal("weights", File.ReadAllText(movedModel));
+        Assert.Equal("weights", await File.ReadAllTextAsync(movedModel));
         Assert.True(File.Exists(Path.Join(target, "root-asset.txt")));
         Assert.False(File.Exists(Path.Join(source, "root-asset.txt")));
         Assert.False(File.Exists(Path.Join(modelDir, "ggml-base.bin")));

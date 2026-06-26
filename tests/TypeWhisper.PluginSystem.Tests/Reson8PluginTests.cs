@@ -1,11 +1,24 @@
-using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Plugin.Reson8;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+
+// The [0x00, 0x00] byte arrays passed to BuildPcm16Wav are binary PCM audio
+// samples, not text. ReSharper only offers the UTF-8-literal conversion because
+// two NUL bytes happen to be valid UTF-8; the sibling [0x01, 0x00, 0xFF, 0xFF]
+// PCM arrays can't be (0xFF is never valid UTF-8), so converting only the
+// silence case would make identical data look like a string in one place and a
+// byte array in another.
+// ReSharper disable UseUtf8StringLiteral
+
+// The CapturingHandler lambdas assert on the outgoing request (method, URI,
+// headers, body) and return a canned response. ReSharper reads xUnit asserts
+// as precondition checks and concludes those parameters are only validated,
+// never used — but asserting on the request is exactly what these tests
+// verify, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -48,8 +61,7 @@ public class Reson8PluginTests
     [Fact]
     public async Task ActivateAsync_RestoresApiKeySettingsAndCustomModels()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "reson-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         host.SetSetting("selectedModel", "domain-model");
         host.SetSetting("customBaseURL", "https://proxy.example.test/");
         host.SetSetting("customAuthHeader", "X-Api-Key");
@@ -125,8 +137,7 @@ public class Reson8PluginTests
     [Fact]
     public async Task SetApiKeyAsync_KeepsExistingConfigurationWhenDeleteSecretFails()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "reson-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         var sut = new Reson8Plugin();
         await sut.ActivateAsync(host);
         host.DeleteSecretException = new InvalidOperationException("delete failed");
@@ -217,8 +228,7 @@ public class Reson8PluginTests
             return JsonResponse("""{ "text": "Hallo Welt", "language": "de" }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "reson-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         host.SetSetting("selectedModel", "domain-model");
         host.SetSetting("fetchedCustomModels", new[]
         {
@@ -256,8 +266,7 @@ public class Reson8PluginTests
             return JsonResponse("""{ "text": "Hello" }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "reson-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         host.SetSetting("customBaseURL", "https://proxy.example.test/");
         host.SetSetting("customAuthHeader", "X-Api-Key");
 
@@ -282,8 +291,7 @@ public class Reson8PluginTests
         ]);
         var handler = new CapturingHandler((_, _) =>
             JsonResponse("""{ "code": "ERR", "message": "details" }""", statuses.Dequeue()));
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "reson-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
@@ -313,8 +321,7 @@ public class Reson8PluginTests
                 """);
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "reson-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
@@ -445,7 +452,7 @@ public class Reson8PluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
@@ -466,7 +473,7 @@ public class Reson8PluginTests
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            Task.FromResult(Secrets.GetValueOrDefault(key));
 
         public Task DeleteSecretAsync(string key)
         {
@@ -479,11 +486,11 @@ public class Reson8PluginTests
 
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value)
-                ? value.Deserialize<T>(JsonOptions)
+                ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

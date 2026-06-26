@@ -33,26 +33,26 @@ public sealed record TranslationModelInfo
     // model ships. Keep it ordered for the UI.
     private static IReadOnlyList<TranslationLanguage> LanguageCatalog { get; } =
     [
-        new("en", "English", "EN"),
-        new("de", "Deutsch", "DE"),
-        new("fr", "Français", "FR"),
-        new("es", "Español", "ES"),
-        new("it", "Italiano", "IT"),
-        new("nl", "Nederlands", "NL"),
-        new("pl", "Polski", "PL"),
-        new("sv", "Svenska", "SV"),
-        new("da", "Dansk", "DA"),
-        new("fi", "Suomi", "FI"),
-        new("cs", "Čeština", "CS"),
-        new("ru", "Русский", "RU"),
-        new("uk", "Українська", "UA"),
-        new("hu", "Magyar", "HU"),
-        new("ja", "日本語", "JP"),
-        new("zh", "中文", "CN"),
-        new("ar", "العربية", "AR"),
-        new("hi", "हिन्दी", "HI"),
-        new("vi", "Tiếng Việt", "VN"),
-        new("id", "Bahasa Indonesia", "ID")
+        new("en", "English"),
+        new("de", "Deutsch"),
+        new("fr", "Français"),
+        new("es", "Español"),
+        new("it", "Italiano"),
+        new("nl", "Nederlands"),
+        new("pl", "Polski"),
+        new("sv", "Svenska"),
+        new("da", "Dansk"),
+        new("fi", "Suomi"),
+        new("cs", "Čeština"),
+        new("ru", "Русский"),
+        new("uk", "Українська"),
+        new("hu", "Magyar"),
+        new("ja", "日本語"),
+        new("zh", "中文"),
+        new("ar", "العربية"),
+        new("hi", "हिन्दी"),
+        new("vi", "Tiếng Việt"),
+        new("id", "Bahasa Indonesia")
     ];
 
     // The OPUS-MT models that actually exist (confirmed Xenova ONNX exports). The
@@ -109,7 +109,7 @@ public sealed record TranslationModelInfo
     // actually produce (directly, or as the en→X leg of the English pivot).
     // Declaration order is preserved so the fallback branch in BuildOptions is
     // deterministic.
-    private static readonly IReadOnlyList<string> ProducibleTargets =
+    private static readonly IReadOnlyList<string> s_producibleTargets =
         AvailableModels.Select(m => m.TargetLanguage).Distinct().ToList();
 
     /// <summary>Options list for the Settings (global) ComboBox; first item is "no translation".</summary>
@@ -133,38 +133,41 @@ public sealed record TranslationModelInfo
 
         if (includeGlobal)
         {
-            list.Add(new TranslationTargetOption(null, "Use global setting", ""));
-            list.Add(new TranslationTargetOption("", "No translation", ""));
+            list.Add(new TranslationTargetOption(null, "Use global setting"));
+            list.Add(new TranslationTargetOption("", "No translation"));
         }
         else
         {
-            list.Add(new TranslationTargetOption(null, "No translation", ""));
+            list.Add(new TranslationTargetOption(null, "No translation"));
         }
 
         // Curated order, but only languages we can actually produce a model for. A
         // catalog entry with no producible model (today: "pl") is dropped here, so
         // the picker can never offer a target that silently no-ops.
+        // ReSharper disable once LoopCanBeConvertedToQuery
         foreach (var lang in LanguageCatalog)
         {
-            if (ProducibleTargets.Contains(lang.Code))
+            if (s_producibleTargets.Contains(lang.Code))
             {
-                list.Add(new TranslationTargetOption(lang.Code, lang.DisplayName, lang.BadgeCode));
+                list.Add(new TranslationTargetOption(lang.Code, lang.DisplayName));
             }
         }
 
         // Fail-open: a producible target with no catalog entry (a newly added model)
         // stays selectable, rendered with a raw-code fallback, and is flagged so
         // someone adds curated metadata. Appended after the curated block.
-        foreach (var code in ProducibleTargets)
+        foreach (var code in s_producibleTargets)
         {
-            if (LanguageCatalog.All(l => l.Code != code))
+            if (LanguageCatalog.Any(l => l.Code == code))
             {
-                Debug.WriteLine(
-                    $"TranslationModelInfo: producible target '{code}' has no LanguageCatalog "
-                    + "entry; showing the raw code. Add a curated entry for a display name/badge."
-                );
-                list.Add(new TranslationTargetOption(code, code, code.ToUpperInvariant()));
+                continue;
             }
+
+            Debug.WriteLine(
+                $"TranslationModelInfo: producible target '{code}' has no LanguageCatalog "
+                + "entry; showing the raw code. Add a curated entry for a display name."
+            );
+            list.Add(new TranslationTargetOption(code, code));
         }
 
         return list;
@@ -186,16 +189,14 @@ public sealed record TranslationModelInfo
             [
                 new TranslationFileInfo(
                     "encoder_model_quantized.onnx",
-                    $"{Hf}/opus-mt-{repo}/resolve/main/onnx/encoder_model_quantized.onnx",
-                    50
+                    $"{Hf}/opus-mt-{repo}/resolve/main/onnx/encoder_model_quantized.onnx"
                 ),
                 new TranslationFileInfo(
                     "decoder_model_quantized.onnx",
-                    $"{Hf}/opus-mt-{repo}/resolve/main/onnx/decoder_model_quantized.onnx",
-                    54
+                    $"{Hf}/opus-mt-{repo}/resolve/main/onnx/decoder_model_quantized.onnx"
                 ),
-                new TranslationFileInfo("tokenizer.json", $"{Hf}/opus-mt-{repo}/resolve/main/tokenizer.json", 2),
-                new TranslationFileInfo("config.json", $"{Hf}/opus-mt-{repo}/resolve/main/config.json", 1)
+                new TranslationFileInfo("tokenizer.json", $"{Hf}/opus-mt-{repo}/resolve/main/tokenizer.json"),
+                new TranslationFileInfo("config.json", $"{Hf}/opus-mt-{repo}/resolve/main/config.json")
             ]
         };
     }

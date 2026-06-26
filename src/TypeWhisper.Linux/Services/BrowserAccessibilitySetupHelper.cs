@@ -14,7 +14,7 @@ namespace TypeWhisper.Linux.Services;
 ///     Both artifacts carry <see cref="OwnershipMarker" /> so <see cref="RemoveAsync" /> can
 ///     confirm ownership before deletion.
 /// </summary>
-public sealed class BrowserAccessibilitySetupHelper
+public sealed partial class BrowserAccessibilitySetupHelper
 {
     internal const string OwnershipMarker = "Installed by TypeWhisper";
 
@@ -34,9 +34,6 @@ public sealed class BrowserAccessibilitySetupHelper
 
     private const string FirefoxEnvWrapper =
         "env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge";
-
-    private const string ForceDisabledNegOnePattern =
-        @"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;";
 
     private const string UserJsOwnershipMarker = "// Set by TypeWhisper";
 
@@ -133,7 +130,7 @@ public sealed class BrowserAccessibilitySetupHelper
                 {
                     var existing = File.Exists(userJsPath) ? File.ReadAllText(userJsPath) : "";
 
-                    if (Regex.IsMatch(existing, ForceDisabledNegOnePattern))
+                    if (ForceDisabledNegOneRegex().IsMatch(existing))
                     {
                         patched.Add(Path.GetFileName(profileDir));
                         continue;
@@ -141,12 +138,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
                     // Replace any other accessibility.force_disabled line so
                     // we don't leave two contradictory pref entries.
-                    var cleaned = Regex.Replace(
-                        existing,
-                        @"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-?\d+\s*\)\s*;\s*\r?\n?",
-                        "",
-                        RegexOptions.Multiline
-                    );
+                    var cleaned = ForceDisabledAnyValueLineRegex().Replace(existing, "");
 
                     var prefixNewline = cleaned.Length > 0 && !cleaned.EndsWith('\n') ? "\n" : "";
                     var addition =
@@ -313,7 +305,7 @@ public sealed class BrowserAccessibilitySetupHelper
             );
         }
 
-        if (status.FirefoxInstalled && !status.FirefoxLauncherPresent)
+        if (status is { FirefoxInstalled: true, FirefoxLauncherPresent: false })
         {
             actions.Add(
                 $"• Shadow Firefox / Zen .desktop launchers in {UserApplicationsDir()}\n"
@@ -322,7 +314,7 @@ public sealed class BrowserAccessibilitySetupHelper
             );
         }
 
-        if (status.ChromiumInstalled && !status.ChromiumLauncherPresent)
+        if (status is { ChromiumInstalled: true, ChromiumLauncherPresent: false })
         {
             actions.Add(
                 $"• Shadow Chromium-family .desktop launchers in {UserApplicationsDir()}\n"
@@ -331,9 +323,7 @@ public sealed class BrowserAccessibilitySetupHelper
         }
 
         if (
-            status.FirefoxInstalled
-            && status.FirefoxProfileFound
-            && !status.FirefoxAccessibilityForceEnabled
+            status is { FirefoxInstalled: true, FirefoxProfileFound: true, FirefoxAccessibilityForceEnabled: false }
         )
         {
             var profiles = EnumerateFirefoxProfileDirs().Select(d => Path.Join(d, "user.js"));
@@ -546,7 +536,7 @@ public sealed class BrowserAccessibilitySetupHelper
             try
             {
                 var content = File.ReadAllText(path);
-                if (Regex.IsMatch(content, ForceDisabledNegOnePattern, RegexOptions.Multiline))
+                if (ForceDisabledNegOneMultilineRegex().IsMatch(content))
                 {
                     return true;
                 }
@@ -1085,6 +1075,18 @@ public sealed class BrowserAccessibilitySetupHelper
             && (!ChromiumInstalled || ChromiumLauncherPresent)
             && (!FirefoxInstalled || !FirefoxProfileFound || FirefoxAccessibilityForceEnabled);
     }
+
+    // accessibility.force_disabled = -1 pref line (start-of-string match on a single user.js).
+    [GeneratedRegex(@"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;")]
+    private static partial Regex ForceDisabledNegOneRegex();
+
+    // Same pref line, matched per-line across full user.js content.
+    [GeneratedRegex(@"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;", RegexOptions.Multiline)]
+    private static partial Regex ForceDisabledNegOneMultilineRegex();
+
+    // Any accessibility.force_disabled line (any value) so we don't leave contradictory prefs.
+    [GeneratedRegex(@"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-?\d+\s*\)\s*;\s*\r?\n?", RegexOptions.Multiline)]
+    private static partial Regex ForceDisabledAnyValueLineRegex();
 
     public sealed record SetupResult(bool Success, string Message, string? Detail = null);
 }

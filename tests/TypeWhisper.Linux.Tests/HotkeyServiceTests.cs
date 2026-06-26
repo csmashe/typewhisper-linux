@@ -92,7 +92,7 @@ public sealed class HotkeyServiceTests
         var backendA = new TestShortcutBackend();
         var backendB = new TestShortcutBackend();
         var queue = new Queue<IGlobalShortcutBackend>(
-            new IGlobalShortcutBackend[] { backendA, backendB }
+            [backendA, backendB]
         );
         var selector = new BackendSelector(() => queue.Dequeue());
         using var hotkey = new HotkeyService(selector);

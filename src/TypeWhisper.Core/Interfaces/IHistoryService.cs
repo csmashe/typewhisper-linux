@@ -14,6 +14,7 @@ public interface IHistoryService
     int TotalWords { get; }
 
     /// <summary>Total recorded audio duration across all records, in seconds.</summary>
+    // ReSharper disable once UnusedMember.Global
     double TotalDuration { get; }
 
     void AddRecord(TranscriptionRecord record);

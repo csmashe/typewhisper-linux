@@ -13,9 +13,11 @@ public interface IDictionaryService
     IReadOnlyList<DictionaryEntry> Entries { get; }
 
     void AddEntry(DictionaryEntry entry);
+    // ReSharper disable once UnusedMemberInSuper.Global
     void AddEntries(IEnumerable<DictionaryEntry> entries);
     void UpdateEntry(DictionaryEntry entry);
     void DeleteEntry(string id);
+    // ReSharper disable once UnusedMemberInSuper.Global
     void DeleteEntries(IEnumerable<string> ids);
 
     /// <summary>Applies the enabled corrections to <paramref name="text" /> and returns the rewritten text.</summary>
@@ -40,6 +42,7 @@ public interface IDictionaryService
     void SetTerms(IEnumerable<string> terms, bool replaceExisting);
 
     /// <summary>Removes every term entry, leaving corrections untouched.</summary>
+    // ReSharper disable once UnusedMemberInSuper.Global
     void RemoveAllTerms();
 
     /// <summary>Removes a single term by its original string; returns <c>true</c> if a term was removed.</summary>

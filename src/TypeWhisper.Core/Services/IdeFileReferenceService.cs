@@ -139,7 +139,7 @@ public sealed partial class IdeFileReferenceService
     {
         return value.Contains('.', StringComparison.Ordinal)
                || value.Contains('/', StringComparison.Ordinal)
-               || value.StartsWith("@", StringComparison.Ordinal);
+               || value.StartsWith('@');
     }
 
     private static bool LooksLikeSpokenFileName(string value)
@@ -153,10 +153,10 @@ public sealed partial class IdeFileReferenceService
     [GeneratedRegex(@"^(?<name>.+?)\s+dot\s+(?<extension>[a-z0-9+# ]+)$", RegexOptions.IgnoreCase)]
     private static partial Regex ExtensionRegex();
 
-    [GeneratedRegex(@"^[a-z0-9]+$")]
+    [GeneratedRegex("^[a-z0-9]+$")]
     private static partial Regex PlainExtensionRegex();
 
-    [GeneratedRegex(@"[a-z0-9]+")]
+    [GeneratedRegex("[a-z0-9]+")]
     private static partial Regex WordRegex();
 
     [GeneratedRegex(@"\s+")]

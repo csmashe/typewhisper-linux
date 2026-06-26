@@ -486,7 +486,7 @@ public class CudaRuntimeProvisioner
         // Keep only the shared objects under nvidia/<component>/lib/, skipping
         // directory entries, Python stubs, headers, and metadata.
         static bool IsLibEntry(ZipArchiveEntry entry) =>
-            !entry.FullName.EndsWith("/", StringComparison.Ordinal)
+            !entry.FullName.EndsWith('/')
             && entry.FullName.Contains("/lib/", StringComparison.Ordinal)
             && IsSharedObject(Path.GetFileName(entry.FullName));
 

@@ -19,10 +19,6 @@ public record AppSettings
     public const int DefaultPreviewBubbleAutoHideMilliseconds = 1500;
     public const int MaxPreviewBubbleAutoHideMilliseconds = 5000;
 
-    private readonly Dictionary<string, TextInsertionStrategy> _appInsertionStrategies = new(
-        StringComparer.OrdinalIgnoreCase
-    );
-
     public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
     public string PushToTalkHotkey { get; init; } = "Ctrl+Shift";
     public string ToggleOnlyHotkey { get; init; } = "";
@@ -35,17 +31,18 @@ public record AppSettings
 
     public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
     {
-        get => _appInsertionStrategies;
+        get;
         init =>
             // JsonSerializer can pass null for a null JSON value; fall back to an empty map
             // instead of letting the Dictionary copy-constructor throw on a null source.
-            _appInsertionStrategies = value is null
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+            field = value is null
                 ? new Dictionary<string, TextInsertionStrategy>(StringComparer.OrdinalIgnoreCase)
                 : new Dictionary<string, TextInsertionStrategy>(
                     value,
                     StringComparer.OrdinalIgnoreCase
                 );
-    }
+    } = new(StringComparer.OrdinalIgnoreCase);
 
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
 

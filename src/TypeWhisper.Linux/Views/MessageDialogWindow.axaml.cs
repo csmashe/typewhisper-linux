@@ -24,9 +24,7 @@ public partial class MessageDialogWindow : Window
 
         if (
             Application.Current?.ApplicationLifetime
-                is IClassicDesktopStyleApplicationLifetime desktop
-            && desktop.MainWindow is { } owner
-        )
+            is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
         {
             await ShowDialog(owner);
         }
@@ -53,9 +51,7 @@ public partial class MessageDialogWindow : Window
 
         if (
             Application.Current?.ApplicationLifetime
-                is IClassicDesktopStyleApplicationLifetime desktop
-            && desktop.MainWindow is { } owner
-        )
+            is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
         {
             var result = await ShowDialog<bool>(owner);
             return result;

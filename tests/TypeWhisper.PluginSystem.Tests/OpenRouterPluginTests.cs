@@ -1,4 +1,3 @@
-using System.IO;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -6,6 +5,13 @@ using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenRouter;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+
+// The CapturingHandler lambdas assert on the outgoing request (method, URI,
+// headers, body) and return a canned response. ReSharper reads xUnit asserts
+// as precondition checks and concludes those parameters are only validated,
+// never used — but asserting on the request is exactly what these tests
+// verify, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -39,15 +45,14 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task ActivateAsync_ExposesOpenRouterAsTranscriptionEngineWithDefaultModel()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
 
         var sut = new OpenRouterPlugin();
         await sut.ActivateAsync(host);
 
-        Assert.IsAssignableFrom<ITranscriptionEnginePlugin>(sut);
-        Assert.IsAssignableFrom<ILlmProviderPlugin>(sut);
-        Assert.IsAssignableFrom<IPluginSettingsProvider>(sut);
+        Assert.IsType<ITranscriptionEnginePlugin>(sut, exactMatch: false);
+        Assert.IsType<ILlmProviderPlugin>(sut, exactMatch: false);
+        Assert.IsType<IPluginSettingsProvider>(sut, exactMatch: false);
         Assert.Equal("openrouter", sut.ProviderId);
         Assert.Equal("OpenRouter", sut.ProviderDisplayName);
         Assert.True(sut.IsConfigured);
@@ -61,12 +66,11 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task ActivateAsync_RestoresFetchedTranscriptionModelsAndNormalizesStaleSelection()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("fetchedTranscriptionModels", new List<OpenRouterFetchedModel>
         {
             new("z/stt", "Zulu STT", "0.000002", "0"),
-            new("a/stt", "Alpha STT", "0", "0"),
+            new("a/stt", "Alpha STT", "0", "0")
         });
         host.SetSetting("selectedTranscriptionModel", "missing/stt");
 
@@ -81,8 +85,7 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task ActivateAsync_UsesOpenRouterFreeAsDefaultWhenSelectionUnset()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
 
         var sut = new OpenRouterPlugin();
         await sut.ActivateAsync(host);
@@ -95,8 +98,7 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task ActivateAsync_MigratesLegacyFallbackDefaultToOpenRouterFree()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("selectedLlmModel", "openai/gpt-4o");
 
         var sut = new OpenRouterPlugin();
@@ -118,8 +120,7 @@ public class OpenRouterPluginTests
         // fork only migrates null/blank or the explicit legacy openai/
         // gpt-4o default; everything else is preserved and the user-flag
         // is backfilled so the next activate doesn't re-migrate it.
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("selectedLlmModel", "openrouter/owl-alpha");
 
         var sut = new OpenRouterPlugin();
@@ -140,8 +141,7 @@ public class OpenRouterPluginTests
         // hard-coded. Any of these can be a real saved selection from an
         // earlier install; they must survive the catalog/migration
         // rewrite untouched.
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("selectedLlmModel", savedSelection);
 
         var sut = new OpenRouterPlugin();
@@ -155,12 +155,11 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task ActivateAsync_RestoresFetchedModelsAndNormalizesStaleSelection()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("fetchedModels", new List<OpenRouterFetchedModel>
         {
             new("z/model", "Z Model", "0.000002", "0.000003"),
-            new("a/model", "A Model", "0", "0"),
+            new("a/model", "A Model", "0", "0")
         });
         host.SetSetting("selectedLlmModel", "missing/model");
 
@@ -177,8 +176,7 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task ActivateAsync_PreservesMarkedUserSelection()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("selectedLlmModel", "selected/model");
         host.SetSetting("userSelectedLlmModel", true);
 
@@ -213,7 +211,8 @@ public class OpenRouterPluginTests
             return JsonResponse("""{ "data": { "limit_remaining": 12.5 } }""");
         });
 
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
 
         Assert.True(await sut.ValidateApiKeyAsync("openrouter-key"));
@@ -259,9 +258,9 @@ public class OpenRouterPluginTests
                 """);
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -288,9 +287,9 @@ public class OpenRouterPluginTests
         // cached/fallback catalog — exactly the failure mode this code
         // is trying to tolerate.
         var handler = new CapturingHandler((_, _) => JsonResponse(responseBody));
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -343,9 +342,9 @@ public class OpenRouterPluginTests
                 """);
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -365,9 +364,9 @@ public class OpenRouterPluginTests
             return JsonResponse("""{ "data": { "limit": 20.0, "usage": 7.25 } }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -380,9 +379,9 @@ public class OpenRouterPluginTests
         var handler = new CapturingHandler((_, _) =>
             JsonResponse("""{ "data": { "limit_remaining": 4.5 } }"""));
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -411,9 +410,9 @@ public class OpenRouterPluginTests
             return JsonResponse("""{ "text": "Hallo Welt", "usage": { "seconds": 1.25 } }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -436,13 +435,13 @@ public class OpenRouterPluginTests
         {
             using var doc = JsonDocument.Parse(body ?? throw new InvalidOperationException("Missing body"));
             Assert.NotNull(request);
-            Assert.False(doc.RootElement.TryGetProperty("language", out var _));
+            Assert.False(doc.RootElement.TryGetProperty("language", out _));
             return JsonResponse("""{ "text": "auto", "usage": { "seconds": 0.5 } }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -462,9 +461,9 @@ public class OpenRouterPluginTests
             return JsonResponse("""{ "choices": [ { "message": { "content": "default" } } ] }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -486,11 +485,11 @@ public class OpenRouterPluginTests
             return JsonResponse("""{ "choices": [ { "message": { "content": "done" } } ] }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("selectedLlmModel", "selected/model");
         host.SetSetting("userSelectedLlmModel", true);
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -510,11 +509,11 @@ public class OpenRouterPluginTests
             return JsonResponse("""{ "choices": [ { "message": { "content": "custom" } } ] }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("llmTemperatureMode", "custom");
         host.SetSetting("llmTemperatureValue", 1.2);
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -543,13 +542,13 @@ public class OpenRouterPluginTests
                 request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
             };
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -557,7 +556,7 @@ public class OpenRouterPluginTests
         await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
             chunks.Add(chunk);
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
         Assert.Equal("openrouter/free", doc.RootElement.GetProperty("model").GetString());
@@ -576,15 +575,15 @@ public class OpenRouterPluginTests
             {
                 Content = new StringContent(
                     "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n",
-                    Encoding.UTF8, "text/event-stream"),
+                    Encoding.UTF8, "text/event-stream")
             };
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("llmTemperatureMode", "custom");
         host.SetSetting("llmTemperatureValue", 1.2);
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -592,7 +591,7 @@ public class OpenRouterPluginTests
         await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "override/model", CancellationToken.None))
             chunks.Add(chunk);
 
-        Assert.Equal(new[] { "x" }, chunks);
+        Assert.Equal(["x"], chunks);
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.Equal("override/model", doc.RootElement.GetProperty("model").GetString());
         Assert.Equal(1.2, doc.RootElement.GetProperty("temperature").GetDouble(), precision: 3);
@@ -604,10 +603,10 @@ public class OpenRouterPluginTests
         var handler = new CapturingHandler((_, _) =>
             JsonResponse("""{ "choices": [ { "message": { "content": "bulk" } } ] }"""));
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("streamResponses", false);
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -638,7 +637,7 @@ public class OpenRouterPluginTests
                 "selectedLlmModel",
                 "llmTemperatureMode",
                 "llmTemperatureValue",
-                "streamResponses",
+                "streamResponses"
             ],
             keys);
     }
@@ -646,8 +645,7 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task SetSettingValueAsync_PersistsLlmModelAndMarksUserSelection()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         var sut = new OpenRouterPlugin();
         await sut.ActivateAsync(host);
 
@@ -661,8 +659,7 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task SetSettingValueAsync_PersistsTemperatureModeAndValueWithInvariantCulture()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         var sut = new OpenRouterPlugin();
         await sut.ActivateAsync(host);
 
@@ -681,8 +678,7 @@ public class OpenRouterPluginTests
     [InlineData("-Infinity")]
     public async Task SetSettingValueAsync_RejectsNonFiniteTemperatureValues(string value)
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         var sut = new OpenRouterPlugin();
         await sut.ActivateAsync(host);
 
@@ -698,8 +694,7 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task SetSettingValueAsync_ClampsTemperatureToZeroTwoRange()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         var sut = new OpenRouterPlugin();
         await sut.ActivateAsync(host);
 
@@ -720,7 +715,7 @@ public class OpenRouterPluginTests
         var result = await sut.ValidateAsync();
 
         Assert.NotNull(result);
-        Assert.False(result!.IsSuccess);
+        Assert.False(result.IsSuccess);
         Assert.Contains("API key", result.Message, StringComparison.Ordinal);
     }
 
@@ -760,20 +755,20 @@ public class OpenRouterPluginTests
                           ]
                         }
                         """),
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
             };
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "openrouter-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var result = await sut.ValidateAsync();
 
         Assert.NotNull(result);
-        Assert.True(result!.IsSuccess);
+        Assert.True(result.IsSuccess);
         Assert.Contains("Fetched 2 LLM model(s)", result.Message, StringComparison.Ordinal);
         Assert.Contains("Fetched 1 transcription model(s)", result.Message, StringComparison.Ordinal);
         Assert.Contains("$7.50", result.Message, StringComparison.Ordinal);
@@ -814,7 +809,7 @@ public class OpenRouterPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
 
     private sealed class CapturingHandler(
@@ -833,9 +828,9 @@ public class OpenRouterPluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true,
+            PropertyNameCaseInsensitive = true
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
@@ -849,7 +844,7 @@ public class OpenRouterPluginTests
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            Task.FromResult(Secrets.GetValueOrDefault(key));
 
         public Task DeleteSecretAsync(string key)
         {
@@ -859,11 +854,11 @@ public class OpenRouterPluginTests
 
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value)
-                ? value.Deserialize<T>(JsonOptions)
+                ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;
@@ -880,7 +875,7 @@ public class OpenRouterPluginTests
     // host's PluginLocalization in production, instead of echoing raw keys.
     private sealed class TestPluginLocalization : IPluginLocalization
     {
-        private static readonly PluginLocalization s_en = new PluginLocalization(
+        private static readonly PluginLocalization s_en = new(
             Path.GetFullPath(
                 Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenRouter"),
                 AppContext.BaseDirectory),

@@ -107,7 +107,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         _timer?.Dispose();
         _timer = null;
 
-        var wav = _audio.StopRecording();
+        var wav = await _audio.StopRecordingAsync();
         IsRecording = false;
         OnPropertyChanged(nameof(RecordButtonText));
         AudioLevel = 0;

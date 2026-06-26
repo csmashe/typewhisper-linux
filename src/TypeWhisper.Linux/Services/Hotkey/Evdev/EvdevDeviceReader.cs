@@ -43,7 +43,7 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
 
         try
         {
-            _cts.Cancel();
+            await _cts.CancelAsync();
         }
         catch
         {
@@ -52,7 +52,7 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
 
         try
         {
-            _stream?.Dispose();
+             _stream?.DisposeAsync();
         }
         catch (Exception ex)
         {

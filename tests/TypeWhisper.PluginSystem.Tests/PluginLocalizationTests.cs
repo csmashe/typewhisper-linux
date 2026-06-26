@@ -3,7 +3,7 @@ using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class PluginLocalizationTests : IDisposable
+public sealed class PluginLocalizationTests : IDisposable
 {
     private readonly string _locDir;
     private readonly string _pluginDir;

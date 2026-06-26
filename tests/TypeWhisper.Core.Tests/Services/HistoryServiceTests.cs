@@ -4,7 +4,7 @@ using TypeWhisper.Core.Services;
 namespace TypeWhisper.Core.Tests.Services;
 
 /// <summary>Covers <see cref="HistoryService" />: record persistence, exports, retention purging, and audio-file cleanup.</summary>
-public class HistoryServiceTests : IDisposable
+public sealed class HistoryServiceTests : IDisposable
 {
     private readonly string _audioDirectory;
     private readonly string _filePath;
@@ -27,7 +27,10 @@ public class HistoryServiceTests : IDisposable
         {
             Directory.Delete(_tempDir, true);
         }
-        catch { }
+        catch
+        {
+            // best effort
+        }
     }
 
     [Fact]
@@ -220,7 +223,7 @@ public class HistoryServiceTests : IDisposable
     [Fact]
     public void PurgeOldRecords_DeletesAssociatedAudioFiles()
     {
-        var audioFile = "expired.wav";
+        const string audioFile = "expired.wav";
         File.WriteAllText(Path.Join(_audioDirectory, audioFile), "audio");
         var record = CreateRecord("expired", DateTime.UtcNow.AddHours(-3), audioFile);
         _sut.AddRecord(record);
@@ -233,7 +236,7 @@ public class HistoryServiceTests : IDisposable
     [Fact]
     public void ClearAll_DeletesAssociatedAudioFiles()
     {
-        var audioFile = "session.wav";
+        const string audioFile = "session.wav";
         File.WriteAllText(Path.Join(_audioDirectory, audioFile), "audio");
         _sut.AddRecord(CreateRecord("session", DateTime.UtcNow, audioFile));
 

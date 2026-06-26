@@ -11,6 +11,7 @@ public sealed record TranscriptionResult
     public string? DetectedLanguage { get; init; }
     public double Duration { get; init; }
     public double ProcessingTime { get; init; }
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
     public float? NoSpeechProbability { get; init; }
     public IReadOnlyList<TranscriptionSegment> Segments { get; init; } = [];
 }

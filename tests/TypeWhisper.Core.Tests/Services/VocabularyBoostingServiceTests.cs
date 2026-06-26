@@ -227,8 +227,11 @@ public class VocabularyBoostingServiceTests
             Entries = entries.ToArray();
         }
 
-        public IReadOnlyList<DictionaryEntry> Entries { get; private set; }
-        public event Action? EntriesChanged;
+        public IReadOnlyList<DictionaryEntry> Entries { get; }
+
+        // Interface requires the event; this fake never raises it (the SUT only reads
+        // Entries once at construction), so no-op accessors satisfy it without CS0067.
+        public event Action? EntriesChanged { add { } remove { } }
 
         public void AddEntry(DictionaryEntry entry)
         {
@@ -327,12 +330,6 @@ public class VocabularyBoostingServiceTests
         public int ImportFromCsv(string csv)
         {
             throw new NotSupportedException();
-        }
-
-        public void SetEntries(params DictionaryEntry[] entries)
-        {
-            Entries = entries;
-            EntriesChanged?.Invoke();
         }
     }
 }

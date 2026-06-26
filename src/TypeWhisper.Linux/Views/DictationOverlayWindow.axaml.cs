@@ -221,8 +221,7 @@ public partial class DictationOverlayWindow : Window
         var width = Math.Max(320, Bounds.Width);
         var height = Math.Max(56, Bounds.Height);
 
-        if (_settings.Current.OverlayCustomLeft is { } customLeft &&
-            _settings.Current.OverlayCustomTop is { } customTop)
+        if (_settings.Current is { OverlayCustomLeft: { } customLeft, OverlayCustomTop: { } customTop })
         {
             // Clamp to the screen the saved point is on, not always primary — otherwise
             // dragging to a secondary monitor would snap back on the debounced save.

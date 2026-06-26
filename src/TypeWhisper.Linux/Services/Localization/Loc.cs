@@ -130,7 +130,7 @@ public sealed class Loc : INotifyPropertyChanged
         AvailableUiLanguages = BuildUiLanguageOptions(available);
     }
 
-    public bool HasLanguage(string langCode) => _strings.ContainsKey(langCode);
+    private bool HasLanguage(string langCode) => _strings.ContainsKey(langCode);
 
     /// <summary>
     ///     Resolves a persisted setting value to an effective language code:
@@ -146,7 +146,7 @@ public sealed class Loc : INotifyPropertyChanged
         return HasLanguage(SystemLanguage) ? SystemLanguage : FallbackLanguage;
     }
 
-    public string GetString(string key)
+    private string GetString(string key)
     {
         if (_strings.TryGetValue(_currentLanguage, out var currentDict)
             && currentDict.TryGetValue(key, out var value))

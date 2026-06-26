@@ -98,7 +98,10 @@ public sealed class YdotoolSetupHelperTests
             {
                 Directory.Delete(dir, true);
             }
-            catch { }
+            catch
+            {
+                // best effort
+            }
         }
     }
 
@@ -126,13 +129,19 @@ public sealed class YdotoolSetupHelperTests
             {
                 File.Delete(withMarker);
             }
-            catch { }
+            catch
+            {
+                // best effort
+            }
 
             try
             {
                 File.Delete(withoutMarker);
             }
-            catch { }
+            catch
+            {
+                // best effort
+            }
         }
     }
 
@@ -152,7 +161,10 @@ public sealed class YdotoolSetupHelperTests
             {
                 File.Delete(path);
             }
-            catch { }
+            catch
+            {
+                // best effort
+            }
         }
     }
 

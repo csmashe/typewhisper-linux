@@ -69,15 +69,14 @@ internal static class LinuxDictationReadbackLanguagePolicy
     // checked — a translation can legitimately return text identical to its input.
     private static bool IsSuccessfulTranslation(PostProcessingStepResult step)
     {
-        return step.Name == PostProcessingStepNames.Translation && step.Succeeded;
+        return step is { Name: PostProcessingStepNames.Translation, Succeeded: true };
     }
 
     // LLM prompt action or plugin post-processor — both can rewrite into any language.
     // Only a succeeded step that actually changed the text counts.
     private static bool IsArbitraryTransform(PostProcessingStepResult step)
     {
-        return step.Succeeded
-               && step.Changed
+        return step is { Succeeded: true, Changed: true }
                && (
                    step.Name == PostProcessingStepNames.Llm
                    || step.Name.StartsWith(

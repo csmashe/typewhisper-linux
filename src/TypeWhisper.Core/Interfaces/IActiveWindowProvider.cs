@@ -14,6 +14,7 @@ public interface IActiveWindowProvider
     ///     Stable identifier surfaced in <see cref="ActiveWindowSnapshot.Source" />
     ///     and used in failure-tracker remediation text.
     /// </summary>
+    // ReSharper disable once UnusedMemberInSuper.Global
     string Name { get; }
 
     /// <summary>

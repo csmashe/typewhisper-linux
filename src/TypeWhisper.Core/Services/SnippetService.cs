@@ -239,7 +239,7 @@ public sealed partial class SnippetService : ISnippetService
         var escaped = Regex.Escape(snippet.Trigger);
         return snippet.TriggerMode == SnippetTriggerMode.ExactPhrase
             ? @"^\s*" + escaped + @"[.!?]?\s*$"
-            : escaped + @"[.!?]?";
+            : escaped + "[.!?]?";
     }
 
     private static bool SnippetIdentityEquals(Snippet left, Snippet right)

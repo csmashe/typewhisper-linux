@@ -9,7 +9,7 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_None_ReturnsOriginalText()
     {
-        var text = "um hello   world";
+        const string text = "um hello   world";
 
         var result = CleanupService.Clean(text, CleanupLevel.None);
 

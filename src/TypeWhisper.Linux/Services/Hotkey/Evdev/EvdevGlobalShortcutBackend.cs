@@ -186,7 +186,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         {
             try
             {
-                rescan.Cancel();
+                await rescan.CancelAsync();
                 rescan.Dispose();
             }
             catch (Exception ex)

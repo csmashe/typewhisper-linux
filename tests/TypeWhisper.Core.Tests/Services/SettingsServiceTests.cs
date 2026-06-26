@@ -5,8 +5,14 @@ using TypeWhisper.Core.Services;
 namespace TypeWhisper.Core.Tests.Services;
 
 /// <summary>Covers <see cref="SettingsService" />: save/load round-trips, atomic-write/backup recovery, and legacy-field migrations.</summary>
-public class SettingsServiceTests : IDisposable
+public sealed class SettingsServiceTests : IDisposable
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
     private readonly string _filePath;
     private readonly string _tempDir;
 
@@ -23,7 +29,10 @@ public class SettingsServiceTests : IDisposable
         {
             Directory.Delete(_tempDir, true);
         }
-        catch { }
+        catch
+        {
+            // best effort
+        }
     }
 
     [Fact]
@@ -116,14 +125,7 @@ public class SettingsServiceTests : IDisposable
     public void Load_CorruptPrimary_FallsBackToBackup()
     {
         var backup = AppSettings.Default with { Language = "de", HasCompletedOnboarding = true };
-        var json = JsonSerializer.Serialize(
-            backup,
-            new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            }
-        );
+        var json = JsonSerializer.Serialize(backup, s_jsonOptions);
         File.WriteAllText(_filePath + ".bak", json);
         File.WriteAllText(_filePath, "{{not valid json!!");
 
@@ -148,14 +150,7 @@ public class SettingsServiceTests : IDisposable
     public void Load_CorruptPrimary_RestoresPrimaryFromBackup()
     {
         var backup = AppSettings.Default with { Language = "de" };
-        var json = JsonSerializer.Serialize(
-            backup,
-            new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            }
-        );
+        var json = JsonSerializer.Serialize(backup, s_jsonOptions);
         File.WriteAllText(_filePath + ".bak", json);
         File.WriteAllText(_filePath, "{{corrupt}}");
 
@@ -177,7 +172,7 @@ public class SettingsServiceTests : IDisposable
         sut.Save(settings);
 
         Assert.NotNull(received);
-        Assert.Equal("es", received!.Language);
+        Assert.Equal("es", received.Language);
     }
 
     [Fact]

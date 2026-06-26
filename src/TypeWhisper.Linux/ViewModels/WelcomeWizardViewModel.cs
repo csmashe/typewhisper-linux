@@ -204,25 +204,20 @@ public partial class WelcomeWizardViewModel : ObservableObject
             return false;
         }
 
-        if (result is InsertionResult.MissingClipboardTool)
+        switch (result)
         {
-            PasteTestStatus = Loc.Instance["Wizard.PasteTestMissingClipboard"];
-            return false;
-        }
-
-        if (result is InsertionResult.MissingPasteTool)
-        {
-            PasteTestStatus = Loc.Instance.GetString(
-                "Wizard.PasteTestMissingPaste",
-                _commands.GetSnapshot().PasteToolInstallHint
-            );
-            return false;
-        }
-
-        if (result is InsertionResult.CopiedToClipboard)
-        {
-            PasteTestStatus = Loc.Instance["Wizard.PasteTestCopiedOnly"];
-            return false;
+            case InsertionResult.MissingClipboardTool:
+                PasteTestStatus = Loc.Instance["Wizard.PasteTestMissingClipboard"];
+                return false;
+            case InsertionResult.MissingPasteTool:
+                PasteTestStatus = Loc.Instance.GetString(
+                    "Wizard.PasteTestMissingPaste",
+                    _commands.GetSnapshot().PasteToolInstallHint
+                );
+                return false;
+            case InsertionResult.CopiedToClipboard:
+                PasteTestStatus = Loc.Instance["Wizard.PasteTestCopiedOnly"];
+                return false;
         }
 
         if (result is not InsertionResult.Pasted)
@@ -361,9 +356,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     private void RefreshPluginState()
     {
-        for (var i = 0; i < ExtensionPlugins.Count; i++)
+        foreach (var existing in ExtensionPlugins)
         {
-            var existing = ExtensionPlugins[i];
             var isEnabled = _pluginManager.IsEnabled(existing.Id);
             if (isEnabled != existing.IsEnabled)
             {
@@ -406,13 +400,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
             var downloaded = engine.SupportsModelDownload
                 ? engine.IsModelDownloaded(rawModelId)
                 : engine.IsConfigured;
-            if (downloaded != existing.IsDownloaded)
+            if (downloaded == existing.IsDownloaded)
             {
-                AvailableModels[i] = existing with { IsDownloaded = downloaded };
-                if (SelectedModel?.ModelId == existing.ModelId)
-                {
-                    SelectedModel = AvailableModels[i];
-                }
+                continue;
+            }
+
+            AvailableModels[i] = existing with { IsDownloaded = downloaded };
+            if (SelectedModel?.ModelId == existing.ModelId)
+            {
+                SelectedModel = AvailableModels[i];
             }
         }
     }
@@ -659,7 +655,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             hotkeyRow is not null
             && hotkeyRow.Summary.Contains("log out", StringComparison.OrdinalIgnoreCase);
 
-        var outstanding = SetupItems.Where(r => r.IsRequired && !r.IsSatisfied).ToList();
+        var outstanding = SetupItems.Where(r => r is { IsRequired: true, IsSatisfied: false }).ToList();
         SetupSummary = SetupItems.All(r => r.IsSatisfied)
             ? Loc.Instance["Wizard.SetupAllSet"]
             : outstanding.Count == 0

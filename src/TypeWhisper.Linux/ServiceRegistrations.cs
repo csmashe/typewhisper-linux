@@ -7,7 +7,6 @@ using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
-using TypeWhisper.Linux.Services.Hotkey.Portal;
 using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins;

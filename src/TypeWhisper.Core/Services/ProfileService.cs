@@ -133,7 +133,7 @@ public sealed class ProfileService : IProfileService
             if (url is not null && profile.UrlPatterns.Count > 0)
             {
                 urlMatchPattern = profile.UrlPatterns.FirstOrDefault(pattern =>
-                    host is not null && MatchesUrlPattern(host, url, pattern)
+                    host is not null && MatchesUrlPattern(host, pattern)
                 );
             }
 
@@ -227,7 +227,7 @@ public sealed class ProfileService : IProfileService
         return null;
     }
 
-    private static bool MatchesUrlPattern(string host, string url, string pattern)
+    private static bool MatchesUrlPattern(string host, string pattern)
     {
         if (!pattern.StartsWith("*."))
         {
@@ -304,7 +304,7 @@ public sealed class ProfileService : IProfileService
         finally
         {
             // Surface persistence failures: swallowing them left _cache mutated
-            // and ProfilesChanged firing as if the write had succeeded.
+            // and ProfilesChanged firing as if to write had succeeded.
             if (tempPath is not null)
             {
                 try

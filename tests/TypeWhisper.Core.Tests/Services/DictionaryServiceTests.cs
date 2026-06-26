@@ -1,11 +1,15 @@
-using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
+// The Assert.All lambdas in this file assert on each element; ReSharper reads xUnit
+// asserts as precondition checks and concludes the element parameter is only
+// validated, never used — but asserting on each element is exactly the test's
+// purpose, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
 namespace TypeWhisper.Core.Tests.Services;
 
 /// <summary>Covers <see cref="DictionaryService" />: entries, term packs, corrections, CSV round-trip, and change notifications.</summary>
-public class DictionaryServiceTests : IDisposable
+public sealed class DictionaryServiceTests : IDisposable
 {
     private readonly string _filePath;
     private readonly DictionaryService _sut;
@@ -119,14 +123,14 @@ public class DictionaryServiceTests : IDisposable
         _sut.ActivatePack(pack);
 
         Assert.Equal(3, _sut.Entries.Count);
-        Assert.Contains(_sut.Entries, e => e.Id == "existing" && e.Original == "React");
-        Assert.Contains(_sut.Entries, e => e.Id == "pack:test:React" && e.Original == "React");
+        Assert.Contains(_sut.Entries, e => e is { Id: "existing", Original: "React" });
+        Assert.Contains(_sut.Entries, e => e is { Id: "pack:test:React", Original: "React" });
     }
 
     [Fact]
     public void ApplyIndustryPreset_General_DoesNotActivateAnyPack()
     {
-        ((IDictionaryService)_sut).ApplyIndustryPreset("general");
+        _sut.ApplyIndustryPreset("general");
 
         Assert.Empty(_sut.Entries);
     }
@@ -134,7 +138,7 @@ public class DictionaryServiceTests : IDisposable
     [Fact]
     public void ApplyIndustryPreset_UnknownId_DoesNotActivateAnyPack()
     {
-        ((IDictionaryService)_sut).ApplyIndustryPreset("does-not-exist");
+        _sut.ApplyIndustryPreset("does-not-exist");
 
         Assert.Empty(_sut.Entries);
     }
@@ -150,9 +154,9 @@ public class DictionaryServiceTests : IDisposable
         var pack = TermPack.FindById(preset.TermPackId!);
         Assert.NotNull(pack);
 
-        ((IDictionaryService)_sut).ApplyIndustryPreset(presetId);
+        _sut.ApplyIndustryPreset(presetId);
 
-        Assert.Equal(pack!.Terms.Length, _sut.Entries.Count);
+        Assert.Equal(pack.Terms.Length, _sut.Entries.Count);
         Assert.All(_sut.Entries, entry =>
         {
             Assert.Equal(DictionaryEntryType.Term, entry.EntryType);
@@ -512,7 +516,7 @@ public class DictionaryServiceTests : IDisposable
         Assert.Contains(
             _sut.Entries,
             entry =>
-                entry.EntryType == DictionaryEntryType.Correction && entry.Replacement == "Wispr"
+                entry is { EntryType: DictionaryEntryType.Correction, Replacement: "Wispr" }
         );
     }
 

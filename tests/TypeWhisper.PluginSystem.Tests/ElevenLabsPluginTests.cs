@@ -5,10 +5,22 @@ using TypeWhisper.Plugin.ElevenLabs;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
+// The CapturingHandler lambdas assert on the outgoing request (method, URI,
+// headers, body) and return a canned response. ReSharper reads xUnit asserts
+// as precondition checks and concludes those parameters are only validated,
+// never used — but asserting on the request is exactly what these tests
+// verify, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
+
 namespace TypeWhisper.PluginSystem.Tests;
 
 public class ElevenLabsPluginTests
 {
+    private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
@@ -27,7 +39,7 @@ public class ElevenLabsPluginTests
         );
         var manifest = JsonSerializer.Deserialize<PluginManifest>(
             File.ReadAllText(manifestPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+            s_manifestJsonOptions
         );
 
         var sut = new ElevenLabsPlugin();
@@ -39,8 +51,7 @@ public class ElevenLabsPluginTests
     [Fact]
     public async Task ActivateAsync_UsesScribeV2AsDefaultModel()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "eleven-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } };
 
         var sut = new ElevenLabsPlugin();
         await sut.ActivateAsync(host);
@@ -135,8 +146,7 @@ public class ElevenLabsPluginTests
             }
         );
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "eleven-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } };
 
         using var httpClient = new HttpClient(handler);
         var sut = new ElevenLabsPlugin(httpClient);
@@ -255,7 +265,7 @@ public class ElevenLabsPluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
@@ -272,7 +282,7 @@ public class ElevenLabsPluginTests
 
         public Task<string?> LoadSecretAsync(string key)
         {
-            return Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            return Task.FromResult(Secrets.GetValueOrDefault(key));
         }
 
         public Task DeleteSecretAsync(string key)
@@ -283,12 +293,12 @@ public class ElevenLabsPluginTests
 
         public T? GetSetting<T>(string key)
         {
-            return _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(JsonOptions) : default;
+            return _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(s_jsonOptions) : default;
         }
 
         public void SetSetting<T>(string key, T value)
         {
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
         }
 
         public string PluginDataDirectory => Path.GetTempPath();

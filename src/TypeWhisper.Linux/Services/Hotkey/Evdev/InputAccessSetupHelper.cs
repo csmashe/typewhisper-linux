@@ -1,4 +1,3 @@
-using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;

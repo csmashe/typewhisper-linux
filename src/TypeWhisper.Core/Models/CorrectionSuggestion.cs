@@ -8,8 +8,6 @@ namespace TypeWhisper.Core.Models;
 /// </summary>
 public sealed record CorrectionSuggestion
 {
-    private readonly double _confidence;
-
     public CorrectionSuggestion() { }
 
     public CorrectionSuggestion(string original, string replacement)
@@ -24,7 +22,7 @@ public sealed record CorrectionSuggestion
     /// <summary>Confidence in the suggestion, constrained to [0.0, 1.0]; the setter throws <see cref="ArgumentOutOfRangeException" /> outside that range.</summary>
     public double Confidence
     {
-        get => _confidence;
+        get;
         init
         {
             if (value is < 0.0 or > 1.0)
@@ -36,7 +34,7 @@ public sealed record CorrectionSuggestion
                 );
             }
 
-            _confidence = value;
+            field = value;
         }
     }
 }

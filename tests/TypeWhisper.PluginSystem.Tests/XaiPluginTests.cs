@@ -5,6 +5,13 @@ using TypeWhisper.Plugin.Xai;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
+// The CapturingHandler lambdas assert on the outgoing 'request' (method, URI,
+// headers) and return a canned response. ReSharper reads xUnit asserts as
+// precondition checks and concludes 'request' is only validated, never used —
+// but asserting on the request is exactly what these tests verify, so the
+// inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
+
 namespace TypeWhisper.PluginSystem.Tests;
 
 public class XaiPluginTests
@@ -39,8 +46,7 @@ public class XaiPluginTests
     [Fact]
     public async Task ActivateAsync_RestoresDefaultsAndExposesAllProviderCapabilities()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
 
         var sut = new XaiPlugin();
         await sut.ActivateAsync(host);
@@ -100,10 +106,10 @@ public class XaiPluginTests
                 """);
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
 
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -132,9 +138,9 @@ public class XaiPluginTests
             return JsonResponse("""{ "output_text": "Cleaned transcript" }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -165,13 +171,13 @@ public class XaiPluginTests
             Assert.Equal("https://api.x.ai/v1/responses", request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
             };
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -179,7 +185,7 @@ public class XaiPluginTests
         await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
             chunks.Add(chunk);
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
         Assert.Equal("grok-4.3", doc.RootElement.GetProperty("model").GetString());
@@ -191,10 +197,10 @@ public class XaiPluginTests
         var handler = new CapturingHandler((_, _) =>
             JsonResponse("""{ "output_text": "bulk" }"""));
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
         host.SetSetting("streamResponses", false);
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -243,12 +249,12 @@ public class XaiPluginTests
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -259,7 +265,7 @@ public class XaiPluginTests
                 chunks.Add(chunk);
         });
 
-        Assert.Equal(new[] { "Hel" }, chunks);
+        Assert.Equal(["Hel"], chunks);
         Assert.Contains("server overloaded", ex.Message);
     }
 
@@ -315,9 +321,9 @@ public class XaiPluginTests
                 """);
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -332,8 +338,7 @@ public class XaiPluginTests
     [Fact]
     public async Task TranscribeAsync_RejectsTranslation()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
         var sut = new XaiPlugin();
         await sut.ActivateAsync(host);
 
@@ -372,19 +377,19 @@ public class XaiPluginTests
         // Non-final partial: interim text passes through.
         var interim = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":false,"speech_final":false}""");
         Assert.NotNull(interim);
-        Assert.Equal("hello", interim!.Text);
+        Assert.Equal("hello", interim.Text);
         Assert.False(interim.IsFinal);
 
         // First final segment.
         var seg1 = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello world","is_final":true,"speech_final":false}""");
         Assert.NotNull(seg1);
-        Assert.Equal("hello world", seg1!.Text);
+        Assert.Equal("hello world", seg1.Text);
         Assert.True(seg1.IsFinal);
 
         // Second final segment: emits the new segment as a delta (not cumulative).
         var seg2 = collector.ApplyEvent("""{"type":"transcript.partial","text":"how are you","is_final":true,"speech_final":false}""");
         Assert.NotNull(seg2);
-        Assert.Equal("how are you", seg2!.Text);
+        Assert.Equal("how are you", seg2.Text);
 
         // speech_final=true after per-segment finals is xAI's cumulative
         // summary — must be suppressed to avoid re-appending.
@@ -417,7 +422,7 @@ public class XaiPluginTests
 
         var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","language":"en","duration":0.5}""");
         Assert.NotNull(done);
-        Assert.Equal("world", done!.Text);
+        Assert.Equal("world", done.Text);
         Assert.True(done.IsFinal);
     }
 
@@ -447,7 +452,7 @@ public class XaiPluginTests
 
         var done = collector.ApplyEvent("""{"type":"transcript.done","text":"single shot transcript","language":"en","duration":0.5}""");
         Assert.NotNull(done);
-        Assert.Equal("single shot transcript", done!.Text);
+        Assert.Equal("single shot transcript", done.Text);
         Assert.True(done.IsFinal);
     }
 
@@ -477,11 +482,11 @@ public class XaiPluginTests
 
         var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"first","is_final":true,"speech_final":false}""");
         Assert.NotNull(first);
-        Assert.Equal("first", first!.Text);
+        Assert.Equal("first", first.Text);
 
         var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"second","is_final":true,"speech_final":true}""");
         Assert.NotNull(second);
-        Assert.Equal("second", second!.Text);
+        Assert.Equal("second", second.Text);
         Assert.True(second.IsFinal);
     }
 
@@ -499,7 +504,7 @@ public class XaiPluginTests
 
         var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"I'm here","is_final":true,"speech_final":true}""");
         Assert.NotNull(second);
-        Assert.Equal("I'm here", second!.Text);
+        Assert.Equal("I'm here", second.Text);
         Assert.True(second.IsFinal);
     }
 
@@ -514,11 +519,11 @@ public class XaiPluginTests
 
         var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"yes","is_final":true,"speech_final":false}""");
         Assert.NotNull(first);
-        Assert.Equal("yes", first!.Text);
+        Assert.Equal("yes", first.Text);
 
         var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"yes","is_final":true,"speech_final":false}""");
         Assert.NotNull(second);
-        Assert.Equal("yes", second!.Text);
+        Assert.Equal("yes", second.Text);
         Assert.True(second.IsFinal);
     }
 
@@ -570,9 +575,9 @@ public class XaiPluginTests
                 """);
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -613,9 +618,9 @@ public class XaiPluginTests
             };
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(
             httpClient,
             pcm =>
@@ -648,9 +653,9 @@ public class XaiPluginTests
             };
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient, ttsPlaybackAvailableProbe: () => false);
         await sut.ActivateAsync(host);
 
@@ -678,7 +683,7 @@ public class XaiPluginTests
                 "selectedVoice",
                 "customVoiceId",
                 "ttsLowLatency",
-                "ttsTextNormalization",
+                "ttsTextNormalization"
             ],
             keys);
     }
@@ -686,8 +691,7 @@ public class XaiPluginTests
     [Fact]
     public async Task SetSettingValueAsync_PersistsVoiceCustomIdAndTtsToggles()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
         var sut = new XaiPlugin();
         await sut.ActivateAsync(host);
 
@@ -717,19 +721,19 @@ public class XaiPluginTests
                 "https://api.x.ai/v1/tts/voices" => JsonResponse("""
                     { "voices": [ { "voice_id": "leo", "name": "Leo" } ] }
                     """),
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
             });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "xai-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var result = await sut.ValidateAsync();
 
         Assert.NotNull(result);
-        Assert.True(result!.IsSuccess);
+        Assert.True(result.IsSuccess);
         Assert.Equal(["grok-4.3"], sut.SupportedModels.Select(m => m.Id).ToArray());
         Assert.Equal(["leo"], sut.AvailableVoices.Select(v => v.Id).ToArray());
     }
@@ -767,7 +771,7 @@ public class XaiPluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
@@ -783,7 +787,7 @@ public class XaiPluginTests
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            Task.FromResult(Secrets.GetValueOrDefault(key));
 
         public Task DeleteSecretAsync(string key)
         {
@@ -793,11 +797,11 @@ public class XaiPluginTests
 
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value)
-                ? value.Deserialize<T>(JsonOptions)
+                ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

@@ -48,7 +48,7 @@ public sealed class AutoPasteSetupTask : ISetupTask
         // only reaches XWayland apps. Require a path that works for native windows.
         var autoPasteUsable = IsWayland
             ? snapshot.HasYdotoolAvailable
-              || (snapshot.HasWtype && !snapshot.CompositorRejectsWtype)
+              || snapshot is { HasWtype: true, CompositorRejectsWtype: false }
             : snapshot.HasXdotool;
 
         if (autoPasteUsable)

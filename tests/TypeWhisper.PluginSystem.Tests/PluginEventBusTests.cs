@@ -130,10 +130,7 @@ public class PluginEventBusTests
     {
         var tcs = new TaskCompletionSource<bool>();
 
-        _bus.Subscribe<RecordingStartedEvent>(_ =>
-        {
-            throw new InvalidOperationException("Boom!");
-        });
+        _bus.Subscribe<RecordingStartedEvent>(_ => throw new InvalidOperationException("Boom!"));
 
         _bus.Subscribe<RecordingStartedEvent>(_ =>
         {

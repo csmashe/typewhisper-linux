@@ -60,7 +60,7 @@ public partial class DictionarySectionViewModel : ObservableObject
 
     public int ActiveBoostingTermCount =>
         _dict.Entries.Count(entry =>
-            entry.IsEnabled && entry.EntryType == DictionaryEntryType.Term
+            entry is { IsEnabled: true, EntryType: DictionaryEntryType.Term }
         );
 
     public string VocabularyBoostingStatusText =>

@@ -9,15 +9,15 @@ namespace TypeWhisper.Core.Tests.Models;
 ///     string literal, so the About-screen filter and exported diagnostics stay in
 ///     sync with the constants.
 /// </summary>
-public class ErrorCategoryGuardTests
+public partial class ErrorCategoryGuardTests
 {
     // Matches an AddEntry(...) call that passes one of the known category words as a
     // *quoted literal* in an argument after the message (i.e. preceded by a comma).
     // [^;] stays inside a single statement and still spans newlines for wrapped calls.
-    private static readonly Regex s_literalCategoryCall = new(
-        "AddEntry\\(\\s*[^;]*?,\\s*\"(general|transcription|recording|prompt|plugin|insertion|detection)\"",
-        RegexOptions.Compiled
-    );
+    [GeneratedRegex(
+        "AddEntry\\(\\s*[^;]*?,\\s*\"(general|transcription|recording|prompt|plugin|insertion|detection)\""
+    )]
+    private static partial Regex LiteralCategoryCallRegex();
 
     [Fact]
     public void Defaults_reference_the_General_constant_not_a_magic_string()
@@ -50,6 +50,7 @@ public class ErrorCategoryGuardTests
         var root = FindRepositoryRoot();
         var offenders = new List<string>();
 
+        // ReSharper disable once LoopCanBeConvertedToQuery
         foreach (var dir in new[] { "src", "plugins" })
         {
             var subtree = Path.Join(root, dir);
@@ -58,6 +59,7 @@ public class ErrorCategoryGuardTests
                 continue;
             }
 
+            // ReSharper disable once LoopCanBeConvertedToQuery
             foreach (var file in Directory.EnumerateFiles(subtree, "*.cs", SearchOption.AllDirectories))
             {
                 // Skip build output.
@@ -68,7 +70,7 @@ public class ErrorCategoryGuardTests
                 }
 
                 var text = File.ReadAllText(file);
-                if (s_literalCategoryCall.IsMatch(text))
+                if (LiteralCategoryCallRegex().IsMatch(text))
                 {
                     offenders.Add(Path.GetRelativePath(root, file));
                 }

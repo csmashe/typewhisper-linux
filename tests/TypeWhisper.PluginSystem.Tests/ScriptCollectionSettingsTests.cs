@@ -5,7 +5,7 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class ScriptCollectionSettingsTests : IDisposable
+public sealed class ScriptCollectionSettingsTests : IDisposable
 {
     private const string CollectionKey = "scripts";
 
@@ -190,7 +190,7 @@ public class ScriptCollectionSettingsTests : IDisposable
         await plugin.ActivateAsync(CreateHost(_tempDir));
 
         Assert.NotNull(plugin.Service);
-        Assert.Empty(plugin.Service!.Scripts);
+        Assert.Empty(plugin.Service.Scripts);
 
         await plugin.SetItemsAsync(
             CollectionKey,

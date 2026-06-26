@@ -14,7 +14,7 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 ///     4. Score showing/visible entries for likely URL candidates; return the best match.
 ///     Total walk budget: 2.5 s (the orchestrator's deferred-URL timeout is 4 s).
 /// </summary>
-public sealed class AtSpiUrlExtractor
+public sealed partial class AtSpiUrlExtractor
 {
     private const string AtSpiRegistryBusName = "org.a11y.atspi.Registry";
     private const string AtSpiRootPath = "/org/a11y/atspi/accessible/root";
@@ -478,7 +478,7 @@ public sealed class AtSpiUrlExtractor
             return null;
         }
 
-        var match = Regex.Match(output, @"\('(?<value>.+)'\s*,?\)");
+        var match = TupleValueRegex().Match(output);
         return match.Success ? match.Groups["value"].Value : null;
     }
 
@@ -611,7 +611,7 @@ public sealed class AtSpiUrlExtractor
         }
 
         var ints = new List<uint>();
-        foreach (Match match in Regex.Matches(output, @"\b\d+\b"))
+        foreach (Match match in DigitRunRegex().Matches(output))
         {
             if (uint.TryParse(match.Value, out var value))
             {
@@ -821,9 +821,17 @@ public sealed class AtSpiUrlExtractor
             return 0;
         }
 
-        var match = Regex.Matches(value, @"\b\d+\b").LastOrDefault();
+        var match = DigitRunRegex().Matches(value).LastOrDefault();
         return match is not null && int.TryParse(match.Value, out var result) ? result : 0;
     }
+
+    // Single-value gdbus tuple: ('value',).
+    [GeneratedRegex(@"\('(?<value>.+)'\s*,?\)")]
+    private static partial Regex TupleValueRegex();
+
+    // Runs of digits (used to pull integer tokens out of gdbus/atspi output).
+    [GeneratedRegex(@"\b\d+\b")]
+    private static partial Regex DigitRunRegex();
 
     private sealed class WalkStats
     {

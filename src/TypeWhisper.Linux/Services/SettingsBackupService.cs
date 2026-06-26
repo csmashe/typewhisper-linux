@@ -132,7 +132,7 @@ public sealed class SettingsBackupService
             {
                 if (
                     entry.FullName.Length == 0
-                    || entry.FullName.EndsWith("/", StringComparison.Ordinal)
+                    || entry.FullName.EndsWith('/')
                 )
                 {
                     continue;
@@ -244,7 +244,7 @@ public sealed class SettingsBackupService
         {
             if (
                 entry.FullName.Length == 0
-                || entry.FullName.EndsWith("/", StringComparison.Ordinal)
+                || entry.FullName.EndsWith('/')
             )
             {
                 continue;

@@ -61,6 +61,7 @@ public interface IPluginHostServices
     void SetSetting<T>(string key, T value);
 
     /// <summary>Logs a message through the host logging system.</summary>
+    // ReSharper disable once UnusedMember.Global
     void Log(PluginLogLevel level, string message);
 
     /// <summary>

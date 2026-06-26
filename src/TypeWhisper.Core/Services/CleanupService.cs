@@ -53,6 +53,7 @@ public sealed partial class CleanupService
 
     public static string GetLlmSystemPrompt(CleanupLevel level)
     {
+        // ReSharper disable once SwitchExpressionHandlesSomeKnownEnumValuesWithExceptionInDefault
         return level switch
         {
             CleanupLevel.Medium => MediumSystemPrompt,
@@ -156,7 +157,7 @@ public sealed partial class CleanupService
             Math.Max(prefix.LastIndexOf('!'), prefix.LastIndexOf('\n'))
         );
         var phrase = prefix[(boundary + 1)..];
-        return WordRegex().Matches(phrase).Count;
+        return WordRegex().Count(phrase);
     }
 
     private static bool HasWordAfter(string text, int startIndex)
@@ -323,7 +324,7 @@ public sealed partial class CleanupService
     [GeneratedRegex(@"\s+([,.;:!?])")]
     private static partial Regex WhitespaceBeforePunctuationRegex();
 
-    [GeneratedRegex(@",{2,}")]
+    [GeneratedRegex(",{2,}")]
     private static partial Regex DuplicateCommaRegex();
 
     [GeneratedRegex(@"^[\s,.;:!?]+")]
@@ -362,9 +363,9 @@ public sealed partial class CleanupService
     [GeneratedRegex(@"\s*[,;]\s*")]
     private static partial Regex BulletPunctuationSeparatorRegex();
 
-    [GeneratedRegex(@"^[A-Za-z][A-Za-z'-]*$")]
+    [GeneratedRegex("^[A-Za-z][A-Za-z'-]*$")]
     private static partial Regex SingleWordListItemRegex();
 
-    [GeneratedRegex(@"[A-Za-z][A-Za-z'-]*")]
+    [GeneratedRegex("[A-Za-z][A-Za-z'-]*")]
     private static partial Regex WordRegex();
 }

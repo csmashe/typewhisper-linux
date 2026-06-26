@@ -4,7 +4,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class PluginLoaderTests : IDisposable
+public sealed class PluginLoaderTests : IDisposable
 {
     private readonly PluginLoader _loader = new();
     private readonly string _tempDir;

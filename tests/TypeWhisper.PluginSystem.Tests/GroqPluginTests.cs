@@ -5,10 +5,22 @@ using TypeWhisper.Plugin.Groq;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
+// The CapturingHandler lambdas assert on the outgoing request (method, URI,
+// headers, body) and return a canned response. ReSharper reads xUnit asserts
+// as precondition checks and concludes those parameters are only validated,
+// never used — but asserting on the request is exactly what these tests
+// verify, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
+
 namespace TypeWhisper.PluginSystem.Tests;
 
 public class GroqPluginTests
 {
+    private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
@@ -27,7 +39,7 @@ public class GroqPluginTests
         );
         var manifest = JsonSerializer.Deserialize<PluginManifest>(
             File.ReadAllText(manifestPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+            s_manifestJsonOptions
         );
 
         var sut = new GroqPlugin();
@@ -64,8 +76,7 @@ public class GroqPluginTests
     [Fact]
     public async Task ActivateAsync_RestoresFetchedModelsAndNormalizesStaleSelectedLlmModel()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "groq-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
         host.SetSetting(
             "fetchedLlmModels",
             new List<FetchedLlmModel>
@@ -90,8 +101,7 @@ public class GroqPluginTests
     [Fact]
     public async Task ActivateAsync_UsesFallbackSelectedLlmModelWhenUnset()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "groq-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
 
         var sut = new GroqPlugin();
         await sut.ActivateAsync(host);
@@ -123,10 +133,10 @@ public class GroqPluginTests
             }
         );
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "groq-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
 
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new GroqPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -135,7 +145,7 @@ public class GroqPluginTests
         Assert.NotNull(models);
         Assert.Equal(
             ["llama-3.1-8b-instant", "openai/gpt-oss-120b"],
-            models!.Select(m => m.Id).ToArray()
+            models.Select(m => m.Id).ToArray()
         );
     }
 
@@ -168,11 +178,11 @@ public class GroqPluginTests
             }
         );
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "groq-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
         host.SetSetting("selectedLlmModel", "openai/gpt-oss-120b");
 
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new GroqPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -210,10 +220,10 @@ public class GroqPluginTests
             }
         );
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "groq-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
 
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new GroqPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -225,8 +235,7 @@ public class GroqPluginTests
     [Fact]
     public async Task SetApiKeyAsync_DoesNotNotifyWhenPrefilledValueIsWrittenBack()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "groq-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
 
         var sut = new GroqPlugin();
         await sut.ActivateAsync(host);
@@ -252,8 +261,7 @@ public class GroqPluginTests
     [Fact]
     public async Task SetApiKeyAsync_ClearsFetchedLlmModelsAndSelectionWhenKeyChanges()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "old-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "old-key" } };
         host.SetSetting(
             "fetchedLlmModels",
             new List<FetchedLlmModel> { new("custom-model-from-old-account", "Old") }
@@ -297,11 +305,11 @@ public class GroqPluginTests
             }
         );
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "groq-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
         host.SetSetting("selectedLlmModel", "openai/gpt-oss-120b");
 
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new GroqPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -311,7 +319,7 @@ public class GroqPluginTests
         )
             chunks.Add(chunk);
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         Assert.Equal(
             "https://api.groq.com/openai/v1/chat/completions",
             capturedRequest?.RequestUri?.ToString()
@@ -328,12 +336,12 @@ public class GroqPluginTests
             (_, _) => JsonResponse("""{"choices":[{"message":{"content":"bulk"}}]}""")
         );
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "groq-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
         host.SetSetting("selectedLlmModel", "openai/gpt-oss-120b");
         host.SetSetting("streamResponses", false);
 
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new GroqPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -373,7 +381,7 @@ public class GroqPluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
@@ -390,7 +398,7 @@ public class GroqPluginTests
 
         public Task<string?> LoadSecretAsync(string key)
         {
-            return Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            return Task.FromResult(Secrets.GetValueOrDefault(key));
         }
 
         public Task DeleteSecretAsync(string key)
@@ -401,12 +409,12 @@ public class GroqPluginTests
 
         public T? GetSetting<T>(string key)
         {
-            return _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(JsonOptions) : default;
+            return _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(s_jsonOptions) : default;
         }
 
         public void SetSetting<T>(string key, T value)
         {
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
         }
 
         public string PluginDataDirectory => Path.GetTempPath();

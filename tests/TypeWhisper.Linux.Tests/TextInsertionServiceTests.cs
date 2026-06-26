@@ -48,7 +48,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteResults = new Queue<bool>(new[] { false, false, true })
+            PasteResults = new Queue<bool>([false, false, true])
         };
         var sut = new TextInsertionService(platform);
 
@@ -908,12 +908,11 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         Assert.All(runner.Calls, call => Assert.Equal("wtype", call.FileName));
         Assert.Equal(
-            new[]
-            {
-                new[] { "--", "line one" },
-                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
-                new[] { "--", "line two" }
-            },
+            [
+                ["--", "line one"],
+                ["-M", "shift", "-k", "Return", "-m", "shift"],
+                ["--", "line two"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -932,13 +931,12 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         Assert.All(runner.Calls, call => Assert.Equal("ydotool", call.FileName));
         Assert.Equal(
-            new[]
-            {
-                new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "line one" },
+            [
+                ["type", "--key-delay", "2", "--key-hold", "2", "--", "line one"],
                 // LEFTSHIFT(42)+ENTER(28) press/release pairs.
-                new[] { "key", "42:1", "28:1", "28:0", "42:0" },
-                new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "line two" }
-            },
+                ["key", "42:1", "28:1", "28:0", "42:0"],
+                ["type", "--key-delay", "2", "--key-hold", "2", "--", "line two"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -957,12 +955,11 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         Assert.All(runner.Calls, call => Assert.Equal("xdotool", call.FileName));
         Assert.Equal(
-            new[]
-            {
-                new[] { "type", "--clearmodifiers", "--delay", "8", "--", "line one" },
-                new[] { "key", "--clearmodifiers", "shift+Return" },
-                new[] { "type", "--clearmodifiers", "--delay", "8", "--", "line two" }
-            },
+            [
+                ["type", "--clearmodifiers", "--delay", "8", "--", "line one"],
+                ["key", "--clearmodifiers", "shift+Return"],
+                ["type", "--clearmodifiers", "--delay", "8", "--", "line two"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -982,13 +979,12 @@ public sealed class TextInsertionServiceTests
 
         Assert.True(result);
         Assert.Equal(
-            new[]
-            {
-                new[] { "--", "first" },
-                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
-                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
-                new[] { "--", "second" }
-            },
+            [
+                ["--", "first"],
+                ["-M", "shift", "-k", "Return", "-m", "shift"],
+                ["-M", "shift", "-k", "Return", "-m", "shift"],
+                ["--", "second"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -1006,12 +1002,11 @@ public sealed class TextInsertionServiceTests
 
         Assert.True(result);
         Assert.Equal(
-            new[]
-            {
-                new[] { "--", "a" },
-                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
-                new[] { "--", "b" }
-            },
+            [
+                ["--", "a"],
+                ["-M", "shift", "-k", "Return", "-m", "shift"],
+                ["--", "b"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -1083,7 +1078,7 @@ public sealed class TextInsertionServiceTests
 
     private sealed class RecordingProcessRunner
     {
-        public List<(string FileName, string[] Arguments)> Calls { get; } = new();
+        public List<(string FileName, string[] Arguments)> Calls { get; } = [];
         public int ExitCode { get; set; }
 
         public Task<int> Run(string fileName, IReadOnlyList<string> args)
@@ -1100,7 +1095,7 @@ public sealed class TextInsertionServiceTests
     /// </summary>
     private sealed class ScriptedProcessRunner
     {
-        public List<(string FileName, string[] Arguments)> Calls { get; } = new();
+        public List<(string FileName, string[] Arguments)> Calls { get; } = [];
         public Queue<(string Expected, int ExitCode, string Stderr)> Queue { get; } = new();
 
         public Task<int> Run(string fileName, IReadOnlyList<string> args)

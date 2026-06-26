@@ -1,4 +1,3 @@
-using System.IO;
 using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Core.Tests;
@@ -23,7 +22,7 @@ public sealed class InterProcessFileLockTests
         try
         {
             var lockPath = Path.Join(dir, "artifact.lock");
-            var first = await InterProcessFileLock.AcquireAsync(lockPath, default);
+            var first = await InterProcessFileLock.AcquireAsync(lockPath, CancellationToken.None);
 
             var second = InterProcessFileLock.AcquireAsync(lockPath, CancellationToken.None);
             // The second acquire must NOT complete while the first holds the lock.
@@ -45,7 +44,7 @@ public sealed class InterProcessFileLockTests
         try
         {
             var lockPath = Path.Join(dir, "artifact.lock");
-            await using var first = await InterProcessFileLock.AcquireAsync(lockPath, default);
+            await using var first = await InterProcessFileLock.AcquireAsync(lockPath, CancellationToken.None);
 
             using var cts = new CancellationTokenSource();
             var waiting = InterProcessFileLock.AcquireAsync(lockPath, cts.Token);

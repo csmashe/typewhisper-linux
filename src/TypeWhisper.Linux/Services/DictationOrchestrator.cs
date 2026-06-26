@@ -397,7 +397,7 @@ public sealed class DictationOrchestrator : IDisposable
         {
             try
             {
-                cts.Cancel();
+                await cts.CancelAsync();
             }
             catch (ObjectDisposedException)
             {
@@ -2429,7 +2429,7 @@ public sealed class DictationOrchestrator : IDisposable
         // anyway, so the startup CTS gets implicitly cancelled too.
         if (startupCts is not null && !finalize)
         {
-            try { startupCts.Cancel(); }
+            try { await startupCts.CancelAsync(); }
             catch
             {
                 /* ignore */
@@ -2471,7 +2471,7 @@ public sealed class DictationOrchestrator : IDisposable
 
         if (cts is not null)
         {
-            cts.Cancel();
+            await cts.CancelAsync();
             cts.Dispose();
         }
 

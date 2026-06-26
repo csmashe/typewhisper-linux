@@ -9,13 +9,12 @@ namespace TypeWhisper.Core.Services;
 ///     "cancel") from transcribed text, including stacked commands, and reports the resulting
 ///     <see cref="VoiceCommandParseResult" />.
 /// </summary>
-public sealed class VoiceCommandParser
+public static partial class VoiceCommandParser
 {
     private static readonly Regex s_pressEnterSuffix = BuildSuffixRegex("press enter");
     private static readonly Regex s_newParagraphSuffix = BuildSuffixRegex("new paragraph");
     private static readonly Regex s_newLineSuffix = BuildSuffixRegex("new line");
     private static readonly Regex s_cancelSuffix = BuildSuffixRegex("cancel");
-    private static readonly Regex s_trailingNoise = new(@"[\s,.;:!?]+$", RegexOptions.Compiled);
 
     public static VoiceCommandParseResult Parse(string text)
     {
@@ -97,6 +96,9 @@ public sealed class VoiceCommandParser
 
     private static string TrimTrailingNoise(string text)
     {
-        return s_trailingNoise.Replace(text, "");
+        return TrailingNoiseRegex().Replace(text, "");
     }
+
+    [GeneratedRegex(@"[\s,.;:!?]+$")]
+    private static partial Regex TrailingNoiseRegex();
 }

@@ -137,8 +137,7 @@ public sealed partial class HistoryService : IHistoryService
 
             var old = _cache[idx];
             var updated = old with { FinalText = finalText };
-            var newCache = new List<TranscriptionRecord>(_cache);
-            newCache[idx] = updated;
+            var newCache = new List<TranscriptionRecord>(_cache) { [idx] = updated };
             SaveToDisk(newCache);
 
             _cache = newCache;

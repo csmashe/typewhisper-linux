@@ -455,7 +455,7 @@ public class App : Application
         try
         {
             var models = services.GetService<ModelManagerService>();
-            models?.UnloadModel();
+            await models?.UnloadModelAsync();
         }
         catch (Exception ex)
         {

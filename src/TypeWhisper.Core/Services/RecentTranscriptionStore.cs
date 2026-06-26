@@ -17,17 +17,6 @@ public sealed class RecentTranscriptionStore
         _maxSessionEntries = Math.Max(1, maxSessionEntries);
     }
 
-    public IReadOnlyList<RecentTranscriptionEntry> SessionEntries
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _sessionEntries.ToList();
-            }
-        }
-    }
-
     public void RecordTranscription(
         string id,
         string finalText,

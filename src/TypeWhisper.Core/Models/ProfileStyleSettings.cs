@@ -1,3 +1,4 @@
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
 /// <summary>The concrete formatting flags a <see cref="ProfileStylePreset" /> resolves to (cleanup level, smart/developer formatting, terminal-safe output).</summary>

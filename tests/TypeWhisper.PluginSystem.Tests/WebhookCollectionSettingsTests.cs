@@ -5,7 +5,7 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class WebhookCollectionSettingsTests : IDisposable
+public sealed class WebhookCollectionSettingsTests : IDisposable
 {
     private const string CollectionKey = "webhooks";
 

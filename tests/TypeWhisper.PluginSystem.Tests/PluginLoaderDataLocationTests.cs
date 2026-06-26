@@ -11,7 +11,7 @@ namespace TypeWhisper.PluginSystem.Tests;
 ///     plugins by calling <c>SetDataDirectory</c> with a path under
 ///     <c>PluginData/{manifestId}</c>.
 /// </summary>
-public class PluginLoaderDataLocationTests : IDisposable
+public sealed class PluginLoaderDataLocationTests : IDisposable
 {
     private readonly PluginLoader _loader = new();
     private readonly string _tempDir;
@@ -54,13 +54,14 @@ public class PluginLoaderDataLocationTests : IDisposable
 
         // The instance must be IPluginDataLocationAware (type identity preserved
         // because TypeWhisper.PluginSDK is a shared contract assembly).
-        Assert.IsAssignableFrom<IPluginDataLocationAware>(scriptPlugin.Instance);
+        Assert.IsType<IPluginDataLocationAware>(scriptPlugin.Instance, exactMatch: false);
 
         // Observable behavior: a collection-settings provider whose data directory
         // was *not* set throws InvalidOperationException from GetItemsAsync.
         // PluginLoader must have called SetDataDirectory, so this does NOT throw.
-        var collectionProvider = Assert.IsAssignableFrom<IPluginCollectionSettingsProvider>(
-            scriptPlugin.Instance
+        var collectionProvider = Assert.IsType<IPluginCollectionSettingsProvider>(
+            scriptPlugin.Instance,
+            exactMatch: false
         );
         var items = await collectionProvider.GetItemsAsync("scripts");
         Assert.Empty(items);
@@ -80,9 +81,9 @@ public class PluginLoaderDataLocationTests : IDisposable
 
     /// <summary>
     ///     Copies the compiled Script plugin (assembly + PluginSDK + manifest) into a
-    ///     subdirectory of the temp search root and returns that directory.
+    ///     subdirectory of the temp search root.
     /// </summary>
-    private string StageScriptPlugin()
+    private void StageScriptPlugin()
     {
         var sourceDir = Path.GetDirectoryName(
             typeof(ScriptPlugin).Assembly.Location
@@ -99,17 +100,15 @@ public class PluginLoaderDataLocationTests : IDisposable
         );
 
         // manifest.json — point at the copied assembly.
-        var manifest = """
-                       {
-                         "id": "com.typewhisper.script",
-                         "name": "Script Runner",
-                         "version": "1.0.0",
-                         "assemblyName": "TypeWhisper.Plugin.Script.dll",
-                         "pluginClass": "TypeWhisper.Plugin.Script.ScriptPlugin"
-                       }
-                       """;
+        const string manifest = """
+                                {
+                                  "id": "com.typewhisper.script",
+                                  "name": "Script Runner",
+                                  "version": "1.0.0",
+                                  "assemblyName": "TypeWhisper.Plugin.Script.dll",
+                                  "pluginClass": "TypeWhisper.Plugin.Script.ScriptPlugin"
+                                }
+                                """;
         File.WriteAllText(Path.Join(pluginDir, "manifest.json"), manifest);
-
-        return pluginDir;
     }
 }

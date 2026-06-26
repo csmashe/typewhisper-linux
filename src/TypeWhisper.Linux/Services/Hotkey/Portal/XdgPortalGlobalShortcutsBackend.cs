@@ -30,7 +30,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.Portal;
 /// </summary>
 public sealed class XdgPortalGlobalShortcutsBackend : IGlobalShortcutBackend
 {
-    public const string BackendId = "linux-xdg-portal";
+    private const string BackendId = "linux-xdg-portal";
 
     public string Id => BackendId;
     public string DisplayName => "XDG Desktop Portal";

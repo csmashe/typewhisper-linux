@@ -2,8 +2,6 @@ namespace TypeWhisper.Core;
 
 public static class TypeWhisperEnvironment
 {
-    public const string GithubRepoUrl = "https://github.com/csmashe/typewhisper-linux";
-
     public static string BasePath { get; } = Path.Join(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "TypeWhisper"
@@ -16,7 +14,6 @@ public static class TypeWhisperEnvironment
     public static string AudioPath => Path.Join(BasePath, "Audio");
     public static string PluginDataPath => Path.Join(BasePath, "PluginData");
     public static string SettingsFilePath => Path.Join(BasePath, "settings.json");
-    public static string DatabasePath => Path.Join(DataPath, "typewhisper.db");
 
     public static void EnsureDirectories()
     {

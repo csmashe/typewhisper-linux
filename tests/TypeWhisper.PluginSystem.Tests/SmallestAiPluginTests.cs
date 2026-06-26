@@ -5,6 +5,13 @@ using TypeWhisper.Plugin.SmallestAi;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
+// The CapturingHandler lambdas assert on the outgoing 'request' and 'body'
+// (method, URI, headers, payload) and return a canned response. ReSharper reads
+// xUnit asserts as precondition checks and concludes these parameters are only
+// validated, never used — but asserting on the request is exactly what these
+// tests verify, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
+
 namespace TypeWhisper.PluginSystem.Tests;
 
 public class SmallestAiPluginTests
@@ -51,8 +58,7 @@ public class SmallestAiPluginTests
     [Fact]
     public async Task ActivateAsync_RestoresApiKeyAndExposesPulseModel()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "smallest-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "smallest-key" } };
 
         var sut = new SmallestAiPlugin();
         await sut.ActivateAsync(host);
@@ -108,18 +114,16 @@ public class SmallestAiPluginTests
         var sut = new SmallestAiPlugin();
         await sut.ActivateAsync(host);
 
-        SmallestAiPlugin settings = sut;
-
-        var definition = Assert.Single(settings.GetSettingDefinitions());
+        var definition = Assert.Single(sut.GetSettingDefinitions());
         Assert.Equal("api-key", definition.Key);
         Assert.True(definition.IsSecret);
 
-        Assert.Null(await settings.GetSettingValueAsync("api-key"));
-        Assert.Null(await settings.GetSettingValueAsync("unknown"));
+        Assert.Null(await sut.GetSettingValueAsync("api-key"));
+        Assert.Null(await sut.GetSettingValueAsync("unknown"));
 
-        await settings.SetSettingValueAsync("api-key", "smallest-key");
+        await sut.SetSettingValueAsync("api-key", "smallest-key");
 
-        Assert.Equal("smallest-key", await settings.GetSettingValueAsync("api-key"));
+        Assert.Equal("smallest-key", await sut.GetSettingValueAsync("api-key"));
         Assert.True(sut.IsConfigured);
         Assert.Equal("smallest-key", host.Secrets["api-key"]);
     }
@@ -134,17 +138,15 @@ public class SmallestAiPluginTests
         var sut = new SmallestAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        SmallestAiPlugin settings = sut;
-
-        var missing = await settings.ValidateAsync();
+        var missing = await sut.ValidateAsync();
         Assert.NotNull(missing);
-        Assert.False(missing!.IsSuccess);
+        Assert.False(missing.IsSuccess);
 
-        await settings.SetSettingValueAsync("api-key", "smallest-key");
+        await sut.SetSettingValueAsync("api-key", "smallest-key");
 
-        var valid = await settings.ValidateAsync();
+        var valid = await sut.ValidateAsync();
         Assert.NotNull(valid);
-        Assert.True(valid!.IsSuccess);
+        Assert.True(valid.IsSuccess);
     }
 
     [Fact]
@@ -200,8 +202,7 @@ public class SmallestAiPluginTests
                 """);
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "smallest-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "smallest-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new SmallestAiPlugin(httpClient);
         await sut.ActivateAsync(host);
@@ -226,8 +227,7 @@ public class SmallestAiPluginTests
             return JsonResponse("""{ "status": "success", "transcription": "Hello" }""");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "smallest-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "smallest-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new SmallestAiPlugin(httpClient);
         await sut.ActivateAsync(host);
@@ -240,8 +240,7 @@ public class SmallestAiPluginTests
     [Fact]
     public async Task TranscribeAsync_RejectsTranslation()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "smallest-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "smallest-key" } };
         var sut = new SmallestAiPlugin();
         await sut.ActivateAsync(host);
 
@@ -378,13 +377,13 @@ public class SmallestAiPluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
-        private readonly object _secretLock = new();
+        private readonly Lock _secretLock = new();
         private int _activeSecretWrites;
         private int _maxConcurrentSecretWrites;
         public Dictionary<string, string?> Secrets { get; } = [];
@@ -398,7 +397,7 @@ public class SmallestAiPluginTests
         public Task<string?> LoadSecretAsync(string key)
         {
             lock (_secretLock)
-                return Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+                return Task.FromResult(Secrets.GetValueOrDefault(key));
         }
 
         public Task DeleteSecretAsync(string key) =>
@@ -436,11 +435,11 @@ public class SmallestAiPluginTests
 
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value)
-                ? value.Deserialize<T>(JsonOptions)
+                ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

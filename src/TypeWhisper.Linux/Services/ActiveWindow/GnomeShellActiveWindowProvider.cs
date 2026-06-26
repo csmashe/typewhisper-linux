@@ -12,7 +12,7 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 ///     stays "gnome-shell" so the failure tracker can surface the fix
 ///     (<c>gsettings set org.gnome.shell introspect true</c>).
 /// </summary>
-public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
+public sealed partial class GnomeShellActiveWindowProvider : IActiveWindowProvider
 {
     public string Name => "gnome-shell";
 
@@ -107,7 +107,7 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
         var i = 0;
         while (i < output.Length)
         {
-            var idMatch = Regex.Match(output[i..], @"uint64\s+(\d+)\s*:\s*\{");
+            var idMatch = WindowEntryRegex().Match(output[i..]);
             if (!idMatch.Success)
             {
                 yield break;
@@ -211,4 +211,8 @@ public sealed class GnomeShellActiveWindowProvider : IActiveWindowProvider
             return null;
         }
     }
+
+    // gdbus window-list entry header: 'uint64 <id>: {'.
+    [GeneratedRegex(@"uint64\s+(\d+)\s*:\s*\{")]
+    private static partial Regex WindowEntryRegex();
 }

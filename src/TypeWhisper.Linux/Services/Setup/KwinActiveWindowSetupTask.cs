@@ -31,7 +31,7 @@ public sealed class KwinActiveWindowSetupTask : ISetupTask
     {
         // Gate on compositor + session type so this never surfaces on GNOME or KDE X11.
         var snapshot = _commands.GetSnapshot();
-        return snapshot.SessionType == "Wayland" && snapshot.Compositor == "kde";
+        return snapshot is { SessionType: "Wayland", Compositor: "kde" };
     }
 
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)

@@ -319,7 +319,7 @@ internal static class HttpApiRequestParser
             }
 
             var boundary = part["boundary=".Length..].Trim();
-            if (boundary.Length >= 2 && boundary[0] == '"' && boundary[^1] == '"')
+            if (boundary is ['"', _, ..] && boundary[^1] == '"')
             {
                 boundary = boundary[1..^1];
             }
@@ -382,7 +382,7 @@ internal static class HttpApiRequestParser
             }
 
             var parameterValue = part[(equals + 1)..].Trim();
-            if (parameterValue.Length >= 2 && parameterValue[0] == '"' && parameterValue[^1] == '"')
+            if (parameterValue is ['"', _, ..] && parameterValue[^1] == '"')
             {
                 parameterValue = parameterValue[1..^1];
             }

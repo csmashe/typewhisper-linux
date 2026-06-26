@@ -354,8 +354,8 @@ public sealed class ShortcutDispatcherTests
             ModifierMask.None,
             mode,
             false,
-            Array.Empty<PromptActionHotkey>(),
-            new[] { new ProfileHotkey(profileId, key, mods, behavior) }
+            [],
+            [new ProfileHotkey(profileId, key, mods, behavior)]
         );
     }
 
@@ -400,8 +400,8 @@ public sealed class ShortcutDispatcherTests
             ModifierMask.None,
             RecordingMode.Toggle,
             false,
-            new[] { new PromptActionHotkey(actionId, key, mods) },
-            Array.Empty<ProfileHotkey>()
+            [new PromptActionHotkey(actionId, key, mods)],
+            []
         );
     }
 }

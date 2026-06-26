@@ -24,6 +24,7 @@ public sealed record DictionaryEntry
 
     public int TimesCorrected { get; init; }
     public int Priority { get; init; }
+    // ReSharper disable once UnusedMember.Global
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? LastUsedAt { get; init; }
     public DateTime? LastCorrectedAt { get; init; }

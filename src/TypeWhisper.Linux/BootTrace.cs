@@ -10,7 +10,7 @@ internal static class BootTrace
     // about, not a history across launches. Stays null if the file can't be
     // opened, so failures here never block startup.
     private static StreamWriter? s_fileWriter;
-    private static readonly object s_lock = new();
+    private static readonly Lock s_lock = new();
 
     public static void Initialize()
     {

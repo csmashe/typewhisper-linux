@@ -5,8 +5,6 @@ namespace TypeWhisper.Core.Tests.Services;
 /// <summary>Covers <see cref="VoiceCommandParser" />: trailing voice commands (press enter, new line/paragraph, cancel) vs. literal text.</summary>
 public sealed class VoiceCommandParserTests
 {
-    private readonly VoiceCommandParser _sut = new();
-
     [Theory]
     [InlineData("Hello world press enter", "Hello world")]
     [InlineData("Hello world, press enter.", "Hello world")]

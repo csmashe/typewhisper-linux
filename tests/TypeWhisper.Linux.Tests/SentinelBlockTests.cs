@@ -70,7 +70,7 @@ public sealed class SentinelBlockTests
         var input = "bind = SUPER, q, killactive\n";
         var output = SentinelBlock.ReplaceOrAppend(
             input,
-            new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" }
+            ["bind  = CTRL SHIFT, SPACE, exec, typewhisper"]
         );
         Assert.Contains(SentinelBlock.OpenSentinel, output);
         Assert.Contains(SentinelBlock.CloseSentinel, output);
@@ -91,7 +91,7 @@ public sealed class SentinelBlockTests
             + "bind = SUPER, x, exit\n";
         var output = SentinelBlock.ReplaceOrAppend(
             input,
-            new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" }
+            ["bind  = CTRL SHIFT, SPACE, exec, typewhisper"]
         );
         Assert.DoesNotContain("stale = junk", output);
         Assert.Contains("typewhisper", output);
@@ -107,7 +107,7 @@ public sealed class SentinelBlockTests
     {
         var input = SentinelBlock.OpenSentinel + "\nbind = ...\n";
         Assert.Throws<InvalidOperationException>(() =>
-            SentinelBlock.ReplaceOrAppend(input, new[] { "bind = x" })
+            SentinelBlock.ReplaceOrAppend(input, ["bind = x"])
         );
     }
 
@@ -140,7 +140,7 @@ public sealed class SentinelBlockTests
         var input = "bind = SUPER, q, killactive\n";
         var output = SentinelBlock.ReplaceOrAppend(
             input,
-            new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" }
+            ["bind  = CTRL SHIFT, SPACE, exec, typewhisper"]
         );
         Assert.EndsWith("\n", output);
     }
@@ -151,7 +151,7 @@ public sealed class SentinelBlockTests
         var input = "bind = SUPER, q, killactive";
         var output = SentinelBlock.ReplaceOrAppend(
             input,
-            new[] { "bind  = CTRL SHIFT, SPACE, exec, typewhisper" }
+            ["bind  = CTRL SHIFT, SPACE, exec, typewhisper"]
         );
         Assert.False(output.EndsWith("\n"));
     }

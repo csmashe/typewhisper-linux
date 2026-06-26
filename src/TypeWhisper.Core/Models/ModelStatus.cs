@@ -11,6 +11,7 @@ public sealed record ModelStatus
 {
     public required ModelStatusType Type { get; init; }
     public double Progress { get; init; }
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
     public double? BytesPerSecond { get; init; }
     public string? ErrorMessage { get; init; }
 

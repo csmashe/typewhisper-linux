@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class PluginManagerTests : IDisposable
+public sealed class PluginManagerTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly PluginEventBus _eventBus = new();
@@ -98,7 +98,7 @@ public class PluginManagerTests : IDisposable
     public void Dispose_WithNoPlugins_DoesNotThrow()
     {
         var manager = CreateManager();
-        var ex = Record.Exception(() => manager.Dispose());
+        var ex = Record.Exception(manager.Dispose);
         Assert.Null(ex);
     }
 
@@ -125,7 +125,7 @@ public class PluginManagerTests : IDisposable
             .Returns(new AppSettings { PluginEnabledState = new Dictionary<string, bool>() });
 
         var manager = CreateManager();
-        var ex = await Record.ExceptionAsync(() => manager.InitializeAsync());
+        var ex = await Record.ExceptionAsync(manager.InitializeAsync);
         Assert.Null(ex);
     }
 
@@ -177,7 +177,7 @@ public class PluginManagerTests : IDisposable
 }
 
 // Verifies enable/disable/capability-index logic without loading real plugin assemblies.
-public class PluginManagerWithFakePluginTests : IDisposable
+public sealed class PluginManagerWithFakePluginTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly PluginEventBus _eventBus = new();

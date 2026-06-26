@@ -5,7 +5,7 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class PluginManifestTests
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
@@ -13,20 +13,20 @@ public class PluginManifestTests
     [Fact]
     public void Deserialize_AllFields()
     {
-        var json = """
-                   {
-                       "id": "com.example.test",
-                       "name": "Test Plugin",
-                       "version": "2.1.0",
-                       "minHostVersion": "1.0.0",
-                       "author": "Test Author",
-                       "description": "A test plugin for unit tests",
-                       "assemblyName": "TestPlugin.dll",
-                       "pluginClass": "TestPlugin.MyPlugin"
-                   }
-                   """;
+        const string json = """
+                            {
+                                "id": "com.example.test",
+                                "name": "Test Plugin",
+                                "version": "2.1.0",
+                                "minHostVersion": "1.0.0",
+                                "author": "Test Author",
+                                "description": "A test plugin for unit tests",
+                                "assemblyName": "TestPlugin.dll",
+                                "pluginClass": "TestPlugin.MyPlugin"
+                            }
+                            """;
 
-        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
+        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, s_jsonOptions);
 
         Assert.NotNull(manifest);
         Assert.Equal("com.example.test", manifest.Id);
@@ -42,17 +42,17 @@ public class PluginManifestTests
     [Fact]
     public void Deserialize_OnlyRequiredFields()
     {
-        var json = """
-                   {
-                       "id": "com.example.minimal",
-                       "name": "Minimal",
-                       "version": "1.0.0",
-                       "assemblyName": "Minimal.dll",
-                       "pluginClass": "Minimal.Plugin"
-                   }
-                   """;
+        const string json = """
+                            {
+                                "id": "com.example.minimal",
+                                "name": "Minimal",
+                                "version": "1.0.0",
+                                "assemblyName": "Minimal.dll",
+                                "pluginClass": "Minimal.Plugin"
+                            }
+                            """;
 
-        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
+        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, s_jsonOptions);
 
         Assert.NotNull(manifest);
         Assert.Equal("com.example.minimal", manifest.Id);
@@ -80,8 +80,8 @@ public class PluginManifestTests
             MinHostVersion = "2.0.0"
         };
 
-        var json = JsonSerializer.Serialize(original, JsonOptions);
-        var deserialized = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
+        var json = JsonSerializer.Serialize(original, s_jsonOptions);
+        var deserialized = JsonSerializer.Deserialize<PluginManifest>(json, s_jsonOptions);
 
         Assert.NotNull(deserialized);
         Assert.Equal(original.Id, deserialized.Id);
@@ -97,17 +97,17 @@ public class PluginManifestTests
     [Fact]
     public void Deserialize_CaseInsensitive()
     {
-        var json = """
-                   {
-                       "ID": "com.example.case",
-                       "NAME": "Case Test",
-                       "VERSION": "1.0.0",
-                       "ASSEMBLYNAME": "Case.dll",
-                       "PLUGINCLASS": "Case.Plugin"
-                   }
-                   """;
+        const string json = """
+                            {
+                                "ID": "com.example.case",
+                                "NAME": "Case Test",
+                                "VERSION": "1.0.0",
+                                "ASSEMBLYNAME": "Case.dll",
+                                "PLUGINCLASS": "Case.Plugin"
+                            }
+                            """;
 
-        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
+        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, s_jsonOptions);
 
         Assert.NotNull(manifest);
         Assert.Equal("com.example.case", manifest.Id);
@@ -117,19 +117,19 @@ public class PluginManifestTests
     [Fact]
     public void Deserialize_ExtraFields_AreIgnored()
     {
-        var json = """
-                   {
-                       "id": "com.example.extra",
-                       "name": "Extra",
-                       "version": "1.0.0",
-                       "assemblyName": "Extra.dll",
-                       "pluginClass": "Extra.Plugin",
-                       "someUnknownField": "value",
-                       "anotherField": 42
-                   }
-                   """;
+        const string json = """
+                            {
+                                "id": "com.example.extra",
+                                "name": "Extra",
+                                "version": "1.0.0",
+                                "assemblyName": "Extra.dll",
+                                "pluginClass": "Extra.Plugin",
+                                "someUnknownField": "value",
+                                "anotherField": 42
+                            }
+                            """;
 
-        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, JsonOptions);
+        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, s_jsonOptions);
 
         Assert.NotNull(manifest);
         Assert.Equal("com.example.extra", manifest.Id);

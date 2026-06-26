@@ -1076,7 +1076,7 @@ public sealed class HotkeyService : IDisposable
                     continue;
             }
 
-            if (part.Length == 1 && part[0] is >= 'a' and <= 'z')
+            if (part is [>= 'a' and <= 'z'])
             {
                 if (key is not null)
                 {
@@ -1087,7 +1087,7 @@ public sealed class HotkeyService : IDisposable
                 continue;
             }
 
-            if (part.Length == 1 && part[0] is >= '0' and <= '9')
+            if (part is [>= '0' and <= '9'])
             {
                 if (key is not null)
                 {

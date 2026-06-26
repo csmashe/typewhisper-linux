@@ -21,6 +21,7 @@ public sealed record PromptAction
     public string? TargetActionPluginId { get; init; }
     public string? HotkeyKey { get; init; }
     public bool IsManualOnly { get; init; }
+    // ReSharper disable once UnusedMember.Global
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
 }

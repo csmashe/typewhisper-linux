@@ -6,7 +6,7 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace TypeWhisper.Plugin.SupertonicTts;
 
-internal sealed class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
+internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
 {
     private readonly SupertonicTextProcessor _textProcessor;
     private readonly InferenceSession _durationPredictor;
@@ -164,10 +164,13 @@ internal sealed class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
         return mask;
     }
 
+    [GeneratedRegex(@"\n\s*\n+")]
+    private static partial Regex ParagraphSplitRegex();
+
     private static List<string> ChunkText(string text, int maxLength)
     {
         var chunks = new List<string>();
-        foreach (var paragraph in Regex.Split(text.Trim(), @"\n\s*\n+").Where(p => !string.IsNullOrWhiteSpace(p)))
+        foreach (var paragraph in ParagraphSplitRegex().Split(text.Trim()).Where(p => !string.IsNullOrWhiteSpace(p)))
         {
             var remaining = paragraph.Trim();
             while (remaining.Length > maxLength)

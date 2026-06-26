@@ -1,5 +1,8 @@
-using System.IO;
-
+// This helper is file-linked into multiple plugin assemblies and the Core.Tests
+// project. Its namespace must stay the canonical TypeWhisper.Plugins.Shared.Net that
+// every consumer imports; matching any single link location (e.g. the Core.Tests
+// link) would break the plugin builds. So the file-location check is a false positive.
+// ReSharper disable once CheckNamespace
 namespace TypeWhisper.Plugins.Shared.Net;
 
 /// <summary>
@@ -22,7 +25,7 @@ namespace TypeWhisper.Plugins.Shared.Net;
 /// </summary>
 internal static class InterProcessFileLock
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan s_pollInterval = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
     ///     Acquires the lock at <paramref name="lockPath" />, retrying until it is free
@@ -49,7 +52,7 @@ internal static class InterProcessFileLock
             {
                 // Another holder owns the lock; the work it guards (a large download +
                 // extraction) is the long pole, so a coarse poll interval is fine.
-                await Task.Delay(PollInterval, ct).ConfigureAwait(false);
+                await Task.Delay(s_pollInterval, ct).ConfigureAwait(false);
             }
         }
     }

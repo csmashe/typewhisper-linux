@@ -197,11 +197,13 @@ public partial class PluginsSectionViewModel : ObservableObject
         var expandedPlugin = PluginGroups
             .SelectMany(group => group.Plugins)
             .FirstOrDefault(plugin => plugin.Id == expandedPluginId);
-        if (expandedPlugin is not null)
+        if (expandedPlugin is null)
         {
-            expandedPlugin.IsExpanded = true;
-            _ = LoadPluginSettingsAsync(expandedPlugin);
+            return;
         }
+
+        expandedPlugin.IsExpanded = true;
+        _ = LoadPluginSettingsAsync(expandedPlugin);
     }
 
     [RelayCommand]
@@ -243,30 +245,38 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
-        if (loaded.Instance is IPluginSettingsProvider provider)
+        switch (loaded.Instance)
         {
-            foreach (var field in row.SettingFields)
+            case IPluginSettingsProvider provider:
             {
-                await provider.SetSettingValueAsync(field.Key, field.Value);
-            }
-        }
-
-        if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider)
-        {
-            foreach (var collection in row.Collections)
-            {
-                var items = collection
-                    .Items.Select(item => new PluginCollectionItem(
-                        item.Fields.ToDictionary(field => field.Key, field => (string?)field.Value)
-                    ))
-                    .ToList();
-
-                var result = await collectionProvider.SetItemsAsync(collection.Key, items);
-                if (!result.IsSuccess)
+                foreach (var field in row.SettingFields)
                 {
+                    await provider.SetSettingValueAsync(field.Key, field.Value);
+                }
+
+                break;
+            }
+            case IPluginCollectionSettingsProvider collectionProvider:
+            {
+                foreach (var collection in row.Collections)
+                {
+                    var items = collection
+                        .Items.Select(item => new PluginCollectionItem(
+                            item.Fields.ToDictionary(field => field.Key, field => (string?)field.Value)
+                        ))
+                        .ToList();
+
+                    var result = await collectionProvider.SetItemsAsync(collection.Key, items);
+                    if (result.IsSuccess)
+                    {
+                        continue;
+                    }
+
                     row.Status = result.Message;
                     return;
                 }
+
+                break;
             }
         }
 
@@ -392,22 +402,15 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         var combined = $"{manifest.Name} {manifest.Description}".ToLowerInvariant();
-        if (
-            combined.Contains("offline")
-            || combined.Contains("local")
-            || combined.Contains("on-device")
-            || combined.Contains("on device")
-            || combined.Contains("file-based")
-            || combined.Contains("file based")
-            || combined.Contains("obsidian")
-            || combined.Contains("shell script")
-            || combined.Contains("webhook")
-        )
-        {
-            return true;
-        }
-
-        return false;
+        return combined.Contains("offline")
+               || combined.Contains("local")
+               || combined.Contains("on-device")
+               || combined.Contains("on device")
+               || combined.Contains("file-based")
+               || combined.Contains("file based")
+               || combined.Contains("obsidian")
+               || combined.Contains("shell script")
+               || combined.Contains("webhook");
     }
 
     // Manifest Category takes precedence; fall back to known-ID lists then keyword heuristics.
@@ -687,12 +690,14 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
             }
         }
 
-        if (!_syncingBoolValue)
+        if (_syncingBoolValue)
         {
-            _syncingBoolValue = true;
-            BoolValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-            _syncingBoolValue = false;
+            return;
         }
+
+        _syncingBoolValue = true;
+        BoolValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        _syncingBoolValue = false;
     }
 
     partial void OnBoolValueChanged(bool value)

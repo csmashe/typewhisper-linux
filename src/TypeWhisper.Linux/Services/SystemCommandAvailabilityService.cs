@@ -86,7 +86,7 @@ public sealed class SystemCommandAvailabilityService
         get
         {
             var s = _snapshot;
-            return s.ClipboardToolName == "xclip" && s.HasClipboardTool;
+            return s is { ClipboardToolName: "xclip", HasClipboardTool: true };
         }
     }
 
@@ -95,7 +95,7 @@ public sealed class SystemCommandAvailabilityService
         get
         {
             var s = _snapshot;
-            return s.ClipboardToolName == "wl-clipboard" && s.HasClipboardTool;
+            return s is { ClipboardToolName: "wl-clipboard", HasClipboardTool: true };
         }
     }
 
