@@ -1633,7 +1633,7 @@ public sealed class DictationOrchestrator : IDisposable
             )
             {
                 _models.PluginManager.EventBus.Publish(
-                    new TextInsertedEvent { Text = insertionText, AppName = context.AppProcess }
+                    new TextInsertedEvent { Text = insertionText, AppName = context.AppTitle }
                 );
             }
 
