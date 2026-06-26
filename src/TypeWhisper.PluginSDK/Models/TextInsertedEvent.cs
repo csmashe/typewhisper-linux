@@ -13,9 +13,9 @@ public sealed record TextInsertedEvent : PluginEvent
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public required string Text { get; init; }
 
-    /// <summary>Name of the target application, or null.</summary>
+    /// <summary>Name of the target application the text was inserted into, or null.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
-    public string? TargetApp { get; init; }
+    public string? AppName { get; init; }
 }

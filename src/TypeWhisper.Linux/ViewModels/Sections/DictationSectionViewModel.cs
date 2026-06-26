@@ -517,7 +517,11 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        await _modelSelectionCts?.CancelAsync();
+        if (_modelSelectionCts is not null)
+        {
+            await _modelSelectionCts.CancelAsync();
+        }
+
         StatusText = Loc.Instance.GetString("Dictation.DeletingModel", selected.DisplayLabel);
 
         try
@@ -914,7 +918,11 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private async Task DownloadAndLoadSelectedModelAsync(DictationModelOption selected)
     {
-        await _modelSelectionCts?.CancelAsync();
+        if (_modelSelectionCts is not null)
+        {
+            await _modelSelectionCts.CancelAsync();
+        }
+
         _modelSelectionCts?.Dispose();
         var cts = _modelSelectionCts = new CancellationTokenSource();
 

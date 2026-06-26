@@ -125,7 +125,9 @@ public static class Program
         }
     }
 
-    private static AppBuilder BuildAvaloniaApp()
+    // Public so the Avalonia XAML previewer / design-time tooling can discover and invoke it reflectively.
+    // ReSharper disable once MemberCanBePrivate.Global
+    public static AppBuilder BuildAvaloniaApp()
     {
         var builder = AppBuilder
             .Configure<App>()

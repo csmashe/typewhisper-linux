@@ -78,17 +78,17 @@ public class PluginEventsTests
     [Fact]
     public void TextInsertedEvent_AllFields()
     {
-        var evt = new TextInsertedEvent { Text = "pasted text", TargetApp = "notepad" };
+        var evt = new TextInsertedEvent { Text = "pasted text", AppName = "notepad" };
 
         Assert.Equal("pasted text", evt.Text);
-        Assert.Equal("notepad", evt.TargetApp);
+        Assert.Equal("notepad", evt.AppName);
     }
 
     [Fact]
-    public void TextInsertedEvent_TargetAppIsOptional()
+    public void TextInsertedEvent_AppNameIsOptional()
     {
         var evt = new TextInsertedEvent { Text = "text" };
-        Assert.Null(evt.TargetApp);
+        Assert.Null(evt.AppName);
     }
 
     [Fact]

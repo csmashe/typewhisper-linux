@@ -115,10 +115,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
 
             // Probe failed: daemon is up but /dev/uinput is unwritable (usually EACCES).
             // Showing "Ready" here would contradict the setup-result popup.
-            return !status.ProbeSucceeded ? 
-                "ydotoold socket reachable, but a test keystroke failed. " +
-                "Check that your user has read/write access to /dev/uinput (run `groups` — you should see `input`; " +
-                "if not, `sudo usermod -aG input $USER` then log out and back in)." 
+            return !status.ProbeSucceeded
+                ? Loc.Instance["TextInsertion.YdotoolProbeFailed"]
                 : Loc.Instance.GetString("TextInsertion.YdotoolReady", status.SocketPath);
         }
     }

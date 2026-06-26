@@ -245,38 +245,35 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
-        switch (loaded.Instance)
+        // A plugin can implement both interfaces (e.g. OpenAiCompatiblePlugin), so check each
+        // independently rather than via a mutually-exclusive switch — otherwise only the first
+        // matching kind of settings would ever persist.
+        if (loaded.Instance is IPluginSettingsProvider provider)
         {
-            case IPluginSettingsProvider provider:
+            foreach (var field in row.SettingFields)
             {
-                foreach (var field in row.SettingFields)
-                {
-                    await provider.SetSettingValueAsync(field.Key, field.Value);
-                }
-
-                break;
+                await provider.SetSettingValueAsync(field.Key, field.Value);
             }
-            case IPluginCollectionSettingsProvider collectionProvider:
+        }
+
+        if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider)
+        {
+            foreach (var collection in row.Collections)
             {
-                foreach (var collection in row.Collections)
+                var items = collection
+                    .Items.Select(item => new PluginCollectionItem(
+                        item.Fields.ToDictionary(field => field.Key, field => (string?)field.Value)
+                    ))
+                    .ToList();
+
+                var result = await collectionProvider.SetItemsAsync(collection.Key, items);
+                if (result.IsSuccess)
                 {
-                    var items = collection
-                        .Items.Select(item => new PluginCollectionItem(
-                            item.Fields.ToDictionary(field => field.Key, field => (string?)field.Value)
-                        ))
-                        .ToList();
-
-                    var result = await collectionProvider.SetItemsAsync(collection.Key, items);
-                    if (result.IsSuccess)
-                    {
-                        continue;
-                    }
-
-                    row.Status = result.Message;
-                    return;
+                    continue;
                 }
 
-                break;
+                row.Status = result.Message;
+                return;
             }
         }
 

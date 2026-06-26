@@ -114,12 +114,12 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
         }
         catch (JsonException ex)
         {
-            await Console.Error.WriteLineAsync($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}");
+            await Console.Error.WriteLineAsync($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}").ConfigureAwait(false);
             return null;
         }
         catch (Exception ex)
         {
-            await Console.Error.WriteLineAsync($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}");
+            await Console.Error.WriteLineAsync($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}").ConfigureAwait(false);
             return null;
         }
     }

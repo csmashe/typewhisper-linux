@@ -26,7 +26,7 @@ public static class OpenAiTranscriptionHelper
     /// <param name="translate">If true, uses the translations endpoint (audio to English).</param>
     /// <param name="responseFormat">Response format (e.g. "verbose_json", "json", "text").</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <param name="prompt"></param>
+    /// <param name="prompt">Optional text to bias the model toward specific spelling, vocabulary, or style; null to omit.</param>
     /// <returns>Transcription result with text, detected language, and duration.</returns>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global

@@ -757,6 +757,7 @@
   "TextInsertion.WtypeUnsupportedCompositor": "Installiert, aber dieser Compositor unterstützt das Virtual-Keyboard-Protokoll von wtype nicht.",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "Installiert — nur XWayland-Fenster.",
   "TextInsertion.YdotoolNotInstalled": "ydotool nicht installiert. Installieren Sie es über Ihren Paketmanager.",
+  "TextInsertion.YdotoolProbeFailed": "ydotoold-Socket erreichbar, aber ein Test-Tastendruck ist fehlgeschlagen. Prüfen Sie, ob Ihr Benutzer Lese-/Schreibzugriff auf /dev/uinput hat (führen Sie `groups` aus — Sie sollten `input` sehen; falls nicht, `sudo usermod -aG input $USER`, dann ab- und wieder anmelden).",
   "TextInsertion.YdotoolReady": "Bereit. Socket: {0}",
   "TextInsertion.YdotoolSocketUnreachable": "ydotoold ist aktiv, aber der Socket ist nicht erreichbar.",
   "TextInsertion.YdotoolUdevRuleMissing": "ydotool installiert, aber die udev-Regel für /dev/uinput fehlt.",

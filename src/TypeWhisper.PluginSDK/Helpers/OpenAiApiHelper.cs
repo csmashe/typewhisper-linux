@@ -43,16 +43,18 @@ public static class OpenAiApiHelper
             return response;
         }
 
-        var errorBody = await response.Content.ReadAsStringAsync(ct);
-        var message = (int)response.StatusCode switch
+        using (response)
         {
-            401 => "Invalid API key",
-            413 => "Audio too large (max 25 MB)",
-            429 => "Rate limit reached, please wait",
-            _ => $"API error {(int)response.StatusCode}: {ExtractErrorMessage(errorBody)}"
-        };
-        throw new InvalidOperationException(message);
-
+            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var message = (int)response.StatusCode switch
+            {
+                401 => "Invalid API key",
+                413 => "Audio too large (max 25 MB)",
+                429 => "Rate limit reached, please wait",
+                _ => $"API error {(int)response.StatusCode}: {ExtractErrorMessage(errorBody)}"
+            };
+            throw new InvalidOperationException(message);
+        }
     }
 
     /// <summary>

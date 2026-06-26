@@ -52,7 +52,10 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
 
         try
         {
-             _stream?.DisposeAsync();
+            if (_stream is not null)
+            {
+                await _stream.DisposeAsync().ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {

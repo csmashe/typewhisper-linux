@@ -130,7 +130,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 {
                     var existing = File.Exists(userJsPath) ? File.ReadAllText(userJsPath) : "";
 
-                    if (ForceDisabledNegOneRegex().IsMatch(existing))
+                    if (ForceDisabledNegOneMultilineRegex().IsMatch(existing))
                     {
                         patched.Add(Path.GetFileName(profileDir));
                         continue;
@@ -1076,11 +1076,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
             && (!FirefoxInstalled || !FirefoxProfileFound || FirefoxAccessibilityForceEnabled);
     }
 
-    // accessibility.force_disabled = -1 pref line (start-of-string match on a single user.js).
-    [GeneratedRegex(@"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;")]
-    private static partial Regex ForceDisabledNegOneRegex();
-
-    // Same pref line, matched per-line across full user.js content.
+    // accessibility.force_disabled = -1 pref line, matched per-line across full user.js content
+    // (Multiline so the line is recognized even when our attribution comment precedes it).
     [GeneratedRegex(@"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;", RegexOptions.Multiline)]
     private static partial Regex ForceDisabledNegOneMultilineRegex();
 

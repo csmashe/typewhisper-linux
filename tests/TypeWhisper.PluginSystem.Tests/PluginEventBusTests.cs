@@ -245,11 +245,11 @@ public class PluginEventBusTests
             return Task.CompletedTask;
         });
 
-        _bus.Publish(new TextInsertedEvent { Text = "inserted", TargetApp = "notepad" });
+        _bus.Publish(new TextInsertedEvent { Text = "inserted", AppName = "notepad" });
 
         var received = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("inserted", received.Text);
-        Assert.Equal("notepad", received.TargetApp);
+        Assert.Equal("notepad", received.AppName);
     }
 
     [Fact]
