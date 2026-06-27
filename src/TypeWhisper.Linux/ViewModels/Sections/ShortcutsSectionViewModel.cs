@@ -9,6 +9,9 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class ShortcutsSectionViewModel : ObservableObject
 {
     private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
@@ -18,9 +21,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     private readonly IReadOnlyList<IDeShortcutWriter> _writers;
 
     // Cached lazily: IsCurrentDesktop hits the filesystem (BinaryExists) so
-    // we don't want to rerun it for every UI-bound property.
-    private IDeShortcutWriter? _activeWriterCache;
-
+    // we don't want to rerun it for every UI-bound property. The resolved writer
+    // lives in the ActiveWriter property's backing `field`; this flag marks it computed.
     private bool _activeWriterCached;
 
     [ObservableProperty]
@@ -248,7 +250,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         {
             if (_activeWriterCached)
             {
-                return _activeWriterCache;
+                return field;
             }
 
             _activeWriterCached = true;
@@ -261,7 +263,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                         continue;
                     }
 
-                    _activeWriterCache = w;
+                    field = w;
                     break;
                 }
                 catch
@@ -270,7 +272,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 }
             }
 
-            return _activeWriterCache;
+            return field;
         }
     }
 

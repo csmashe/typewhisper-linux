@@ -46,7 +46,6 @@ public partial class HistorySectionViewModel : ObservableObject
         IHistoryService history,
         IDictionaryService dictionary,
         ISettingsService settings,
-        CorrectionSuggestionService correctionSuggestions,
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback
     )

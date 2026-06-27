@@ -4,7 +4,7 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 namespace TypeWhisper.Linux.Services;
 
-public sealed class SystemCommandAvailabilityService
+public sealed partial class SystemCommandAvailabilityService
 {
     private const int RtldNow = 2;
     private const int RtldGlobal = 0x100;
@@ -38,12 +38,7 @@ public sealed class SystemCommandAvailabilityService
     private static readonly Lock s_cudaPreloadLock = new();
     private static readonly List<IntPtr> s_cudaPreloadHandles = [];
 
-    private LinuxCapabilitySnapshot _snapshot;
-
-    public SystemCommandAvailabilityService()
-    {
-        _snapshot = BuildSnapshot();
-    }
+    private LinuxCapabilitySnapshot _snapshot = BuildSnapshot();
 
     // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool IsWaylandSession
@@ -184,6 +179,7 @@ public sealed class SystemCommandAvailabilityService
         return s;
     }
 
+    // ReSharper disable once UnusedMethodReturnValue.Global -- returns the rebuilt snapshot for callers that want it; the current caller ignores it.
     public LinuxCapabilitySnapshot RefreshSnapshot()
     {
         var snapshot = BuildSnapshot();
@@ -321,10 +317,7 @@ public sealed class SystemCommandAvailabilityService
             var waitTask = process.WaitForExitAsync(cancellationToken);
             var timeoutTask = Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
             var completed = await Task.WhenAny(waitTask, timeoutTask);
-            if (cancellationToken.IsCancellationRequested)
-            {
-                throw new OperationCanceledException(cancellationToken);
-            }
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (!ReferenceEquals(completed, waitTask) && !process.HasExited)
             {
@@ -456,6 +449,7 @@ public sealed class SystemCommandAvailabilityService
             candidates.Add($"/run/user/{uid}/.ydotool_socket");
         }
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- the explicit whitespace guard keeps socket-path resolution linear; the partial LINQ form only hoists this one guard while the try/catch + early-return stay in the body
         foreach (var candidate in candidates)
         {
             if (string.IsNullOrWhiteSpace(candidate))
@@ -696,11 +690,13 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
-    [DllImport("libdl.so.2", CharSet = CharSet.Ansi)]
-    private static extern IntPtr dlopen(string fileName, int flags);
+    // Linux marshals "ANSI" strings as UTF-8, so StringMarshalling.Utf8 matches the prior CharSet.Ansi/LPStr behavior for ASCII library paths.
+    // ReSharper disable once InconsistentNaming -- native libdl function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libdl.so.2", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial IntPtr dlopen(string fileName, int flags);
 
-    [DllImport("libdl.so.2")]
-    private static extern IntPtr dlerror();
+    [LibraryImport("libdl.so.2")]
+    private static partial IntPtr dlerror();
 }
 
 // Success/Elapsed are carried in the benchmark result record's data shape (not currently read).

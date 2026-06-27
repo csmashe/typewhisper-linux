@@ -104,6 +104,7 @@ public sealed class PromptProcessingService
             ct
         );
 
+        // ReSharper disable once RedundantWithCancellation -- provider is a plugin; it may implement IAsyncEnumerable manually and observe only the GetAsyncEnumerator token, so forwarding ct here is not redundant across the plugin boundary.
         await foreach (var delta in source.WithCancellation(ct))
         {
             yield return delta;

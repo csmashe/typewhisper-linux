@@ -519,7 +519,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         }
 
         var inner = s.Substring(1, s.Length - 2);
-        return inner.Replace("\\'", "'").Replace("\\\\", "\\");
+        return inner.Replace("\\'", "'").Replace(@"\\", "\\");
     }
 
     private static string BuildCustomPath(string shortcutId)
@@ -613,8 +613,8 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
                 return (false, string.Empty, $"Could not start {fileName}");
             }
 
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-            var stderrTask = proc.StandardError.ReadToEndAsync();
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
             await proc.WaitForExitAsync(ct).ConfigureAwait(false);
             var stdout = await stdoutTask.ConfigureAwait(false);
             var stderr = await stderrTask.ConfigureAwait(false);

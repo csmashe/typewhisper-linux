@@ -187,6 +187,7 @@ public sealed class PluginRegistryService
                 throw;
             }
 
+            // ReSharper disable once MethodHasAsyncOverloadWithCancellation -- synchronous extraction is intentional; the async overload would change cancellation semantics (partial extract on cancel) for a small local plugin zip
             ZipFile.ExtractToDirectory(tempZip, pluginDir, true);
             File.Delete(tempZip);
 
@@ -211,7 +212,10 @@ public sealed class PluginRegistryService
             {
                 Directory.Delete(pluginDir, true);
             }
-            catch { }
+            catch
+            {
+                // Best-effort cleanup of the partial install directory; the original failure is rethrown below.
+            }
 
             throw;
         }

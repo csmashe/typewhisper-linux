@@ -12,6 +12,9 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class DictationSectionViewModel : ObservableObject
 {
     private readonly AudioRecordingService _audio;
@@ -1162,6 +1165,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     // ~/.config/environment.d/ is picked up by systemd-environment-d-generator for GUI sessions
     // on Wayland, covering app-menu launches where the shell profile isn't sourced.
+    // ReSharper disable once UnusedMethodReturnValue.Local -- returns the written path for callers that want it; the current caller invokes it for its file-writing side effect.
     private static string WriteDesktopEnvironmentFile(string home, string cudaLibraryPath)
     {
         var environmentDir = Path.Join(home, ".config", "environment.d");

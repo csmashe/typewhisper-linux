@@ -47,12 +47,8 @@ internal static partial class LinuxDictationFinalTextPolicy
         for (var pass = 0; pass < MaximumRepeatReductionPasses; pass++)
         {
             var tokens = TokenizeWords(reduced);
-            if (tokens.Count < MinimumRepeatedPhraseWords * 2)
-            {
-                return reduced.Trim();
-            }
-
-            if (!TryFindAdjacentRepeatedPhrase(reduced, tokens, out var removalStart, out var removalEnd))
+            if (tokens.Count < MinimumRepeatedPhraseWords * 2
+                || !TryFindAdjacentRepeatedPhrase(reduced, tokens, out var removalStart, out var removalEnd))
             {
                 return reduced.Trim();
             }

@@ -228,6 +228,7 @@ public partial class MainWindowViewModel : ObservableObject
 
 public partial class NavItem : ObservableObject
 {
+    // ReSharper disable once ReplaceWithFieldKeyword -- set in the constructor (where `field` is inaccessible); Label must stay a computed property to re-resolve localization on language change.
     private readonly string _labelKey;
 
     [ObservableProperty]

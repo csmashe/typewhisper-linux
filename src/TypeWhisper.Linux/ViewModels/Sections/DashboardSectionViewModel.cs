@@ -108,6 +108,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         _disposed = true;
         _history.RecordsChanged -= OnRecordsChanged;
         Loc.Instance.LanguageChanged -= OnLanguageChanged;
+        GC.SuppressFinalize(this);
     }
 
     partial void OnSelectedRangeChanged(TimeRange value)

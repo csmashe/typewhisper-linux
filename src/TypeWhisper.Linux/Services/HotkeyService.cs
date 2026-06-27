@@ -1081,7 +1081,7 @@ public sealed class HotkeyService : IDisposable
                         return false;
                     }
 
-                    key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{char.ToUpperInvariant(part[0])}");
+                    key = Enum.Parse<KeyCode>($"Vc{char.ToUpperInvariant(part[0])}");
                     continue;
                 case [>= '0' and <= '9']:
                     if (key is not null)
@@ -1089,7 +1089,7 @@ public sealed class HotkeyService : IDisposable
                         return false;
                     }
 
-                    key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{part[0]}");
+                    key = Enum.Parse<KeyCode>($"Vc{part[0]}");
                     continue;
             }
 
@@ -1134,7 +1134,7 @@ public sealed class HotkeyService : IDisposable
                     return false;
                 }
 
-                key = (KeyCode)Enum.Parse(typeof(KeyCode), $"VcF{fNum}");
+                key = Enum.Parse<KeyCode>($"VcF{fNum}");
                 continue;
             }
 

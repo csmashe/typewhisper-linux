@@ -8,6 +8,9 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 {
     private readonly IDictionaryService _dictionary;
@@ -88,6 +91,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     {
         _snippets.SnippetsChanged -= _snippetsChangedHandler;
         _dictionary.EntriesChanged -= _entriesChangedHandler;
+        GC.SuppressFinalize(this);
     }
 
     public string ExportToJson()

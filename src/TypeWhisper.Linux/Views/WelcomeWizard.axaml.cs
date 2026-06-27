@@ -35,6 +35,7 @@ public partial class WelcomeWizard : Window
         base.OnClosed(e);
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void RunPasteSmokeButton_OnClick(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not WelcomeWizardViewModel vm)

@@ -137,6 +137,7 @@
                                                 Click="OnCopyTranscript"
                                                 Tag="{Binding Transcript}"
                                                 IsEnabled="{Binding Transcript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                         <Button Content="{loc:Str Common.Delete}"
                                                 Command="{Binding $parent[ItemsControl].((vm:RecorderSectionViewModel)DataContext).DeleteRecordingCommand}"
                                                 CommandParameter="{Binding}" />

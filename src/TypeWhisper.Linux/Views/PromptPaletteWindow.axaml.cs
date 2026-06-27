@@ -1,6 +1,5 @@
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Interactivity;
 using Avalonia.Threading;
 using TypeWhisper.Core.Models;
 
@@ -153,6 +152,7 @@ public partial class PromptPaletteWindow : Window
 
     private void SearchBox_OnKeyDown(object? sender, KeyEventArgs e)
     {
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the navigation keys are handled; all other keys are intentionally ignored.
         switch (e.Key)
         {
             case Key.Down:
@@ -204,16 +204,6 @@ public partial class PromptPaletteWindow : Window
     }
 
     private void ActionListBox_OnDoubleTapped(object? sender, TappedEventArgs e)
-    {
-        Complete(ActionListBox.SelectedItem as PromptAction);
-    }
-
-    private void CancelButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        Complete(null);
-    }
-
-    private void RunButton_OnClick(object? sender, RoutedEventArgs e)
     {
         Complete(ActionListBox.SelectedItem as PromptAction);
     }

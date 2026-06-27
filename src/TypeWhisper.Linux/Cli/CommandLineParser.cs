@@ -56,15 +56,13 @@ internal static class CommandLineParser
         }
 
         // --help short-circuits even alongside other flags like --minimized.
-        foreach (var a in args)
-        {
-            if (
+        if (
+            args.Any(a =>
                 string.Equals(a, "--help", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(a, "-h", StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return new CliAction(CliActionKind.PrintHelp);
-            }
+                || string.Equals(a, "-h", StringComparison.OrdinalIgnoreCase))
+        )
+        {
+            return new CliAction(CliActionKind.PrintHelp);
         }
 
         // --minimized with no subcommand launches the GUI minimized. Unknown flags

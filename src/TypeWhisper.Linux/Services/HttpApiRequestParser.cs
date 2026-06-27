@@ -226,7 +226,7 @@ internal static class HttpApiRequestParser
     public static IReadOnlyList<MultipartPart> ParseMultipart(byte[] body, string boundary)
     {
         var boundaryBytes = Encoding.UTF8.GetBytes("--" + boundary);
-        var doubleCrlf = Encoding.UTF8.GetBytes("\r\n\r\n");
+        var doubleCrlf = "\r\n\r\n"u8.ToArray();
         var parts = new List<MultipartPart>();
         var searchStart = 0;
 
@@ -408,7 +408,7 @@ internal static class HttpApiRequestParser
 
     private static string? Header(IReadOnlyDictionary<string, string> headers, string name)
     {
-        return headers.TryGetValue(name, out var value) ? value : null;
+        return headers.GetValueOrDefault(name);
     }
 
     private static string? Field(IEnumerable<MultipartPart> parts, string name)
@@ -502,6 +502,7 @@ internal static class HttpApiRequestParser
         for (var i = startIndex; i <= haystack.Length - needle.Length; i++)
         {
             var found = true;
+            // ReSharper disable once LoopCanBeConvertedToQuery -- naive byte-array substring match; the explicit loop is the intended hot-path form.
             for (var j = 0; j < needle.Length; j++)
             {
                 if (haystack[i + j] == needle[j])
@@ -524,14 +525,12 @@ internal static class HttpApiRequestParser
 
     private sealed class LimitedReadStream(Stream inner, long maxBytes) : Stream
     {
-        private readonly Stream _inner = inner;
-        private readonly long _maxBytes = maxBytes;
         private long _bytesRead;
 
-        public override bool CanRead => _inner.CanRead;
+        public override bool CanRead => inner.CanRead;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
-        public override long Length => _inner.Length;
+        public override long Length => inner.Length;
 
         public override long Position
         {
@@ -541,19 +540,19 @@ internal static class HttpApiRequestParser
 
         public override void Flush()
         {
-            _inner.Flush();
+            inner.Flush();
         }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            var read = _inner.Read(buffer, offset, count);
+            var read = inner.Read(buffer, offset, count);
             TrackBytes(read);
             return read;
         }
 
         public override int Read(Span<byte> buffer)
         {
-            var read = _inner.Read(buffer);
+            var read = inner.Read(buffer);
             TrackBytes(read);
             return read;
         }
@@ -563,14 +562,14 @@ internal static class HttpApiRequestParser
             CancellationToken cancellationToken = default
         )
         {
-            var read = await _inner.ReadAsync(buffer, cancellationToken);
+            var read = await inner.ReadAsync(buffer, cancellationToken);
             TrackBytes(read);
             return read;
         }
 
         public override int ReadByte()
         {
-            var value = _inner.ReadByte();
+            var value = inner.ReadByte();
             if (value >= 0)
             {
                 TrackBytes(1);
@@ -597,7 +596,7 @@ internal static class HttpApiRequestParser
         private void TrackBytes(int read)
         {
             _bytesRead += read;
-            if (_bytesRead > _maxBytes)
+            if (_bytesRead > maxBytes)
             {
                 throw new InvalidOperationException("Request body exceeded the configured limit.");
             }

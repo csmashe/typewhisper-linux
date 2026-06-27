@@ -13,6 +13,7 @@ public partial class SnippetsSection : UserControl
         InitializeComponent();
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnExport(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not SnippetsSectionViewModel viewModel)
@@ -43,6 +44,7 @@ public partial class SnippetsSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnImport(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not SnippetsSectionViewModel viewModel)

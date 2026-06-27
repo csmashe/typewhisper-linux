@@ -209,6 +209,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
     public void AcceptAudioFrame(float[] samples, int sampleRate)
     {
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- public entry point fed by external capture callers; keep the defensive null guard despite the non-nullable annotation
         if (_disposed || Faulted || samples is null || samples.Length == 0)
         {
             return;

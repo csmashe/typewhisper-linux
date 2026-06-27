@@ -137,6 +137,7 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
 
         if (node.TryGetProperty("nodes", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
         {
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- recursive early-return walk; the explicit loop avoids boxing the struct JsonElement.ArrayEnumerator into LINQ
             foreach (var child in nodes.EnumerateArray())
             {
                 var match = FindFocusedNode(child);
@@ -157,6 +158,7 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
             return null;
         }
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- recursive early-return walk; the explicit loop avoids boxing the struct JsonElement.ArrayEnumerator into LINQ
         foreach (var child in floating.EnumerateArray())
         {
             var match = FindFocusedNode(child);

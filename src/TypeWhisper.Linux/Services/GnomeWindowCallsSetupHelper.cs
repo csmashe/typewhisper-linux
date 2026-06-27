@@ -17,7 +17,7 @@ public sealed class GnomeWindowCallsSetupHelper
 
     // Accept either the original "Window Calls" or the "Window Calls Extended"
     // fork — they expose a compatible List method at different paths.
-    private static readonly (string Path, string Interface)[] Endpoints =
+    private static readonly (string Path, string Interface)[] s_endpoints =
     [
         ("/org/gnome/Shell/Extensions/Windows", "org.gnome.Shell.Extensions.Windows"),
         ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt")
@@ -51,7 +51,7 @@ public sealed class GnomeWindowCallsSetupHelper
         // Don't use `gdbus introspect`: org.gnome.Shell answers it on any path
         // (empty node), giving a false positive. Actually CALL List — a missing
         // object/method exits non-zero. Try each known endpoint.
-        foreach (var (path, iface) in Endpoints)
+        foreach (var (path, iface) in s_endpoints)
         {
             try
             {

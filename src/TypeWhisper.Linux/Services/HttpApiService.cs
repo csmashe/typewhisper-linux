@@ -95,7 +95,10 @@ public sealed class HttpApiService : IDisposable
         {
             _listenTask?.Wait(TimeSpan.FromSeconds(1));
         }
-        catch { }
+        catch
+        {
+            // Best-effort wait for the listener loop to drain during dispose.
+        }
 
         _disposed = true;
     }
@@ -143,6 +146,7 @@ public sealed class HttpApiService : IDisposable
 
     private void Stop()
     {
+        // ReSharper disable once IntroduceOptionalParameters.Local -- kept as explicit overloads; collapsing into an optional parameter would delete a member.
         Stop(true);
     }
 
@@ -273,8 +277,8 @@ public sealed class HttpApiService : IDisposable
                     response,
                     401,
                     Serialize(new { error = "Unauthorized" }),
-                    ct,
-                    allowedOrigin
+                    allowedOrigin,
+                    ct
                 );
                 return;
             }
@@ -286,8 +290,8 @@ public sealed class HttpApiService : IDisposable
                     response,
                     403,
                     Serialize(new { error = "Forbidden" }),
-                    ct,
-                    null
+                    null,
+                    ct
                 );
                 return;
             }
@@ -319,7 +323,7 @@ public sealed class HttpApiService : IDisposable
                 _ => (404, Serialize(new { error = "Not found" }))
             };
 
-            await WriteJsonAsync(response, statusCode, body, ct, allowedOrigin);
+            await WriteJsonAsync(response, statusCode, body, allowedOrigin, ct);
         }
         catch (HttpApiRequestException ex)
         {
@@ -327,8 +331,8 @@ public sealed class HttpApiService : IDisposable
                 response,
                 ex.StatusCode,
                 Serialize(new { error = ex.Message }),
-                ct,
-                GetAllowedOrigin(context.Request)
+                GetAllowedOrigin(context.Request),
+                ct
             );
         }
         catch (Exception ex)
@@ -341,8 +345,8 @@ public sealed class HttpApiService : IDisposable
                 response,
                 500,
                 Serialize(new { error = "Internal server error" }),
-                ct,
-                recoveredOrigin
+                recoveredOrigin,
+                ct
             );
         }
         finally
@@ -458,7 +462,10 @@ public sealed class HttpApiService : IDisposable
             {
                 File.Delete(tempPath);
             }
-            catch { }
+            catch
+            {
+                // Best-effort temp-file cleanup.
+            }
         }
     }
 
@@ -510,6 +517,7 @@ public sealed class HttpApiService : IDisposable
             : TranscriptionTask.Transcribe;
         var opts = new TranscriptionRunOptions(
             payload.Language,
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- LanguageHints is deserialized from JSON and can be null when the field is omitted
             payload.LanguageHints ?? [],
             task,
             payload.TargetLanguage,
@@ -976,6 +984,7 @@ public sealed class HttpApiService : IDisposable
             return (400, Serialize(new { error = "Missing required field: original" }));
         }
 
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- Replacement is deserialized from JSON and can be null when the field is omitted
         if (payload.Replacement is null)
         {
             return (400, Serialize(new { error = "Missing required field: replacement" }));
@@ -1112,27 +1121,24 @@ public sealed class HttpApiService : IDisposable
                 candidate.TranscriptionModels.Any(model => model.Id == requestedModel)
             )
             .ToList();
-        switch (matches.Count)
+        return matches.Count switch
         {
-            case 0:
-                throw new HttpApiRequestException(404, $"Unknown model: {requestedModel}");
-            case > 1:
-                throw new HttpApiRequestException(
-                    400,
-                    $"Ambiguous model '{requestedModel}': provided by multiple engines. "
-                        + "Specify the engine explicitly or use the full plugin-qualified model id."
-                );
-            default:
-                return ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), requestedModel);
-        }
+            0 => throw new HttpApiRequestException(404, $"Unknown model: {requestedModel}"),
+            > 1 => throw new HttpApiRequestException(
+                400,
+                $"Ambiguous model '{requestedModel}': provided by multiple engines. "
+                    + "Specify the engine explicitly or use the full plugin-qualified model id."
+            ),
+            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), requestedModel)
+        };
     }
 
     private static async Task WriteJsonAsync(
         HttpListenerResponse response,
         int statusCode,
         string body,
-        CancellationToken ct,
-        string? origin
+        string? origin,
+        CancellationToken ct
     )
     {
         response.StatusCode = statusCode;

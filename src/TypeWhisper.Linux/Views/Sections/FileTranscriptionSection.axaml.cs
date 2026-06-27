@@ -22,6 +22,7 @@ public partial class FileTranscriptionSection : UserControl
         DragDrop.AddDropHandler(DropZone, OnDrop);
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnSelectFile(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not FileTranscriptionSectionViewModel viewModel)
@@ -50,6 +51,7 @@ public partial class FileTranscriptionSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnCopy(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not FileTranscriptionSectionViewModel viewModel)
@@ -64,6 +66,7 @@ public partial class FileTranscriptionSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnCopyItem(object? sender, RoutedEventArgs e)
     {
         if ((sender as Control)?.DataContext is not FileTranscriptionQueueItemViewModel item)
@@ -78,6 +81,7 @@ public partial class FileTranscriptionSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnExportText(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not FileTranscriptionSectionViewModel viewModel)
@@ -94,6 +98,7 @@ public partial class FileTranscriptionSection : UserControl
         await ExportTextAsync(viewModel, viewModel.SelectedItem);
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnExportItemText(object? sender, RoutedEventArgs e)
     {
         if (
@@ -143,11 +148,13 @@ public partial class FileTranscriptionSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnExportItemSrt(object? sender, RoutedEventArgs e)
     {
         await ExportSubtitleAsync(sender, "srt", "SRT");
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnExportItemVtt(object? sender, RoutedEventArgs e)
     {
         await ExportSubtitleAsync(sender, "vtt", "WebVTT");
@@ -193,6 +200,7 @@ public partial class FileTranscriptionSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnSelectWatchFolder(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not FileTranscriptionSectionViewModel viewModel)
@@ -207,6 +215,7 @@ public partial class FileTranscriptionSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnSelectWatchFolderOutput(
         object? sender,
         RoutedEventArgs e
@@ -258,10 +267,7 @@ public partial class FileTranscriptionSection : UserControl
     {
         SetDragOver(false);
 
-        if (
-            DataContext is not FileTranscriptionSectionViewModel viewModel
-            || !viewModel.CanImportFiles
-        )
+        if (DataContext is not FileTranscriptionSectionViewModel { CanImportFiles: true } viewModel)
         {
             return;
         }

@@ -233,6 +233,7 @@
                                                 </Border>
                                             </StackPanel>
 
+                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <Button Grid.Column="2"
                                                     Content="{Binding IsStarred, Converter={x:Static local:BoolTextConverter.Instance}, ConverterParameter='True=★|False=☆'}"
                                                     Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleStarredCommand}"
@@ -245,11 +246,13 @@
                                                         Orientation="Horizontal"
                                                         Spacing="4"
                                                         VerticalAlignment="Center">
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                 <Button Content="−"
                                                         Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DecreasePriorityCommand}"
                                                         CommandParameter="{Binding}"
                                                         Padding="8,6"
                                                         MinWidth="30" />
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                 <Button Content="+"
                                                         Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).IncreasePriorityCommand}"
                                                         CommandParameter="{Binding}"
@@ -257,12 +260,14 @@
                                                         MinWidth="30" />
                                             </StackPanel>
 
+                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <ToggleSwitch Grid.Column="4"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleEnabledCommand}"
                                                           CommandParameter="{Binding}"
                                                           VerticalAlignment="Center" />
 
+                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <Button Grid.Column="5"
                                                     Content="{loc:Str Common.Delete}"
                                                     Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DeleteCommand}"
@@ -311,6 +316,7 @@
                                                            Margin="0,8,0,0" />
                                             </StackPanel>
 
+                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <ToggleSwitch Grid.Column="1"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).TogglePackCommand}"

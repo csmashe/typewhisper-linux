@@ -24,7 +24,7 @@ public sealed class StrExtension : MarkupExtension
 
     public StrExtension(string key) => Key = key;
 
-    private string Key { get; set; } = "";
+    private string Key { get; } = "";
 
     public override object ProvideValue(IServiceProvider serviceProvider)
     {

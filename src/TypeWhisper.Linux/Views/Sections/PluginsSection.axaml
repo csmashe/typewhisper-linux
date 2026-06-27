@@ -232,6 +232,7 @@
                                                                 </StackPanel>
                                                             </StackPanel>
 
+                                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                             <ToggleSwitch Grid.Column="2"
                                                                           Margin="0,0,2,0"
                                                                           VerticalAlignment="Center"
@@ -239,6 +240,7 @@
                                                                           Command="{Binding Owner.ToggleEnabledCommand}"
                                                                           CommandParameter="{Binding}" />
 
+                                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                             <Button Grid.Column="3"
                                                                     Width="28"
                                                                     Height="28"
@@ -307,16 +309,19 @@
                                                                                                             Text="{Binding HeaderText}"
                                                                                                             FontWeight="SemiBold"
                                                                                                             VerticalAlignment="Center" />
+                                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                                                                         <Button
                                                                                                             Grid.Column="1"
                                                                                                             Content="{loc:Str Common.Up}"
                                                                                                             Command="{Binding OwnerCollection.MoveUpCommand}"
                                                                                                             CommandParameter="{Binding}" />
+                                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                                                                         <Button
                                                                                                             Grid.Column="2"
                                                                                                             Content="{loc:Str Common.Down}"
                                                                                                             Command="{Binding OwnerCollection.MoveDownCommand}"
                                                                                                             CommandParameter="{Binding}" />
+                                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                                                                         <Button
                                                                                                             Grid.Column="3"
                                                                                                             Content="{loc:Str Common.Remove}"
@@ -346,10 +351,12 @@
                                                                             HorizontalAlignment="Right"
                                                                             Spacing="8"
                                                                             Margin="0,0,0,14">
+                                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                                     <Button Content="{loc:Str Common.Save}"
                                                                             Command="{Binding Owner.SaveSettingsCommand}"
                                                                             CommandParameter="{Binding}"
                                                                             IsEnabled="{Binding CanEditSettings}" />
+                                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                                     <Button Content="{loc:Str Plugins.Validate}"
                                                                             Command="{Binding Owner.ValidateSettingsCommand}"
                                                                             CommandParameter="{Binding}"

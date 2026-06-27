@@ -219,6 +219,7 @@ public sealed class TransformSelectionService
                     null,
                     cts.Token
                 );
+                // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Text comes from a plugin TranscribeAsync result; the non-null annotation is not guaranteed across plugin implementations
                 command = transcription.Text?.Trim();
             }
             finally
@@ -227,6 +228,7 @@ public sealed class TransformSelectionService
                 // LLM transform and text insertion below so a concurrent
                 // dictation isn't blocked by them. The scope-end dispose is a
                 // harmless idempotent no-op.
+                // ReSharper disable once DisposeOnUsingVariable -- intentional early dispose to release the model lock before the LLM transform; the scope-end dispose is idempotent
                 await leaseScope.DisposeAsync();
             }
 

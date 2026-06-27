@@ -49,7 +49,7 @@ public sealed class SpeechFeedbackService : IDisposable
     }
 
     public bool IsAvailable => ResolveSpeakProvider().IsConfigured;
-    public string? BackendName => ResolveSpeakProvider().ProviderDisplayName;
+    public string BackendName => ResolveSpeakProvider().ProviderDisplayName;
 
     private bool IsSpeaking
     {
@@ -200,7 +200,10 @@ public sealed class SpeechFeedbackService : IDisposable
         {
             cts?.Cancel();
         }
-        catch { }
+        catch
+        {
+            // Best-effort cancellation; the source is disposed in the finally below.
+        }
         finally
         {
             cts?.Dispose();
@@ -210,7 +213,10 @@ public sealed class SpeechFeedbackService : IDisposable
         {
             session?.Stop();
         }
-        catch { }
+        catch
+        {
+            // Best-effort stop of the speech session.
+        }
     }
 
     public event EventHandler? ProvidersChanged;

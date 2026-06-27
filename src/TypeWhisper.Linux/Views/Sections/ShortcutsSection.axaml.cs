@@ -35,6 +35,7 @@ public partial class ShortcutsSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnCopyCustomShortcutRequested(object? sender, string text)
     {
         if (string.IsNullOrWhiteSpace(text))

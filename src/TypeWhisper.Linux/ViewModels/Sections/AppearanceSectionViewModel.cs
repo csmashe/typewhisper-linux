@@ -238,7 +238,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
 // Stores the localization key (not the resolved string) so DisplayName can be
 // re-resolved on a live UI-language switch. Item instances stay stable, so the
 // ComboBox selection is preserved — only the rendered text changes.
-public sealed partial class OverlayPositionOption(OverlayPosition value, string displayNameKey)
+public sealed class OverlayPositionOption(OverlayPosition value, string displayNameKey)
     : ObservableObject
 {
     public OverlayPosition Value { get; } = value;
@@ -247,7 +247,7 @@ public sealed partial class OverlayPositionOption(OverlayPosition value, string 
     public void RefreshDisplayName() => OnPropertyChanged(nameof(DisplayName));
 }
 
-public sealed partial class OverlayWidgetOption(OverlayWidget value, string displayNameKey)
+public sealed class OverlayWidgetOption(OverlayWidget value, string displayNameKey)
     : ObservableObject
 {
     public OverlayWidget Value { get; } = value;

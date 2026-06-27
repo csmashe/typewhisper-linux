@@ -9,17 +9,7 @@
              x:DataType="vm:DashboardSectionViewModel">
     <ScrollViewer VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
             <StackPanel MaxWidth="860"
                         Margin="28"
                         Spacing="0">
@@ -243,7 +233,8 @@
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
                             </Border>
-                            <Border Grid.Column="1"
+                            <Border Grid.Row="0"
+                                    Grid.Column="1"
                                     Background="#111822"
                                     BorderBrush="#243241"
                                     BorderThickness="1"
@@ -259,6 +250,7 @@
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="1"
+                                    Grid.Column="0"
                                     Background="#111822"
                                     BorderBrush="#243241"
                                     BorderThickness="1"
@@ -342,7 +334,8 @@
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
                             </Border>
-                            <Border Grid.Column="1"
+                            <Border Grid.Row="0"
+                                    Grid.Column="1"
                                     Background="#111822"
                                     BorderBrush="#243241"
                                     BorderThickness="1"
@@ -358,6 +351,7 @@
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="1"
+                                    Grid.Column="0"
                                     Background="#111822"
                                     BorderBrush="#243241"
                                     BorderThickness="1"
@@ -389,6 +383,7 @@
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="2"
+                                    Grid.Column="0"
                                     Background="#111822"
                                     BorderBrush="#243241"
                                     BorderThickness="1"
@@ -475,6 +470,7 @@
                         <!-- Walk up to the host Window to reach MainWindowViewModel,
                          because DashboardSectionViewModel doesn't hold a reference
                          to the shell VM. -->
+                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                         <Button Content="{loc:Str Common.OpenWizard}"
                                 Command="{Binding $parent[Window].((shellvm:MainWindowViewModel)DataContext).OpenWizardCommand}" />
                     </StackPanel>

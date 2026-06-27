@@ -294,18 +294,21 @@
                                                 </WrapPanel>
                                             </StackPanel>
 
+                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                             <Button Grid.Column="3"
                                                     Content="{loc:Str Common.Edit}"
                                                     Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).BeginEditCommand}"
                                                     CommandParameter="{Binding}"
                                                     Padding="12,6"
                                                     VerticalAlignment="Center" />
+                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                             <Button Grid.Column="4"
                                                     Content="{loc:Str Common.Delete}"
                                                     Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).DeleteCommand}"
                                                     CommandParameter="{Binding}"
                                                     Padding="12,6"
                                                     VerticalAlignment="Center" />
+                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                             <ToggleSwitch Grid.Column="5"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).ToggleEnabledCommand}"

@@ -19,12 +19,7 @@ internal static class LinuxLiveTranscriptionStartupPolicy
         AppSettings settings,
         ITranscriptionEnginePlugin? plugin)
     {
-        if (!settings.LiveTranscriptionEnabled)
-        {
-            return LiveTranscriptionMode.None;
-        }
-
-        if (plugin is null)
+        if (!settings.LiveTranscriptionEnabled || plugin is null)
         {
             return LiveTranscriptionMode.None;
         }

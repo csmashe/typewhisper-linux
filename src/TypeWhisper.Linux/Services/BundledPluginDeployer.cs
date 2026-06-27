@@ -11,6 +11,7 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class BundledPluginDeployer
 {
+    // ReSharper disable once UnusedMethodReturnValue.Global -- returns the count of synced plugins for callers that want it; the current caller ignores it.
     public static int DeployIfMissing()
     {
         var source = FindBundledPluginsDir();

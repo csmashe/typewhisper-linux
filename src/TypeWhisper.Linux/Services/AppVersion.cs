@@ -20,6 +20,7 @@ public static class AppVersion
         Assembly
             .GetExecutingAssembly()
             .GetCustomAttribute<AssemblyCopyrightAttribute>()
+            // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Copyright is read from assembly metadata via reflection; keep the defensive null-conditional even though the BCL annotates it non-null
             ?.Copyright?.Trim() ?? string.Empty;
 
     /// <summary>
@@ -100,18 +101,14 @@ public static class AppVersion
         var aNumeric = long.TryParse(a, out var an);
         var bNumeric = long.TryParse(b, out var bn);
 
-        switch (aNumeric, bNumeric)
+        return (aNumeric, bNumeric) switch
         {
-            case (true, true):
-                return an.CompareTo(bn);
+            (true, true) => an.CompareTo(bn),
             // Numeric identifiers rank below alphanumeric (SemVer §11.4).
-            case (true, _):
-                return -1;
-            case (_, true):
-                return 1;
-            default:
-                return string.CompareOrdinal(a, b);
-        }
+            (true, _) => -1,
+            (_, true) => 1,
+            _ => string.CompareOrdinal(a, b)
+        };
     }
 
     private static (Version Core, string PreRelease) Split(string? raw)

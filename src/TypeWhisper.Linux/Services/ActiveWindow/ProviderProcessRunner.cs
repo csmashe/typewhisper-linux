@@ -86,13 +86,19 @@ internal static class ProviderProcessRunner
             {
                 stdout = await stdoutTask.ConfigureAwait(false);
             }
-            catch { }
+            catch
+            {
+                // Best-effort drain; the process already exited, so a read failure is non-fatal.
+            }
 
             try
             {
                 _ = await stderrTask.ConfigureAwait(false);
             }
-            catch { }
+            catch
+            {
+                // Best-effort drain; the process already exited, so a read failure is non-fatal.
+            }
 
             return (p.ExitCode, stdout);
         }

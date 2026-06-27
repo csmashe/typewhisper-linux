@@ -218,6 +218,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of a reader that failed to start; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and awaiting here would needlessly block the attach path.")]
     private void TryAttach_NoLock(string path)
     {
         if (_readers.ContainsKey(path))
@@ -289,7 +290,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 
                 Rescan();
             }
-        });
+        }, ct);
     }
 
     private void OnDeviceCreated(object? sender, FileSystemEventArgs e)
@@ -308,6 +309,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         });
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of a removed reader; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and must not block this FileSystemWatcher callback.")]
     private void OnDeviceDeleted(object? sender, FileSystemEventArgs e)
     {
         lock (_lock)
@@ -319,6 +321,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of stale readers pruned during rescan; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and awaiting here is unnecessary.")]
     private bool Rescan()
     {
         var added = false;
@@ -331,6 +334,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             }
 
             // Prune readers for paths that vanished — guards against FSW dropping Delete events under load.
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- loop mutates _readers and builds toDispose; a LINQ rewrite would obscure the side effects
             foreach (var existing in _readers.Keys.ToList())
             {
                 if (File.Exists(existing))
@@ -408,6 +412,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         _dispatcher.Handle(sharpHookKey.Value, mods, pressed);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of the failed reader; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and must not block this failure callback.")]
     private void OnReaderFailure(string path, Exception ex)
     {
         Trace.WriteLine($"[EvdevBackend] Reader {path} failed: {ex.Message}");

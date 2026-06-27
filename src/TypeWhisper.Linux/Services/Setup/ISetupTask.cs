@@ -89,6 +89,7 @@ public interface ISetupTask
     ///     Evaluates the task's current state. May read gsettings/dbus/config files
     ///     so it is async, but should stay quick — all tasks are evaluated together.
     /// </summary>
+    // ReSharper disable once UnusedParameter.Global -- CancellationToken is part of the async interface contract; callers pass one and implementations may honor it, so keep it for API consistency
     Task<SetupTaskState> EvaluateAsync(CancellationToken ct);
 
     /// <summary>

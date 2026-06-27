@@ -260,13 +260,8 @@ public sealed class TextInsertionService
 
     private async Task<bool> FocusTargetWindowAsync(string? targetWindowId)
     {
-        if (string.IsNullOrWhiteSpace(targetWindowId))
-        {
-            await _platform.DelayAsync(s_focusDelay);
-            return true;
-        }
-
-        if (_platform.GetActiveWindowId() == targetWindowId)
+        if (string.IsNullOrWhiteSpace(targetWindowId)
+            || _platform.GetActiveWindowId() == targetWindowId)
         {
             await _platform.DelayAsync(s_focusDelay);
             return true;
@@ -456,6 +451,7 @@ public sealed class TextInsertionService
     /// </summary>
     private static bool IsAsciiSafe(string text)
     {
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- explicit char scan avoids the LINQ enumerator allocation on the text-insertion path
         foreach (var c in text)
         {
             if (c is '\t' or '\n' or '\r')
@@ -577,7 +573,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     )
         : this(
             snapshot,
-            (file, args, env) => processRunner(file, args),
+            (file, args, _) => processRunner(file, args),
             // Tests inject the legacy single-return runner that already
             // records wtype's invocation but doesn't surface stderr.
             // Adapt it to the stderr-aware shape so the chain stays on a
@@ -868,6 +864,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
 
         var anyAttempted = false;
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- body awaits and mutates state; the explicit disabled-backend guard is clearer than a LINQ Where
         foreach (var backend in chain)
         {
             if (disabled.Contains(backend))
@@ -915,11 +912,6 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 {
                     chain.Add(InputBackend.Wtype);
                 }
-
-                if (snapshot.HasXdotool)
-                {
-                    chain.Add(InputBackend.Xdotool);
-                }
             }
             else
             {
@@ -932,11 +924,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 {
                     chain.Add(InputBackend.Ydotool);
                 }
+            }
 
-                if (snapshot.HasXdotool)
-                {
-                    chain.Add(InputBackend.Xdotool);
-                }
+            if (snapshot.HasXdotool)
+            {
+                chain.Add(InputBackend.Xdotool);
             }
         }
         else if (snapshot.HasXdotool)
@@ -1037,7 +1029,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             LastFailureReason = InsertionFailureReason.WtypeCompositorUnsupported;
         }
 
-        return exitCode == 0;
+        // Reached only on the compositor-rejection path, where exitCode is always non-zero.
+        return false;
     }
 
     private static bool IsWtypeCompositorRejection(string stderr)
@@ -1166,6 +1159,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private enum InputBackend
     {
+        // ReSharper disable once UnusedMember.Local -- zero-value sentinel so default(InputBackend) is not a real backend
         None,
         Xdotool,
         Wtype,

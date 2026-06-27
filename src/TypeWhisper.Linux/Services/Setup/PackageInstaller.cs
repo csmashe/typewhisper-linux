@@ -24,7 +24,7 @@ public sealed record PackageManager(string Id, string Binary, IReadOnlyList<stri
 public sealed class PackageInstaller
 {
     // Ordered by how we'd prefer to resolve ties when probing PATH.
-    private static readonly PackageManager[] Known =
+    private static readonly PackageManager[] s_known =
     [
         new("dnf", "dnf", ["install", "-y"]), new("apt", "apt-get", ["install", "-y"]),
         new("pacman", "pacman", ["-S", "--noconfirm"]),
@@ -45,10 +45,10 @@ public sealed class PackageInstaller
     private static PackageManager? Detect()
     {
         var hinted = ReadOsReleaseManagerHints()
-            .Select(id => Known.FirstOrDefault(m => m.Id == id))
+            .Select(id => s_known.FirstOrDefault(m => m.Id == id))
             .FirstOrDefault(match => match is not null && DesktopDetector.BinaryExists(match.Binary));
         // os-release didn't point at an installed manager — probe PATH.
-        return hinted ?? Known.FirstOrDefault(m => DesktopDetector.BinaryExists(m.Binary));
+        return hinted ?? s_known.FirstOrDefault(m => DesktopDetector.BinaryExists(m.Binary));
     }
 
     /// <summary>

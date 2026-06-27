@@ -29,7 +29,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
     public string ProviderDisplayName => "Linux system voice";
     public bool IsConfigured => _commands.SpeechFeedbackCommand is not null;
     public string? SelectedVoiceId => _settings.Current.SpokenFeedbackVoiceId;
-    public string? SettingsSummary => SelectedVoiceId ?? "System default voice";
+    public string SettingsSummary => SelectedVoiceId ?? "System default voice";
 
     public IReadOnlyList<PluginVoiceInfo> AvailableVoices => [];
 
@@ -145,20 +145,11 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
             return false;
         }
 
-        foreach (
-            var dir in path.Split(
+        return path
+            .Split(
                 Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-            )
-        )
-        {
-            if (File.Exists(Path.Join(dir, name)))
-            {
-                return true;
-            }
-        }
-
-        return false;
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(dir => File.Exists(Path.Join(dir, name)));
     }
 
     private static string Quote(string value)

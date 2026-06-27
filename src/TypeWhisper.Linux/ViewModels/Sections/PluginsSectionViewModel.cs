@@ -263,7 +263,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             {
                 var items = collection
                     .Items.Select(item => new PluginCollectionItem(
-                        item.Fields.ToDictionary(field => field.Key, field => (string?)field.Value)
+                        item.Fields.ToDictionary(field => field.Key, string? (field) => field.Value)
                     ))
                     .ToList();
 

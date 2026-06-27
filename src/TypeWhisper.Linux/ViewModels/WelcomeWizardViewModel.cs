@@ -28,6 +28,9 @@ namespace TypeWhisper.Linux.ViewModels;
 ///     5. First-dictation check.
 ///     6. Done — sets HasCompletedOnboarding.
 /// </summary>
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class WelcomeWizardViewModel : ObservableObject
 {
     private const string PasteSmokeExpectedText = "typewhisper paste test";
@@ -204,6 +207,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
             return false;
         }
 
+        // Remaining values (Pasted, Typed, NoText, …) are handled by the check below.
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
         switch (result)
         {
             case InsertionResult.MissingClipboardTool:
@@ -828,6 +833,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                     null,
                     CancellationToken.None
                 );
+                // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Text comes from an external ITranscriptionEnginePlugin; its non-null annotation may not hold, keep the defensive ?.
                 transcript = result.Text?.Trim() ?? "";
             }
 

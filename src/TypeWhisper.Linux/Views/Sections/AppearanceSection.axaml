@@ -221,7 +221,8 @@
                                  VerticalAlignment="Center"
                                  IsVisible="{Binding PreviewLeftIsIndicator}" />
 
-                        <StackPanel Orientation="Horizontal"
+                        <StackPanel Grid.Column="0"
+                                    Orientation="Horizontal"
                                     Spacing="3"
                                     Height="18"
                                     VerticalAlignment="Center"
@@ -238,7 +239,8 @@
                                     Background="#1593F5" VerticalAlignment="Bottom" />
                         </StackPanel>
 
-                        <TextBlock Text="{Binding PreviewLeftText}"
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding PreviewLeftText}"
                                    VerticalAlignment="Center"
                                    FontSize="12"
                                    FontWeight="SemiBold"

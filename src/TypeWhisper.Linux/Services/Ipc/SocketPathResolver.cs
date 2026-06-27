@@ -12,7 +12,7 @@ namespace TypeWhisper.Linux.Services.Ipc;
 ///     already 0700 via systemd-logind). Falls back to <c>/tmp/typewhisper-$UID/</c>
 ///     with an explicit chmod 0700 when <c>XDG_RUNTIME_DIR</c> is unset.
 /// </remarks>
-internal static class SocketPathResolver
+internal static partial class SocketPathResolver
 {
     private const string SocketFileName = "control.sock";
 
@@ -214,14 +214,17 @@ internal static class SocketPathResolver
         }
     }
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern uint geteuid();
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial uint geteuid();
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int chmod(string path, uint mode);
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int chmod(string path, uint mode);
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int statx(
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int statx(
         int dirfd,
         string pathname,
         int flags,

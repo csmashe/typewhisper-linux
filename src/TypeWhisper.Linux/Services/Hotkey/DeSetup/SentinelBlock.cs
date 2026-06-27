@@ -81,7 +81,7 @@ public static class SentinelBlock
         block.AddRange(managedLines);
         block.Add(CloseSentinel);
 
-        if (scan is { OpenLine: int open, CloseLine: int close })
+        if (scan is { OpenLine: { } open, CloseLine: { } close })
         {
             // Replace [open..close] inclusive, preserving the rest of the file's ordering.
             var prefix = lines.Take(open).ToList();
@@ -143,7 +143,7 @@ public static class SentinelBlock
     public static List<string>? ExtractBlockLines(string contents)
     {
         var scan = Scan(contents);
-        if (scan.Mismatched || scan.OpenLine is not int open || scan.CloseLine is not int close)
+        if (scan.Mismatched || scan.OpenLine is not { } open || scan.CloseLine is not { } close)
         {
             return null;
         }

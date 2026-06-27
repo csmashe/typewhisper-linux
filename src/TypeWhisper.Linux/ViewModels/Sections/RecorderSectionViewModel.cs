@@ -149,6 +149,7 @@ public partial class RecorderSectionViewModel : ObservableObject
                 // dictation isn't blocked by the file I/O that follows.
                 // The using-statement above will call DisposeAsync again on
                 // exit, but the lease is idempotent so the double-dispose is safe.
+                // ReSharper disable once DisposeOnUsingVariable -- intentional early release of the model lock before the file I/O below.
                 await lease.DisposeAsync();
             }
 

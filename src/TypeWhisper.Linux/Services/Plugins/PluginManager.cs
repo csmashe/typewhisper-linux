@@ -16,7 +16,7 @@ public sealed class PluginManager : IDisposable
 {
     // Fresh-install defaults: offline transcription engines only, so dictation works
     // out of the box without a key. Cloud providers default off until opted in.
-    private static readonly HashSet<string> DefaultEnabledPluginIds = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> s_defaultEnabledPluginIds = new(StringComparer.Ordinal)
     {
         "com.typewhisper.whisper-cpp", // offline transcription (recommended default)
         "com.typewhisper.sherpa-onnx" // offline transcription
@@ -214,7 +214,7 @@ public sealed class PluginManager : IDisposable
         {
             return _allPlugins
                 .Where(p => _activatedPlugins.Contains(p.Manifest.Id) && p.Instance is T)
-                .Select(p => (T)p.Instance!)
+                .Select(p => (T)p.Instance)
                 .ToList();
         }
     }
@@ -250,7 +250,7 @@ public sealed class PluginManager : IDisposable
             // manifest is unreliable across plugins, so we anchor on an explicit allowlist.
             var isEnabled = enabledState.TryGetValue(plugin.Manifest.Id, out var state)
                 ? state
-                : DefaultEnabledPluginIds.Contains(plugin.Manifest.Id) || plugin.Manifest.IsLocal;
+                : s_defaultEnabledPluginIds.Contains(plugin.Manifest.Id) || plugin.Manifest.IsLocal;
 
             if (isEnabled)
             {
@@ -481,6 +481,7 @@ public sealed class PluginManager : IDisposable
                 providers = _allPlugins
                     .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
                     .Select(p => p.Instance)
+                    // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
                     .OfType<IModelCatalogProvider>()
                     .ToList();
             }
@@ -569,20 +570,16 @@ public sealed class PluginManager : IDisposable
     // under Transcription, LLM providers under Prompt) before the generic Plugin bucket.
     private static string ResolveErrorCategory(LoadedPlugin plugin)
     {
-        switch (plugin.Manifest.Category?.Trim().ToLowerInvariant())
+        return plugin.Manifest.Category?.Trim().ToLowerInvariant() switch
         {
-            case "transcription":
-                return ErrorCategory.Transcription;
-            case "llm":
-            case "prompt":
-                return ErrorCategory.Prompt;
-        }
-
-        return plugin.Instance switch
-        {
-            ITranscriptionEnginePlugin => ErrorCategory.Transcription,
-            ILlmProviderPlugin => ErrorCategory.Prompt,
-            _ => ErrorCategory.Plugin
+            "transcription" => ErrorCategory.Transcription,
+            "llm" or "prompt" => ErrorCategory.Prompt,
+            _ => plugin.Instance switch
+            {
+                ITranscriptionEnginePlugin => ErrorCategory.Transcription,
+                ILlmProviderPlugin => ErrorCategory.Prompt,
+                _ => ErrorCategory.Plugin
+            }
         };
     }
 
@@ -628,6 +625,7 @@ public sealed class PluginManager : IDisposable
                 .OfType<ILlmProviderPlugin>()
                 .Concat(
                     activePlugins
+                        // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
                         .OfType<IAdditionalLlmProvidersProvider>()
                         .SelectMany(SafeAdditionalLlmProviders)
                 )
@@ -638,6 +636,7 @@ public sealed class PluginManager : IDisposable
                 .OfType<ITranscriptionEnginePlugin>()
                 .Concat(
                     activePlugins
+                        // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
                         .OfType<IAdditionalTranscriptionEnginesProvider>()
                         .SelectMany(SafeAdditionalTranscriptionEngines)
                 )
@@ -669,6 +668,8 @@ public sealed class PluginManager : IDisposable
             // Drop null entries: the downstream GroupBy key selector calls an extension
             // method (GetLlmSelectionId) that dereferences the instance, so a null from a
             // misbehaving plugin would throw outside this try/catch and abort the rebuild.
+            // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- AdditionalLlmProviders comes from a third-party plugin whose nullable annotation may lie
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- defensive: a misbehaving plugin may yield null elements despite the non-null annotation
             return provider.AdditionalLlmProviders?.Where(p => p is not null).ToList() ?? [];
         }
         catch (Exception ex)
@@ -689,6 +690,8 @@ public sealed class PluginManager : IDisposable
             // Drop null entries: the downstream GroupBy key selector calls an extension
             // method (GetTranscriptionSelectionId) that dereferences the instance, so a
             // null from a misbehaving plugin would throw outside this try/catch.
+            // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- AdditionalTranscriptionEngines comes from a third-party plugin whose nullable annotation may lie
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- defensive: a misbehaving plugin may yield null elements despite the non-null annotation
             return provider.AdditionalTranscriptionEngines?.Where(e => e is not null).ToList() ?? [];
         }
         catch (Exception ex)

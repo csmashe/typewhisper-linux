@@ -22,7 +22,7 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
     // fork "Window Calls Extended" (window-calls-extended@hseliger.eu) export a
     // compatible List method returning the same window JSON — just at different
     // object paths/interfaces. Try each so whichever the user installed works.
-    private static readonly (string Path, string Interface)[] Endpoints =
+    private static readonly (string Path, string Interface)[] s_endpoints =
     [
         ("/org/gnome/Shell/Extensions/Windows", "org.gnome.Shell.Extensions.Windows"),
         ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt")
@@ -52,7 +52,7 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
         try
         {
             string? listOutput = null;
-            foreach (var (path, iface) in Endpoints)
+            foreach (var (path, iface) in s_endpoints)
             {
                 var (exit, output) = await ProviderProcessRunner
                     .RunAsync(

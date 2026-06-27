@@ -117,28 +117,20 @@ public sealed partial class AtSpiUrlExtractor
 
         if (!s_isBusctlAvailable || !s_isGdbusAvailable)
         {
-            LogOnce(
-                processHint,
-                focusedTitle,
-                "AT-SPI URL walk skipped: busctl/gdbus not on PATH."
-            );
+            LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
             return null;
         }
 
         var address = GetAtSpiBusAddress();
         if (string.IsNullOrWhiteSpace(address))
         {
-            LogOnce(
-                processHint,
-                focusedTitle,
-                "AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus."
-            );
+            LogOnce("AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus.");
             return null;
         }
 
         using var cts = new CancellationTokenSource(s_walkBudget);
         var stats = new WalkStats();
-        var url = WalkForUrl(address, processHint, cts.Token, stats);
+        var url = WalkForUrl(address, processHint, stats, cts.Token);
 
         lock (_cacheLock)
         {
@@ -154,14 +146,12 @@ public sealed partial class AtSpiUrlExtractor
         }
 
         LogOnce(
-            processHint,
-            focusedTitle,
             BuildDiagnosticLine(processHint, focusedTitle, stats, url, cts.IsCancellationRequested)
         );
         return url;
     }
 
-    private void LogOnce(string processHint, string? title, string message)
+    private void LogOnce(string message)
     {
         if (!s_diagnosticLoggingEnabled)
         {
@@ -247,8 +237,8 @@ public sealed partial class AtSpiUrlExtractor
     private static string? WalkForUrl(
         string address,
         string processHint,
-        CancellationToken ct,
-        WalkStats stats
+        WalkStats stats,
+        CancellationToken ct
     )
     {
         foreach (
@@ -284,7 +274,7 @@ public sealed partial class AtSpiUrlExtractor
 
             stats.WindowFound = true;
 
-            var url = FindLikelyBrowserUrlInSubtree(address, window.Value, ct, stats);
+            var url = FindLikelyBrowserUrlInSubtree(address, window.Value, stats, ct);
             if (url is not null)
             {
                 return url;
@@ -399,8 +389,8 @@ public sealed partial class AtSpiUrlExtractor
     private static string? FindLikelyBrowserUrlInSubtree(
         string address,
         AccessibleRef root,
-        CancellationToken ct,
-        WalkStats stats
+        WalkStats stats,
+        CancellationToken ct
     )
     {
         var queue = new Queue<(AccessibleRef Node, int Depth)>();
@@ -798,8 +788,8 @@ public sealed partial class AtSpiUrlExtractor
 
     private static List<string> ParseQuotedStrings(string value)
     {
-        return Regex
-            .Matches(value, "\"((?:[^\"\\\\]|\\\\.)*)\"")
+        return QuotedStringRegex()
+            .Matches(value)
             .Select(match => Regex.Unescape(match.Groups[1].Value))
             .ToList();
     }
@@ -833,6 +823,10 @@ public sealed partial class AtSpiUrlExtractor
     // Runs of digits (used to pull integer tokens out of gdbus/atspi output).
     [GeneratedRegex(@"\b\d+\b")]
     private static partial Regex DigitRunRegex();
+
+    // Double-quoted string with backslash escapes; group 1 is the (still-escaped) body.
+    [GeneratedRegex("\"((?:[^\"\\\\]|\\\\.)*)\"")]
+    private static partial Regex QuotedStringRegex();
 
     private sealed class WalkStats
     {

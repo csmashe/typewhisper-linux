@@ -145,7 +145,6 @@ public sealed class HistorySectionViewModelTests : IDisposable
             history,
             dictionary,
             settings ?? CreateSettingsService(),
-            new CorrectionSuggestionService(),
             new SessionAudioFileService(),
             // AudioPlaybackService opens audio hardware in its constructor — not
             // available in CI. GetUninitializedObject bypasses the constructor so

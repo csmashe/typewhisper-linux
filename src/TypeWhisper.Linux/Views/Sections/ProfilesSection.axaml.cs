@@ -14,7 +14,7 @@ public partial class ProfilesSection : UserControl
 
     // Re-poll providers for current models whenever the per-profile model
     // dropdown opens, so newly added models appear without a manual "Validate".
-    private void OnModelDropDownOpened(object? sender, System.EventArgs e)
+    private void OnModelDropDownOpened(object? sender, EventArgs e)
     {
         if (DataContext is ProfilesSectionViewModel viewModel)
         {
@@ -54,6 +54,7 @@ public partial class ProfilesSection : UserControl
         e.Handled = true;
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnDeleteProfile(object? sender, RoutedEventArgs e)
     {
         if (

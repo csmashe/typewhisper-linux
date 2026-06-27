@@ -414,7 +414,8 @@ public class App : Application
     {
         try
         {
-            var sessionAudio = services.GetService<SessionAudioFileService>();
+            // Resolve to ensure the service is constructed before clearing its captures.
+            _ = services.GetService<SessionAudioFileService>();
             SessionAudioFileService.DeleteSessionCaptures();
         }
         catch (Exception ex)
@@ -529,14 +530,14 @@ public class App : Application
         await history.EnsureLoadedAsync();
         BootTrace.Stage("history.EnsureLoadedAsync");
 
-        var sessionAudio = services.GetRequiredService<SessionAudioFileService>();
+        _ = services.GetRequiredService<SessionAudioFileService>();
         SessionAudioFileService.DeleteSessionCaptures();
 
         var audio = services.GetRequiredService<AudioRecordingService>();
         ApplyConfiguredMicrophone(audio, settings);
         BootTrace.Stage("audio configured");
 
-        var deployer = services.GetRequiredService<BundledPluginDeployer>();
+        _ = services.GetRequiredService<BundledPluginDeployer>();
         BundledPluginDeployer.DeployIfMissing();
         BootTrace.Stage("BundledPluginDeployer.DeployIfMissing");
 

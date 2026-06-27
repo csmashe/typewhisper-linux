@@ -189,7 +189,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             switch (c)
             {
                 case '\\':
-                    sb.Append("\\\\");
+                    sb.Append(@"\\");
                     break;
                 case '\n':
                     sb.Append("\\n");

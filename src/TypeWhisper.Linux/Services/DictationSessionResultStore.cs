@@ -55,7 +55,7 @@ public sealed class DictationSessionResultStore : IDisposable
             return true;
         }
 
-        result = default!;
+        result = null!;
         return false;
     }
 

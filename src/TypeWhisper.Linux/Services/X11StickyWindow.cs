@@ -12,7 +12,7 @@ namespace TypeWhisper.Linux.Services;
 ///     follows the user to another workspace. Best-effort: no-ops when there is no X
 ///     display (pure Wayland without XWayland) and swallows all failures.
 /// </summary>
-internal static class X11StickyWindow
+internal static partial class X11StickyWindow
 {
     private const string Lib = "libX11.so.6";
     private const int ClientMessage = 33;
@@ -95,14 +95,14 @@ internal static class X11StickyWindow
             Marshal.WriteInt64(ev, OffData + 24, SourceApplication);
             Marshal.WriteInt64(ev, OffData + 32, 0);
 
-            XSendEvent(
+            _ = XSendEvent(
                 display,
                 root,
                 false,
                 (nint)(SubstructureNotifyMask | SubstructureRedirectMask),
                 ev);
 
-            XFlush(display);
+            _ = XFlush(display);
         }
         finally
         {
@@ -111,7 +111,7 @@ internal static class X11StickyWindow
                 Marshal.FreeHGlobal(ev);
             }
 
-            XCloseDisplay(display);
+            _ = XCloseDisplay(display);
         }
     }
 
@@ -123,28 +123,29 @@ internal static class X11StickyWindow
         }
     }
 
-    [DllImport(Lib)]
-    private static extern IntPtr XOpenDisplay(string? name);
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial IntPtr XOpenDisplay(string? name);
 
-    [DllImport(Lib)]
-    private static extern int XCloseDisplay(IntPtr display);
+    [LibraryImport(Lib)]
+    private static partial int XCloseDisplay(IntPtr display);
 
-    [DllImport(Lib)]
-    private static extern int XDefaultScreen(IntPtr display);
+    [LibraryImport(Lib)]
+    private static partial int XDefaultScreen(IntPtr display);
 
-    [DllImport(Lib)]
-    private static extern nuint XRootWindow(IntPtr display, int screen);
+    [LibraryImport(Lib)]
+    private static partial nuint XRootWindow(IntPtr display, int screen);
 
-    [DllImport(Lib, CharSet = CharSet.Ansi)]
-    private static extern nuint XInternAtom(
+    // Linux marshals "ANSI" strings as UTF-8, so StringMarshalling.Utf8 matches the prior CharSet.Ansi behavior for ASCII atom names.
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nuint XInternAtom(
         IntPtr display,
         string name,
         [MarshalAs(UnmanagedType.Bool)]
         bool onlyIfExists
     );
 
-    [DllImport(Lib)]
-    private static extern int XSendEvent(
+    [LibraryImport(Lib)]
+    private static partial int XSendEvent(
         IntPtr display,
         nuint window,
         [MarshalAs(UnmanagedType.Bool)]
@@ -153,6 +154,6 @@ internal static class X11StickyWindow
         IntPtr eventSend
     );
 
-    [DllImport(Lib)]
-    private static extern int XFlush(IntPtr display);
+    [LibraryImport(Lib)]
+    private static partial int XFlush(IntPtr display);
 }

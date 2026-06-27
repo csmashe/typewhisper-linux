@@ -4,6 +4,9 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.ViewModels;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class RecentTranscriptionsPaletteViewModel : ObservableObject
 {
     private readonly IReadOnlyList<RecentTranscriptionPaletteItem> _allItems;

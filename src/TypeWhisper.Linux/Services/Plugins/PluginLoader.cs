@@ -217,6 +217,7 @@ public sealed class PluginLoader
 
         // Plugins that need a stable writable directory (models, caches) declare
         // IPluginDataLocationAware and receive the path before ActivateAsync.
+        // ReSharper disable once SuspiciousTypeConversion.Global -- the plugin instance is loaded from an external assembly (AssemblyLoadContext) that implements this capability interface; the cross-assembly implementer is not visible in-solution.
         if (instance is IPluginDataLocationAware dataLocationAware)
         {
             dataLocationAware.SetDataDirectory(
@@ -229,6 +230,7 @@ public sealed class PluginLoader
         // activation. The settings page queries metadata (labels, validation) for
         // every discovered plugin, including disabled ones that are never
         // activated, so localization must not depend on _host being set.
+        // ReSharper disable once SuspiciousTypeConversion.Global -- the plugin instance is loaded from an external assembly (AssemblyLoadContext) that implements this capability interface; the cross-assembly implementer is not visible in-solution.
         if (instance is IPluginLocalizationAware localizationAware)
         {
             localizationAware.SetLocalization(new PluginLocalization(pluginDir));

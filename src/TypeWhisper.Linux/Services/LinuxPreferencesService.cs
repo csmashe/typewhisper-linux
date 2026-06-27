@@ -104,5 +104,6 @@ public sealed class LinuxPreferencesService
         }
     }
 
+    // ReSharper disable once EventNeverSubscribedTo.Global -- public API; raised on preference changes for external/future subscribers.
     public event Action<LinuxPreferences>? Changed;
 }

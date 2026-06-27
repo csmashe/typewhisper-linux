@@ -94,7 +94,10 @@ public sealed class AudioRecordingService : IDisposable
             {
                 PortAudio.Terminate();
             }
-            catch { }
+            catch
+            {
+                // PortAudio teardown is best-effort; ignore if it was never fully initialized.
+            }
         }
     }
 
@@ -348,6 +351,8 @@ public sealed class AudioRecordingService : IDisposable
         }
 
         double sumSquares = 0;
+        // ReSharper disable once LoopCanBeConvertedToQuery -- hot RMS path; the explicit loop avoids LINQ iterator/delegate overhead per audio frame.
+        // ReSharper disable once ForCanBeConvertedToForeach -- hot RMS path; keep the explicit indexed loop deliberately, consistent with the query suppression above.
         for (var i = 0; i < samples.Length; i++)
         {
             sumSquares += samples[i] * samples[i];

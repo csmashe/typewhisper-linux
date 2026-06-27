@@ -81,10 +81,7 @@ public sealed class TrayIconService : IDisposable
     // ReSharper disable once UnusedMember.Global  public API surface (dynamic tray tooltip update); not currently called in-tree
     public void UpdateTooltip(string text)
     {
-        if (_trayIcon is not null)
-        {
-            _trayIcon.ToolTipText = text;
-        }
+        _trayIcon?.ToolTipText = text;
     }
 
     /// <summary>

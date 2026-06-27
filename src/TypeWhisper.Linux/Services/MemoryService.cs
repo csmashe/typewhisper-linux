@@ -57,6 +57,7 @@ public sealed class MemoryService
         }
 
         var llm = _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
+        // ReSharper disable once UseNullPropagation -- early-return null guard protecting later non-conditional dereferences of llm; there is no member access to fold into a null-conditional, so a rewrite would change control flow.
         if (llm is null)
         {
             return;

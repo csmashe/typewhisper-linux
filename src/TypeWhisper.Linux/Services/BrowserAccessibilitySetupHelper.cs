@@ -207,6 +207,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
     // kept instance: invoked on the injected _browserSetup seam by callers (static would orphan the DI field)
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global
+    // ReSharper disable once UnusedParameter.Global -- part of the setup API contract (cancellation support and signature symmetry with RemoveAsync)
     public Task<SetupResult> SetUpAsync(CancellationToken ct)
     {
         try
@@ -346,6 +347,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
         return actions;
     }
 
+    // ReSharper disable once UnusedParameter.Global -- part of the setup API contract (cancellation support and signature symmetry with SetUpAsync)
     public static Task<SetupResult> RemoveAsync(CancellationToken ct)
     {
         try
@@ -657,10 +659,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 // untouched, including a manually-added force_disabled that
                 // happens to share the value — we only remove the pair we
                 // wrote ourselves, identified by the comment marker.
-                const string pattern =
-                    @"^//\s*Set by TypeWhisper[^\r\n]*\r?\n"
-                    + @"user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;\s*\r?\n?";
-                var stripped = Regex.Replace(content, pattern, "", RegexOptions.Multiline);
+                var stripped = OwnedAccessibilityEntryRegex().Replace(content, "");
 
                 if (stripped == content)
                 {
@@ -849,16 +848,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private static string? FindSystemLauncher(string name)
     {
-        foreach (var dir in s_systemLauncherDirectories)
-        {
-            var candidate = Path.Join(dir, name);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
+        return s_systemLauncherDirectories
+            .Select(dir => Path.Join(dir, name))
+            .FirstOrDefault(File.Exists);
     }
 
     private static bool HasOwnedLauncher(IReadOnlyList<string> launcherNames)
@@ -869,16 +861,11 @@ public sealed partial class BrowserAccessibilitySetupHelper
             return false;
         }
 
-        foreach (var name in launcherNames)
+        return launcherNames.Any(name =>
         {
             var path = Path.Join(dir, name);
-            if (File.Exists(path) && FileStartsWithOwnershipMarker(path))
-            {
-                return true;
-            }
-        }
-
-        return false;
+            return File.Exists(path) && FileStartsWithOwnershipMarker(path);
+        });
     }
 
     /// <summary>
@@ -890,6 +877,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
     private static bool AllInstalledLaunchersOwned(IReadOnlyList<string> launcherNames)
     {
         var userDir = UserApplicationsDir();
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the continue-skip over not-installed launchers mirrors the documented "every installed launcher is owned" semantics more clearly than a chained Where/All.
         foreach (var name in launcherNames)
         {
             var isInstalled =
@@ -1088,12 +1076,17 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     // accessibility.force_disabled = -1 pref line, matched per-line across full user.js content
     // (Multiline so the line is recognized even when our attribution comment precedes it).
-    [GeneratedRegex(@"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;", RegexOptions.Multiline)]
+    [GeneratedRegex("""^\s*user_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
     private static partial Regex ForceDisabledNegOneMultilineRegex();
 
     // Any accessibility.force_disabled line (any value) so we don't leave contradictory prefs.
-    [GeneratedRegex(@"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-?\d+\s*\)\s*;\s*\r?\n?", RegexOptions.Multiline)]
+    [GeneratedRegex("""^\s*user_pref\(\s*"accessibility\.force_disabled"\s*,\s*-?\d+\s*\)\s*;\s*\r?\n?""", RegexOptions.Multiline)]
     private static partial Regex ForceDisabledAnyValueLineRegex();
+
+    // Our attribution comment plus the following force_disabled=-1 pref line we wrote
+    // ourselves, matched as a single pair across full user.js content (Multiline).
+    [GeneratedRegex("""^//\s*Set by TypeWhisper[^\r\n]*\r?\nuser_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)\s*;\s*\r?\n?""", RegexOptions.Multiline)]
+    private static partial Regex OwnedAccessibilityEntryRegex();
 
     public sealed record SetupResult(bool Success, string Message, string? Detail = null);
 }

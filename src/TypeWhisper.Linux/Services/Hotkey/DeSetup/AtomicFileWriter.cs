@@ -46,7 +46,10 @@ internal static class AtomicFileWriter
                     File.Delete(tmp);
                 }
             }
-            catch { }
+            catch
+            {
+                // Cleanup of the temp file is best-effort; the original failure is rethrown below.
+            }
 
             throw;
         }

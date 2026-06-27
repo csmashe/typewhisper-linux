@@ -32,7 +32,9 @@ internal static class ControlSocketClient
                 AddressFamily.Unix,
                 SocketType.Stream,
                 ProtocolType.Unspecified
-            ) { SendTimeout = TimeoutMillis, ReceiveTimeout = TimeoutMillis };
+            );
+            sock.SendTimeout = TimeoutMillis;
+            sock.ReceiveTimeout = TimeoutMillis;
             sock.Connect(new UnixDomainSocketEndPoint(path));
             return true;
         }
@@ -77,10 +79,12 @@ internal static class ControlSocketClient
                 AddressFamily.Unix,
                 SocketType.Stream,
                 ProtocolType.Unspecified
-            ) { SendTimeout = TimeoutMillis, ReceiveTimeout = TimeoutMillis };
+            );
+            sock.SendTimeout = TimeoutMillis;
+            sock.ReceiveTimeout = TimeoutMillis;
             sock.Connect(new UnixDomainSocketEndPoint(path));
 
-            var msg = Encoding.UTF8.GetBytes("toggle\n");
+            var msg = "toggle\n"u8.ToArray();
             var sent = 0;
             while (sent < msg.Length)
             {
@@ -184,7 +188,9 @@ internal static class ControlSocketClient
                 AddressFamily.Unix,
                 SocketType.Stream,
                 ProtocolType.Unspecified
-            ) { SendTimeout = TimeoutMillis, ReceiveTimeout = TimeoutMillis };
+            );
+            sock.SendTimeout = TimeoutMillis;
+            sock.ReceiveTimeout = TimeoutMillis;
             sock.Connect(new UnixDomainSocketEndPoint(path));
 
             var json = JsonSerializer.Serialize(request, JsonControlProtocol.JsonOptions);

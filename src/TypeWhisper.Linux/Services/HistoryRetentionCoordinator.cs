@@ -89,6 +89,8 @@ public sealed class HistoryRetentionCoordinator : IDisposable
 
         try
         {
+            // Forever retains everything; UntilAppCloses outside startup/shutdown is a no-op.
+            // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
             switch (settings.HistoryRetentionMode)
             {
                 case HistoryRetentionMode.Duration:

@@ -11,6 +11,9 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
@@ -72,9 +75,11 @@ public partial class AboutSectionViewModel : ObservableObject
 
     // Prefers AssemblyInformationalVersion (keeps pre-release suffix, strips +hash).
     // Shared with the update checker so both sides agree on "current".
+    // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
     public string Version { get; } = AppVersion.Display;
 
     // Embedded at build time (Directory.Build.props); shows the upstream/Excel-on-the-Web split in-app.
+    // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
     public string Copyright { get; } = AppVersion.Copyright;
 
     // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section system-info display); not currently bound in-tree
@@ -89,9 +94,11 @@ public partial class AboutSectionViewModel : ObservableObject
         RuntimeInformation.OSArchitecture.ToString();
 
     // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section project URL display); not currently bound in-tree
+    // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
     public string ProjectUrl { get; } = "https://github.com/csmashe/typewhisper-linux";
 
     // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section upstream URL display); not currently bound in-tree
+    // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
     public string UpstreamUrl { get; } = "https://github.com/TypeWhisper/typewhisper-win";
 
     public bool CanCheckForUpdates => !IsCheckingForUpdates;

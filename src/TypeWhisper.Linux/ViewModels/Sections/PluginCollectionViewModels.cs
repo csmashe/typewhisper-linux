@@ -195,7 +195,7 @@ public class PluginCollectionItemRow : ObservableObject
 
     public ObservableCollection<PluginSettingFieldRow> Fields { get; } = [];
 
-    public PluginCollectionRow? OwnerCollection { get; set; }
+    public PluginCollectionRow? OwnerCollection { get; init; }
 
     public string HiddenId
     {
@@ -204,10 +204,7 @@ public class PluginCollectionItemRow : ObservableObject
         set
         {
             var idField = Fields.FirstOrDefault(f => f.Key == "__id");
-            if (idField is not null)
-            {
-                idField.Value = value;
-            }
+            idField?.Value = value;
         }
     }
 

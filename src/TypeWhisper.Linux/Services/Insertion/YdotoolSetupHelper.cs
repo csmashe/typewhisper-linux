@@ -12,7 +12,7 @@ namespace TypeWhisper.Linux.Services.Insertion;
 ///     without it ydotoold starts but every keystroke fails with EACCES.
 ///     <c>pkexec</c> is the consent surface — we never call <c>sudo</c> directly.
 /// </summary>
-public sealed class YdotoolSetupHelper
+public sealed partial class YdotoolSetupHelper
 {
     // System config dir holding the udev rule + modules-load entry. Always /etc
     // in production. Tests redirect it via SysConfDirOverride so SetUpAsync /
@@ -479,11 +479,13 @@ public sealed class YdotoolSetupHelper
         }
     }
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int access(string pathname, int mode);
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int access(string pathname, int mode);
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern uint geteuid();
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial uint geteuid();
 
     /// <summary>
     ///     True only when this process can already read+write <c>/dev/uinput</c>

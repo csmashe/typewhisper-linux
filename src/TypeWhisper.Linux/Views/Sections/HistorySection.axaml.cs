@@ -27,7 +27,7 @@ public partial class HistorySection : UserControl
     // leave no scrollbar and fire no further ScrollChanged to resume loading).
     private void LoadMoreIfNearBottom()
     {
-        if (DataContext is not HistorySectionViewModel viewModel || !viewModel.HasMore)
+        if (DataContext is not HistorySectionViewModel { HasMore: true } viewModel)
         {
             return;
         }
@@ -49,6 +49,7 @@ public partial class HistorySection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnCopyRecord(object? sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: string text } || string.IsNullOrWhiteSpace(text))
@@ -63,6 +64,7 @@ public partial class HistorySection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnExport(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not HistorySectionViewModel viewModel)
@@ -110,6 +112,7 @@ public partial class HistorySection : UserControl
         await File.WriteAllTextAsync(path, viewModel.BuildExportContent(extension));
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnClearAll(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not HistorySectionViewModel viewModel)
@@ -130,6 +133,7 @@ public partial class HistorySection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnDeleteRecord(object? sender, RoutedEventArgs e)
     {
         if (

@@ -13,6 +13,7 @@ public partial class AboutSection : UserControl
         InitializeComponent();
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnExportDiagnostics(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not AboutSectionViewModel viewModel)
@@ -43,6 +44,7 @@ public partial class AboutSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnBackupSettings(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not AboutSectionViewModel viewModel)
@@ -87,6 +89,7 @@ public partial class AboutSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnRestoreSettings(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not AboutSectionViewModel viewModel)

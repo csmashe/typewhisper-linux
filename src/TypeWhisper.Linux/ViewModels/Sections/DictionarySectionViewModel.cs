@@ -8,6 +8,9 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class DictionarySectionViewModel : ObservableObject
 {
     private readonly IDictionaryService _dict;
@@ -201,15 +204,14 @@ public partial class DictionarySectionViewModel : ObservableObject
     [RelayCommand]
     private void SetTab(object? tab)
     {
-        switch (tab)
+        SelectedTab = tab switch
         {
-            case int intValue:
-                SelectedTab = intValue;
-                break;
-            case string stringValue when int.TryParse(stringValue, out var parsed):
-                SelectedTab = parsed;
-                break;
-        }
+            int intValue => intValue,
+            string stringValue when int.TryParse(stringValue, out var parsed) => parsed,
+            // Leave the current tab unchanged for any other value; the
+            // [ObservableProperty] setter's equality guard makes this a no-op.
+            _ => SelectedTab
+        };
     }
 
     [RelayCommand]

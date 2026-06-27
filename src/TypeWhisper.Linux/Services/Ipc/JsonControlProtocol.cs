@@ -84,12 +84,15 @@ internal static class JsonControlProtocol
     public sealed class Request
     {
         [JsonPropertyName("v")]
-        public int Version { get; set; }
+        public int Version { get; init; }
 
         [JsonPropertyName("cmd")]
-        public string? Command { get; set; }
+        public string? Command { get; init; }
     }
 
+    // Serialized to JSON via JsonOptions (reflection); the get accessors are read by the
+    // serializer, which ReSharper cannot see.
+    // ReSharper disable UnusedAutoPropertyAccessor.Local
     /// <summary>
     ///     Outbound success response. <see cref="Prev" /> is the state before the
     ///     verb executed; <see cref="State" /> is the state after.
@@ -111,6 +114,7 @@ internal static class JsonControlProtocol
         [JsonPropertyName("error")]
         public string? Error { get; set; }
     }
+    // ReSharper restore UnusedAutoPropertyAccessor.Local
 
     /// <summary>
     ///     Outbound <c>status</c> response. Fields that deviate from snake_case

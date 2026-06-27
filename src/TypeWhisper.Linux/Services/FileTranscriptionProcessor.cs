@@ -196,19 +196,16 @@ public sealed class FileTranscriptionProcessor(
                 candidate.TranscriptionModels.Any(model => model.Id == options.ModelId)
             )
             .ToList();
-        switch (matches.Count)
+        return matches.Count switch
         {
-            case 0:
-                throw new InvalidOperationException(
-                    $"Unknown transcription model: {options.ModelId}"
-                );
-            case > 1:
-                throw new InvalidOperationException(
-                    $"Ambiguous transcription model '{options.ModelId}': provided by multiple engines. "
-                        + "Specify the engine explicitly or use the full plugin-qualified model id."
-                );
-            default:
-                return ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId);
-        }
+            0 => throw new InvalidOperationException(
+                $"Unknown transcription model: {options.ModelId}"
+            ),
+            > 1 => throw new InvalidOperationException(
+                $"Ambiguous transcription model '{options.ModelId}': provided by multiple engines. "
+                    + "Specify the engine explicitly or use the full plugin-qualified model id."
+            ),
+            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId)
+        };
     }
 }

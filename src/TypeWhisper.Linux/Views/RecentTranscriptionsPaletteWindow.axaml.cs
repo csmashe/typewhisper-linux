@@ -58,6 +58,8 @@ public partial class RecentTranscriptionsPaletteWindow : Window
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        // Other keys fall through to the SearchBox for normal text input.
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
         switch (e.Key)
         {
             case Key.Down:

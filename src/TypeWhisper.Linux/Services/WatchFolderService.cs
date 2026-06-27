@@ -164,6 +164,7 @@ public sealed class WatchFolderService : IDisposable
     }
 
     public event EventHandler? StateChanged;
+    // ReSharper disable once EventNeverSubscribedTo.Global -- public API; raised for each processed file for external/future subscribers.
     public event EventHandler<WatchFolderHistoryItem>? FileProcessed;
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)

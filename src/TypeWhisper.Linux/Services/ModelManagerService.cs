@@ -561,6 +561,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 var downloadInProgress = true;
                 var progress = new Progress<double>(p =>
                 {
+                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: downloadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
                     if (!Volatile.Read(ref downloadInProgress))
                         return;
                     SetStatus(modelId, ModelStatus.DownloadingModel(p));
@@ -687,6 +688,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 var loadInProgress = true;
                 var loadProgress = new Progress<double>(p =>
                 {
+                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: loadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
                     if (!Volatile.Read(ref loadInProgress))
                         return;
                     SetStatus(

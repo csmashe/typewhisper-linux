@@ -14,7 +14,7 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed partial class RecordingNotificationService : IDisposable
 {
-    private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan s_callTimeout = TimeSpan.FromSeconds(3);
 
     private readonly DictationOrchestrator _dictation;
     private readonly bool _enabled;
@@ -130,7 +130,7 @@ public sealed partial class RecordingNotificationService : IDisposable
                         "{}", // hints
                         "0" // expire_timeout 0 → stay up until we close it
                     ],
-                    timeout: CallTimeout
+                    timeout: s_callTimeout
                 )
                 .ConfigureAwait(false);
 
@@ -203,7 +203,7 @@ public sealed partial class RecordingNotificationService : IDisposable
                         "/org/freedesktop/Notifications", "--method",
                         "org.freedesktop.Notifications.CloseNotification", id.ToString()
                     ],
-                    timeout: CallTimeout
+                    timeout: s_callTimeout
                 )
                 .ConfigureAwait(false);
         }

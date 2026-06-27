@@ -16,6 +16,9 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class ProfilesSectionViewModel : ObservableObject
 {
     private readonly IActiveWindowService _activeWindow;
@@ -890,12 +893,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
         else
         {
-            _lastExternalProcessName = processName ?? "-";
+            _lastExternalProcessName = processName;
             _lastExternalWindowTitle = title ?? "-";
             _lastExternalUrl = url ?? "-";
         }
 
-        CurrentProcessName = processName ?? "-";
+        CurrentProcessName = processName;
         CurrentWindowTitle = title ?? "-";
         CurrentUrl = url ?? "-";
 
