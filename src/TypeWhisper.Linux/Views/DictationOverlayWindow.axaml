@@ -37,7 +37,8 @@
                             VerticalAlignment="Center"
                             IsVisible="{Binding ShowLeftIndicator}" />
 
-                    <StackPanel Orientation="Horizontal"
+                    <StackPanel Grid.Column="0"
+                                Orientation="Horizontal"
                                 Spacing="3"
                                 Height="18"
                                 VerticalAlignment="Center"
@@ -59,7 +60,8 @@
                                 VerticalAlignment="Bottom" />
                     </StackPanel>
 
-                    <TextBlock Text="{Binding LeftText}"
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding LeftText}"
                                VerticalAlignment="Center"
                                FontSize="12"
                                FontWeight="SemiBold"

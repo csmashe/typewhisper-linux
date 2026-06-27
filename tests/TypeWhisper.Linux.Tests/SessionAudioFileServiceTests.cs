@@ -23,7 +23,6 @@ public class SessionAudioFileServiceTests
         File.WriteAllText(dictationFile, "dictation");
         File.WriteAllText(otherFile, "other");
 
-        var sut = new SessionAudioFileService();
         SessionAudioFileService.DeleteSessionCaptures();
 
         Assert.False(File.Exists(dictationFile));

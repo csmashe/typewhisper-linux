@@ -21,7 +21,7 @@ public partial class DictationSection : UserControl
 
     // Re-poll providers for current models whenever the model dropdown opens,
     // so newly added models appear without a manual "Validate".
-    private void OnModelDropDownOpened(object? sender, System.EventArgs e)
+    private void OnModelDropDownOpened(object? sender, EventArgs e)
     {
         if (DataContext is DictationSectionViewModel viewModel)
         {
@@ -29,14 +29,14 @@ public partial class DictationSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnDeleteSelectedModel(
         object? sender,
         RoutedEventArgs e
     )
     {
         if (
-            DataContext is not DictationSectionViewModel viewModel
-            || viewModel.SelectedModel is not { } selected
+            DataContext is not DictationSectionViewModel { SelectedModel: { } selected } viewModel
         )
         {
             return;
@@ -55,6 +55,7 @@ public partial class DictationSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnChangeModelStorage(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not DictationSectionViewModel viewModel)

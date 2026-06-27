@@ -483,12 +483,9 @@ public class CudaRuntimeProvisionerTests
 
     private sealed class TempDir : IDisposable
     {
-        public TempDir() =>
-            Path = System.IO.Path.Join(
-                System.IO.Path.GetTempPath(),
-                "tw-cuda-prov-" + Guid.NewGuid().ToString("N"));
-
-        public string Path { get; }
+        public string Path { get; } = System.IO.Path.Join(
+            System.IO.Path.GetTempPath(),
+            "tw-cuda-prov-" + Guid.NewGuid().ToString("N"));
 
         public void Dispose()
         {

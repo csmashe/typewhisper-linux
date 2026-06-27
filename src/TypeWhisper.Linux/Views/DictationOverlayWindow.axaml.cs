@@ -92,45 +92,49 @@ public partial class DictationOverlayWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(DictationOverlayViewModel.HasVisibleContent))
+        switch (e.PropertyName)
         {
-            Dispatcher.UIThread.Post(UpdateWindowVisibility);
-        }
-        else if (e.PropertyName == nameof(DictationOverlayViewModel.PartialText))
-        {
-            // Background priority so the scroll runs after layout measures the updated text.
-            var partialText = _viewModel?.PartialText;
-            Dispatcher.UIThread.Post(
-                () =>
-                {
-                    if (string.IsNullOrWhiteSpace(partialText))
+            case nameof(DictationOverlayViewModel.HasVisibleContent):
+                Dispatcher.UIThread.Post(UpdateWindowVisibility);
+                break;
+            case nameof(DictationOverlayViewModel.PartialText):
+            {
+                // Background priority so the scroll runs after layout measures the updated text.
+                var partialText = _viewModel?.PartialText;
+                Dispatcher.UIThread.Post(
+                    () =>
                     {
-                        PartialPreviewScrollViewer?.ScrollToHome();
-                    }
-                    else
+                        if (string.IsNullOrWhiteSpace(partialText))
+                        {
+                            PartialPreviewScrollViewer?.ScrollToHome();
+                        }
+                        else
+                        {
+                            PartialPreviewScrollViewer?.ScrollToEnd();
+                        }
+                    },
+                    DispatcherPriority.Background);
+                break;
+            }
+            case nameof(DictationOverlayViewModel.LlmResponseText):
+            {
+                // Same after-layout auto-scroll as PartialText, for the streamed LLM response area.
+                var llmText = _viewModel?.LlmResponseText;
+                Dispatcher.UIThread.Post(
+                    () =>
                     {
-                        PartialPreviewScrollViewer?.ScrollToEnd();
-                    }
-                },
-                DispatcherPriority.Background);
-        }
-        else if (e.PropertyName == nameof(DictationOverlayViewModel.LlmResponseText))
-        {
-            // Same after-layout auto-scroll as PartialText, for the streamed LLM response area.
-            var llmText = _viewModel?.LlmResponseText;
-            Dispatcher.UIThread.Post(
-                () =>
-                {
-                    if (string.IsNullOrWhiteSpace(llmText))
-                    {
-                        LlmResponseScrollViewer?.ScrollToHome();
-                    }
-                    else
-                    {
-                        LlmResponseScrollViewer?.ScrollToEnd();
-                    }
-                },
-                DispatcherPriority.Background);
+                        if (string.IsNullOrWhiteSpace(llmText))
+                        {
+                            LlmResponseScrollViewer?.ScrollToHome();
+                        }
+                        else
+                        {
+                            LlmResponseScrollViewer?.ScrollToEnd();
+                        }
+                    },
+                    DispatcherPriority.Background);
+                break;
+            }
         }
     }
 
@@ -143,7 +147,7 @@ public partial class DictationOverlayWindow : Window
 
         // On tiling WMs the overlay is suppressed: an XWayland toplevel on a tiler reserves
         // a tile, steals focus, and blurs into a box — use the notification indicator instead.
-        if (UsesNotificationIndicator)
+        if (s_usesNotificationIndicator)
         {
             if (IsVisible)
             {
@@ -176,7 +180,7 @@ public partial class DictationOverlayWindow : Window
     }
 
     // Cached — the desktop environment can't change within a session.
-    private static readonly bool UsesNotificationIndicator =
+    private static readonly bool s_usesNotificationIndicator =
         DesktopDetector.UsesNotificationRecordingIndicator();
 
     // The overlay is mapped once and kept alive via Opacity (see UpdateWindowVisibility),
@@ -212,6 +216,7 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
+        // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Avalonia annotates Screens non-null, but it can be null before the platform window is realized (headless/early lifecycle); keep the defensive ?. consistent with the Screens?. access below.
         var primaryScreen = Screens?.Primary;
         if (primaryScreen is null)
         {

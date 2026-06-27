@@ -6,7 +6,7 @@ namespace TypeWhisper.Core.Services;
 ///     Converts spoken developer syntax into literal symbols (e.g. "open paren" → "(", "dash dash"
 ///     → "--", "x dot ts") and applies camel/snake/kebab casing commands.
 /// </summary>
-public sealed partial class DeveloperFormattingService
+public static partial class DeveloperFormattingService
 {
     private static readonly (Regex Pattern, string Replacement)[] s_symbolReplacements =
     [
