@@ -63,14 +63,14 @@ public sealed class TranslationService : ITranslationService, IDisposable
         }
 
         var llmProvider = GetConfiguredTranslationProvider();
-        if (llmProvider is not null)
+        if (llmProvider is null)
         {
-            var model = llmProvider.SupportedModels[0].Id;
-            var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
-            return await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
+            return await TranslateLocalAsync(text, sourceLang, targetLang, ct);
         }
 
-        return await TranslateLocalAsync(text, sourceLang, targetLang, ct);
+        var model = llmProvider.SupportedModels[0].Id;
+        var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
+        return await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
     }
 
     private ILlmProviderPlugin? GetConfiguredTranslationProvider()
@@ -296,11 +296,13 @@ public sealed class TranslationService : ITranslationService, IDisposable
             for (var i = 0; i < vocabSize; i++)
             {
                 var candidate = logits.Buffer.Span[lastTokenOffset + i];
-                if (candidate > bestValue)
+                if (candidate <= bestValue)
                 {
-                    bestValue = candidate;
-                    bestId = i;
+                    continue;
                 }
+
+                bestValue = candidate;
+                bestId = i;
             }
 
             if (bestId == model.Config.EosTokenId)

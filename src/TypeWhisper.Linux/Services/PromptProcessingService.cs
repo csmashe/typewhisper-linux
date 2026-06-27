@@ -40,6 +40,8 @@ public sealed class PromptProcessingService
         }
 
         var systemPrompt = action.SystemPrompt;
+        // ReSharper disable once InvertIf — conditionally augments systemPrompt; not a guard,
+        // and inverting would duplicate the large trailing ProcessAsync call.
         if (_settings.Current.MemoryEnabled)
         {
             var context = await _memory.GetContextAsync(inputText, ct);

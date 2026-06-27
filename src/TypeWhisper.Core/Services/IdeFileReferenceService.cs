@@ -75,7 +75,10 @@ public sealed partial class IdeFileReferenceService
         return string.IsNullOrWhiteSpace(fileReference) ? "" : "@" + fileReference;
     }
 
-    public static string? TryFormatReferenceCommand(string spokenText)
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    public string? TryFormatReferenceCommand(string spokenText)
     {
         if (string.IsNullOrWhiteSpace(spokenText))
         {

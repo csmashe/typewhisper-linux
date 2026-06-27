@@ -112,8 +112,7 @@ public sealed class BrowserAccessibilityExecPatchTests
     {
         // Running setup twice in a row shouldn't double-wrap. The skip
         // condition is the literal MOZ_ENABLE_ACCESSIBILITY= marker.
-        var alreadyPatched =
-            "Exec=env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge firefox %u";
+        const string alreadyPatched = "Exec=env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge firefox %u";
 
         var result = BrowserAccessibilitySetupHelper.PrependEnvWrapperToExecLines(alreadyPatched);
 

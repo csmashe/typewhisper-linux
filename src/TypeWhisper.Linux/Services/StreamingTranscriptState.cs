@@ -33,12 +33,12 @@ internal sealed class StreamingTranscriptState
         return finalText;
     }
 
-    public bool IsCurrentSession(int sessionVersion)
+    private bool IsCurrentSession(int sessionVersion)
     {
         return sessionVersion == Volatile.Read(ref _sessionVersion);
     }
 
-    public void InvalidateSession()
+    private void InvalidateSession()
     {
         Interlocked.Increment(ref _sessionVersion);
     }
@@ -135,17 +135,21 @@ internal sealed class StreamingTranscriptState
 
         var minOverlap = Math.Max(1, Math.Min(20, confirmed.Length / 4));
         var maxShift = Math.Min(confirmed.Length - minOverlap, 150);
-        if (maxShift > 0)
+        if (maxShift <= 0)
         {
-            for (var dropCount = 1; dropCount <= maxShift; dropCount++)
+            return newText;
+        }
+
+        for (var dropCount = 1; dropCount <= maxShift; dropCount++)
+        {
+            var suffix = confirmed[dropCount..];
+            if (!newText.StartsWith(suffix, StringComparison.Ordinal))
             {
-                var suffix = confirmed[dropCount..];
-                if (newText.StartsWith(suffix, StringComparison.Ordinal))
-                {
-                    var newTail = newText[(confirmed.Length - dropCount)..];
-                    return string.IsNullOrEmpty(newTail) ? confirmed : confirmed + newTail;
-                }
+                continue;
             }
+
+            var newTail = newText[(confirmed.Length - dropCount)..];
+            return string.IsNullOrEmpty(newTail) ? confirmed : confirmed + newTail;
         }
 
         return newText;

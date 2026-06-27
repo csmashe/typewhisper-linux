@@ -6,7 +6,9 @@ using TypeWhisper.Core.Models;
 namespace TypeWhisper.Linux.Services;
 
 internal sealed record HttpApiRequest(
+    // ReSharper disable once NotAccessedPositionalProperty.Global  part of the parsed-request data shape (routing currently keys off QueryString/Body)
     string Method,
+    // ReSharper disable once NotAccessedPositionalProperty.Global  part of the parsed-request data shape (routing currently keys off QueryString/Body)
     string Path,
     NameValueCollection QueryString,
     IReadOnlyDictionary<string, string> Headers,
@@ -121,14 +123,14 @@ internal static class HttpApiRequestParser
         var contentType = Header(request.Headers, "content-type") ?? "";
         byte[] audioData;
         string fileExtension;
-        string? language = null;
+        string? language;
         var languageHints = new List<string>();
-        var task = TranscriptionTask.Transcribe;
-        string? targetLanguage = null;
+        TranscriptionTask task;
+        string? targetLanguage;
         string responseFormat;
-        string? prompt = null;
-        string? engine = null;
-        string? model = null;
+        string? prompt;
+        string? engine;
+        string? model;
 
         if (contentType.Contains("multipart/form-data", StringComparison.OrdinalIgnoreCase))
         {
@@ -219,6 +221,8 @@ internal static class HttpApiRequestParser
         );
     }
 
+    // ReSharper disable once MemberCanBePrivate.Global
+    // only used internally, but privatizing surfaces CA1859 (return-type) which can't be fixed without altering the signature
     public static IReadOnlyList<MultipartPart> ParseMultipart(byte[] body, string boundary)
     {
         var boundaryBytes = Encoding.UTF8.GetBytes("--" + boundary);
@@ -309,7 +313,7 @@ internal static class HttpApiRequestParser
         return parts;
     }
 
-    internal static string? ExtractBoundary(string contentType)
+    private static string? ExtractBoundary(string contentType)
     {
         foreach (var part in contentType.Split(';', StringSplitOptions.TrimEntries))
         {
@@ -485,12 +489,7 @@ internal static class HttpApiRequestParser
             return "aac";
         }
 
-        if (lower.Contains("webm"))
-        {
-            return "webm";
-        }
-
-        return null;
+        return lower.Contains("webm") ? "webm" : null;
     }
 
     private static int IndexOf(byte[] haystack, byte[] needle, int startIndex)

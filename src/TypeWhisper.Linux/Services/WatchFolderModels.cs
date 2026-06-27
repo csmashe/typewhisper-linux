@@ -21,8 +21,11 @@ public sealed record WatchFolderTranscriptionRequest(string FilePath);
 
 public sealed record WatchFolderTranscriptionResult(
     string Text,
+    // ReSharper disable once NotAccessedPositionalProperty.Global  carried in the transcription result record's data shape
     string? DetectedLanguage,
+    // ReSharper disable once NotAccessedPositionalProperty.Global  carried in the transcription result record's data shape
     double Duration,
+    // ReSharper disable once NotAccessedPositionalProperty.Global  carried in the transcription result record's data shape
     double ProcessingTime,
     IReadOnlyList<TranscriptionSegment> Segments,
     string? EngineId,
@@ -33,8 +36,11 @@ public sealed record WatchFolderExportArtifact(string FileExtension, string Cont
 
 public sealed record WatchFolderHistoryItem
 {
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  get read by the reflection JSON serializer when persisting watch-folder history (WatchFolderService.SaveHistory)
     public required string Id { get; init; }
     public required string FileName { get; init; }
+
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  get read by the reflection JSON serializer when persisting watch-folder history (WatchFolderService.SaveHistory)
     public required DateTime ProcessedAtUtc { get; init; }
     public required string OutputPath { get; init; }
     public required bool Success { get; init; }
@@ -54,6 +60,7 @@ public static class WatchFolderOutputFormats
                     : WatchFolderOutputFormat.Markdown;
     }
 
+    // ReSharper disable once UnusedMember.Global  inverse of WatchFolderOutputFormats.Parse for the stored-value vocabulary (md/txt/srt/vtt); not currently called in-tree
     public static string ToStoredValue(WatchFolderOutputFormat format)
     {
         return format switch

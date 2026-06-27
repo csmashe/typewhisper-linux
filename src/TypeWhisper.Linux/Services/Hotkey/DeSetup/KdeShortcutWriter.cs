@@ -63,7 +63,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not create {dir}: {ex.Message}",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -77,14 +77,14 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not write {target}: {ex.Message}",
-                Array.Empty<string>()
+                []
             );
         }
 
         return new DeShortcutWriteResult(
             true,
             "KDE shortcut file written. Log out and back in (or restart the KGlobalAccel daemon) for Plasma to register it.",
-            new[] { target }
+            [target]
         );
     }
 
@@ -97,7 +97,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
                 new DeShortcutWriteResult(
                     true,
                     "No KDE integration to remove.",
-                    Array.Empty<string>()
+                    []
                 )
             );
         }
@@ -109,7 +109,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
                 new DeShortcutWriteResult(
                     true,
                     "KDE shortcut file removed. Restart the KGlobalAccel daemon or log out and back in to drop the registration.",
-                    new[] { target }
+                    [target]
                 )
             );
         }
@@ -119,7 +119,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
                 new DeShortcutWriteResult(
                     false,
                     $"Could not delete {target}: {ex.Message}",
-                    Array.Empty<string>()
+                    []
                 )
             );
         }

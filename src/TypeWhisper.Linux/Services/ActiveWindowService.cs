@@ -123,12 +123,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             windowId = RunXdotool("getactivewindow");
         }
 
-        if (string.IsNullOrWhiteSpace(windowId))
-        {
-            return null;
-        }
-
-        return TryCaptureBrowserUrl(windowId);
+        return string.IsNullOrWhiteSpace(windowId) ? null : TryCaptureBrowserUrl(windowId);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
@@ -198,6 +193,9 @@ public sealed class ActiveWindowService : IActiveWindowService
         return null;
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public string? GetActiveWindowId()
     {
         if (!s_isXdotoolAvailable)
@@ -209,7 +207,8 @@ public sealed class ActiveWindowService : IActiveWindowService
         return string.IsNullOrWhiteSpace(windowId) ? null : windowId;
     }
 
-    public bool TryActivateWindow(string? windowId)
+    // ReSharper disable once UnusedMember.Global  public API surface (window-activation helper paired with GetActiveWindowId); not currently called in-tree
+    public static bool TryActivateWindow(string? windowId)
     {
         if (string.IsNullOrWhiteSpace(windowId) || !s_isXdotoolAvailable)
         {
@@ -238,12 +237,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             return null;
         }
 
-        if (title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase))
-        {
-            return "zen";
-        }
-
-        return null;
+        return title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase) ? "zen" : null;
     }
 
     internal static string? TryInferBrowserUrlFromTitle(string? title)
@@ -295,9 +289,9 @@ public sealed class ActiveWindowService : IActiveWindowService
         return NormalizeUrl(trimmed);
     }
 
-    internal static bool IsLikelyUrl(string value)
+    private static bool IsLikelyUrl(string value)
     {
-        if (value.Length < 3 || value.Length > 2048)
+        if (value.Length is < 3 or > 2048)
         {
             return false;
         }
@@ -320,7 +314,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         return host.Contains('.');
     }
 
-    internal static string NormalizeUrl(string value)
+    private static string NormalizeUrl(string value)
     {
         if (
             value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
@@ -362,13 +356,14 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
 
         var score = 100;
-        if (role == AtSpiRoleEditBar)
+        switch (role)
         {
-            score += 120;
-        }
-        else if (role == AtSpiRoleEntry)
-        {
-            score += 80;
+            case AtSpiRoleEditBar:
+                score += 120;
+                break;
+            case AtSpiRoleEntry:
+                score += 80;
+                break;
         }
 
         if (HasState(states, AtSpiStateFocused))

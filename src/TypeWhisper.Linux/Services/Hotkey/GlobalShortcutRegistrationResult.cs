@@ -12,5 +12,6 @@ public sealed record GlobalShortcutRegistrationResult(
     string BackendId,
     string? UserMessage,
     bool RequiresToggleMode,
+    // ReSharper disable once NotAccessedPositionalProperty.Global  carried in the registration result record's data shape (troubleshooting hint for callers/diagnostics)
     string? TroubleshootingCommand
 );

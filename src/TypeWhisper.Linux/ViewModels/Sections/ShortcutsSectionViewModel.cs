@@ -60,7 +60,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // Test-friendly overload — production wiring passes the DI-registered
     // writer collection through the three-arg constructor.
     public ShortcutsSectionViewModel(HotkeyService hotkey, ISettingsService settings)
-        : this(hotkey, settings, Array.Empty<IDeShortcutWriter>())
+        : this(hotkey, settings, [])
     {
     }
 
@@ -83,6 +83,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         _compositorBindsExpanded = ComputeCompositorBindsRelevant();
     }
 
+    // ReSharper disable once UnusedMember.Global  public ViewModel property (recording-mode options for selection UI); not currently bound in-tree
     public IReadOnlyList<RecordingMode> Modes { get; } =
         [RecordingMode.Toggle, RecordingMode.PushToTalk, RecordingMode.Hybrid];
 
@@ -91,6 +92,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public string ActiveBackendDisplayName =>
         _hotkey.ActiveBackendDisplayName ?? "(not initialized)";
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string SessionType =>
         Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") ?? "unknown";
 
@@ -124,6 +127,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // node. Gating on actual access (not input-group membership) is correct now
     // that the uaccess rule grants access via a session ACL without the group —
     // a membership check would nag users who already have working access.
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public bool ShowKeyboardAccessBanner
     {
         get
@@ -139,10 +144,14 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     // The exact command the keyboard-access setup runs, offered as a copyable
     // fallback for users who'd rather not click through the one-prompt installer.
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string KeyboardAccessCommand => InputAccessSetupHelper.ManualInstallCommand();
 
     // Bare binary name relies on the Phase 4 single-instance IPC: a second
     // invocation toggles the existing instance instead of launching a new one.
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string CustomShortcutCommand => "typewhisper";
 
     public string CompositorBindsToggleLabel =>
@@ -168,8 +177,12 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         return !WaylandEvdevHotkeysEnabled || !InputDeviceAccessCheck.HasKeyboardAccess();
     }
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public bool ShowPushToTalkSnippet => DesktopName is "Hyprland" or "Sway";
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PushToTalkPressSnippet =>
         DesktopName switch
         {
@@ -181,6 +194,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _ => ""
         };
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PushToTalkReleaseSnippet =>
         DesktopName switch
         {
@@ -189,6 +204,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _ => ""
         };
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PushToTalkSnippetHint =>
         DesktopName switch
         {
@@ -199,6 +216,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     // DesktopDetector normalizes edge cases like "ubuntu:GNOME".
     // "KDE Plasma" → "KDE" keeps legacy snippet-display keys intact.
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string DesktopName
     {
         get
@@ -208,6 +227,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
     }
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string DesktopInstructions =>
         DesktopName switch
         {
@@ -235,11 +256,13 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             {
                 try
                 {
-                    if (w.IsCurrentDesktop())
+                    if (!w.IsCurrentDesktop())
                     {
-                        _activeWriterCache = w;
-                        break;
+                        continue;
                     }
+
+                    _activeWriterCache = w;
+                    break;
                 }
                 catch
                 {
@@ -263,12 +286,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         get
         {
             var w = ActiveWriter;
-            if (w is null)
-            {
-                return string.Empty;
-            }
-
-            return w.PreviewLines(BuildSpec(w));
+            return w is null ? string.Empty : w.PreviewLines(BuildSpec(w));
         }
     }
 

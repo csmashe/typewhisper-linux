@@ -248,6 +248,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         // A plugin can implement both interfaces (e.g. OpenAiCompatiblePlugin), so check each
         // independently rather than via a mutually-exclusive switch — otherwise only the first
         // matching kind of settings would ever persist.
+        // ReSharper disable once ConvertIfStatementToSwitchStatement — see above; the checks are independent.
         if (loaded.Instance is IPluginSettingsProvider provider)
         {
             foreach (var field in row.SettingFields)

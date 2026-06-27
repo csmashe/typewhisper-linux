@@ -68,20 +68,22 @@ public sealed class LinuxPreferencesService
 
     public LinuxPreferences Load()
     {
-        if (File.Exists(_path))
+        if (!File.Exists(_path))
         {
-            try
-            {
-                var json = File.ReadAllText(_path);
-                Current =
-                    JsonSerializer.Deserialize<LinuxPreferences>(json, s_jsonOptions)
-                    ?? LinuxPreferences.Default;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[LinuxPreferencesService] Load failed: {ex.Message}");
-                Current = LinuxPreferences.Default;
-            }
+            return Current;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(_path);
+            Current =
+                JsonSerializer.Deserialize<LinuxPreferences>(json, s_jsonOptions)
+                ?? LinuxPreferences.Default;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[LinuxPreferencesService] Load failed: {ex.Message}");
+            Current = LinuxPreferences.Default;
         }
 
         return Current;

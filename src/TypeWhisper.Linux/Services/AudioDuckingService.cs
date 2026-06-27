@@ -100,17 +100,19 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
                 continue;
             }
 
-            if (currentId is not null && line.StartsWith("Volume:", StringComparison.Ordinal))
+            if (currentId is null || !line.StartsWith("Volume:", StringComparison.Ordinal))
             {
-                var volMatch = VolumePercentRegex().Match(line);
-                if (volMatch.Success)
-                {
-                    yield return (currentId, volMatch.Groups[1].Value + "%");
-                }
-
-                // Only the first Volume line per block is relevant.
-                currentId = null;
+                continue;
             }
+
+            var volMatch = VolumePercentRegex().Match(line);
+            if (volMatch.Success)
+            {
+                yield return (currentId, volMatch.Groups[1].Value + "%");
+            }
+
+            // Only the first Volume line per block is relevant.
+            currentId = null;
         }
     }
 

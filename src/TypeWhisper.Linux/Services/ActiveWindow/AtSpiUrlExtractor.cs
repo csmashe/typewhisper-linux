@@ -60,9 +60,10 @@ public sealed partial class AtSpiUrlExtractor
     // Diagnostic logging is off by default — flip to true to emit one line per unique
     // walk outcome to the Error Log. Kept as `static readonly` (not `const`) so the
     // compiler doesn't eliminate the LogOnce body as dead code.
+    // ReSharper disable once ConvertToConstant.Local — intentionally not const (see above).
     private static readonly bool s_diagnosticLoggingEnabled = false;
 
-    private readonly object _cacheLock = new();
+    private readonly Lock _cacheLock = new();
     private readonly IErrorLogService? _errorLog;
     private string? _cachedProcessName;
     private string? _cachedTitle;
@@ -379,7 +380,7 @@ public sealed partial class AtSpiUrlExtractor
             var role = GetAccessibleRole(address, node);
             var states = GetAccessibleState(address, node);
             if (
-                (role == AtSpiRoleFrame || role == AtSpiRoleWindow)
+                role is AtSpiRoleFrame or AtSpiRoleWindow
                 && ActiveWindowService.HasState(states, AtSpiStateActive)
             )
             {
@@ -835,7 +836,7 @@ public sealed partial class AtSpiUrlExtractor
 
     private sealed class WalkStats
     {
-        public List<string> AppsSeen { get; } = new();
+        public List<string> AppsSeen { get; } = [];
         public string? MatchedApp { get; set; }
         public bool WindowFound { get; set; }
         public int NodesWalked { get; set; }

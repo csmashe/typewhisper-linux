@@ -35,7 +35,7 @@ public sealed class SystemCommandAvailabilityService
         "/usr/local/cuda-12.0/targets/x86_64-linux/lib"
     ];
 
-    private static readonly object s_cudaPreloadLock = new();
+    private static readonly Lock s_cudaPreloadLock = new();
     private static readonly List<IntPtr> s_cudaPreloadHandles = [];
 
     private LinuxCapabilitySnapshot _snapshot;
@@ -45,6 +45,7 @@ public sealed class SystemCommandAvailabilityService
         _snapshot = BuildSnapshot();
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool IsWaylandSession
     {
         get
@@ -54,6 +55,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool IsX11Session
     {
         get
@@ -63,6 +65,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasXdotool
     {
         get
@@ -72,6 +75,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasWtype
     {
         get
@@ -81,6 +85,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasXclip
     {
         get
@@ -90,6 +95,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasWlClipboard
     {
         get
@@ -135,6 +141,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasSpeechFeedback
     {
         get
@@ -479,7 +486,7 @@ public sealed class SystemCommandAvailabilityService
     /// </summary>
     public event EventHandler<LinuxCapabilitySnapshot>? SnapshotChanged;
 
-    private LinuxCapabilitySnapshot BuildSnapshot()
+    private static LinuxCapabilitySnapshot BuildSnapshot()
     {
         var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
         var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
@@ -541,21 +548,21 @@ public sealed class SystemCommandAvailabilityService
             }
 
             var output = p.StandardOutput.ReadToEnd().Trim();
-            if (!p.WaitForExit(500))
+            if (p.WaitForExit(500))
             {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return null;
+                return string.IsNullOrWhiteSpace(output) ? null : output;
             }
 
-            return string.IsNullOrWhiteSpace(output) ? null : output;
+            try
+            {
+                p.Kill(true);
+            }
+            catch
+            {
+                /* best effort */
+            }
+
+            return null;
         }
         catch
         {
@@ -575,12 +582,7 @@ public sealed class SystemCommandAvailabilityService
             return "espeak";
         }
 
-        if (IsCommandAvailable("spd-say"))
-        {
-            return "spd-say";
-        }
-
-        return null;
+        return IsCommandAvailable("spd-say") ? "spd-say" : null;
     }
 
     private static bool IsLibraryAvailable(string libraryName)
@@ -701,7 +703,10 @@ public sealed class SystemCommandAvailabilityService
     private static extern IntPtr dlerror();
 }
 
+// Success/Elapsed are carried in the benchmark result record's data shape (not currently read).
+// ReSharper disable NotAccessedPositionalProperty.Global
 public sealed record CudaBenchmarkResult(bool Success, string Message, TimeSpan? Elapsed);
+// ReSharper restore NotAccessedPositionalProperty.Global
 
 public sealed record LinuxCapabilitySnapshot(
     string SessionType,

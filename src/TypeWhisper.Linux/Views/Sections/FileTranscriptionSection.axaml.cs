@@ -118,7 +118,7 @@ public partial class FileTranscriptionSection : UserControl
             return;
         }
 
-        var content = item is null ? viewModel.BuildExportText() : viewModel.BuildExportText(item);
+        var content = item is null ? viewModel.BuildExportText() : FileTranscriptionSectionViewModel.BuildExportText(item);
         if (string.IsNullOrWhiteSpace(content))
         {
             return;
@@ -163,7 +163,7 @@ public partial class FileTranscriptionSection : UserControl
             return;
         }
 
-        var content = viewModel.BuildSubtitleExport(item, extension);
+        var content = FileTranscriptionSectionViewModel.BuildSubtitleExport(item, extension);
         if (string.IsNullOrWhiteSpace(content))
         {
             return;

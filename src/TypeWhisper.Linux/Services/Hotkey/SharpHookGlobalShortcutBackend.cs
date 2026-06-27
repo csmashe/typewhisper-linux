@@ -12,11 +12,11 @@ namespace TypeWhisper.Linux.Services.Hotkey;
 /// </summary>
 public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
 {
-    public const string BackendId = "linux-sharphook";
+    private const string BackendId = "linux-sharphook";
     private readonly ShortcutDispatcher _dispatcher = new();
 
     private readonly TaskPoolGlobalHook _hook = new();
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private int _disposed;
     private Task? _hookTask;
 
@@ -95,6 +95,8 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
 
         lock (_lock)
         {
+            // ReSharper disable once InvertIf — last statement in the lock; inverting would
+            // duplicate the trailing success-result construction with no clean early exit.
             if (!_running && Volatile.Read(ref _disposed) == 0)
             {
                 _hook.KeyPressed += OnKeyPressed;

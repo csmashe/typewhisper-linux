@@ -5,7 +5,7 @@ using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
-public class ApiDiscoveryFileTests : IDisposable
+public sealed class ApiDiscoveryFileTests : IDisposable
 {
     private readonly string _xdgConfigHome;
     private readonly string? _originalXdgConfigHome;

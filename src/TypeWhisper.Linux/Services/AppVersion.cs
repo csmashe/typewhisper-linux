@@ -100,23 +100,18 @@ public static class AppVersion
         var aNumeric = long.TryParse(a, out var an);
         var bNumeric = long.TryParse(b, out var bn);
 
-        if (aNumeric && bNumeric)
+        switch (aNumeric, bNumeric)
         {
-            return an.CompareTo(bn);
+            case (true, true):
+                return an.CompareTo(bn);
+            // Numeric identifiers rank below alphanumeric (SemVer §11.4).
+            case (true, _):
+                return -1;
+            case (_, true):
+                return 1;
+            default:
+                return string.CompareOrdinal(a, b);
         }
-
-        // Numeric identifiers rank below alphanumeric (SemVer §11.4).
-        if (aNumeric)
-        {
-            return -1;
-        }
-
-        if (bNumeric)
-        {
-            return 1;
-        }
-
-        return string.CompareOrdinal(a, b);
     }
 
     private static (Version Core, string PreRelease) Split(string? raw)

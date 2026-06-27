@@ -16,7 +16,7 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed partial class BrowserAccessibilitySetupHelper
 {
-    internal const string OwnershipMarker = "Installed by TypeWhisper";
+    private const string OwnershipMarker = "Installed by TypeWhisper";
 
     private const string EnvFileName = "typewhisper-accessibility.conf";
 
@@ -73,13 +73,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     so prompting the user to enable browser accessibility there
     ///     would just be noise.
     /// </summary>
-    public bool IsApplicable()
+    public static bool IsApplicable()
     {
         var sessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
         return string.Equals(sessionType, "wayland", StringComparison.OrdinalIgnoreCase);
     }
 
-    public Status IsCurrentlyConfigured()
+    public static Status IsCurrentlyConfigured()
     {
         var envFilePresent = File.Exists(EnvFilePath());
         // "LauncherPresent" means every installed launcher in this family is patched, not just
@@ -116,7 +116,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     <c>user.js</c>, and a running Firefox won't clobber our change on
     ///     its next save. Takes effect on the next Firefox restart.
     /// </summary>
-    public SetupResult ForceEnableFirefoxAccessibility()
+    private static SetupResult ForceEnableFirefoxAccessibility()
     {
         var patched = new List<string>();
         var skipped = new List<string>();
@@ -204,6 +204,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
         }
     }
 
+    // kept instance: invoked on the injected _browserSetup seam by callers (static would orphan the DI field)
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public Task<SetupResult> SetUpAsync(CancellationToken ct)
     {
         try
@@ -292,6 +295,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     done in a prior run are omitted from the list so the dialog never
     ///     over-claims what it's doing.
     /// </summary>
+    // kept instance: invoked on the injected _browserSetup seam by callers (static would orphan the DI field)
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     public IReadOnlyList<string> DescribePendingActions()
     {
         var status = IsCurrentlyConfigured();
@@ -323,23 +328,25 @@ public sealed partial class BrowserAccessibilitySetupHelper
         }
 
         if (
-            status is { FirefoxInstalled: true, FirefoxProfileFound: true, FirefoxAccessibilityForceEnabled: false }
+            status is not { FirefoxInstalled: true, FirefoxProfileFound: true, FirefoxAccessibilityForceEnabled: false }
         )
         {
-            var profiles = EnumerateFirefoxProfileDirs().Select(d => Path.Join(d, "user.js"));
-            actions.Add(
-                "• Write user.js in your Firefox profile(s) to force-enable accessibility:\n"
-                + string.Join("\n", profiles.Select(p => "    " + p))
-                + "\n"
-                + "  Appends user_pref(\"accessibility.force_disabled\", -1); — Firefox reads user.js\n"
-                + "  at every startup as the override file and never writes back to it."
-            );
+            return actions;
         }
+
+        var profiles = EnumerateFirefoxProfileDirs().Select(d => Path.Join(d, "user.js"));
+        actions.Add(
+            "• Write user.js in your Firefox profile(s) to force-enable accessibility:\n"
+            + string.Join("\n", profiles.Select(p => "    " + p))
+            + "\n"
+            + "  Appends user_pref(\"accessibility.force_disabled\", -1); — Firefox reads user.js\n"
+            + "  at every startup as the override file and never writes back to it."
+        );
 
         return actions;
     }
 
-    public Task<SetupResult> RemoveAsync(CancellationToken ct)
+    public static Task<SetupResult> RemoveAsync(CancellationToken ct)
     {
         try
         {
@@ -361,13 +368,15 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 summary.Append('.');
             }
 
-            if (cleanedProfiles.Count > 0)
+            if (cleanedProfiles.Count <= 0)
             {
-                summary.Append(' ');
-                summary.Append("Cleaned Firefox profile(s): ");
-                summary.Append(string.Join(", ", cleanedProfiles));
-                summary.Append('.');
+                return Task.FromResult(new SetupResult(true, summary.ToString()));
             }
+
+            summary.Append(' ');
+            summary.Append("Cleaned Firefox profile(s): ");
+            summary.Append(string.Join(", ", cleanedProfiles));
+            summary.Append('.');
 
             return Task.FromResult(new SetupResult(true, summary.ToString()));
         }
@@ -390,7 +399,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     Firefox prefs.js entries here: those might have been set by the
     ///     user via about:config and aren't ours to remove.
     /// </summary>
-    public bool HasInstalledChanges()
+    public static bool HasInstalledChanges()
     {
         if (File.Exists(EnvFilePath()) && FileStartsWithOwnershipMarker(EnvFilePath()))
         {
@@ -418,7 +427,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     touched, including which Firefox profile(s) will lose the
     ///     accessibility override.
     /// </summary>
-    public IReadOnlyList<string> DescribeRevertActions()
+    public static IReadOnlyList<string> DescribeRevertActions()
     {
         var actions = new List<string>();
 
@@ -648,7 +657,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 // untouched, including a manually-added force_disabled that
                 // happens to share the value — we only remove the pair we
                 // wrote ourselves, identified by the comment marker.
-                var pattern =
+                const string pattern =
                     @"^//\s*Set by TypeWhisper[^\r\n]*\r?\n"
                     + @"user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;\s*\r?\n?";
                 var stripped = Regex.Replace(content, pattern, "", RegexOptions.Multiline);
@@ -812,25 +821,26 @@ public sealed partial class BrowserAccessibilitySetupHelper
         for (var i = searchStart; i < line.Length; i++)
         {
             var c = line[i];
-            if (c == '%' && i + 1 < line.Length)
+            switch (c)
             {
-                var next = line[i + 1];
-                // %% is an XDG-escaped literal percent — skip both chars so
-                // it doesn't masquerade as a real field code like %f.
-                if (next == '%')
-                {
-                    i++;
-                    continue;
-                }
+                case '%' when i + 1 < line.Length:
+                    var next = line[i + 1];
+                    // %% is an XDG-escaped literal percent — skip both chars so
+                    // it doesn't masquerade as a real field code like %f.
+                    if (next == '%')
+                    {
+                        i++;
+                        continue;
+                    }
 
-                if (char.IsLetterOrDigit(next))
-                {
+                    if (char.IsLetterOrDigit(next))
+                    {
+                        return i;
+                    }
+
+                    break;
+                case '@' when i + 1 < line.Length && line[i + 1] == '@':
                     return i;
-                }
-            }
-            else if (c == '@' && i + 1 < line.Length && line[i + 1] == '@')
-            {
-                return i;
             }
         }
 

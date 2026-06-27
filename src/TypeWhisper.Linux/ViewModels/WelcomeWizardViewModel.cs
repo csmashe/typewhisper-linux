@@ -154,7 +154,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public ObservableCollection<AudioInputDevice> Mics { get; } = [];
     public ObservableCollection<IndustryPreset> IndustryPresets { get; } = [];
 
-    public int StepCount => 6;
+    private static int StepCount => 6;
     public bool IsFirstStep => StepIndex == 0;
     public bool IsLastStep => StepIndex == StepCount - 1;
     public string NextLabel => IsLastStep ? Loc.Instance["Common.Finish"] : Loc.Instance["Common.Next"];
@@ -343,7 +343,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private void LoadMics()
     {
         Mics.Clear();
-        foreach (var d in _audio.GetInputDevices())
+        foreach (var d in AudioRecordingService.GetInputDevices())
         {
             Mics.Add(d);
         }

@@ -74,12 +74,9 @@ internal static class SocketPathResolver
             return CreatePrivateSocketPath(uid);
         }
 
-        if (!IsDirectoryPrivateAndOwned(fallback, uid))
-        {
-            return CreatePrivateSocketPath(uid);
-        }
-
-        return Path.Join(fallback, SocketFileName);
+        return !IsDirectoryPrivateAndOwned(fallback, uid)
+            ? CreatePrivateSocketPath(uid)
+            : Path.Join(fallback, SocketFileName);
     }
 
     /// <summary>Best-effort <c>chmod</c>; logs on failure but never throws.</summary>
@@ -141,18 +138,18 @@ internal static class SocketPathResolver
                 return false;
             }
 
-            if (ownerUid != uid)
+            if (ownerUid == uid)
             {
-                Trace.WriteLine(
-                    $"[SocketPathResolver] {path} not owned by uid {uid} (actual {ownerUid})."
+                return DirectoryHasExpectedMode(
+                    path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
                 );
-                return false;
             }
 
-            return DirectoryHasExpectedMode(
-                path,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            Trace.WriteLine(
+                $"[SocketPathResolver] {path} not owned by uid {uid} (actual {ownerUid})."
             );
+            return false;
         }
         catch (Exception ex)
         {

@@ -122,7 +122,9 @@ public partial class MainWindowViewModel : ObservableObject
 
     public ObservableCollection<NavItem> NavItems { get; }
 
-    public  string AppTitle => "TypeWhisper";
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
+    public string AppTitle => "TypeWhisper";
     public string VersionLabel => About.Version == "dev" ? "dev" : $"v{About.Version}";
 
     public void Navigate<TSection>()

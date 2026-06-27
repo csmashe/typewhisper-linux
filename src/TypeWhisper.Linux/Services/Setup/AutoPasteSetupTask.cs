@@ -66,7 +66,7 @@ public sealed class AutoPasteSetupTask : ISetupTask
                     Loc.Instance["Setup.XdotoolNotInstalled"],
                     Loc.Instance["Setup.XdotoolNotInstalledDetail"],
                     Loc.Instance["Setup.XdotoolInstall"],
-                    _installer.BuildSudoCommand(new[] { "xdotool" })
+                    _installer.BuildSudoCommand(["xdotool"])
                 )
             );
         }
@@ -80,7 +80,7 @@ public sealed class AutoPasteSetupTask : ISetupTask
                     Loc.Instance["Setup.YdotoolNotInstalled"],
                     Loc.Instance["Setup.YdotoolNotInstalledDetail"],
                     Loc.Instance["Setup.YdotoolInstallAndSetUp"],
-                    _installer.BuildSudoCommand(new[] { "ydotool" })
+                    _installer.BuildSudoCommand(["ydotool"])
                 )
             );
         }
@@ -100,7 +100,7 @@ public sealed class AutoPasteSetupTask : ISetupTask
         if (!IsWayland)
         {
             var outcome = await _installer
-                .InstallAsync(new[] { "xdotool" }, ct)
+                .InstallAsync(["xdotool"], ct)
                 .ConfigureAwait(false);
             _commands.RefreshSnapshot();
             return outcome;
@@ -110,7 +110,7 @@ public sealed class AutoPasteSetupTask : ISetupTask
         if (!_ydotool.IsCurrentlyConfigured().BinaryInstalled)
         {
             var install = await _installer
-                .InstallAsync(new[] { "ydotool" }, ct)
+                .InstallAsync(["ydotool"], ct)
                 .ConfigureAwait(false);
             _commands.RefreshSnapshot();
             if (!install.Success)

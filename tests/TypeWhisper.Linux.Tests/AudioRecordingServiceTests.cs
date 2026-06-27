@@ -62,7 +62,7 @@ public sealed class AudioRecordingServiceTests
     {
         using var service = new AudioRecordingService { WhisperModeEnabled = true };
         var captured = new List<float[]>();
-        service.LiveFrameSink = frame => captured.Add(frame);
+        service.LiveFrameSink = captured.Add;
 
         var input = new[] { 0.01f, -0.01f, 0.01f, -0.01f };
         var expected = AudioRecordingService.ApplyWhisperModeGain(

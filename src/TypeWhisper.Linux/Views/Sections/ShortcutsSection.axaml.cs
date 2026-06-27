@@ -26,6 +26,8 @@ public partial class ShortcutsSection : UserControl
             _wired = null;
         }
 
+        // ReSharper disable once InvertIf — pattern variable `vm` is used in the block;
+        // inverting would orphan the binding.
         if (DataContext is ShortcutsSectionViewModel vm)
         {
             vm.CopyCustomShortcutRequested += OnCopyCustomShortcutRequested;

@@ -40,7 +40,7 @@ public partial class PromptPaletteWindow : Window
     }
 
     /// <summary>Shows a status message and locks the UI while the host runs the picked action.</summary>
-    public void ShowStatus(string text)
+    private void ShowStatus(string text)
     {
         StatusText.Text = text;
         StatusBorder.IsVisible = true;
@@ -50,7 +50,7 @@ public partial class PromptPaletteWindow : Window
 
     /// <summary>Locks the UI, shows a status line, and reveals the result area
     ///     for streamed tokens after an action is picked.</summary>
-    public void BeginRunning(string actionName)
+    private void BeginRunning(string actionName)
     {
         _running = true;
         ShowStatus($"Running '{actionName}'… (Esc to cancel)");
@@ -137,11 +137,13 @@ public partial class PromptPaletteWindow : Window
     {
         // The search box is disabled while running, so handle Escape at the window
         // level. Before a pick, the search box handles Escape and marks it handled.
-        if (_running && e.Key == Key.Escape)
+        if (!_running || e.Key != Key.Escape)
         {
-            e.Handled = true;
-            ClosePalette();
+            return;
         }
+
+        e.Handled = true;
+        ClosePalette();
     }
 
     private void SearchBox_OnTextChanged(object? sender, TextChangedEventArgs e)

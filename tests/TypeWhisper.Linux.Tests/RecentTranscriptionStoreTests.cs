@@ -74,9 +74,7 @@ public sealed class RecentTranscriptionStoreTests
                 RecentTranscriptionSource.Session
             )
         };
-        var sut = new RecentTranscriptionsPaletteViewModel(entries, _ => { });
-
-        sut.SearchQuery = "firefox";
+        var sut = new RecentTranscriptionsPaletteViewModel(entries, _ => { }) { SearchQuery = "firefox" };
 
         Assert.Single(sut.FilteredEntries);
         Assert.Equal("beta note", sut.FilteredEntries[0].FinalText);

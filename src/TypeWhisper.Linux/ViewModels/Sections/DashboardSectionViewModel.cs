@@ -256,7 +256,7 @@ public sealed class AppUsageInsightRow
     }
 
     public string AppProcessName { get; }
-    public int RecordCount { get; }
-    public int WordCount { get; }
+    private int RecordCount { get; }
+    private int WordCount { get; }
     public string Summary => Loc.Instance.GetString("Dashboard.SummaryStat", RecordCount, WordCount);
 }

@@ -22,9 +22,7 @@ public sealed class AppearanceSectionViewModelTests
     public void SettingSeconds_PersistsNormalizedMilliseconds()
     {
         var settings = CreateSettingsMock(AppSettings.Default);
-        var sut = new AppearanceSectionViewModel(settings.Object);
-
-        sut.PreviewBubbleAutoHideSeconds = 3.75;
+        _ = new AppearanceSectionViewModel(settings.Object) { PreviewBubbleAutoHideSeconds = 3.75 };
 
         settings.Verify(
             s => s.Save(It.Is<AppSettings>(a => a.PreviewBubbleAutoHideMilliseconds == 3750)),
@@ -35,9 +33,7 @@ public sealed class AppearanceSectionViewModelTests
     public void SettingSecondsAboveMax_ClampsToFiveSecondsOnPersist()
     {
         var settings = CreateSettingsMock(AppSettings.Default);
-        var sut = new AppearanceSectionViewModel(settings.Object);
-
-        sut.PreviewBubbleAutoHideSeconds = 7.0;
+        _ = new AppearanceSectionViewModel(settings.Object) { PreviewBubbleAutoHideSeconds = 7.0 };
 
         settings.Verify(
             s => s.Save(It.Is<AppSettings>(a => a.PreviewBubbleAutoHideMilliseconds == 5000)),
@@ -58,7 +54,7 @@ public sealed class AppearanceSectionViewModelTests
             AppSettings.Default with
             {
                 OverlayCustomLeft = left,
-                OverlayCustomTop = top,
+                OverlayCustomTop = top
             });
 
         var sut = new AppearanceSectionViewModel(settings.Object);
@@ -73,7 +69,7 @@ public sealed class AppearanceSectionViewModelTests
             AppSettings.Default with
             {
                 OverlayCustomLeft = 120.0,
-                OverlayCustomTop = 80.0,
+                OverlayCustomTop = 80.0
             });
         var sut = new AppearanceSectionViewModel(settings.Object);
 
@@ -99,7 +95,7 @@ public sealed class AppearanceSectionViewModelTests
         var updated = AppSettings.Default with
         {
             OverlayCustomLeft = 250.0,
-            OverlayCustomTop = 150.0,
+            OverlayCustomTop = 150.0
         };
         settings.SetupGet(s => s.Current).Returns(updated);
         settings.Raise(s => s.SettingsChanged += null, updated);

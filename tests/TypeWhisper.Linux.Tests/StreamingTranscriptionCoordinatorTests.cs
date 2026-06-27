@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Http;
 using System.Net.WebSockets;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
@@ -148,7 +147,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var markers = session.SentChunks.Select(ReadMarker).ToList();
         Assert.Contains(199, markers);
         // Some early markers must be dropped (most chunks 5-50 should not be present).
-        var earlyPresent = markers.Count(m => m >= 5 && m <= 50);
+        var earlyPresent = markers.Count(m => m is >= 5 and <= 50);
         Assert.True(earlyPresent < 10,
             $"Expected most early markers (5-50) dropped, got {earlyPresent} present");
     }
@@ -169,7 +168,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         for (var i = 0; i < 100; i++)
         {
-            coord.AcceptAudioFrame(MakeMarkedFrame(i, 32), 16000);
+            coord.AcceptAudioFrame(MakeMarkedFrame(i), 16000);
         }
 
         await coord.FinalizeAsync(CancellationToken.None);
@@ -195,12 +194,12 @@ public sealed class StreamingTranscriptionCoordinatorTests
         await coord.StartAsync(CancellationToken.None);
 
         // Warm up to avoid JIT cost in the timed loop.
-        coord.AcceptAudioFrame(MakeMarkedFrame(0, 32), 16000);
+        coord.AcceptAudioFrame(MakeMarkedFrame(0), 16000);
 
         var sw = Stopwatch.StartNew();
         for (var i = 1; i <= 10; i++)
         {
-            coord.AcceptAudioFrame(MakeMarkedFrame(i, 32), 16000);
+            coord.AcceptAudioFrame(MakeMarkedFrame(i), 16000);
         }
         sw.Stop();
 
@@ -223,7 +222,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
             plugin, null, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
 
         await coord.StartAsync(CancellationToken.None);
-        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
 
         var observed = await faultTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.IsType<WebSocketException>(observed);
@@ -235,7 +234,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
     {
         // Regression: plugin SendAudioAsync implementations can throw arbitrary
         // exception types (HttpRequestException from REST-style streamers,
-        // plugin-internal exceptions, etc). The sender must route ALL non-cancel
+        // plugin-internal exceptions, etc.). The sender must route ALL non-cancel
         // failures through HandleFault so Phase 4's batch fallback fires.
         var session = new FakeStreamingSession();
         session.OnSendAudio = _ => throw new HttpRequestException("simulated REST failure");
@@ -247,7 +246,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
             plugin, null, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
 
         await coord.StartAsync(CancellationToken.None);
-        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
 
         var observed = await faultTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.IsType<HttpRequestException>(observed);
@@ -276,7 +275,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         Assert.True(coord.Faulted);
 
         // Verify no audio is delivered after fault.
-        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
         await Task.Delay(50);
         // No fake session was ever returned, so SentChunks doesn't apply here.
         // Faulted alone guards the path.
@@ -300,7 +299,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
             plugin, null, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
-        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => coord.FinalizeAsync(CancellationToken.None));
@@ -324,7 +323,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
             plugin, null, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
-        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
 
         var text = await coord.FinalizeAsync(CancellationToken.None);
         Assert.Equal(string.Empty, text);
@@ -358,7 +357,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         for (var i = 0; i < 5; i++)
         {
-            coord.AcceptAudioFrame(MakeMarkedFrame(i, 32), 16000);
+            coord.AcceptAudioFrame(MakeMarkedFrame(i), 16000);
         }
 
         await coord.FinalizeAsync(CancellationToken.None);
@@ -405,7 +404,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         // Queue 5 chunks while connect is pending: they land in the pending buffer.
         for (var i = 0; i < 5; i++)
         {
-            coord.AcceptAudioFrame(MakeMarkedFrame(i, 32), 16000);
+            coord.AcceptAudioFrame(MakeMarkedFrame(i), 16000);
         }
 
         connectTcs.SetResult(session);
@@ -448,6 +447,9 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         await coord.StartAsync(CancellationToken.None);
 
+        // ReSharper disable once AccessToDisposedClosure — finalizeTask is awaited
+        // below (before this method's await-using disposes coord); the WaitAsync
+        // timeout is only a deadlock guard.
         var finalizeTask = Task.Run(() => coord.FinalizeAsync(CancellationToken.None));
 
         // Give FinalizeAsync ~150 ms to reach the grace window.
@@ -474,6 +476,9 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         await coord.StartAsync(CancellationToken.None);
 
+        // ReSharper disable once AccessToDisposedClosure — finalizeTask is awaited
+        // below (before this method's await-using disposes coord); the WaitAsync
+        // timeout is only a deadlock guard.
         var finalizeTask = Task.Run(() => coord.FinalizeAsync(CancellationToken.None));
 
         // Give FinalizeAsync time to reach its grace-window debounce loop.
@@ -586,7 +591,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var startTask = coord.StartAsync(CancellationToken.None);
 
         // Queue audio while connect is pending — it lands in the pending buffer.
-        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
 
         // Finalize before connect resolves.
         var finalizeResult = await coord.FinalizeAsync(CancellationToken.None);
@@ -684,7 +689,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         await coord.StartAsync(CancellationToken.None);
 
-        coord.AcceptAudioFrame(MakeMarkedFrame(1, 32), 16000);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
 
         var finalizeTask = Task.Run(() => coord.FinalizeAsync(CancellationToken.None));
         await Task.Delay(50);
@@ -782,8 +787,8 @@ public sealed class StreamingTranscriptionCoordinatorTests
     private sealed class FakeStreamingSession : IStreamingSession
     {
         public event Action<StreamingTranscriptEvent>? TranscriptReceived;
-        public readonly List<byte[]> SentChunks = new();
-        public readonly SemaphoreSlim SendConcurrencyGuard = new(1, 1);
+        public readonly List<byte[]> SentChunks = [];
+        private readonly SemaphoreSlim _sendConcurrencyGuard = new(1, 1);
         public Func<byte[], Task>? OnSendAudio;
         public Func<CancellationToken, Task>? OnFinalize;
         public bool Disposed;
@@ -791,7 +796,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
         {
             // A9 regression: any concurrent caller throws.
-            if (!await SendConcurrencyGuard.WaitAsync(0, ct))
+            if (!await _sendConcurrencyGuard.WaitAsync(0, ct))
             {
                 throw new InvalidOperationException("Concurrent SendAudioAsync (A9 violation)");
             }
@@ -803,7 +808,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
             }
             finally
             {
-                SendConcurrencyGuard.Release();
+                _sendConcurrencyGuard.Release();
             }
         }
 
@@ -850,10 +855,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
             string? prompt,
             CancellationToken ct) => throw new NotSupportedException();
 
-        public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
-        {
-            if (OnStartStreaming is null) throw new NotSupportedException();
-            return OnStartStreaming(ct);
-        }
+        public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+            (OnStartStreaming ?? throw new NotSupportedException())(ct);
     }
 }

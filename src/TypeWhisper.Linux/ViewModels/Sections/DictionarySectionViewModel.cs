@@ -376,7 +376,7 @@ public partial class TermPackItemViewModel : ObservableObject
 
     public TermPack Pack { get; }
 
-    public int TermCount => Pack.Terms.Length;
+    private int TermCount => Pack.Terms.Length;
     public string TermCountLabel => Loc.Instance.GetString("Dictionary.TermCountLabel", TermCount);
 
     public string TermsPreview =>

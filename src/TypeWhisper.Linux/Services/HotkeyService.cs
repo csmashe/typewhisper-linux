@@ -19,9 +19,9 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class HotkeyService : IDisposable
 {
-    private readonly KeyCode _cancelKey = KeyCode.VcEscape;
-    private readonly ModifierMask _cancelModifiers = ModifierMask.None;
-    private readonly object _lock = new();
+    private const KeyCode CancelKey = KeyCode.VcEscape;
+    private const ModifierMask CancelModifiers = ModifierMask.None;
+    private readonly Lock _lock = new();
 
     private readonly BackendSelector _selector;
 
@@ -58,12 +58,12 @@ public sealed class HotkeyService : IDisposable
     private Task _pendingBackendUpdate = Task.CompletedTask;
 
     // Per-profile hotkeys. Rebuilt wholesale by SetProfileHotkeys; snapshot captures by reference.
-    private IReadOnlyList<ProfileHotkey> _profileHotkeys = Array.Empty<ProfileHotkey>();
+    private IReadOnlyList<ProfileHotkey> _profileHotkeys = [];
 
     // Direct-execution prompt action hotkeys (B12). Rebuilt wholesale by SetPromptActionHotkeys;
     // snapshot captures by reference so post-push mutations are invisible to the running matcher.
     private IReadOnlyList<PromptActionHotkey> _promptActionHotkeys =
-        Array.Empty<PromptActionHotkey>();
+        [];
 
     private KeyCode? _promptPaletteKey;
     private ModifierMask _promptPaletteModifiers = ModifierMask.None;
@@ -120,6 +120,7 @@ public sealed class HotkeyService : IDisposable
     /// </summary>
     public bool IsCancelShortcutEnabled
     {
+        // ReSharper disable once UnusedMember.Global  paired read accessor for a public property whose setter drives PushShortcutsIfRunning; kept as symmetric API
         get => _cancelShortcutEnabled;
         set
         {
@@ -130,6 +131,7 @@ public sealed class HotkeyService : IDisposable
 
     public RecordingMode Mode
     {
+        // ReSharper disable once UnusedMember.Global  paired read accessor for a public property whose setter drives PushShortcutsIfRunning; kept as symmetric API
         get => _mode;
         set
         {
@@ -485,7 +487,7 @@ public sealed class HotkeyService : IDisposable
         // Clear first so GetBoundHotkeys() doesn't flag re-submitted unchanged entries as
         // already-bound (ActionsChanged fires on every add/update/delete and reuses most
         // existing entries). Intra-batch dedup is handled by the accepted.Any(...) check.
-        _promptActionHotkeys = Array.Empty<PromptActionHotkey>();
+        _promptActionHotkeys = [];
 
         var accepted = new List<PromptActionHotkey>(entries.Count);
         foreach (var entry in entries)
@@ -567,7 +569,7 @@ public sealed class HotkeyService : IDisposable
     ///     Replaces the per-profile hotkey list atomically. Same collision rules as
     ///     <see cref="SetPromptActionHotkeys" /> — entries colliding with any fixed binding
     ///     (including prompt-action and other profile chords) or an earlier batch entry are
-    ///     dropped with a <see cref="Trace.WriteLine" />. Pushes a fresh snapshot immediately.
+    ///     dropped with a <see cref="Trace.WriteLine(string)" />. Pushes a fresh snapshot immediately.
     /// </summary>
     public void SetProfileHotkeys(IReadOnlyList<ProfileHotkey> entries)
     {
@@ -575,7 +577,7 @@ public sealed class HotkeyService : IDisposable
 
         // Clear first — same reason as SetPromptActionHotkeys: reuse of existing entries
         // across ProfilesChanged events must not register as collisions.
-        _profileHotkeys = Array.Empty<ProfileHotkey>();
+        _profileHotkeys = [];
 
         var accepted = new List<ProfileHotkey>(entries.Count);
         foreach (var entry in entries)
@@ -785,8 +787,8 @@ public sealed class HotkeyService : IDisposable
             _copyLastTranscriptionModifiers,
             _transformSelectionKey,
             _transformSelectionModifiers,
-            _cancelKey,
-            _cancelModifiers,
+            CancelKey,
+            CancelModifiers,
             _mode,
             _cancelShortcutEnabled,
             _promptActionHotkeys,
@@ -868,13 +870,8 @@ public sealed class HotkeyService : IDisposable
         // Prefix collision: a bare-modifier binding (e.g. `Left Ctrl`) fires on the same
         // keypress that opens any chord using that physical modifier. Reject either direction
         // at config time. Check against both Left/Right flags because the matcher collapses them.
-        if (CollidesAsModifierPrefix(key, modifiers, otherKey.Value, otherModifiers)
-            || CollidesAsModifierPrefix(otherKey.Value, otherModifiers, key, modifiers))
-        {
-            return true;
-        }
-
-        return false;
+        return CollidesAsModifierPrefix(key, modifiers, otherKey.Value, otherModifiers)
+            || CollidesAsModifierPrefix(otherKey.Value, otherModifiers, key, modifiers);
     }
 
     private static bool CollidesAsModifierPrefix(
@@ -1076,26 +1073,24 @@ public sealed class HotkeyService : IDisposable
                     continue;
             }
 
-            if (part is [>= 'a' and <= 'z'])
+            switch (part)
             {
-                if (key is not null)
-                {
-                    return false;
-                }
+                case [>= 'a' and <= 'z']:
+                    if (key is not null)
+                    {
+                        return false;
+                    }
 
-                key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{char.ToUpperInvariant(part[0])}");
-                continue;
-            }
+                    key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{char.ToUpperInvariant(part[0])}");
+                    continue;
+                case [>= '0' and <= '9']:
+                    if (key is not null)
+                    {
+                        return false;
+                    }
 
-            if (part is [>= '0' and <= '9'])
-            {
-                if (key is not null)
-                {
-                    return false;
-                }
-
-                key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{part[0]}");
-                continue;
+                    key = (KeyCode)Enum.Parse(typeof(KeyCode), $"Vc{part[0]}");
+                    continue;
             }
 
             var named = part switch

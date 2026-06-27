@@ -28,12 +28,7 @@
     </Window.Resources>
 
     <Grid ColumnDefinitions="272,1,*" RowDefinitions="*">
-        <Grid Grid.Column="0" Margin="18,18,0,18">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-
+        <Grid Grid.Column="0" Margin="18,18,0,18" RowDefinitions="Auto,*">
             <DockPanel Grid.Row="0" Margin="2,8,14,14">
                 <TextBlock Text="{Binding AppTitle}"
                            FontSize="15"
@@ -102,19 +97,8 @@
 
         <Border Grid.Column="1" Background="#283644" Margin="0,18,0,18" />
 
-        <Grid Grid.Column="2" Margin="0,18,18,18">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="52" />
-                <RowDefinition Height="1" />
-                <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0" Margin="28,0,28,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
+        <Grid Grid.Column="2" Margin="0,18,18,18" RowDefinitions="52,1,*">
+            <Grid Grid.Row="0" Margin="28,0,28,0" ColumnDefinitions="*,Auto">
                 <Border Grid.Column="0"
                         IsVisible="{Binding UpdateBannerVisible}"
                         HorizontalAlignment="Left"

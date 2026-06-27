@@ -1,6 +1,6 @@
 namespace TypeWhisper.Linux.Cli;
 
-/// <summary>What the parsed argv tells us to do; Program.Main switches on <see cref="Kind" />.</summary>
+/// <summary>What the parsed argv tells us to do; Program.Main switches on <see cref="CliAction.Kind" />.</summary>
 internal enum CliActionKind
 {
     /// <summary>Launch the GUI (single-instance probe runs separately).</summary>
@@ -130,20 +130,20 @@ internal static class CommandLineParser
             );
         }
 
-        if (string.Equals(verb, "status", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(verb, "status", StringComparison.OrdinalIgnoreCase))
         {
-            if (HasUnexpectedTrailingOperand(args, firstNonFlag))
-            {
-                return new CliAction(
-                    CliActionKind.Invalid,
-                    ErrorMessage: "unexpected extra arguments after 'status'"
-                );
-            }
-
-            return new CliAction(CliActionKind.Status);
+            return new CliAction(CliActionKind.Invalid, ErrorMessage: $"unknown command '{verb}'");
         }
 
-        return new CliAction(CliActionKind.Invalid, ErrorMessage: $"unknown command '{verb}'");
+        if (HasUnexpectedTrailingOperand(args, firstNonFlag))
+        {
+            return new CliAction(
+                CliActionKind.Invalid,
+                ErrorMessage: "unexpected extra arguments after 'status'"
+            );
+        }
+
+        return new CliAction(CliActionKind.Status);
     }
 
     /// <summary>

@@ -41,7 +41,7 @@ public sealed class SuppressGlxRenderExceptionLogSinkTests
 
         sink.Log(LogEventLevel.Error, "Visual", null, "boom: {0}", ex);
 
-        Assert.Equal(new[] { "boom: {0}" }, inner.Messages);
+        Assert.Equal(["boom: {0}"], inner.Messages);
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public sealed class SuppressGlxRenderExceptionLogSinkTests
 
         sink.Log(LogEventLevel.Error, "Visual", null, "Exception in render loop: {0}", ex);
 
-        Assert.Equal(new[] { "Exception in render loop: {0}" }, inner.Messages);
+        Assert.Equal(["Exception in render loop: {0}"], inner.Messages);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public sealed class SuppressGlxRenderExceptionLogSinkTests
 
         sink.Log(LogEventLevel.Warning, "X11Platform", null, "Some plain message");
 
-        Assert.Equal(new[] { "Some plain message" }, inner.Messages);
+        Assert.Equal(["Some plain message"], inner.Messages);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public sealed class SuppressGlxRenderExceptionLogSinkTests
 
         sink.Log(LogEventLevel.Error, "Visual", null, "boom: {0}", ex);
 
-        Assert.Equal(new[] { "boom: {0}" }, inner.Messages);
+        Assert.Equal(["boom: {0}"], inner.Messages);
     }
 
     [Fact]
@@ -115,20 +115,18 @@ public sealed class SuppressGlxRenderExceptionLogSinkTests
 
     private sealed class StubSyncLockException : SynchronizationLockException
     {
-        private readonly string _stackTrace;
-
         public StubSyncLockException(string stackTrace)
         {
-            _stackTrace = stackTrace;
+            StackTrace = stackTrace;
         }
 
-        public override string? StackTrace => _stackTrace;
+        public override string StackTrace { get; }
     }
 
     /// <summary>Inner sink that records the message templates it receives.</summary>
     private sealed class RecordingSink : ILogSink
     {
-        public List<string> Messages { get; } = new();
+        public List<string> Messages { get; } = [];
         public bool IsEnabledResult { get; set; } = true;
 
         public bool IsEnabled(LogEventLevel level, string area)

@@ -11,7 +11,7 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class BundledPluginDeployer
 {
-    public int DeployIfMissing()
+    public static int DeployIfMissing()
     {
         var source = FindBundledPluginsDir();
         if (source is null)

@@ -13,6 +13,7 @@ public static class InputGroupCheck
 {
     private const string InputGroupName = "input";
 
+    // ReSharper disable once UnusedMember.Global  public API surface (input-group membership probe referenced by InputDeviceAccessCheck); not currently called in-tree
     public static bool? CurrentUserInInputGroup()
     {
         var inputGid = ReadInputGid();

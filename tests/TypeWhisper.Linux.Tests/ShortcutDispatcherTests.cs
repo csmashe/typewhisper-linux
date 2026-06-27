@@ -19,7 +19,7 @@ public sealed class ShortcutDispatcherTests
             )
         );
         string? observed = null;
-        int count = 0;
+        var count = 0;
         d.PromptActionRequested += id =>
         {
             observed = id;
@@ -48,7 +48,7 @@ public sealed class ShortcutDispatcherTests
                 ModifierMask.LeftCtrl | ModifierMask.LeftAlt
             )
         );
-        int count = 0;
+        var count = 0;
         d.PromptActionRequested += _ => count++;
 
         d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
@@ -82,7 +82,7 @@ public sealed class ShortcutDispatcherTests
                 ModifierMask.LeftCtrl | ModifierMask.LeftAlt
             )
         );
-        int count = 0;
+        var count = 0;
         d.PromptActionRequested += _ => count++;
 
         d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
@@ -196,8 +196,7 @@ public sealed class ShortcutDispatcherTests
                 "email",
                 KeyCode.VcE,
                 ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-                ProfileHotkeyBehavior.StartDictation,
-                RecordingMode.Toggle
+                ProfileHotkeyBehavior.StartDictation
             )
         );
         string? toggled = null;
@@ -282,8 +281,7 @@ public sealed class ShortcutDispatcherTests
                 "email",
                 KeyCode.VcE,
                 ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-                ProfileHotkeyBehavior.StartDictation,
-                RecordingMode.Toggle
+                ProfileHotkeyBehavior.StartDictation
             )
         );
         var toggleCount = 0;
@@ -304,8 +302,7 @@ public sealed class ShortcutDispatcherTests
                 "summarize",
                 KeyCode.VcS,
                 ModifierMask.LeftCtrl | ModifierMask.LeftShift,
-                ProfileHotkeyBehavior.ProcessSelectedText,
-                RecordingMode.Toggle
+                ProfileHotkeyBehavior.ProcessSelectedText
             )
         );
         string? observed = null;

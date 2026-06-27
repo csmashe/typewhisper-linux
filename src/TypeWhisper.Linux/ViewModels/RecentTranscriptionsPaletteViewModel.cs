@@ -42,6 +42,7 @@ public partial class RecentTranscriptionsPaletteViewModel : ObservableObject
         SelectedItem = FilteredEntries[nextIndex];
     }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (palette confirm-selection entry point alongside MoveSelection/Select); not currently called in-tree
     public void SelectCurrent()
     {
         Select(SelectedItem ?? FilteredEntries.FirstOrDefault());

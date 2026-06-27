@@ -96,23 +96,27 @@ internal static class ShortcutMatcher
         // HotkeyService de-duplicates before pushing, so linear scan is fine (N < 10).
         foreach (var entry in set.PromptActionHotkeys)
         {
-            if (key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
+            if (key != entry.Key || !ModifiersMatch(pressedMods, entry.Modifiers))
             {
-                promptActionId = entry.ActionId;
-                return ShortcutMatchKind.PromptAction;
+                continue;
             }
+
+            promptActionId = entry.ActionId;
+            return ShortcutMatchKind.PromptAction;
         }
 
         // Profile hotkeys after prompt-actions; SetProfileHotkeys already rejects collisions,
         // but the ordering preserves that intent.
         foreach (var entry in set.ProfileHotkeys)
         {
-            if (key == entry.Key && ModifiersMatch(pressedMods, entry.Modifiers))
+            if (key != entry.Key || !ModifiersMatch(pressedMods, entry.Modifiers))
             {
-                profileId = entry.ProfileId;
-                profileBehavior = entry.Behavior;
-                return ShortcutMatchKind.Profile;
+                continue;
             }
+
+            profileId = entry.ProfileId;
+            profileBehavior = entry.Behavior;
+            return ShortcutMatchKind.Profile;
         }
 
         if (key == set.DictationKey && ModifiersMatch(pressedMods, set.DictationModifiers))

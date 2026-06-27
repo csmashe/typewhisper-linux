@@ -92,13 +92,15 @@ public sealed class PluginLoader
                 try
                 {
                     var plugin = LoadPlugin(pluginDir);
-                    if (plugin is not null)
+                    if (plugin is null)
                     {
-                        loaded.Add(plugin);
-                        Trace.WriteLine(
-                            $"[PluginLoader] Loaded plugin: {plugin.Manifest.Id} v{plugin.Manifest.Version} from {pluginDir}"
-                        );
+                        continue;
                     }
+
+                    loaded.Add(plugin);
+                    Trace.WriteLine(
+                        $"[PluginLoader] Loaded plugin: {plugin.Manifest.Id} v{plugin.Manifest.Version} from {pluginDir}"
+                    );
                 }
                 catch (Exception ex)
                 {
@@ -195,6 +197,9 @@ public sealed class PluginLoader
             return null;
         }
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement — the following
+        // `instance is IPluginDataLocationAware` / `IPluginLocalizationAware` checks are
+        // independent (a plugin may implement both); a type-switch would skip later matches.
         if (instance is null)
         {
             _lastLoadFailures.Add(

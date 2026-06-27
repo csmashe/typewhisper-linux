@@ -1,7 +1,6 @@
 using System.Collections.Specialized;
 using System.Text;
 using System.Text.Json;
-using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using Xunit;
@@ -10,10 +9,16 @@ namespace TypeWhisper.Linux.Tests;
 
 public class HttpApiRequestParserTests
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true
+    };
+
     [Fact]
     public void ParseTranscribe_ReadsMultipartFileAndFields()
     {
-        var boundary = "Boundary123";
+        const string boundary = "Boundary123";
         var body = Multipart(
             boundary,
             ("language_hint", null, null, "de"u8.ToArray()),
@@ -89,7 +94,7 @@ public class HttpApiRequestParserTests
     [Fact]
     public void ParseTranscribe_RejectsLanguageAndHintsTogether()
     {
-        var boundary = "Boundary123";
+        const string boundary = "Boundary123";
         var body = Multipart(
             boundary,
             ("language", null, null, "de"u8.ToArray()),
@@ -118,7 +123,7 @@ public class HttpApiRequestParserTests
     [Fact]
     public void ParseTranscribe_RejectsMultipartWithoutFile()
     {
-        var boundary = "Boundary123";
+        const string boundary = "Boundary123";
         var body = Multipart(boundary, ("language", null, null, "de"u8.ToArray()));
         var request = new HttpApiRequest(
             "POST",
@@ -141,7 +146,7 @@ public class HttpApiRequestParserTests
     [Fact]
     public void ParseTranscribeLocalFile_DeserializesFullBody()
     {
-        var json = """
+        const string json = """
             {
               "path": "/tmp/clip.wav",
               "language": "en",
@@ -155,13 +160,7 @@ public class HttpApiRequestParserTests
               "await_download": true
             }
             """;
-        var options = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            PropertyNameCaseInsensitive = true
-        };
-
-        var parsed = JsonSerializer.Deserialize<LocalFileTranscribeRequest>(json, options)!;
+        var parsed = JsonSerializer.Deserialize<LocalFileTranscribeRequest>(json, s_jsonOptions)!;
 
         Assert.Equal("/tmp/clip.wav", parsed.Path);
         Assert.Equal("en", parsed.Language);
@@ -178,34 +177,22 @@ public class HttpApiRequestParserTests
     [Fact]
     public void ParseDictionaryTermDelete_RequiresTerm()
     {
-        var options = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            PropertyNameCaseInsensitive = true
-        };
-
         var withTerm = JsonSerializer.Deserialize<DictionaryTermDeleteRequest>(
             """{"term":"FooCorp"}""",
-            options
+            s_jsonOptions
         );
         Assert.Equal("FooCorp", withTerm!.Term);
 
-        var empty = JsonSerializer.Deserialize<DictionaryTermDeleteRequest>("{}", options);
+        var empty = JsonSerializer.Deserialize<DictionaryTermDeleteRequest>("{}", s_jsonOptions);
         Assert.Null(empty!.Term);
     }
 
     [Fact]
     public void ParseCorrectionUpsert_AcceptsOptionalCaseSensitive()
     {
-        var options = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            PropertyNameCaseInsensitive = true
-        };
-
         var parsed = JsonSerializer.Deserialize<CorrectionUpsertRequest>(
             """{"original":"teh","replacement":"the"}""",
-            options
+            s_jsonOptions
         );
         Assert.Equal("teh", parsed!.Original);
         Assert.Equal("the", parsed.Replacement);
@@ -213,7 +200,7 @@ public class HttpApiRequestParserTests
 
         var withFlag = JsonSerializer.Deserialize<CorrectionUpsertRequest>(
             """{"original":"teh","replacement":"the","case_sensitive":true}""",
-            options
+            s_jsonOptions
         );
         Assert.True(withFlag!.CaseSensitive);
     }

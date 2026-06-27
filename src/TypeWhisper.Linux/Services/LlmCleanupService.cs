@@ -35,17 +35,17 @@ public sealed class LlmCleanupService
         CancellationToken ct = default
     )
     {
-        if (level == CleanupLevel.None)
+        // Medium/High intentionally fall through to the LLM cleanup path below.
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
+        switch (level)
         {
-            return text;
+            case CleanupLevel.None:
+                return text;
+            case CleanupLevel.Light:
+                return _cleanup.Clean(text, CleanupLevel.Light);
         }
 
-        if (level == CleanupLevel.Light)
-        {
-            return CleanupService.Clean(text, CleanupLevel.Light);
-        }
-
-        var lightText = CleanupService.Clean(text, CleanupLevel.Light);
+        var lightText = _cleanup.Clean(text, CleanupLevel.Light);
         if (!_promptProcessing.IsAnyProviderAvailable)
         {
             await NotifyStatusAsync(

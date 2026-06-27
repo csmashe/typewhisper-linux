@@ -22,15 +22,12 @@ internal static class ProcessNameNormalizer
         // "nautilus" — so collapse 3+ segment DNS forms to the last segment.
         // We require >=2 dots so a stray two-token name like "chrome.app"
         // doesn't get mangled into "app".
-        if (baseName.Count(c => c == '.') >= 2)
+        if (baseName.Count(c => c == '.') < 2)
         {
-            var lastSegment = baseName[(baseName.LastIndexOf('.') + 1)..];
-            if (!string.IsNullOrEmpty(lastSegment))
-            {
-                return lastSegment;
-            }
+            return baseName;
         }
 
-        return baseName;
+        var lastSegment = baseName[(baseName.LastIndexOf('.') + 1)..];
+        return string.IsNullOrEmpty(lastSegment) ? baseName : lastSegment;
     }
 }

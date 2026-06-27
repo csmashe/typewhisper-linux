@@ -52,6 +52,9 @@ public sealed class PluginRegistryService
     };
 
     private readonly HttpClient _httpClient;
+
+    // kept injected as a DI/test seam; not consumed in-tree
+    // ReSharper disable once NotAccessedField.Local
     private readonly PluginLoader _pluginLoader;
 
     private readonly PluginManager _pluginManager;
@@ -128,7 +131,7 @@ public sealed class PluginRegistryService
         return PluginInstallState.Installed;
     }
 
-    public async Task InstallPluginAsync(
+    private async Task InstallPluginAsync(
         RegistryPlugin registryPlugin,
         IProgress<double>? progress = null,
         CancellationToken ct = default
@@ -199,19 +202,22 @@ public sealed class PluginRegistryService
                 $"[PluginRegistry] Failed to install {registryPlugin.Id}: {ex.Message}"
             );
 
-            if (Directory.Exists(pluginDir))
+            if (!Directory.Exists(pluginDir))
             {
-                try
-                {
-                    Directory.Delete(pluginDir, true);
-                }
-                catch { }
+                throw;
             }
+
+            try
+            {
+                Directory.Delete(pluginDir, true);
+            }
+            catch { }
 
             throw;
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (plugin uninstall entry point); not currently called in-tree
     public async Task UninstallPluginAsync(string pluginId)
     {
         await _pluginManager.UnloadPluginAsync(pluginId);
@@ -237,6 +243,7 @@ public sealed class PluginRegistryService
     ///     Checks for plugin updates, throttled to one network probe per 24 h to avoid hammering
     ///     the registry endpoint on repeated launches.
     /// </summary>
+    // ReSharper disable once UnusedMember.Global  public API surface (throttled plugin update check); not currently called in-tree
     public async Task CheckForUpdatesAsync(CancellationToken ct = default)
     {
         if (DateTime.UtcNow - _lastUpdateCheck < s_updateCheckInterval)
@@ -279,18 +286,20 @@ public sealed class PluginRegistryService
             var registry = await FetchRegistryAsync(ct);
             foreach (var plugin in registry)
             {
-                if (GetInstallState(plugin) == PluginInstallState.NotInstalled)
+                if (GetInstallState(plugin) != PluginInstallState.NotInstalled)
                 {
-                    try
-                    {
-                        await InstallPluginAsync(plugin, ct: ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        Trace.WriteLine(
-                            $"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}"
-                        );
-                    }
+                    continue;
+                }
+
+                try
+                {
+                    await InstallPluginAsync(plugin, ct: ct);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}"
+                    );
                 }
             }
         }

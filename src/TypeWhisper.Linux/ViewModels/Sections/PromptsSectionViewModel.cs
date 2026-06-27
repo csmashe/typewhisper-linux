@@ -83,9 +83,13 @@ public partial class PromptsSectionViewModel : ObservableObject
     public string Summary =>
         Loc.Instance.GetString("Prompts.Summary", ActionCount, EnabledActionCount);
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PromptsHint => Loc.Instance["Prompts.Hint"];
 
     public bool ShowProviderWarning => AvailableProviders.Count <= 1;
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ProviderWarningText => Loc.Instance["Prompts.ProviderWarning"];
     public bool ShowEmptyState => ActionCount == 0;
     public string EditorTitle =>

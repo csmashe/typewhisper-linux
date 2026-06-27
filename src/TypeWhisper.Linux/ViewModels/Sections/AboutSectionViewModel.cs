@@ -77,22 +77,27 @@ public partial class AboutSectionViewModel : ObservableObject
     // Embedded at build time (Directory.Build.props); shows the upstream/Excel-on-the-Web split in-app.
     public string Copyright { get; } = AppVersion.Copyright;
 
+    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section system-info display); not currently bound in-tree
     public string RuntimeVersion { get; } = Environment.Version.ToString();
 
+    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section system-info display); not currently bound in-tree
     public string OsDescription { get; } =
         RuntimeInformation.OSDescription;
 
+    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section system-info display); not currently bound in-tree
     public string Architecture { get; } =
         RuntimeInformation.OSArchitecture.ToString();
 
+    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section project URL display); not currently bound in-tree
     public string ProjectUrl { get; } = "https://github.com/csmashe/typewhisper-linux";
 
+    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section upstream URL display); not currently bound in-tree
     public string UpstreamUrl { get; } = "https://github.com/TypeWhisper/typewhisper-win";
 
     public bool CanCheckForUpdates => !IsCheckingForUpdates;
 
     // Full, unfiltered backing list; drives HasErrors and the category options.
-    public ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
+    private ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
 
     // The entries actually shown — ErrorEntries narrowed by SelectedCategoryFilter.
     public ObservableCollection<ErrorLogEntry> FilteredErrorEntries { get; } = [];

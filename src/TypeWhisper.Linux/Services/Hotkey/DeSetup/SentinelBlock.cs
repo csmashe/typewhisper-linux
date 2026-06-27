@@ -45,14 +45,12 @@ public static class SentinelBlock
             }
         }
 
-        if (opens.Count == 0 && closes.Count == 0)
+        switch (opens.Count, closes.Count)
         {
-            return new SentinelScan(false, null, null, null);
-        }
-
-        if (opens.Count == 1 && closes.Count == 1 && opens[0] < closes[0])
-        {
-            return new SentinelScan(false, opens[0], closes[0], null);
+            case (0, 0):
+                return new SentinelScan(false, null, null, null);
+            case (1, 1) when opens[0] < closes[0]:
+                return new SentinelScan(false, opens[0], closes[0], null);
         }
 
         var reason = $"Found {opens.Count} open sentinel(s) and {closes.Count} close sentinel(s).";
@@ -162,13 +160,8 @@ public static class SentinelBlock
 
     private static List<string> SplitLines(string contents)
     {
-        if (contents.Length == 0)
-        {
-            return new List<string>();
-        }
-
         // Normalise CRLF to LF for splitting; JoinLines restores the original line ending.
-        return contents.Replace("\r\n", "\n").Split('\n').ToList();
+        return contents.Length == 0 ? [] : contents.Replace("\r\n", "\n").Split('\n').ToList();
     }
 
     private static string JoinLines(List<string> lines, string original)
@@ -180,14 +173,15 @@ public static class SentinelBlock
         // trailing empty element as a separator signal and would otherwise drop it.
         var originalEndsWithNewline = original.EndsWith('\n');
         var joinedEndsWithNewline = joined.EndsWith(sep, StringComparison.Ordinal);
-        if (originalEndsWithNewline && !joinedEndsWithNewline)
+        switch (originalEndsWithNewline, joinedEndsWithNewline)
         {
-            joined += sep;
-        }
-        else if (!originalEndsWithNewline && joinedEndsWithNewline)
-        {
-            // Slice exactly one separator — TrimEnd would over-trim files with multiple trailing blanks.
-            joined = joined[..^sep.Length];
+            case (true, false):
+                joined += sep;
+                break;
+            case (false, true):
+                // Slice exactly one separator — TrimEnd would over-trim files with multiple trailing blanks.
+                joined = joined[..^sep.Length];
+                break;
         }
 
         return joined;

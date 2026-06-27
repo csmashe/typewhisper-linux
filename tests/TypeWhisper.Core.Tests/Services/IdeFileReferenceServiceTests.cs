@@ -36,7 +36,7 @@ public sealed class IdeFileReferenceServiceTests
         string expected
     )
     {
-        var result = IdeFileReferenceService.TryFormatReferenceCommand(input);
+        var result = new IdeFileReferenceService().TryFormatReferenceCommand(input);
 
         Assert.Equal(expected, result);
     }
@@ -50,7 +50,7 @@ public sealed class IdeFileReferenceServiceTests
     [InlineData("reference the spec for details")]
     public void TryFormatReferenceCommand_LeavesNormalDeveloperTextAlone(string input)
     {
-        var result = IdeFileReferenceService.TryFormatReferenceCommand(input);
+        var result = new IdeFileReferenceService().TryFormatReferenceCommand(input);
 
         Assert.Null(result);
     }

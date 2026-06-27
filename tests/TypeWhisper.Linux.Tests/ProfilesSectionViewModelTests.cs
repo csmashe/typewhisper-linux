@@ -132,8 +132,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         );
 
         var activeWindow = CreateActiveWindowService();
-        activeWindow.Setup(service => service.GetActiveWindowProcessName()).Returns("firefox");
-        activeWindow.Setup(service => service.GetActiveWindowTitle()).Returns("Docs");
+        activeWindow.Setup(s => s.GetActiveWindowProcessName()).Returns("firefox");
+        activeWindow.Setup(s => s.GetActiveWindowTitle()).Returns("Docs");
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
 
@@ -199,7 +199,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     {
         var service = CreateProfileService();
         var activeWindow = CreateActiveWindowService();
-        activeWindow.Setup(service => service.GetActiveWindowProcessName()).Returns("firefox");
+        activeWindow.Setup(s => s.GetActiveWindowProcessName()).Returns("firefox");
         using var pluginManager = CreatePluginManager();
         var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
 

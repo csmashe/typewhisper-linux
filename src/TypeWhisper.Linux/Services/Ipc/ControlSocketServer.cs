@@ -75,7 +75,7 @@ internal sealed class ControlSocketServer : IDisposable
     }
 
     /// <summary>Absolute path of the socket file once <see cref="Start" /> succeeds.</summary>
-    public string SocketPath { get; }
+    private string SocketPath { get; }
 
     public void Dispose()
     {
@@ -138,18 +138,20 @@ internal sealed class ControlSocketServer : IDisposable
         // may have already taken it over before our Dispose reaches this point.
         try
         {
-            if (_bound && File.Exists(SocketPath))
+            if (!_bound || !File.Exists(SocketPath))
             {
-                if (NoLivePeer(SocketPath))
-                {
-                    File.Delete(SocketPath);
-                }
-                else
-                {
-                    Trace.WriteLine(
-                        $"[ControlSocketServer] Socket path {SocketPath} is held by another listener; leaving it in place."
-                    );
-                }
+                return;
+            }
+
+            if (NoLivePeer(SocketPath))
+            {
+                File.Delete(SocketPath);
+            }
+            else
+            {
+                Trace.WriteLine(
+                    $"[ControlSocketServer] Socket path {SocketPath} is held by another listener; leaving it in place."
+                );
             }
         }
         catch (Exception ex)
@@ -332,12 +334,7 @@ internal sealed class ControlSocketServer : IDisposable
                 .ConfigureAwait(false);
             if (n <= 0)
             {
-                if (total == 0)
-                {
-                    return null;
-                }
-
-                return Encoding.UTF8.GetString(buf, 0, total);
+                return total == 0 ? null : Encoding.UTF8.GetString(buf, 0, total);
             }
 
             var nl = Array.IndexOf(buf, (byte)'\n', total, n);

@@ -8,7 +8,7 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 {
-    public const string BuiltInProviderId = AppSettings.DefaultSpokenFeedbackProviderId;
+    private const string BuiltInProviderId = AppSettings.DefaultSpokenFeedbackProviderId;
     private readonly SystemCommandAvailabilityService _commands;
 
     private readonly ISettingsService _settings;
@@ -134,12 +134,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
             return "paplay";
         }
 
-        if (CommandExists("aplay"))
-        {
-            return "aplay";
-        }
-
-        return null;
+        return CommandExists("aplay") ? "aplay" : null;
     }
 
     private static bool CommandExists(string name)

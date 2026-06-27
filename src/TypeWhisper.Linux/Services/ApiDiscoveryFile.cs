@@ -24,7 +24,7 @@ public sealed class ApiDiscoveryFile
     private static readonly JsonSerializerOptions s_jsonOptions =
         new() { WriteIndented = true };
 
-    public static string DirectoryPath
+    private static string DirectoryPath
     {
         get
         {
@@ -41,8 +41,11 @@ public sealed class ApiDiscoveryFile
         }
     }
 
-    public static string FilePath => Path.Join(DirectoryPath, FileName);
+    private static string FilePath => Path.Join(DirectoryPath, FileName);
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void Write(int port, string token)
     {
         try
@@ -100,6 +103,9 @@ public sealed class ApiDiscoveryFile
         }
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void Delete()
     {
         try

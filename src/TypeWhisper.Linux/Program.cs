@@ -38,6 +38,7 @@ public static class Program
         var action = CommandLineParser.Parse(args);
         StartMinimized = action.StartMinimized;
 
+        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault
         switch (action.Kind)
         {
             case CliActionKind.PrintHelp:
@@ -143,7 +144,7 @@ public static class Program
                     // throws a per-frame SynchronizationLockException from GlxContext.RestoreContext.Dispose,
                     // but only after rendering — transparency works and the log noise is filtered by
                     // SuppressGlxRenderExceptionLogSink. EGL is the fallback if GLX init fails.
-                    RenderingMode = new[] { X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software }
+                    RenderingMode = [X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software]
                 }
             )
 #if DEBUG

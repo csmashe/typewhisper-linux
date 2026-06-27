@@ -6,12 +6,14 @@ namespace TypeWhisper.Core.Tests.Services;
 /// <summary>Covers <see cref="CleanupService" /> light cleanup (fillers, spoken punctuation/lists, backtrack corrections) and LLM prompt selection.</summary>
 public sealed class CleanupServiceTests
 {
+    private readonly CleanupService _sut = new();
+
     [Fact]
     public void Clean_None_ReturnsOriginalText()
     {
         const string text = "um hello   world";
 
-        var result = CleanupService.Clean(text, CleanupLevel.None);
+        var result = _sut.Clean(text, CleanupLevel.None);
 
         Assert.Equal(text, result);
     }
@@ -23,7 +25,7 @@ public sealed class CleanupServiceTests
     [InlineData("er hello ah world", "Hello world")]
     public void Clean_Light_RemovesStandaloneFillers(string input, string expected)
     {
-        var result = CleanupService.Clean(input, CleanupLevel.Light);
+        var result = _sut.Clean(input, CleanupLevel.Light);
 
         Assert.Equal(expected, result);
     }
@@ -31,7 +33,7 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_Light_DoesNotDamageWordsContainingFillerText()
     {
-        var result = CleanupService.Clean("umbrella error ahead", CleanupLevel.Light);
+        var result = _sut.Clean("umbrella error ahead", CleanupLevel.Light);
 
         Assert.Equal("Umbrella error ahead", result);
     }
@@ -39,7 +41,7 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_Light_NormalizesWhitespaceAndPreservesSentencePunctuation()
     {
-        var result = CleanupService.Clean("  hello   world  .  ", CleanupLevel.Light);
+        var result = _sut.Clean("  hello   world  .  ", CleanupLevel.Light);
 
         Assert.Equal("Hello world.", result);
     }
@@ -52,7 +54,7 @@ public sealed class CleanupServiceTests
         string expected
     )
     {
-        var result = CleanupService.Clean(input, CleanupLevel.Light);
+        var result = _sut.Clean(input, CleanupLevel.Light);
 
         Assert.Equal(expected, result);
     }
@@ -60,7 +62,7 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_Light_AppliesScratchThatReplacementWhenReplacementLooksLikeNewDictation()
     {
-        var result = CleanupService.Clean(
+        var result = _sut.Clean(
             "send the first draft scratch that please send the final draft",
             CleanupLevel.Light
         );
@@ -76,7 +78,7 @@ public sealed class CleanupServiceTests
     )]
     public void Clean_Light_LeavesAmbiguousBacktrackTextAlone(string input, string expected)
     {
-        var result = CleanupService.Clean(input, CleanupLevel.Light);
+        var result = _sut.Clean(input, CleanupLevel.Light);
 
         Assert.Equal(expected, result);
     }
@@ -84,7 +86,7 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_Light_FormatsClearSpokenNumberedList()
     {
-        var result = CleanupService.Clean("one apples two bananas three oranges", CleanupLevel.Light);
+        var result = _sut.Clean("one apples two bananas three oranges", CleanupLevel.Light);
 
         Assert.Equal("1. Apples\n2. bananas\n3. oranges", result);
     }
@@ -98,7 +100,7 @@ public sealed class CleanupServiceTests
     )]
     public void Clean_Light_FormatsClearSpokenBulletList(string input, string expected)
     {
-        var result = CleanupService.Clean(input, CleanupLevel.Light);
+        var result = _sut.Clean(input, CleanupLevel.Light);
 
         Assert.Equal(expected, result);
     }
@@ -106,7 +108,7 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_Light_DoesNotFormatAmbiguousBulletList()
     {
-        var result = CleanupService.Clean("bullet list the things we need", CleanupLevel.Light);
+        var result = _sut.Clean("bullet list the things we need", CleanupLevel.Light);
 
         Assert.Equal("Bullet list the things we need", result);
     }
@@ -121,7 +123,7 @@ public sealed class CleanupServiceTests
     [InlineData("great work exclamation point", "Great work!")]
     public void Clean_Light_AppliesSpokenPunctuation(string input, string expected)
     {
-        var result = CleanupService.Clean(input, CleanupLevel.Light);
+        var result = _sut.Clean(input, CleanupLevel.Light);
 
         Assert.Equal(expected, result);
     }
@@ -133,7 +135,7 @@ public sealed class CleanupServiceTests
     [InlineData("first period second period", "First period second.")]
     public void Clean_Light_LeavesAmbiguousSpokenPunctuationAsWords(string input, string expected)
     {
-        var result = CleanupService.Clean(input, CleanupLevel.Light);
+        var result = _sut.Clean(input, CleanupLevel.Light);
 
         Assert.Equal(expected, result);
     }
@@ -141,7 +143,7 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_Light_DoesNotFormatOutOfOrderNumberedList()
     {
-        var result = CleanupService.Clean("one apples three oranges", CleanupLevel.Light);
+        var result = _sut.Clean("one apples three oranges", CleanupLevel.Light);
 
         Assert.Equal("One apples three oranges", result);
     }
@@ -149,8 +151,8 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_MediumAndHigh_DegradeToLightForNow()
     {
-        Assert.Equal("Hello", CleanupService.Clean("um hello", CleanupLevel.Medium));
-        Assert.Equal("Hello", CleanupService.Clean("um hello", CleanupLevel.High));
+        Assert.Equal("Hello", _sut.Clean("um hello", CleanupLevel.Medium));
+        Assert.Equal("Hello", _sut.Clean("um hello", CleanupLevel.High));
     }
 
     [Fact]

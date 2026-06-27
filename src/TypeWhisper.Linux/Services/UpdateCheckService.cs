@@ -19,6 +19,7 @@ public sealed record UpdateCheckResult
     public string? CurrentVersion { get; init; }
     public string? LatestVersion { get; init; }
     public string? ReleaseUrl { get; init; }
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  part of the UpdateCheckResult result-record data shape (set when a check faults; carried for callers/diagnostics)
     public string? Error { get; init; }
 
     public static UpdateCheckResult NotChecked { get; } = new();
@@ -252,11 +253,13 @@ public sealed class UpdateCheckService
                 continue;
             }
 
-            if (best is null || AppVersion.Compare(version, best) > 0)
+            if (best is not null && AppVersion.Compare(version, best) <= 0)
             {
-                best = version;
-                htmlUrl = release.HtmlUrl;
+                continue;
             }
+
+            best = version;
+            htmlUrl = release.HtmlUrl;
         }
 
         return best;

@@ -47,7 +47,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             accessHelper,
             InputDeviceAccessCheck.HasKeyboardAccess,
             UserListedInInputGroupFile,
-            accessHelper.IsRuleInstalled,
+            InputAccessSetupHelper.IsRuleInstalled,
             hotkey.SwitchBackendAsync
         )
     {
@@ -162,28 +162,28 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             );
         }
 
+        // No logind (Devuan, Alpine without elogind): the rule's GROUP="input"
+        // fallback only grants access once the user joins that group and re-logs.
+        if (!_hasKeyboardAccess())
+        {
+            return await AddToInputGroupFallbackAsync(ct).ConfigureAwait(false);
+        }
+
         // Self-correcting: on logind systems the uaccess ACL is live now, so the
         // re-probe succeeds and we're done with no reboot. Hot-swap the backend so
         // evdev re-attaches the now-readable devices without an app restart.
-        if (_hasKeyboardAccess())
+        try
         {
-            try
-            {
-                await _onAccessGranted(ct).ConfigureAwait(false);
-            }
-            catch
-            {
-                // A backend hot-swap hiccup must not turn a successful grant into a
-                // failure — the access is granted; the backend re-probes on next
-                // launch regardless.
-            }
-
-            return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyAccessEnabled"]);
+            await _onAccessGranted(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // A backend hot-swap hiccup must not turn a successful grant into a
+            // failure — the access is granted; the backend re-probes on next
+            // launch regardless.
         }
 
-        // No logind (Devuan, Alpine without elogind): the rule's GROUP="input"
-        // fallback only grants access once the user joins that group and re-logs.
-        return await AddToInputGroupFallbackAsync(ct).ConfigureAwait(false);
+        return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyAccessEnabled"]);
     }
 
     /// <summary>
@@ -198,7 +198,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         var result = await _runner
             .RunAsync(
                 "pkexec",
-                new[] { "usermod", "-aG", "input", CurrentUser },
+                ["usermod", "-aG", "input", CurrentUser],
                 timeout: TimeSpan.FromMinutes(2),
                 ct: ct
             )

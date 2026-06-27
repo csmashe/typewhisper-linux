@@ -51,18 +51,18 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IHistoryService _history;
     private readonly HotkeyService _hotkey;
     private readonly IdeFileReferenceService _ideFileReferences;
-    private readonly HashSet<int> _inFlightSessions = new();
+    private readonly HashSet<int> _inFlightSessions = [];
     private readonly IMediaPauseService _mediaPause;
     private readonly MemoryService _memory;
     private readonly ModelManagerService _models;
-    private readonly object _overlayStateLock = new();
+    private readonly Lock _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly IPostProcessingPipeline _pipeline;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
     private readonly PromptProcessingService _promptProcessing;
     private readonly RecentTranscriptionsService _recentTranscriptions;
-    private readonly object _recordingSessionLock = new();
+    private readonly Lock _recordingSessionLock = new();
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
     private readonly ISnippetService _snippets;
@@ -73,7 +73,7 @@ public sealed class DictationOrchestrator : IDisposable
     // The debounce check-and-write must be atomic: two threads (hook + IPC) can
     // both read the stale timestamp and both pass the gap check. DateTime can't
     // be volatile, so a lock is required.
-    private readonly object _toggleDebounceLock = new();
+    private readonly Lock _toggleDebounceLock = new();
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
@@ -422,7 +422,7 @@ public sealed class DictationOrchestrator : IDisposable
             return 0;
         }
 
-        var startedSessionId = 0;
+        int startedSessionId;
         try
         {
             if (_audio.IsRecording)
@@ -953,54 +953,54 @@ public sealed class DictationOrchestrator : IDisposable
                 _settings.Current.TranscribeShortQuietClipsAggressively
             );
 
-            if (shortSpeechDecision == LinuxShortSpeechDecision.DiscardTooShort)
+            // Transcribe intentionally falls through to the normal transcription path below.
+            // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
+            switch (shortSpeechDecision)
             {
-                SetOverlayState(state =>
-                    state with
-                    {
-                        IsOverlayVisible = true,
-                        ShowFeedback = true,
-                        FeedbackText = Localization.Loc.Instance["Overlay.TooShort"],
-                        FeedbackIsError = true,
-                        IsRecording = false,
-                        StatusText = Localization.Loc.Instance["Overlay.TooShort"],
-                        PartialText = null
-                    }
-                );
-                StatusMessage?.Invoke(this, "Too short");
-                _ = await TeardownStreamingSessionAsync(
-                    stoppedStreamingCoordinator,
-                    stoppedStreamingStartupCts,
-                    false,
-                    CancellationToken.None
-                );
-                FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
-                return;
-            }
-
-            if (shortSpeechDecision == LinuxShortSpeechDecision.DiscardNoSpeech)
-            {
-                SetOverlayState(state =>
-                    state with
-                    {
-                        IsOverlayVisible = true,
-                        ShowFeedback = true,
-                        FeedbackText = Localization.Loc.Instance["Overlay.NoSpeech"],
-                        FeedbackIsError = true,
-                        IsRecording = false,
-                        StatusText = Localization.Loc.Instance["Overlay.NoSpeech"],
-                        PartialText = null
-                    }
-                );
-                StatusMessage?.Invoke(this, "No speech detected");
-                _ = await TeardownStreamingSessionAsync(
-                    stoppedStreamingCoordinator,
-                    stoppedStreamingStartupCts,
-                    false,
-                    CancellationToken.None
-                );
-                FinalizeSession(recordingContext.SessionId, "discarded", "No speech detected");
-                return;
+                case LinuxShortSpeechDecision.DiscardTooShort:
+                    SetOverlayState(state =>
+                        state with
+                        {
+                            IsOverlayVisible = true,
+                            ShowFeedback = true,
+                            FeedbackText = Localization.Loc.Instance["Overlay.TooShort"],
+                            FeedbackIsError = true,
+                            IsRecording = false,
+                            StatusText = Localization.Loc.Instance["Overlay.TooShort"],
+                            PartialText = null
+                        }
+                    );
+                    StatusMessage?.Invoke(this, "Too short");
+                    _ = await TeardownStreamingSessionAsync(
+                        stoppedStreamingCoordinator,
+                        stoppedStreamingStartupCts,
+                        false,
+                        CancellationToken.None
+                    );
+                    FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
+                    return;
+                case LinuxShortSpeechDecision.DiscardNoSpeech:
+                    SetOverlayState(state =>
+                        state with
+                        {
+                            IsOverlayVisible = true,
+                            ShowFeedback = true,
+                            FeedbackText = Localization.Loc.Instance["Overlay.NoSpeech"],
+                            FeedbackIsError = true,
+                            IsRecording = false,
+                            StatusText = Localization.Loc.Instance["Overlay.NoSpeech"],
+                            PartialText = null
+                        }
+                    );
+                    StatusMessage?.Invoke(this, "No speech detected");
+                    _ = await TeardownStreamingSessionAsync(
+                        stoppedStreamingCoordinator,
+                        stoppedStreamingStartupCts,
+                        false,
+                        CancellationToken.None
+                    );
+                    FinalizeSession(recordingContext.SessionId, "discarded", "No speech detected");
+                    return;
             }
 
             // Streaming finalize must run BEFORE pad/save so the EOF grace-window
@@ -1110,12 +1110,9 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         // Overlay shows "Inserting…"; the documented CLI state is "injecting".
-        if (statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase))
-        {
-            return "injecting";
-        }
-
-        return "idle";
+        return statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase)
+            ? "injecting"
+            : "idle";
     }
 
     /// <summary>
@@ -1813,7 +1810,7 @@ public sealed class DictationOrchestrator : IDisposable
             return text;
         }
 
-        var fileReference = IdeFileReferenceService.TryFormatReferenceCommand(text);
+        var fileReference = _ideFileReferences.TryFormatReferenceCommand(text);
         return fileReference ?? DeveloperFormattingService.Format(text);
     }
 
@@ -2158,7 +2155,7 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     /// <summary>
-    ///     <see cref="ReportStatus" /> variant that suppresses overlay/status updates
+    ///     <see cref="ReportStatus(string)" /> variant that suppresses overlay/status updates
     ///     once a newer dictation has taken over the overlay. The
     ///     <see cref="StatusMessage" /> event still fires for observers that care
     ///     about completion (history/log surfaces), but the visible overlay is left
@@ -2201,21 +2198,23 @@ public sealed class DictationOrchestrator : IDisposable
         // surfaces with isError=false but is neither success nor failure —
         // callers flag it via isCanceled rather than us sniffing the text
         // (which varies: "Canceled", "Dictation canceled.", …).
-        if (_settings.Current.SoundFeedbackEnabled)
+        if (!_settings.Current.SoundFeedbackEnabled)
         {
-            if (isError)
-            {
-                _soundFeedback.PlayError();
-            }
-            else if (!isCanceled)
-            {
-                _soundFeedback.PlaySuccess();
-            }
+            return;
+        }
+
+        if (isError)
+        {
+            _soundFeedback.PlayError();
+        }
+        else if (!isCanceled)
+        {
+            _soundFeedback.PlaySuccess();
         }
     }
 
     /// <summary>
-    ///     <see cref="ShowFeedback" /> variant that no-ops once a newer dictation has
+    ///     <see cref="ShowFeedback(string, bool, bool)" /> variant that no-ops once a newer dictation has
     ///     taken over the overlay. Prevents the previous recording's terminal
     ///     feedback ("Typed N char(s)", "Transcription failed", "Canceled") from
     ///     hiding the new recording's overlay.
@@ -2413,7 +2412,7 @@ public sealed class DictationOrchestrator : IDisposable
         });
     }
 
-    private async Task<(string? FinalText, bool Faulted)> TeardownStreamingSessionAsync(
+    private static async Task<(string? FinalText, bool Faulted)> TeardownStreamingSessionAsync(
         StreamingTranscriptionCoordinator? coordinator,
         CancellationTokenSource? startupCts,
         bool finalize,
@@ -2475,18 +2474,20 @@ public sealed class DictationOrchestrator : IDisposable
             cts.Dispose();
         }
 
-        if (task is not null)
+        if (task is null)
         {
-            try
-            {
-                await task.WaitAsync(TimeSpan.FromMilliseconds(500));
-            }
-            catch (OperationCanceledException) { }
-            catch (TimeoutException) { }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] Partial transcription shutdown failed: {ex.Message}");
-            }
+            return _partialTranscriptState.StopSession();
+        }
+
+        try
+        {
+            await task.WaitAsync(TimeSpan.FromMilliseconds(500));
+        }
+        catch (OperationCanceledException) { }
+        catch (TimeoutException) { }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Partial transcription shutdown failed: {ex.Message}");
         }
 
         return _partialTranscriptState.StopSession();

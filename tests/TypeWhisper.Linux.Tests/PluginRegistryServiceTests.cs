@@ -9,7 +9,7 @@ using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
-public class PluginRegistryServiceTests : IDisposable
+public sealed class PluginRegistryServiceTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly PluginEventBus _eventBus = new();

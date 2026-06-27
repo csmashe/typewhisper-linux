@@ -19,7 +19,7 @@ internal sealed class ShortcutDispatcher
     // still feels responsive when held.
     private const int PushToTalkThresholdMs = 600;
 
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
 
     // Profile dictation dedup, keyed by physical KeyCode at press time. Also records the
     // recording mode and timestamp so the release path can compute hold duration for

@@ -29,7 +29,7 @@ public sealed class PluginManager : IDisposable
     private readonly List<LoadedPlugin> _allPlugins = [];
     private readonly Dictionary<string, PluginHostServices> _hostServices = [];
     private readonly PluginLoader _loader;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly IProfileService _profiles;
     private readonly string[] _searchDirectories;
     private readonly ISettingsService _settings;

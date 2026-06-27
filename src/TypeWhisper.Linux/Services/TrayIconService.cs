@@ -62,6 +62,8 @@ public sealed class TrayIconService : IDisposable
             };
             _trayIcon.Clicked += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
 
+            // ReSharper disable once InvertIf — pattern variable `app` is used in the block;
+            // inverting would put it out of scope.
             if (Application.Current is { } app)
             {
                 _trayIcons = [_trayIcon];
@@ -76,6 +78,7 @@ public sealed class TrayIconService : IDisposable
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (dynamic tray tooltip update); not currently called in-tree
     public void UpdateTooltip(string text)
     {
         if (_trayIcon is not null)

@@ -15,7 +15,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 /// </summary>
 public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 {
-    public const string BackendId = "linux-evdev";
+    private const string BackendId = "linux-evdev";
     private const string InputDir = "/dev/input";
 
     // Belt-and-suspenders rescan: FileSystemWatcher can miss events under high I/O load.
@@ -23,7 +23,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     private static readonly TimeSpan s_rescanInterval = TimeSpan.FromSeconds(30);
 
     private readonly ShortcutDispatcher _dispatcher = new();
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Dictionary<string, EvdevDeviceReader> _readers = new();
     private int _disposed;
 
@@ -114,6 +114,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
                 );
             }
 
+            // ReSharper disable once InvertIf — last statement in the lock; inverting would
+            // duplicate the trailing success-result construction with no clean early exit.
             if (!_started)
             {
                 AttachAllDevices_NoLock();
@@ -331,14 +333,18 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             // Prune readers for paths that vanished — guards against FSW dropping Delete events under load.
             foreach (var existing in _readers.Keys.ToList())
             {
-                if (!File.Exists(existing))
+                if (File.Exists(existing))
                 {
-                    if (_readers.Remove(existing, out var stale))
-                    {
-                        toDispose ??= new List<EvdevDeviceReader>();
-                        toDispose.Add(stale);
-                    }
+                    continue;
                 }
+
+                if (!_readers.Remove(existing, out var stale))
+                {
+                    continue;
+                }
+
+                toDispose ??= [];
+                toDispose.Add(stale);
             }
 
             foreach (var path in KeyboardDeviceDiscovery.EnumerateKeyboards())
@@ -353,12 +359,14 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             }
         }
 
-        if (toDispose is not null)
+        if (toDispose is null)
         {
-            foreach (var r in toDispose)
-            {
-                _ = r.DisposeAsync();
-            }
+            return added;
+        }
+
+        foreach (var r in toDispose)
+        {
+            _ = r.DisposeAsync();
         }
 
         return added;

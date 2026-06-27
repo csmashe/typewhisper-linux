@@ -45,14 +45,14 @@ public sealed class FfmpegSetupTask : ISetupTask
                 Loc.Instance.GetString("Setup.PackageNotInstalled", "ffmpeg"),
                 Loc.Instance["Setup.FfmpegHint"],
                 Loc.Instance.GetString("Setup.InstallPackage", "ffmpeg"),
-                _installer.BuildSudoCommand(new[] { "ffmpeg" })
+                _installer.BuildSudoCommand(["ffmpeg"])
             )
         );
     }
 
     public async Task<SetupActionOutcome> RunActionAsync(CancellationToken ct)
     {
-        var outcome = await _installer.InstallAsync(new[] { "ffmpeg" }, ct).ConfigureAwait(false);
+        var outcome = await _installer.InstallAsync(["ffmpeg"], ct).ConfigureAwait(false);
         _commands.RefreshSnapshot();
         return outcome;
     }

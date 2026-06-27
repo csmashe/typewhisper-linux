@@ -35,7 +35,7 @@ public sealed class PluginHostServices : IPluginHostServices
     private readonly string _pluginId;
     private readonly IProfileService _profiles;
     private readonly string _settingsFilePath;
-    private readonly object _settingsLock = new();
+    private readonly Lock _settingsLock = new();
 
     private Dictionary<string, JsonElement>? _settingsCache;
 
@@ -83,10 +83,9 @@ public sealed class PluginHostServices : IPluginHostServices
     {
         get
         {
-            if (_settings is null)
-                return PluginDataDirectory;
-
-            return LocalModelStorageService.ResolveAvailablePluginAssetDirectory(_settings.Current, _pluginId);
+            return _settings is null
+                ? PluginDataDirectory
+                : LocalModelStorageService.ResolveAvailablePluginAssetDirectory(_settings.Current, _pluginId);
         }
     }
 
@@ -108,16 +107,18 @@ public sealed class PluginHostServices : IPluginHostServices
         // would otherwise vanish into Trace (invalid key, model load, provider outage)
         // show up in About and bug-report diagnostics. Lower levels stay diagnostic-only
         // to keep the 200-entry buffer signal-rich.
-        if (level == PluginLogLevel.Error)
+        if (level != PluginLogLevel.Error)
         {
-            try
-            {
-                _errorLog?.AddEntry($"{_pluginDisplayName}: {message}", _pluginErrorCategory);
-            }
-            catch
-            {
-                // Diagnostics must never destabilize a plugin's own logging call.
-            }
+            return;
+        }
+
+        try
+        {
+            _errorLog?.AddEntry($"{_pluginDisplayName}: {message}", _pluginErrorCategory);
+        }
+        catch
+        {
+            // Diagnostics must never destabilize a plugin's own logging call.
         }
     }
 

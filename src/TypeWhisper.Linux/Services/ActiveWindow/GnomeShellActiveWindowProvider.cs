@@ -62,7 +62,7 @@ public sealed partial class GnomeShellActiveWindowProvider : IActiveWindowProvid
         }
     }
 
-    internal ActiveWindowSnapshot? ParseFocusedWindow(string gvariantOutput)
+    private ActiveWindowSnapshot? ParseFocusedWindow(string gvariantOutput)
     {
         foreach (var window in EnumerateWindows(gvariantOutput))
         {
@@ -137,18 +137,18 @@ public sealed partial class GnomeShellActiveWindowProvider : IActiveWindowProvid
                 }
                 else
                 {
-                    if (c == '\'' || c == '"')
+                    switch (c)
                     {
-                        inString = true;
-                        stringQuote = c;
-                    }
-                    else if (c == '{')
-                    {
-                        depth++;
-                    }
-                    else if (c == '}')
-                    {
-                        depth--;
+                        case '\'' or '"':
+                            inString = true;
+                            stringQuote = c;
+                            break;
+                        case '{':
+                            depth++;
+                            break;
+                        case '}':
+                            depth--;
+                            break;
                     }
                 }
 
@@ -199,12 +199,7 @@ public sealed partial class GnomeShellActiveWindowProvider : IActiveWindowProvid
         try
         {
             var path = $"/proc/{pid}/comm";
-            if (!File.Exists(path))
-            {
-                return null;
-            }
-
-            return File.ReadAllText(path).Trim();
+            return !File.Exists(path) ? null : File.ReadAllText(path).Trim();
         }
         catch
         {

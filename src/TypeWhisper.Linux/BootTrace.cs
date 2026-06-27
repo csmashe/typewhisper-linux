@@ -31,14 +31,15 @@ internal static class BootTrace
     {
         var line = $"[Boot] +{Program.BootStopwatch.ElapsedMilliseconds,6}ms  {name}";
         Trace.WriteLine(line);
-        if (s_fileWriter is null)
+        var writer = s_fileWriter;
+        if (writer is null)
         {
             return;
         }
 
         lock (s_lock)
         {
-            s_fileWriter.WriteLine(line);
+            writer.WriteLine(line);
         }
     }
 }

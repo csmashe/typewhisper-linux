@@ -52,14 +52,14 @@ public sealed class KwinActiveWindowSetupTask : ISetupTask
                 Loc.Instance["Setup.KdotoolNotInstalled"],
                 Loc.Instance["Setup.KdotoolNotInstalledDetail"],
                 Loc.Instance["Setup.KdotoolInstall"],
-                _installer.BuildSudoCommand(new[] { "kdotool" })
+                _installer.BuildSudoCommand(["kdotool"])
             )
         );
     }
 
     public async Task<SetupActionOutcome> RunActionAsync(CancellationToken ct)
     {
-        var outcome = await _installer.InstallAsync(new[] { "kdotool" }, ct).ConfigureAwait(false);
+        var outcome = await _installer.InstallAsync(["kdotool"], ct).ConfigureAwait(false);
         _commands.RefreshSnapshot();
         return outcome;
     }

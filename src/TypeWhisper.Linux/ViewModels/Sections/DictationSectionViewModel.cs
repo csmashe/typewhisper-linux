@@ -276,18 +276,24 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool CanUseAudioDucking => _commands.HasPactl;
     public bool ShowAudioDuckingUnavailableReason => !CanUseAudioDucking;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string AudioDuckingUnavailableReason =>
         Loc.Instance["Dictation.PactlUnavailable"];
 
     public bool CanUseMediaPause => _commands.HasPlayerCtl;
     public bool ShowMediaPauseUnavailableReason => !CanUseMediaPause;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string MediaPauseUnavailableReason =>
         Loc.Instance["Dictation.PlayerctlUnavailable"];
 
     public bool CanUseSoundFeedback => _commands.HasAudioPlayer;
     public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string SoundFeedbackUnavailableReason =>
         Loc.Instance["Dictation.AudioPlayerUnavailable"];
 
@@ -305,6 +311,8 @@ public partial class DictationSectionViewModel : ObservableObject
         && !_commands.HasCudaRuntimeLibraries
         && FindCuda12LibraryPath() is not null;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string CudaLibraryPathActionText => Loc.Instance["Dictation.FixCudaPath"];
 
     // CUDA is usable only when the GPU/driver is present AND the runtime the SELECTED engine
@@ -352,6 +360,8 @@ public partial class DictationSectionViewModel : ObservableObject
         && !_gpuRuntimeClearedPendingRestart
         && SelectedModelPlugin?.ProvisionsCudaRuntimeOnDemand == true;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string DownloadCudaRuntimeText => Loc.Instance["Dictation.DownloadCudaRuntime"];
 
     // Offer "Clear GPU runtime" exactly in the corrupt-but-present case: a provisioning
@@ -365,6 +375,8 @@ public partial class DictationSectionViewModel : ObservableObject
         && !IsClearingGpuRuntime
         && !IsDownloadingCudaRuntime;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ClearGpuRuntimeText => Loc.Instance["Dictation.ClearGpuRuntime"];
 
     public string AccelerationStatusText
@@ -564,7 +576,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private void RefreshDevices()
     {
         Devices.Clear();
-        foreach (var d in _audio.GetInputDevices())
+        foreach (var d in AudioRecordingService.GetInputDevices())
         {
             Devices.Add(d);
         }
@@ -1136,12 +1148,9 @@ public partial class DictationSectionViewModel : ObservableObject
             return Path.Join(home, ".zshrc");
         }
 
-        if (shell.EndsWith("/fish", StringComparison.Ordinal))
-        {
-            return Path.Join(home, ".config", "fish", "config.fish");
-        }
-
-        return Path.Join(home, ".bashrc");
+        return shell.EndsWith("/fish", StringComparison.Ordinal)
+            ? Path.Join(home, ".config", "fish", "config.fish")
+            : Path.Join(home, ".bashrc");
     }
 
     private static string GetCudaLibraryPathExport(string profilePath, string cudaLibraryPath)
@@ -1513,11 +1522,13 @@ public sealed class AppInsertionStrategyRow : ObservableObject
         get => _strategy;
         set
         {
-            if (SetProperty(ref _strategy, value))
+            if (!SetProperty(ref _strategy, value))
             {
-                OnPropertyChanged(nameof(SelectedStrategyOption));
-                _changed();
+                return;
             }
+
+            OnPropertyChanged(nameof(SelectedStrategyOption));
+            _changed();
         }
     }
 

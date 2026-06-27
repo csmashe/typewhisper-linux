@@ -81,6 +81,7 @@ public sealed class Loc : INotifyPropertyChanged
         }
     }
 
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  public Loc singleton API populated in Initialize (parallels AvailableUiLanguages)
     public IReadOnlyList<string> AvailableLanguages { get; private set; } = [];
 
     public IReadOnlyList<UiLanguageOption> AvailableUiLanguages { get; private set; } = [];

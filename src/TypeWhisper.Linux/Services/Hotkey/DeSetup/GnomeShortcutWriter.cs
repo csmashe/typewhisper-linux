@@ -34,12 +34,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     public bool IsCurrentDesktop()
     {
         // Accept ubuntu:GNOME and variants; bail if gsettings is absent.
-        if (DesktopDetector.DetectId() != "gnome")
-        {
-            return false;
-        }
-
-        return DesktopDetector.BinaryExists("gsettings");
+        return DesktopDetector.DetectId() == "gnome" && DesktopDetector.BinaryExists("gsettings");
     }
 
     public string PreviewLines(DeShortcutSpec spec)
@@ -62,7 +57,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         var path = BuildCustomPath(spec.ShortcutId);
         var (ok, listOut, _) = await RunAsync(
                 "gsettings",
-                new[] { "get", MediaKeysSchema, ListKey },
+                ["get", MediaKeysSchema, ListKey],
                 ct
             )
             .ConfigureAwait(false);
@@ -98,7 +93,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         // 1. Snapshot before touching anything — refuse if backup fails.
         var (listOk, listOut, listErr) = await RunAsync(
                 "gsettings",
-                new[] { "get", MediaKeysSchema, ListKey },
+                ["get", MediaKeysSchema, ListKey],
                 ct
             )
             .ConfigureAwait(false);
@@ -107,7 +102,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not read GNOME shortcut list: {listErr.Trim()}",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -117,7 +112,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 "Could not write GNOME backup file. Refusing to modify shortcuts.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -133,7 +128,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not parse GNOME shortcut list ({ex.Message}). Refusing to modify shortcuts; backup at {backupPath}.",
-                new[] { backupPath }
+                [backupPath]
             );
         }
 
@@ -150,7 +145,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         {
             var (ok, _, err) = await RunAsync(
                     "gsettings",
-                    new[] { "set", MediaKeysSchema, ListKey, FormatGSettingsList(list) },
+                    ["set", MediaKeysSchema, ListKey, FormatGSettingsList(list)],
                     ct
                 )
                 .ConfigureAwait(false);
@@ -159,7 +154,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
                 return new DeShortcutWriteResult(
                     false,
                     $"Could not update GNOME shortcut list: {err.Trim()}",
-                    new[] { backupPath }
+                    [backupPath]
                 );
             }
 
@@ -178,7 +173,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         {
             var (ok, _, err) = await RunAsync(
                     "gsettings",
-                    new[] { "set", schemaWithPath, key, value },
+                    ["set", schemaWithPath, key, value],
                     ct
                 )
                 .ConfigureAwait(false);
@@ -208,7 +203,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         var path = BuildCustomPath(shortcutId);
         var (listOk, listOut, listErr) = await RunAsync(
                 "gsettings",
-                new[] { "get", MediaKeysSchema, ListKey },
+                ["get", MediaKeysSchema, ListKey],
                 ct
             )
             .ConfigureAwait(false);
@@ -217,7 +212,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not read GNOME shortcut list: {listErr.Trim()}",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -231,7 +226,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not parse GNOME shortcut list ({ex.Message}). Refusing to modify shortcuts.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -240,7 +235,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 true,
                 "No GNOME integration to remove.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -250,14 +245,14 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 "Could not write GNOME backup file. Refusing to modify shortcuts.",
-                Array.Empty<string>()
+                []
             );
         }
 
         list.Remove(path);
         var (setOk, _, setErr) = await RunAsync(
                 "gsettings",
-                new[] { "set", MediaKeysSchema, ListKey, FormatGSettingsList(list) },
+                ["set", MediaKeysSchema, ListKey, FormatGSettingsList(list)],
                 ct
             )
             .ConfigureAwait(false);
@@ -266,7 +261,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not update GNOME shortcut list: {setErr.Trim()}",
-                new[] { backupPath }
+                [backupPath]
             );
         }
 
@@ -277,14 +272,14 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         {
             // Reset failures are non-fatal — the entry is no longer in
             // the list, so GNOME won't honor those values either way.
-            await RunAsync("gsettings", new[] { "reset", schemaWithPath, key }, ct)
+            await RunAsync("gsettings", ["reset", schemaWithPath, key], ct)
                 .ConfigureAwait(false);
         }
 
         return new DeShortcutWriteResult(
             true,
             "GNOME shortcut removed.",
-            new[] { backupPath, $"{MediaKeysSchema}.{ListKey}" }
+            [backupPath, $"{MediaKeysSchema}.{ListKey}"]
         );
     }
 
@@ -316,7 +311,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         // Strip "@as " type-annotation prefix if present.
         if (s.StartsWith("@as ", StringComparison.Ordinal))
         {
-            s = s.Substring(4).TrimStart();
+            s = s[4..].TrimStart();
         }
 
         if (s.Length < 2 || s[0] != '[' || s[^1] != ']')
@@ -422,7 +417,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             sb.Append('\'');
             foreach (var c in item)
             {
-                if (c == '\\' || c == '\'')
+                if (c is '\\' or '\'')
                 {
                     sb.Append('\\');
                 }
@@ -488,7 +483,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         // preserve the leading capital — GTK's keysym parser is case-sensitive there.
         if (IsFunctionKey(key))
         {
-            key = "F" + key.Substring(1);
+            key = "F" + key[1..];
         }
         else
         {
@@ -510,7 +505,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         CancellationToken ct
     )
     {
-        var (ok, raw, _) = await RunAsync("gsettings", new[] { "get", schemaWithPath, key }, ct)
+        var (ok, raw, _) = await RunAsync("gsettings", ["get", schemaWithPath, key], ct)
             .ConfigureAwait(false);
         if (!ok)
         {

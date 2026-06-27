@@ -49,11 +49,20 @@ public sealed class LocalizationResourcesTests
         Assert.DoesNotContain(translation, kv => string.IsNullOrWhiteSpace(kv.Value));
     }
 
-    public static IEnumerable<object[]> NonCanonicalLanguages() =>
-        Directory.EnumerateFiles(LocalizationDir(), "*.json")
-            .Select(file => Path.GetFileNameWithoutExtension(file))
-            .Where(lang => !string.Equals(lang, CanonicalLanguage, StringComparison.Ordinal))
-            .Select(lang => new object[] { lang });
+    public static TheoryData<string> NonCanonicalLanguages()
+    {
+        var data = new TheoryData<string>();
+        foreach (var file in Directory.EnumerateFiles(LocalizationDir(), "*.json"))
+        {
+            var lang = Path.GetFileNameWithoutExtension(file);
+            if (!string.Equals(lang, CanonicalLanguage, StringComparison.Ordinal))
+            {
+                data.Add(lang);
+            }
+        }
+
+        return data;
+    }
 
     private static Dictionary<string, string> Load(string lang)
     {

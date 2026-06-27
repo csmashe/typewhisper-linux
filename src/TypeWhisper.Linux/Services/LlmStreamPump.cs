@@ -63,11 +63,13 @@ internal sealed class LlmStreamPump
 
                 _sb.Append(delta);
 
-                if (stopwatch.Elapsed.TotalMilliseconds - lastFlushMs >= _flushInterval.TotalMilliseconds)
+                if (stopwatch.Elapsed.TotalMilliseconds - lastFlushMs < _flushInterval.TotalMilliseconds)
                 {
-                    Emit();
-                    lastFlushMs = stopwatch.Elapsed.TotalMilliseconds;
+                    continue;
                 }
+
+                Emit();
+                lastFlushMs = stopwatch.Elapsed.TotalMilliseconds;
             }
         }
         catch (OperationCanceledException)

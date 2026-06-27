@@ -23,10 +23,10 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
     // compatible List method returning the same window JSON — just at different
     // object paths/interfaces. Try each so whichever the user installed works.
     private static readonly (string Path, string Interface)[] Endpoints =
-    {
+    [
         ("/org/gnome/Shell/Extensions/Windows", "org.gnome.Shell.Extensions.Windows"),
         ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt")
-    };
+    ];
 
     public string Name => "gnome-window-calls";
 
@@ -61,11 +61,13 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
                         ct
                     )
                     .ConfigureAwait(false);
-                if (exit == 0 && !string.IsNullOrWhiteSpace(output))
+                if (exit != 0 || string.IsNullOrWhiteSpace(output))
                 {
-                    listOutput = output;
-                    break;
+                    continue;
                 }
+
+                listOutput = output;
+                break;
             }
 
             if (string.IsNullOrWhiteSpace(listOutput))
@@ -207,7 +209,7 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
             if (c == '\\' && i + 1 < body.Length)
             {
                 var next = body[i + 1];
-                if (next == '\\' || next == '\'')
+                if (next is '\\' or '\'')
                 {
                     sb.Append(next);
                     i++;
@@ -246,12 +248,7 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
         try
         {
             var path = $"/proc/{pid}/comm";
-            if (!File.Exists(path))
-            {
-                return null;
-            }
-
-            return File.ReadAllText(path).Trim();
+            return !File.Exists(path) ? null : File.ReadAllText(path).Trim();
         }
         catch
         {

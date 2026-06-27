@@ -107,11 +107,13 @@ internal static class ControlSocketClient
 
                 total += n;
                 var nl = Array.IndexOf(buf, (byte)'\n', 0, total);
-                if (nl >= 0)
+                if (nl < 0)
                 {
-                    total = nl;
-                    break;
+                    continue;
                 }
+
+                total = nl;
+                break;
             }
 
             if (total == 0)
@@ -221,11 +223,13 @@ internal static class ControlSocketClient
 
                 total += n;
                 var nl = Array.IndexOf(buf, (byte)'\n', 0, total);
-                if (nl >= 0)
+                if (nl < 0)
                 {
-                    total = nl;
-                    break;
+                    continue;
                 }
+
+                total = nl;
+                break;
             }
 
             if (total == 0)

@@ -33,6 +33,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     private YdotoolSetupHelper.Status YdotoolStatus => _setup.IsCurrentlyConfigured();
 
     public string SessionType => Snapshot.SessionType;
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string CompositorDisplayName => DesktopDetector.DisplayName();
     public string ClipboardToolStatus => Snapshot.ClipboardStatus;
 
@@ -123,7 +125,9 @@ public partial class TextInsertionSectionViewModel : ObservableObject
 
     public string YdotoolStatusTone => YdotoolStatus.IsFullyConfigured ? "ok" : "missing";
 
-    public string SetupPreview => _setup.PreviewLines();
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
+    public string SetupPreview => YdotoolSetupHelper.PreviewLines();
 
     public bool CanSetUpAutomatically =>
         YdotoolStatus is { BinaryInstalled: true, IsFullyConfigured: false };
@@ -135,6 +139,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     public bool CanRemoveIntegration =>
         YdotoolStatus.UdevRulePresent || YdotoolStatus.SystemdUnitActive;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ManualInstallCommand =>
         "Fedora:        sudo dnf install ydotool\n"
         + "Debian/Ubuntu: sudo apt install ydotool\n"

@@ -45,7 +45,7 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
             new[]
             {
                 FileTranscriptionQueueItemStatus.Queued,
-                FileTranscriptionQueueItemStatus.Transcribing,
+                FileTranscriptionQueueItemStatus.Transcribing
             },
             remaining);
         Assert.False(vm.HasClearableItems);

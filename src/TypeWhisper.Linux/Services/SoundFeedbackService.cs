@@ -17,21 +17,33 @@ public sealed class SoundFeedbackService
     // First available player on PATH: pw-play (PipeWire), paplay (PulseAudio), aplay (ALSA).
     private static readonly string? Player = ResolvePlayer();
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlayRecordingStarted()
     {
         Play("start.wav");
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlayRecordingStopped()
     {
         Play("stop.wav");
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlaySuccess()
     {
         Play("success.wav");
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlayError()
     {
         Play("error.wav");
@@ -95,7 +107,7 @@ public sealed class SoundFeedbackService
         // Same candidate order as SystemCommandAvailabilityService.HasAudioPlayer
         // so Player is non-null exactly when HasAudioPlayer is true.
         return Array.Find(
-            new[] { "pw-play", "paplay", "aplay" },
+            ["pw-play", "paplay", "aplay"],
             SystemCommandAvailabilityService.IsCommandAvailable
         );
     }

@@ -171,7 +171,7 @@ public sealed class YdotoolSetupHelperTests
     // --- RemoveAsync ownership gating -------------------------------------
     // RemoveAsync runs `systemctl`, so it's only testable through the
     // IProcessRunner seam. The regression these guard: SetUpAsync respects a
-    // pre-existing foreign ydotoold user unit but also `enable --now`s it, so
+    // pre-existing foreign ydotoold user unit but also `enable --now's it, so
     // an unconditional `disable --now` on remove would kill a service the
     // user relies on, persistently, past logout.
 
@@ -181,10 +181,10 @@ public sealed class YdotoolSetupHelperTests
         using var env = new TempEnvironment();
         // A ydotoold user unit the user (or a distro/AUR package) wrote —
         // no TypeWhisper ownership marker.
-        env.WriteUserUnit(
+        TempEnvironment.WriteUserUnit(
             "# Some other tool's ydotoold unit\n[Service]\nExecStart=/usr/bin/ydotoold\n"
         );
-        // systemctl on PATH so the disable isn't skipped for the *wrong*
+        // systemctl on PATH so the disable action isn't skipped for the *wrong*
         // reason — this proves the ownership gate, not a missing binary.
         env.PutFakeBinaryOnPath("systemctl");
 
@@ -206,7 +206,7 @@ public sealed class YdotoolSetupHelperTests
     public async Task RemoveAsync_disables_and_deletes_a_TypeWhisper_owned_user_unit()
     {
         using var env = new TempEnvironment();
-        env.WriteUserUnit(YdotoolSetupHelper.BuildUserUnitContent("/usr/bin/ydotoold"));
+        TempEnvironment.WriteUserUnit(YdotoolSetupHelper.BuildUserUnitContent("/usr/bin/ydotoold"));
         env.PutFakeBinaryOnPath("systemctl");
 
         var runner = new FakeProcessRunner();
@@ -229,7 +229,7 @@ public sealed class YdotoolSetupHelperTests
     public async Task RemoveAsync_keeps_the_unit_file_when_disable_fails()
     {
         using var env = new TempEnvironment();
-        env.WriteUserUnit(YdotoolSetupHelper.BuildUserUnitContent("/usr/bin/ydotoold"));
+        TempEnvironment.WriteUserUnit(YdotoolSetupHelper.BuildUserUnitContent("/usr/bin/ydotoold"));
         env.PutFakeBinaryOnPath("systemctl");
 
         var runner = new FakeProcessRunner();
@@ -252,7 +252,7 @@ public sealed class YdotoolSetupHelperTests
     ///     Points XDG_CONFIG_HOME and PATH at throwaway temp dirs for one test,
     ///     then restores them. PATH is deliberately restricted to the temp dir so
     ///     the test can never reach the real systemctl/pkexec — process execution
-    ///     goes through the injected <see cref="RecordingProcessRunner" />, while
+    ///     goes through the injected <see cref="FakeProcessRunner" />, while
     ///     <c>DesktopDetector.BinaryExists</c> still resolves whatever fake
     ///     binaries the test places there.
     /// </summary>
@@ -329,7 +329,7 @@ public sealed class YdotoolSetupHelperTests
             }
         }
 
-        public void WriteUserUnit(string content)
+        public static void WriteUserUnit(string content)
         {
             var path = YdotoolSetupHelper.UserUnitFilePath();
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);

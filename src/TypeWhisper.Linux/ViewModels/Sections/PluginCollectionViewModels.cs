@@ -34,9 +34,10 @@ public partial class PluginCollectionRow : ObservableObject
     public string? Description { get; }
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
     public string AddButtonLabel { get; }
-    public IReadOnlyList<PluginSettingDefinition> ItemFields { get; }
-    public string? ItemLabelFieldKey { get; }
+    private IReadOnlyList<PluginSettingDefinition> ItemFields { get; }
+    private string? ItemLabelFieldKey { get; }
     public ObservableCollection<PluginCollectionItemRow> Items { get; } = [];
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  parent back-reference retained in the row's object graph; not safely removable without changing the constructor contract
     public PluginRow OwnerRow { get; }
 
     [RelayCommand]
@@ -199,6 +200,7 @@ public class PluginCollectionItemRow : ObservableObject
     public string HiddenId
     {
         get => Fields.FirstOrDefault(f => f.Key == "__id")?.Value ?? string.Empty;
+        // ReSharper disable once UnusedMember.Global  paired write accessor for the collection-item identity property (mirrors the __id field); not currently called in-tree
         set
         {
             var idField = Fields.FirstOrDefault(f => f.Key == "__id");

@@ -24,7 +24,7 @@ public class SessionAudioFileServiceTests
         File.WriteAllText(otherFile, "other");
 
         var sut = new SessionAudioFileService();
-        sut.DeleteSessionCaptures();
+        SessionAudioFileService.DeleteSessionCaptures();
 
         Assert.False(File.Exists(dictationFile));
         Assert.True(File.Exists(otherFile));

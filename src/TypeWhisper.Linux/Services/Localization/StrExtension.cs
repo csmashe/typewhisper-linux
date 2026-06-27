@@ -19,11 +19,12 @@ namespace TypeWhisper.Linux.Services.Localization;
 /// </remarks>
 public sealed class StrExtension : MarkupExtension
 {
+    // ReSharper disable once UnusedMember.Global  parameterless constructor required by the Avalonia XAML markup-extension contract (loc:Str used across many .axaml); not invoked from C#
     public StrExtension() { }
 
     public StrExtension(string key) => Key = key;
 
-    public string Key { get; set; } = "";
+    private string Key { get; set; } = "";
 
     public override object ProvideValue(IServiceProvider serviceProvider)
     {

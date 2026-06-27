@@ -39,9 +39,8 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
-        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { PromptPaletteHotkeyText = "Ctrl+Shift+P" };
 
-        sut.PromptPaletteHotkeyText = "Ctrl+Shift+P";
         sut.ApplyPromptPaletteHotkeyCommand.Execute(null);
 
         Assert.Equal("Ctrl+Shift+P", settings.Current.PromptPaletteHotkey);
@@ -71,9 +70,8 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         var hotkey = new HotkeyService();
-        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { TransformSelectionHotkeyText = "Ctrl+Shift+T" };
 
-        sut.TransformSelectionHotkeyText = "Ctrl+Shift+T";
         sut.ApplyTransformSelectionHotkeyCommand.Execute(null);
 
         Assert.Equal("Ctrl+Shift+T", settings.Current.TransformSelectionHotkey);

@@ -4,7 +4,7 @@ namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
 ///     Configurable, recording <see cref="IProcessRunner" /> test double. A
-///     hand-written fake is clearer than a mock framework here: tests assert on
+///     handwritten fake is clearer than a mock framework here: tests assert on
 ///     <em>which</em> processes were launched and stage per-command results.
 /// </summary>
 internal sealed class FakeProcessRunner : IProcessRunner
@@ -17,7 +17,7 @@ internal sealed class FakeProcessRunner : IProcessRunner
     public List<Invocation> Invocations { get; } = [];
 
     /// <summary>Result for any call that matches no override.</summary>
-    public ProcessRunResult Default { get; set; } = Success();
+    public ProcessRunResult Default { get; init; } = Success();
 
     /// <summary>The <c>standardInput</c> piped to the most recent invocation (e.g. a pkexec heredoc).</summary>
     public string? LastStandardInput { get; private set; }
@@ -100,7 +100,7 @@ internal sealed class FakeProcessRunner : IProcessRunner
         );
     }
 
-    public static ProcessRunResult Success(string stdout = "")
+    private static ProcessRunResult Success(string stdout = "")
     {
         return new ProcessRunResult(
             true,

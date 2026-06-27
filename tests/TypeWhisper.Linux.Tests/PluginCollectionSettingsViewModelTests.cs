@@ -247,9 +247,8 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             false,
             PluginSettingKind.Boolean,
             "false"
-        );
+        ) { BoolValue = true };
 
-        field.BoolValue = true;
         Assert.Equal("true", field.Value);
 
         field.BoolValue = false;

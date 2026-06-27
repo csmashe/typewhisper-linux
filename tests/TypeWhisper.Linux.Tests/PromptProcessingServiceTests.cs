@@ -275,13 +275,10 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin
     {
-        private readonly string _modelId;
-
         public FakeLlmProviderPlugin(string pluginId, string providerName, string modelId)
         {
             PluginId = pluginId;
             ProviderName = providerName;
-            _modelId = modelId;
             SupportedModels = [new PluginModelInfo(modelId, modelId.ToUpperInvariant())];
         }
 

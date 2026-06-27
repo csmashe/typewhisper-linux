@@ -4,6 +4,7 @@ using TypeWhisper.Core;
 
 namespace TypeWhisper.Linux.Services;
 
+// ReSharper disable once NotAccessedPositionalProperty.Global  UncompressedBytes carried in the backup result record's data shape
 public sealed record SettingsBackupResult(int FileCount, long UncompressedBytes);
 
 public sealed class SettingsBackupService
@@ -302,17 +303,9 @@ public sealed class SettingsBackupService
         var fullRoot = Path.GetFullPath(rootPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var destination = Path.GetFullPath(Path.Join(fullRoot, normalized));
-        if (
-            !destination.StartsWith(
-                fullRoot + Path.DirectorySeparatorChar,
-                StringComparison.Ordinal
-            )
-        )
-        {
-            throw new InvalidDataException($"Backup contains an unsafe path: {entryName}");
-        }
-
-        return destination;
+        return !destination.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            ? throw new InvalidDataException($"Backup contains an unsafe path: {entryName}")
+            : destination;
     }
 
     private static string NormalizeEntryName(string path)

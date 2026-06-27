@@ -369,15 +369,15 @@ public sealed class TextInsertionService
             return InsertionResult.MissingPasteTool;
         }
 
-        if (!await FocusTargetWindowAsync(targetWindowId))
+        if (await FocusTargetWindowAsync(targetWindowId))
         {
-            LogInsertionFallback("Enter command failed: target window could not be focused.");
-            return InsertionResult.ActionFailed;
+            return await _platform.SendEnterAsync()
+                ? InsertionResult.ActionHandled
+                : InsertionResult.ActionFailed;
         }
 
-        return await _platform.SendEnterAsync()
-            ? InsertionResult.ActionHandled
-            : InsertionResult.ActionFailed;
+        LogInsertionFallback("Enter command failed: target window could not be focused.");
+        return InsertionResult.ActionFailed;
     }
 
     private static bool ShouldTypeDirectly(string? processName, string? windowTitle)
@@ -524,6 +524,8 @@ internal interface ITextInsertionPlatform
 /// </summary>
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
+    // kept injected as a DI/test seam; not consumed in-tree
+    // ReSharper disable once NotAccessedField.Local
     private readonly SystemCommandAvailabilityService? _commands;
     private readonly bool _isWayland;
     private readonly ProcessRunnerWithEnv _processRunner;
@@ -535,7 +537,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     >? _processRunnerWithStderr;
 
     private List<InputBackend> _chain;
-    private HashSet<InputBackend> _disabled = new();
+    private HashSet<InputBackend> _disabled = [];
 
     private LinuxCapabilitySnapshot _snapshot;
 
@@ -713,7 +715,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             return false;
         }
 
-        return await RunWithEnv("xdotool", new[] { "windowactivate", "--sync", windowId }, null)
+        return await RunWithEnv("xdotool", ["windowactivate", "--sync", windowId], null)
                == 0;
     }
 
@@ -780,7 +782,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             InputBackend.Wtype => await RunWtypeAsync("--", segment),
             InputBackend.Xdotool => await RunWithEnv(
                 "xdotool",
-                new[] { "type", "--clearmodifiers", "--delay", "8", "--", segment },
+                ["type", "--clearmodifiers", "--delay", "8", "--", segment],
                 null
             ) == 0,
             InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.TypeArgs(segment)),
@@ -795,7 +797,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             InputBackend.Wtype => await RunWtypeAsync("-M", "shift", "-k", "Return", "-m", "shift"),
             InputBackend.Xdotool => await RunWithEnv(
                 "xdotool",
-                new[] { "key", "--clearmodifiers", "shift+Return" },
+                ["key", "--clearmodifiers", "shift+Return"],
                 null
             ) == 0,
             InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.ShiftEnterArgs()),
@@ -824,7 +826,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 InputBackend.Wtype => await RunWtypeAsync("-k", "Return"),
                 InputBackend.Xdotool => await RunWithEnv(
                     "xdotool",
-                    new[] { "key", "--clearmodifiers", "Return" },
+                    ["key", "--clearmodifiers", "Return"],
                     null
                 ) == 0,
                 InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.EnterArgs()),
@@ -948,19 +950,19 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private async Task<bool> SendModifiedKeyAsync(string modifier, string key)
     {
         var keyDown =
-            await RunWithEnv("xdotool", new[] { "keydown", "--clearmodifiers", modifier }, null)
+            await RunWithEnv("xdotool", ["keydown", "--clearmodifiers", modifier], null)
             == 0;
         var keySent = false;
         try
         {
             if (keyDown)
             {
-                keySent = await RunWithEnv("xdotool", new[] { "key", key }, null) == 0;
+                keySent = await RunWithEnv("xdotool", ["key", key], null) == 0;
             }
         }
         finally
         {
-            await RunWithEnv("xdotool", new[] { "keyup", modifier }, null);
+            await RunWithEnv("xdotool", ["keyup", modifier], null);
         }
 
         return keyDown && keySent;
@@ -1016,24 +1018,26 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     {
         // Capture stderr to detect compositor rejection and disable wtype permanently —
         // without this every dictation on GNOME/KDE Wayland wastes ~225 ms on a doomed backend.
-        if (_processRunnerWithStderr is not null)
+        if (_processRunnerWithStderr is null)
         {
-            var (exitCode, stderr) = await _processRunnerWithStderr("wtype", args)
-                .ConfigureAwait(false);
-            if (exitCode != 0 && IsWtypeCompositorRejection(stderr))
-            {
-                _disabled.Add(InputBackend.Wtype);
-                // First-failing backend's reason wins — keep an earlier specific diagnostic.
-                if (LastFailureReason == InsertionFailureReason.None)
-                {
-                    LastFailureReason = InsertionFailureReason.WtypeCompositorUnsupported;
-                }
-            }
+            return await RunWithEnv("wtype", args, null) == 0;
+        }
 
+        var (exitCode, stderr) = await _processRunnerWithStderr("wtype", args)
+            .ConfigureAwait(false);
+        if (exitCode == 0 || !IsWtypeCompositorRejection(stderr))
+        {
             return exitCode == 0;
         }
 
-        return await RunWithEnv("wtype", args, null) == 0;
+        _disabled.Add(InputBackend.Wtype);
+        // First-failing backend's reason wins — keep an earlier specific diagnostic.
+        if (LastFailureReason == InsertionFailureReason.None)
+        {
+            LastFailureReason = InsertionFailureReason.WtypeCompositorUnsupported;
+        }
+
+        return exitCode == 0;
     }
 
     private static bool IsWtypeCompositorRejection(string stderr)
@@ -1060,21 +1064,21 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
 
         var exit = await RunWithEnv(YdotoolBackend.ExecutableName, args, env);
-        if (exit != 0)
+        if (exit == 0)
         {
-            // Almost always EACCES on /dev/uinput (uaccess didn't apply, not in input group)
-            // or a wedged socket. Mark as sticky — disable for this process lifetime so the
-            // chain skips ydotool rather than spawning it on every subsequent dictation.
-            if (LastFailureReason == InsertionFailureReason.None)
-            {
-                LastFailureReason = InsertionFailureReason.YdotoolSocketUnreachable;
-            }
-
-            _disabled.Add(InputBackend.Ydotool);
-            return false;
+            return true;
         }
 
-        return true;
+        // Almost always EACCES on /dev/uinput (uaccess didn't apply, not in input group)
+        // or a wedged socket. Mark as sticky — disable for this process lifetime so the
+        // chain skips ydotool rather than spawning it on every subsequent dictation.
+        if (LastFailureReason == InsertionFailureReason.None)
+        {
+            LastFailureReason = InsertionFailureReason.YdotoolSocketUnreachable;
+        }
+
+        _disabled.Add(InputBackend.Ydotool);
+        return false;
     }
 
     private Task<int> RunWithEnv(
@@ -1160,7 +1164,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    internal enum InputBackend
+    private enum InputBackend
     {
         None,
         Xdotool,

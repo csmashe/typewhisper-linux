@@ -36,7 +36,7 @@ internal static class StatusCommand
             // a misbehaving server sends a non-boolean "ok" value.
             return doc.RootElement.ValueKind == JsonValueKind.Object
                    && doc.RootElement.TryGetProperty("ok", out var ok)
-                   && (ok.ValueKind == JsonValueKind.True || ok.ValueKind == JsonValueKind.False)
+                   && ok.ValueKind is JsonValueKind.True or JsonValueKind.False
                    && ok.GetBoolean();
         }
         catch (JsonException)

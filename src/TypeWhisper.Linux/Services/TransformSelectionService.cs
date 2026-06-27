@@ -264,27 +264,25 @@ public sealed class TransformSelectionService
                 session.WindowTitle
             );
 
-            if (insertion is InsertionResult.CopiedToClipboard)
+            switch (insertion)
             {
-                await ShowWarningAsync(
-                    "Transformed text copied. Paste manually to replace the selection."
-                );
-            }
-            else if (insertion is InsertionResult.MissingClipboardTool)
-            {
-                await ShowWarningAsync(ClipboardToolMissingMessage());
-            }
-            else if (insertion is InsertionResult.MissingPasteTool)
-            {
-                await ShowWarningAsync(_commands.GetSnapshot().PasteToolInstallHint);
-            }
-            else if (insertion is not InsertionResult.Pasted and not InsertionResult.Typed)
-            {
-                await ShowWarningAsync("Could not insert transformed text.");
-            }
-            else
-            {
-                ShowFeedback("Selection transformed.", false);
+                case InsertionResult.CopiedToClipboard:
+                    await ShowWarningAsync(
+                        "Transformed text copied. Paste manually to replace the selection."
+                    );
+                    break;
+                case InsertionResult.MissingClipboardTool:
+                    await ShowWarningAsync(ClipboardToolMissingMessage());
+                    break;
+                case InsertionResult.MissingPasteTool:
+                    await ShowWarningAsync(_commands.GetSnapshot().PasteToolInstallHint);
+                    break;
+                case not InsertionResult.Pasted and not InsertionResult.Typed:
+                    await ShowWarningAsync("Could not insert transformed text.");
+                    break;
+                default:
+                    ShowFeedback("Selection transformed.", false);
+                    break;
             }
         }
         catch (OperationCanceledException)

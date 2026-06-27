@@ -20,7 +20,7 @@ public sealed class WatchFolderService : IDisposable
     private readonly List<WatchFolderHistoryItem> _history = [];
     private readonly string _historyPath;
     private readonly ConcurrentQueue<string> _pendingFiles = [];
-    private readonly object _persistenceGate = new();
+    private readonly Lock _persistenceGate = new();
     private readonly HashSet<string> _processedFingerprints = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly string _processedFingerprintsPath;
@@ -29,7 +29,7 @@ public sealed class WatchFolderService : IDisposable
         StringComparer.OrdinalIgnoreCase
     );
 
-    private readonly object _stateGate = new();
+    private readonly Lock _stateGate = new();
     private CancellationTokenSource? _cts;
     private bool _disposed;
     private WatchFolderOptions? _options;
@@ -56,6 +56,7 @@ public sealed class WatchFolderService : IDisposable
         LoadHistory();
     }
 
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  public service-state accessor exposing the active watch path (parallels CurrentlyProcessing/IsRunning)
     public string? WatchPath { get; private set; }
     public string? CurrentlyProcessing { get; private set; }
     public bool IsRunning => _watcher is not null;

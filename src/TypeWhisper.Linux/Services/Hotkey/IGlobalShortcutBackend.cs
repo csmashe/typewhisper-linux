@@ -25,6 +25,7 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
         CancellationToken ct
     );
 
+    // ReSharper disable once UnusedMember.Global  interface contract member, part of the IGlobalShortcutBackend surface (implemented by every backend)
     Task UnregisterAsync(CancellationToken ct);
 
     event EventHandler? DictationToggleRequested;

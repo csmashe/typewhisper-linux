@@ -42,7 +42,7 @@ public sealed class GnomeShortcutWriterTests
     [Fact]
     public void ParseGSettingsList_MultipleEntries_ReturnsAll()
     {
-        var raw = "['/org/.../custom0/', '/org/.../custom1/', '/org/.../custom2/']";
+        const string raw = "['/org/.../custom0/', '/org/.../custom1/', '/org/.../custom2/']";
         var result = GnomeShortcutWriter.ParseGSettingsList(raw);
         Assert.Equal(3, result.Count);
         Assert.Equal("/org/.../custom0/", result[0]);
@@ -125,7 +125,7 @@ public sealed class GnomeShortcutWriterTests
     [Fact]
     public void FormatGSettingsList_Empty_ReturnsBareBrackets()
     {
-        Assert.Equal("[]", GnomeShortcutWriter.FormatGSettingsList(Array.Empty<string>()));
+        Assert.Equal("[]", GnomeShortcutWriter.FormatGSettingsList([]));
     }
 
     [Fact]

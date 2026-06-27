@@ -15,7 +15,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 ///         seat access without group membership. <c>GROUP="input"</c> is the
 ///         fallback for init systems without logind (Devuan, Alpine without
 ///         elogind); on those the user must additionally join the <c>input</c>
-///         group and re-login, which <see cref="GlobalHotkeySetupTask" /> handles.
+///         group and re-login, which <see cref="Setup.GlobalHotkeySetupTask" /> handles.
 ///     </para>
 ///     <para>
 ///         This is strictly narrower than the old "join the input group"
@@ -51,7 +51,7 @@ public sealed class InputAccessSetupHelper
     // Marker used by RemoveAsync to confirm we own the file before deleting it —
     // without this we could nuke a rule a user or distro package installed under
     // the same conventional filename.
-    internal const string OwnershipMarker = "Installed by TypeWhisper";
+    private const string OwnershipMarker = "Installed by TypeWhisper";
 
     internal const string UdevRuleContent =
         "# "
@@ -77,7 +77,7 @@ public sealed class InputAccessSetupHelper
     ///     only a non-logind re-login remains" from "stale input-group membership
     ///     from the old flow, where installing the rule could grant access now".
     /// </summary>
-    public bool IsRuleInstalled()
+    public static bool IsRuleInstalled()
     {
         return File.Exists(UdevRulePath);
     }
@@ -129,7 +129,7 @@ public sealed class InputAccessSetupHelper
         var run = await _runner
             .RunAsync(
                 "pkexec",
-                new[] { "/bin/sh" },
+                ["/bin/sh"],
                 standardInput: script,
                 timeout: TimeSpan.FromMinutes(2),
                 ct: ct
@@ -145,30 +145,30 @@ public sealed class InputAccessSetupHelper
             );
         }
 
-        if (!run.Succeeded)
+        if (run.Succeeded)
         {
-            // pkexec exits 126/127 when the auth dialog is dismissed or denied —
-            // surface that distinctly so the caller can offer the manual command.
-            if (run.ExitCode is 126 or 127)
-            {
-                return new Result(
-                    false,
-                    "Admin authorization was cancelled or denied.",
-                    ManualInstallCommand(),
-                    Cancelled: true
-                );
-            }
+            return new Result(true, "Installed the keyboard-access rule.");
+        }
 
+        // pkexec exits 126/127 when the auth dialog is dismissed or denied —
+        // surface that distinctly so the caller can offer the manual command.
+        if (run.ExitCode is 126 or 127)
+        {
             return new Result(
                 false,
-                "Could not install the keyboard-access rule (pkexec failed).",
-                string.IsNullOrWhiteSpace(run.StandardError)
-                    ? run.StandardOutput
-                    : run.StandardError
+                "Admin authorization was cancelled or denied.",
+                ManualInstallCommand(),
+                Cancelled: true
             );
         }
 
-        return new Result(true, "Installed the keyboard-access rule.");
+        return new Result(
+            false,
+            "Could not install the keyboard-access rule (pkexec failed).",
+            string.IsNullOrWhiteSpace(run.StandardError)
+                ? run.StandardOutput
+                : run.StandardError
+        );
     }
 
     /// <summary>
@@ -214,7 +214,7 @@ public sealed class InputAccessSetupHelper
         var rm = await _runner
             .RunAsync(
                 "pkexec",
-                new[] { "/bin/sh" },
+                ["/bin/sh"],
                 standardInput: script,
                 timeout: TimeSpan.FromMinutes(2),
                 ct: ct
@@ -266,7 +266,7 @@ public sealed class InputAccessSetupHelper
                + "fi";
     }
 
-    internal static bool IsFileOwnedByTypeWhisper(string path)
+    private static bool IsFileOwnedByTypeWhisper(string path)
     {
         try
         {
@@ -283,6 +283,7 @@ public sealed class InputAccessSetupHelper
 
     public sealed record Result(
         bool Success,
+        // ReSharper disable once NotAccessedPositionalProperty.Global  carried in the setup result record's data shape (status message for callers/diagnostics)
         string Message,
         string? Detail = null,
         bool Cancelled = false

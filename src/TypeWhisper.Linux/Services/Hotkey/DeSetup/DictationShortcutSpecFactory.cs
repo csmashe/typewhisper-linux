@@ -10,8 +10,8 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 public static class DictationShortcutSpecFactory
 {
     public const string DictationShortcutId = "typewhisper.dictation.toggle";
-    public const string DictationDisplayName = "TypeWhisper: Toggle Dictation";
-    public const string DefaultTrigger = "Ctrl+Shift+Space";
+    private const string DictationDisplayName = "TypeWhisper: Toggle Dictation";
+    private const string DefaultTrigger = "Ctrl+Shift+Space";
 
     /// <summary>
     ///     Builds the spec for <paramref name="writer" />. PTT desktops (Hyprland/Sway) get
@@ -53,7 +53,7 @@ public static class DictationShortcutSpecFactory
     ///     the installed binary, otherwise the bare <c>typewhisper</c> name. ProcessPath is not
     ///     trusted when it points at the dotnet host (source/IDE runs).
     /// </summary>
-    public static string ResolveGuiCommand()
+    private static string ResolveGuiCommand()
     {
         var path = Environment.ProcessPath;
         if (!string.IsNullOrEmpty(path)

@@ -25,11 +25,11 @@ public sealed class PackageInstaller
 {
     // Ordered by how we'd prefer to resolve ties when probing PATH.
     private static readonly PackageManager[] Known =
-    {
-        new("dnf", "dnf", new[] { "install", "-y" }), new("apt", "apt-get", new[] { "install", "-y" }),
-        new("pacman", "pacman", new[] { "-S", "--noconfirm" }),
-        new("zypper", "zypper", new[] { "--non-interactive", "install" })
-    };
+    [
+        new("dnf", "dnf", ["install", "-y"]), new("apt", "apt-get", ["install", "-y"]),
+        new("pacman", "pacman", ["-S", "--noconfirm"]),
+        new("zypper", "zypper", ["--non-interactive", "install"])
+    ];
 
     private readonly IProcessRunner _runner;
 
@@ -42,18 +42,13 @@ public sealed class PackageInstaller
     ///     Resolve the package manager for this host, or null if none of the
     ///     managers we know how to drive are present.
     /// </summary>
-    public PackageManager? Detect()
+    private static PackageManager? Detect()
     {
         var hinted = ReadOsReleaseManagerHints()
             .Select(id => Known.FirstOrDefault(m => m.Id == id))
             .FirstOrDefault(match => match is not null && DesktopDetector.BinaryExists(match.Binary));
-        if (hinted is not null)
-        {
-            return hinted;
-        }
-
         // os-release didn't point at an installed manager — probe PATH.
-        return Known.FirstOrDefault(m => DesktopDetector.BinaryExists(m.Binary));
+        return hinted ?? Known.FirstOrDefault(m => DesktopDetector.BinaryExists(m.Binary));
     }
 
     /// <summary>
@@ -62,6 +57,9 @@ public sealed class PackageInstaller
     ///     possible. Falls back to a generic placeholder when no manager is
     ///     detected so the user still sees what they need to install.
     /// </summary>
+    // kept instance: invoked on the injected _installer service by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public string BuildSudoCommand(IReadOnlyList<string> packages)
     {
         return BuildSudoCommand(packages, Detect());
@@ -137,12 +135,9 @@ public sealed class PackageInstaller
     private static string BuildSudoCommand(IReadOnlyList<string> packages, PackageManager? pm)
     {
         var joined = string.Join(' ', packages);
-        if (pm is null)
-        {
-            return $"sudo <your package manager> install {joined}";
-        }
-
-        return $"sudo {pm.Binary} {string.Join(' ', pm.InstallArgs)} {joined}";
+        return pm is null
+            ? $"sudo <your package manager> install {joined}"
+            : $"sudo {pm.Binary} {string.Join(' ', pm.InstallArgs)} {joined}";
     }
 
     /// <summary>Yields package-manager ids from /etc/os-release: ID first, then ID_LIKE tokens.</summary>

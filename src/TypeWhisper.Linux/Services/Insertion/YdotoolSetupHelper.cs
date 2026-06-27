@@ -33,7 +33,7 @@ public sealed class YdotoolSetupHelper
     // Marker used by RemoveAsync to confirm we own the file before
     // deleting it — without this we could nuke a rule a user or distro
     // package installed under the same conventional filename.
-    internal const string OwnershipMarker = "Installed by TypeWhisper";
+    private const string OwnershipMarker = "Installed by TypeWhisper";
 
     private const string UdevRuleContent =
         "# "
@@ -70,7 +70,7 @@ public sealed class YdotoolSetupHelper
     // only a system-level `ydotool.service` (runs ydotoold as root, with
     // a root-owned socket the user can't reach), so on a clean install no
     // user unit by this name resolves and we write our own.
-    internal const string UserUnitName = "ydotoold.service";
+    private const string UserUnitName = "ydotoold.service";
 
     private readonly SystemCommandAvailabilityService _commands;
     private readonly IProcessRunner _runner;
@@ -116,7 +116,7 @@ public sealed class YdotoolSetupHelper
     ///     execute. Pure: no disk touch, no process invocation. The user
     ///     sees this in the panel before they click the button.
     /// </summary>
-    public string PreviewLines()
+    public static string PreviewLines()
     {
         return $"If /dev/uinput isn't already accessible: install {UdevRulePath} via\n"
                + "  pkexec (one-time admin prompt).\n"
@@ -170,7 +170,7 @@ public sealed class YdotoolSetupHelper
         if (wroteUnit)
         {
             var reload = await _runner
-                .RunAsync("systemctl", new[] { "--user", "daemon-reload" }, ct: ct)
+                .RunAsync("systemctl", ["--user", "daemon-reload"], ct: ct)
                 .ConfigureAwait(false);
             if (!reload.Succeeded)
             {
@@ -197,7 +197,7 @@ public sealed class YdotoolSetupHelper
         // stale EACCES handle and silently fail every keystroke while the socket
         // looks healthy. A restart guarantees a fresh open with current perms.
         await _runner
-            .RunAsync("systemctl", new[] { "--user", "restart", UserUnitName }, ct: ct)
+            .RunAsync("systemctl", ["--user", "restart", UserUnitName], ct: ct)
             .ConfigureAwait(false);
 
         var socket = await WaitForSocketAsync(ct).ConfigureAwait(false);
@@ -245,7 +245,7 @@ public sealed class YdotoolSetupHelper
         if (weOwnUnit && DesktopDetector.BinaryExists("systemctl"))
         {
             var disable = await _runner
-                .RunAsync("systemctl", new[] { "--user", "disable", "--now", UserUnitName }, ct: ct)
+                .RunAsync("systemctl", ["--user", "disable", "--now", UserUnitName], ct: ct)
                 .ConfigureAwait(false);
             if (!disable.Succeeded)
             {
@@ -300,7 +300,7 @@ public sealed class YdotoolSetupHelper
         if (removedUnit && DesktopDetector.BinaryExists("systemctl"))
         {
             await _runner
-                .RunAsync("systemctl", new[] { "--user", "daemon-reload" }, ct: ct)
+                .RunAsync("systemctl", ["--user", "daemon-reload"], ct: ct)
                 .ConfigureAwait(false);
         }
 
@@ -352,7 +352,7 @@ public sealed class YdotoolSetupHelper
                 + "rm -f " + string.Join(" ", privilegedRemovals) + "\n"
                 + "modprobe -r uinput 2>/dev/null || true\n";
             var rm = await _runner
-                .RunAsync("pkexec", new[] { "/bin/sh" }, standardInput: script, ct: ct)
+                .RunAsync("pkexec", ["/bin/sh"], standardInput: script, ct: ct)
                 .ConfigureAwait(false);
             if (!rm.Succeeded)
             {
@@ -633,7 +633,7 @@ public sealed class YdotoolSetupHelper
             + "udevadm trigger --subsystem-match=misc --action=change || true\n";
 
         var run = await _runner
-            .RunAsync("pkexec", new[] { "/bin/sh" }, standardInput: script, ct: ct)
+            .RunAsync("pkexec", ["/bin/sh"], standardInput: script, ct: ct)
             .ConfigureAwait(false);
 
         if (!run.Succeeded)
@@ -668,7 +668,7 @@ public sealed class YdotoolSetupHelper
         // user wrote, or one shipped by a distro/AUR package, wherever it
         // lives. Respect any such unit rather than shadowing it.
         var cat = await _runner
-            .RunAsync("systemctl", new[] { "--user", "cat", UserUnitName }, ct: ct)
+            .RunAsync("systemctl", ["--user", "cat", UserUnitName], ct: ct)
             .ConfigureAwait(false);
         if (cat.Succeeded)
         {
@@ -737,7 +737,7 @@ public sealed class YdotoolSetupHelper
     private async Task<SetupResult> EnableUserUnitAsync(string unit, CancellationToken ct)
     {
         var enable = await _runner
-            .RunAsync("systemctl", new[] { "--user", "enable", "--now", unit }, ct: ct)
+            .RunAsync("systemctl", ["--user", "enable", "--now", unit], ct: ct)
             .ConfigureAwait(false);
         if (!enable.Succeeded)
         {
@@ -777,7 +777,7 @@ public sealed class YdotoolSetupHelper
         var result = _runner
             .RunAsync(
                 "systemctl",
-                new[] { "--user", "is-active", "--quiet", unit },
+                ["--user", "is-active", "--quiet", unit],
                 timeout: TimeSpan.FromMilliseconds(500)
             )
             .GetAwaiter()

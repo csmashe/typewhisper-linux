@@ -91,6 +91,8 @@ public partial class RecentTranscriptionsPaletteWindow : Window
 
     private void Entry_PointerReleased(object? sender, PointerReleasedEventArgs e)
     {
+        // ReSharper disable once InvertIf — pattern variable `item` is used in the block;
+        // inverting would orphan the binding.
         if ((sender as Control)?.DataContext is RecentTranscriptionPaletteItem item)
         {
             SelectAndClose(item);
