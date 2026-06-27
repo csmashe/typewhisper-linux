@@ -25,6 +25,20 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // lives in the ActiveWriter property's backing `field`; this flag marks it computed.
     private bool _activeWriterCached;
 
+    // Cached keyboard-access probe result, populated off the UI thread by
+    // RefreshKeyboardAccessAsync. InputDeviceAccessCheck.HasKeyboardAccess() opens
+    // every /dev/input keyboard node and ioctls it — ~0.5s on a typical desktop — so
+    // it must never run during view render. null = not yet probed (treated as "has
+    // access" so the no-access banner/fallback don't flash before the probe returns).
+    private bool? _hasKeyboardAccess;
+
+    // While false, the compositor-bind fallback auto-tracks keyboard access: every
+    // probe re-applies ComputeCompositorBindsRelevant() so the disclosure stays in
+    // sync as access changes (e.g. granted by onboarding). An explicit Show/Hide
+    // toggle sets this true so the user's choice is no longer overridden; toggling
+    // the evdev setting re-arms auto-tracking (a deliberate disclosure reset).
+    private bool _compositorBindsUserControlled;
+
     [ObservableProperty]
     private string _copyLastTranscriptionHotkeyText = "";
 
@@ -83,6 +97,12 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         Mode = settings.Current.Mode;
         _waylandEvdevHotkeysEnabled = settings.Current.WaylandEvdevHotkeysEnabled;
         _compositorBindsExpanded = ComputeCompositorBindsRelevant();
+
+        // Keyboard access is probed on section activation (RefreshKeyboardAccess),
+        // not here: the probe is expensive (see RefreshKeyboardAccessAsync) and this
+        // VM is built eagerly at startup, before first-run onboarding can grant
+        // access — probing in the ctor would both stall startup and cache a stale
+        // pre-onboarding result.
     }
 
     // ReSharper disable once UnusedMember.Global  public ViewModel property (recording-mode options for selection UI); not currently bound in-tree
@@ -140,7 +160,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 return false;
             }
 
-            return !InputDeviceAccessCheck.HasKeyboardAccess();
+            // Cached probe (RefreshKeyboardAccessAsync) — show the banner only once
+            // we've confirmed there's no access; stay hidden while the probe is pending.
+            return _hasKeyboardAccess == false;
         }
     }
 
@@ -176,7 +198,47 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return false;
         }
 
-        return !WaylandEvdevHotkeysEnabled || !InputDeviceAccessCheck.HasKeyboardAccess();
+        // evdev opted out → compositor binds are the route, no access probe needed.
+        if (!WaylandEvdevHotkeysEnabled)
+        {
+            return true;
+        }
+
+        // evdev on → relevant only once the cached probe confirms no keyboard access.
+        // While pending (null) stay collapsed; RefreshKeyboardAccessAsync re-runs this.
+        return _hasKeyboardAccess == false;
+    }
+
+    // Called by the view each time the Shortcuts section is shown. Re-probes so the
+    // banner/fallback reflect access granted since construction — e.g. by first-run
+    // onboarding, which grants access via HotkeyService outside this VM. Fire-and-forget:
+    // the probe updates the bound properties on completion.
+    public void RefreshKeyboardAccess()
+    {
+        _ = RefreshKeyboardAccessAsync();
+    }
+
+    // Probe keyboard access off the UI thread, then refresh the access-dependent
+    // properties. InputDeviceAccessCheck.HasKeyboardAccess() opens every /dev/input
+    // keyboard node (~0.5s) — running it during the constructor or a binding getter
+    // froze the Shortcuts tab on open. No ConfigureAwait(false): the continuation
+    // touches bound properties and must resume on the UI thread.
+    private async Task RefreshKeyboardAccessAsync()
+    {
+        if (!IsWaylandSession())
+        {
+            return;
+        }
+
+        _hasKeyboardAccess = await Task.Run(InputDeviceAccessCheck.HasKeyboardAccess);
+        OnPropertyChanged(nameof(ShowKeyboardAccessBanner));
+
+        // Keep the fallback's auto-expand in sync with access until the user takes
+        // control with an explicit Show/Hide.
+        if (!_compositorBindsUserControlled)
+        {
+            CompositorBindsExpanded = ComputeCompositorBindsRelevant();
+        }
     }
 
     // ReSharper disable once MemberCanBeMadeStatic.Global
@@ -459,6 +521,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     [RelayCommand]
     private void ToggleCompositorBinds()
     {
+        // The user has taken control of the disclosure — auto-tracking stops so a
+        // pending/late access probe never overwrites this choice.
+        _compositorBindsUserControlled = true;
         CompositorBindsExpanded = !CompositorBindsExpanded;
     }
 
@@ -576,6 +641,10 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         // Surface the compositor-bind fallback the moment evdev stops carrying the
         // hotkey (and re-collapse it once evdev is back), matching the rule that it
         // only auto-expands when it's the user's real route to a global hotkey.
+        // Toggling evdev is a deliberate disclosure reset, so re-arm auto-tracking;
+        // this assignment is the optimistic immediate value and the trailing
+        // RefreshKeyboardAccessAsync re-applies it with the real probe result.
+        _compositorBindsUserControlled = false;
         CompositorBindsExpanded = ComputeCompositorBindsRelevant();
 
         // Hot-swap immediately: a restart-only opt-out would be a consent gap
@@ -611,6 +680,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SupportsPressRelease));
         OnPropertyChanged(nameof(ScopeText));
         OnPropertyChanged(nameof(ShowCapabilityMismatch));
-        OnPropertyChanged(nameof(ShowKeyboardAccessBanner));
+
+        // Re-probe off the UI thread: a switch may follow the user granting access,
+        // which must clear the banner. RefreshKeyboardAccessAsync raises the change.
+        await RefreshKeyboardAccessAsync();
     }
 }

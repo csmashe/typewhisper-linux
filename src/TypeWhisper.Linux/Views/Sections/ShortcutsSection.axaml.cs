@@ -14,6 +14,11 @@ public partial class ShortcutsSection : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        // Re-probe keyboard access whenever this section is shown, so the no-access
+        // banner / compositor fallback reflect access granted since the (eagerly
+        // constructed) view model was built — e.g. via first-run onboarding.
+        AttachedToVisualTree += (_, _) =>
+            (DataContext as ShortcutsSectionViewModel)?.RefreshKeyboardAccess();
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
