@@ -52,13 +52,13 @@ public sealed class LocalizationResourcesTests
     public static TheoryData<string> NonCanonicalLanguages()
     {
         var data = new TheoryData<string>();
-        foreach (var file in Directory.EnumerateFiles(LocalizationDir(), "*.json"))
+        var languages = Directory
+            .EnumerateFiles(LocalizationDir(), "*.json")
+            .Select(file => Path.GetFileNameWithoutExtension(file))
+            .Where(lang => !string.Equals(lang, CanonicalLanguage, StringComparison.Ordinal));
+        foreach (var lang in languages)
         {
-            var lang = Path.GetFileNameWithoutExtension(file);
-            if (!string.Equals(lang, CanonicalLanguage, StringComparison.Ordinal))
-            {
-                data.Add(lang);
-            }
+            data.Add(lang);
         }
 
         return data;

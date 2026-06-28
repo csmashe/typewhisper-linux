@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -49,9 +50,18 @@ public partial class ShortcutsSection : UserControl
         }
 
         var topLevel = TopLevel.GetTopLevel(this);
-        if (topLevel?.Clipboard is not null)
+        if (topLevel?.Clipboard is null)
+        {
+            return;
+        }
+
+        try
         {
             await topLevel.Clipboard.SetTextAsync(text);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[ShortcutsSection] Copy to clipboard failed: {ex.Message}");
         }
     }
 }

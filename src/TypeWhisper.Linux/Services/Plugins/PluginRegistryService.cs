@@ -151,16 +151,17 @@ public sealed class PluginRegistryService
 
         Directory.CreateDirectory(pluginDir);
 
+        var tempZip = Path.GetTempFileName();
         try
         {
-            var tempZip = Path.GetTempFileName();
-            try
+            // Scope the download streams so the temp file is closed before we
+            // extract from it; the surrounding finally deletes tempZip on every
+            // exit path (download, extract, or load failure included).
+            using (var response = await _httpClient.GetAsync(
+                       registryPlugin.DownloadUrl,
+                       HttpCompletionOption.ResponseHeadersRead,
+                       ct))
             {
-                using var response = await _httpClient.GetAsync(
-                    registryPlugin.DownloadUrl,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    ct
-                );
                 response.EnsureSuccessStatusCode();
 
                 var totalBytes = response.Content.Headers.ContentLength ?? registryPlugin.Size;
@@ -177,19 +178,9 @@ public sealed class PluginRegistryService
                     progress?.Report(totalBytes > 0 ? (double)bytesRead / totalBytes : 0);
                 }
             }
-            catch
-            {
-                if (File.Exists(tempZip))
-                {
-                    File.Delete(tempZip);
-                }
-
-                throw;
-            }
 
             // ReSharper disable once MethodHasAsyncOverloadWithCancellation -- synchronous extraction is intentional; the async overload would change cancellation semantics (partial extract on cancel) for a small local plugin zip
             ZipFile.ExtractToDirectory(tempZip, pluginDir, true);
-            File.Delete(tempZip);
 
             await _pluginManager.LoadPluginFromDirectoryAsync(pluginDir, true);
 
@@ -218,6 +209,20 @@ public sealed class PluginRegistryService
             }
 
             throw;
+        }
+        finally
+        {
+            if (File.Exists(tempZip))
+            {
+                try
+                {
+                    File.Delete(tempZip);
+                }
+                catch
+                {
+                    // Best-effort temp cleanup; nothing else depends on it.
+                }
+            }
         }
     }
 
@@ -285,6 +290,10 @@ public sealed class PluginRegistryService
             "[PluginRegistry] First run detected, auto-installing Linux-compatible registry plugins..."
         );
 
+        // Only mark first-run bootstrap complete once everything actually
+        // installed. A failed fetch (e.g. offline) or a failed plugin install
+        // must leave the flag clear so the next launch retries.
+        var anyFailed = false;
         try
         {
             var registry = await FetchRegistryAsync(ct);
@@ -301,6 +310,7 @@ public sealed class PluginRegistryService
                 }
                 catch (Exception ex)
                 {
+                    anyFailed = true;
                     Trace.WriteLine(
                         $"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}"
                     );
@@ -309,10 +319,14 @@ public sealed class PluginRegistryService
         }
         catch (Exception ex)
         {
+            anyFailed = true;
             Trace.WriteLine($"[PluginRegistry] First run auto-install failed: {ex.Message}");
         }
 
-        _settings.Save(_settings.Current with { PluginFirstRunCompleted = true });
+        if (!anyFailed)
+        {
+            _settings.Save(_settings.Current with { PluginFirstRunCompleted = true });
+        }
     }
 
     private static Version GetHostVersion()

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -43,27 +44,34 @@ public partial class WelcomeWizard : Window
             return;
         }
 
-        PasteSmokeBox.Text = "";
-        PasteSmokeBox.Focus();
-
-        // Let the clear + focus changes settle on the UI thread before the test
-        // simulates a paste, otherwise the paste can race the empty assignment.
-        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
-
-        var shouldCheckField = await vm.RunPasteSmokeTestAsync();
-        if (!shouldCheckField)
+        try
         {
-            return;
-        }
+            PasteSmokeBox.Text = "";
+            PasteSmokeBox.Focus();
 
-        // Give the simulated paste time to land in the text box, then verify the
-        // window/view model are still alive before reading the result back.
-        await Task.Delay(350);
-        if (_isClosed || !IsVisible || !ReferenceEquals(DataContext, vm))
+            // Let the clear + focus changes settle on the UI thread before the test
+            // simulates a paste, otherwise the paste can race the empty assignment.
+            await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+            var shouldCheckField = await vm.RunPasteSmokeTestAsync();
+            if (!shouldCheckField)
+            {
+                return;
+            }
+
+            // Give the simulated paste time to land in the text box, then verify the
+            // window/view model are still alive before reading the result back.
+            await Task.Delay(350);
+            if (_isClosed || !IsVisible || !ReferenceEquals(DataContext, vm))
+            {
+                return;
+            }
+
+            vm.CompletePasteSmokeTest(PasteSmokeBox.Text);
+        }
+        catch (Exception ex)
         {
-            return;
+            Trace.WriteLine($"[WelcomeWizard] Paste smoke test failed: {ex.Message}");
         }
-
-        vm.CompletePasteSmokeTest(PasteSmokeBox.Text);
     }
 }

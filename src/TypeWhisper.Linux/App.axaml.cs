@@ -270,7 +270,8 @@ public class App : Application
                 FireAndForget(dictation.ToggleAsync(profileId));
             hotkey.ProfileDictationStartRequested += (_, profileId) =>
                 FireAndForget(dictation.StartAsync(profileId));
-            hotkey.ProfileDictationStopRequested += (_, _) => _ = dictation.StopAsync();
+            hotkey.ProfileDictationStopRequested += (_, _) =>
+                FireAndForget(dictation.StopAsync());
 
             var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
             recentTranscriptions.FeedbackRequested += (message, isError) =>

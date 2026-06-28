@@ -27,20 +27,27 @@ public partial class AboutSection : UserControl
             return;
         }
 
-        var file = await topLevel.StorageProvider.SaveFilePickerAsync(
-            new FilePickerSaveOptions
-            {
-                Title = Loc.Instance["Dialog.ExportDiagnostics"],
-                SuggestedFileName = "typewhisper-diagnostics.json",
-                DefaultExtension = "json",
-                FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
-            }
-        );
-
-        var path = file?.TryGetLocalPath();
-        if (!string.IsNullOrWhiteSpace(path))
+        try
         {
-            await File.WriteAllTextAsync(path, viewModel.ExportDiagnostics());
+            var file = await topLevel.StorageProvider.SaveFilePickerAsync(
+                new FilePickerSaveOptions
+                {
+                    Title = Loc.Instance["Dialog.ExportDiagnostics"],
+                    SuggestedFileName = "typewhisper-diagnostics.json",
+                    DefaultExtension = "json",
+                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
+                }
+            );
+
+            var path = file?.TryGetLocalPath();
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                await File.WriteAllTextAsync(path, viewModel.ExportDiagnostics());
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowMessage("Export diagnostics failed", ex.Message);
         }
     }
 
@@ -58,25 +65,26 @@ public partial class AboutSection : UserControl
             return;
         }
 
-        var file = await topLevel.StorageProvider.SaveFilePickerAsync(
-            new FilePickerSaveOptions
-            {
-                Title = Loc.Instance["Dialog.BackUpSettings"],
-                SuggestedFileName =
-                    $"typewhisper-settings-backup-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
-                DefaultExtension = "zip",
-                FileTypeChoices = [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
-            }
-        );
-
-        var path = file?.TryGetLocalPath();
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return;
-        }
-
         try
         {
+            var file = await topLevel.StorageProvider.SaveFilePickerAsync(
+                new FilePickerSaveOptions
+                {
+                    Title = Loc.Instance["Dialog.BackUpSettings"],
+                    SuggestedFileName =
+                        $"typewhisper-settings-backup-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+                    DefaultExtension = "zip",
+                    FileTypeChoices =
+                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
+                }
+            );
+
+            var path = file?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
             var result = await viewModel.CreateSettingsBackupAsync(path);
             await ShowMessage(
                 "Settings backup",
@@ -103,23 +111,24 @@ public partial class AboutSection : UserControl
             return;
         }
 
-        var files = await topLevel.StorageProvider.OpenFilePickerAsync(
-            new FilePickerOpenOptions
-            {
-                Title = Loc.Instance["Dialog.RestoreSettings"],
-                AllowMultiple = false,
-                FileTypeFilter = [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
-            }
-        );
-
-        var path = (files.Count > 0 ? files[0] : null)?.TryGetLocalPath();
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-        {
-            return;
-        }
-
         try
         {
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(
+                new FilePickerOpenOptions
+                {
+                    Title = Loc.Instance["Dialog.RestoreSettings"],
+                    AllowMultiple = false,
+                    FileTypeFilter =
+                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
+                }
+            );
+
+            var path = (files.Count > 0 ? files[0] : null)?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return;
+            }
+
             var result = await viewModel.RestoreSettingsBackupAsync(path);
             await ShowMessage(
                 "Settings restored",

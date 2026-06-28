@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using TypeWhisper.Linux.Models;
 
 namespace TypeWhisper.Linux.Services;
@@ -47,7 +48,7 @@ public sealed class DictationSessionResultStore : IDisposable
         _entries[result.SessionId] = new Entry(result, DateTime.UtcNow);
     }
 
-    public bool TryGet(int sessionId, out DictationSessionResult result)
+    public bool TryGet(int sessionId, [NotNullWhen(true)] out DictationSessionResult? result)
     {
         if (_entries.TryGetValue(sessionId, out var entry) && !IsExpired(entry, DateTime.UtcNow))
         {
@@ -55,7 +56,7 @@ public sealed class DictationSessionResultStore : IDisposable
             return true;
         }
 
-        result = null!;
+        result = null;
         return false;
     }
 

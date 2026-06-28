@@ -541,22 +541,26 @@ public sealed partial class SystemCommandAvailabilityService
                 return null;
             }
 
-            var output = p.StandardOutput.ReadToEnd().Trim();
-            if (p.WaitForExit(500))
+            // Drain stdout asynchronously so a wedged child can't block past the
+            // timeout. ReadToEnd() blocks until stdout closes, which would defeat
+            // the WaitForExit(500) bound if `id` ever hung.
+            var outputTask = p.StandardOutput.ReadToEndAsync();
+            if (!p.WaitForExit(500))
             {
-                return string.IsNullOrWhiteSpace(output) ? null : output;
+                try
+                {
+                    p.Kill(true);
+                }
+                catch
+                {
+                    /* best effort */
+                }
+
+                return null;
             }
 
-            try
-            {
-                p.Kill(true);
-            }
-            catch
-            {
-                /* best effort */
-            }
-
-            return null;
+            var output = outputTask.GetAwaiter().GetResult().Trim();
+            return string.IsNullOrWhiteSpace(output) ? null : output;
         }
         catch
         {

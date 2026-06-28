@@ -82,23 +82,7 @@ public sealed class AudioRecordingService : IDisposable
         StopAndDisposeInputStream();
         UpdateLevel(0f);
 
-        lock (s_paInitLock)
-        {
-            if (s_paInitCount <= 0)
-            {
-                return;
-            }
-
-            s_paInitCount = 0;
-            try
-            {
-                PortAudio.Terminate();
-            }
-            catch
-            {
-                // PortAudio teardown is best-effort; ignore if it was never fully initialized.
-            }
-        }
+        TerminatePortAudioIfInitialized();
     }
 
     public static IReadOnlyList<AudioInputDevice> GetInputDevices()
@@ -757,6 +741,30 @@ public sealed class AudioRecordingService : IDisposable
 
             PortAudio.Initialize();
             s_paInitCount = 1;
+        }
+    }
+
+    // Teardown counterpart to EnsurePortAudioInitialized. Kept static so the
+    // process-global init counter is only ever mutated by the static lifetime
+    // helpers, never written directly from an instance's Dispose.
+    private static void TerminatePortAudioIfInitialized()
+    {
+        lock (s_paInitLock)
+        {
+            if (s_paInitCount <= 0)
+            {
+                return;
+            }
+
+            s_paInitCount = 0;
+            try
+            {
+                PortAudio.Terminate();
+            }
+            catch
+            {
+                // PortAudio teardown is best-effort; ignore if it was never fully initialized.
+            }
         }
     }
 }

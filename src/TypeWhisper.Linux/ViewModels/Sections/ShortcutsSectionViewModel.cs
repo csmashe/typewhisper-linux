@@ -32,6 +32,11 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // access" so the no-access banner/fallback don't flash before the probe returns).
     private bool? _hasKeyboardAccess;
 
+    // Monotonic token so overlapping probes (the section can be reshown while a
+    // prior probe is still running) only let the newest one write back; an older
+    // probe that finishes late must not clobber the latest result.
+    private int _keyboardAccessRefreshVersion;
+
     // While false, the compositor-bind fallback auto-tracks keyboard access: every
     // probe re-applies ComputeCompositorBindsRelevant() so the disclosure stays in
     // sync as access changes (e.g. granted by onboarding). An explicit Show/Hide
@@ -230,7 +235,18 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return;
         }
 
-        _hasKeyboardAccess = await Task.Run(InputDeviceAccessCheck.HasKeyboardAccess);
+        // Claim this probe's version before awaiting (runs on the UI thread, so the
+        // increment and the post-await check below never interleave with each other).
+        var version = ++_keyboardAccessRefreshVersion;
+        var hasAccess = await Task.Run(InputDeviceAccessCheck.HasKeyboardAccess);
+
+        // A newer probe superseded us while we awaited — drop this stale result.
+        if (version != _keyboardAccessRefreshVersion)
+        {
+            return;
+        }
+
+        _hasKeyboardAccess = hasAccess;
         OnPropertyChanged(nameof(ShowKeyboardAccessBanner));
 
         // Keep the fallback's auto-expand in sync with access until the user takes

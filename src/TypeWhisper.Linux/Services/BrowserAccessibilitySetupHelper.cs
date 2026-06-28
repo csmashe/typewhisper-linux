@@ -143,7 +143,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     var prefixNewline = cleaned.Length > 0 && !cleaned.EndsWith('\n') ? "\n" : "";
                     var addition =
                         prefixNewline
-                        + "// Set by TypeWhisper — required for AT-SPI URL detection on Wayland.\n"
+                        + UserJsOwnershipMarker
+                        + " — required for AT-SPI URL detection on Wayland.\n"
                         + "user_pref(\"accessibility.force_disabled\", -1);\n";
 
                     var tmp = userJsPath + ".tmp";
@@ -629,10 +630,11 @@ public sealed partial class BrowserAccessibilitySetupHelper
         try
         {
             var content = File.ReadAllText(userJsPath);
-            // Owned entries are flagged by our attribution comment that
-            // immediately precedes the pref line we wrote. We never claim
-            // ownership of a bare user_pref that was hand-added.
-            return content.Contains(UserJsOwnershipMarker, StringComparison.Ordinal);
+            // Match the exact owned entry (attribution comment + the pref line we
+            // wrote) using the same regex the removal path strips. Detecting on the
+            // bare marker comment alone would report "installed" for a stale marker
+            // whose pref line no longer matches — something Revert can't remove.
+            return OwnedAccessibilityEntryRegex().IsMatch(content);
         }
         catch
         {

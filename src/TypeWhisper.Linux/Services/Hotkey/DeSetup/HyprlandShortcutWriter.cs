@@ -311,6 +311,12 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             var stderr = await stderrTask.ConfigureAwait(false);
             return (proc.ExitCode == 0, stdout, stderr);
         }
+        catch (OperationCanceledException)
+        {
+            // Cancellation must propagate to callers; only genuine process/apply
+            // errors are flattened into the failure tuple below.
+            throw;
+        }
         catch (Exception ex)
         {
             return (false, string.Empty, ex.Message);
