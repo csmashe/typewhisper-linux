@@ -144,6 +144,12 @@ public record AppSettings
     // Memory extraction
     public bool MemoryEnabled { get; init; }
 
+    // Reference context for LLM cleanup (opt-in, local-first, both default off).
+    // When enabled, a bounded snippet of the focused element's text / the clipboard
+    // is passed to Medium/High cleanup as read-only spelling reference.
+    public bool ScreenContextEnabled { get; init; }
+    public bool ClipboardContextEnabled { get; init; }
+
     // UI Language (null = auto-detect from system)
     public string? UiLanguage { get; init; }
 

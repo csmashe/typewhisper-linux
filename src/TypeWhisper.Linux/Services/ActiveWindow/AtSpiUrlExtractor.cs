@@ -25,6 +25,35 @@ public sealed partial class AtSpiUrlExtractor
 
     private const int AtSpiRoleWindow = 69;
 
+    // Focused-context harvest (Feature 03). Independent of the URL walk: targets the
+    // single focused element (+ nearby labels) so Medium/High cleanup can match the
+    // spelling of names/identifiers the user is looking at. Every bound is deliberate —
+    // the harvest must never add user-perceived latency.
+    private const string AtSpiCollectionInterface = "org.a11y.atspi.Collection";
+
+    // AtspiStateType: FOCUSED is 12 (11 is FOCUSABLE — every control is focusable, so matching
+    // 11 would harvest the first focusable node, not the one actually in focus).
+    private const int AtSpiStateFocused = 12;
+
+    // ATSPI_ROLE_PASSWORD_TEXT — never read (or descend into) a password field.
+    private const int AtSpiRolePasswordText = 40;
+    private const int HarvestNodeVisitCap = 40;
+    private const int HarvestBfsMaxDepth = 12;
+    private const int HarvestMaxNearbyLabels = 8;
+    private const int HarvestMaxOutputChars = 2500;
+    private const int HarvestWindowAncestorCap = 12;
+
+    // Separate, tighter budget than the 2.5 s URL walk: the harvest runs in the
+    // background snapshot task and must finish well inside the 4 s stop ceiling.
+    private static readonly TimeSpan s_harvestBudget = TimeSpan.FromMilliseconds(1000);
+
+    // The a11y bus address never changes for the process lifetime, so resolving it
+    // once avoids re-spawning gdbus on every capture. Guarded by its own lock; the
+    // "resolved" flag distinguishes "resolved to null" (unavailable) from "not yet tried".
+    private static readonly Lock s_busAddressLock = new();
+    private static string? s_cachedBusAddress;
+    private static bool s_busAddressResolved;
+
     // Each busctl invocation is a separate process + D-Bus round-trip (50–200 ms each on
     // a busy system). Firefox's URL bar also sits under invisible structural containers, so
     // the walker descends into unseen subtrees — 2.5 s gives headroom while remaining
@@ -149,6 +178,550 @@ public sealed partial class AtSpiUrlExtractor
             BuildDiagnosticLine(processHint, focusedTitle, stats, url, cts.IsCancellationRequested)
         );
         return url;
+    }
+
+    /// <summary>
+    ///     Harvests a bounded snippet of the focused element's text (+ nearby labels) so the
+    ///     cleanup LLM can match the spelling of proper nouns / identifiers on screen. Opt-in
+    ///     and gated by the caller; this method assumes the toggle is already effective.
+    ///     Returns null instantly when busctl/gdbus is unavailable or the app exposes no a11y
+    ///     tree. Password fields are never read. Hard caps: ~1 s wall-clock, ~40 node visits,
+    ///     ~2500-char output.
+    /// </summary>
+    // kept instance: part of the injected extractor's public API, mirroring TryGetBrowserUrl
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam, consistent with TryGetBrowserUrl")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    public string? TryHarvestFocusedContext(
+        string? processName,
+        string? title,
+        string? selfAppName
+    )
+    {
+        if (!s_isBusctlAvailable || !s_isGdbusAvailable)
+        {
+            return null;
+        }
+
+        var address = GetCachedAtSpiBusAddress();
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return null;
+        }
+
+        using var cts = new CancellationTokenSource(s_harvestBudget);
+        try
+        {
+            return HarvestFocusedContext(address, processName, title, selfAppName, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[AtSpiUrlExtractor] Focused-context harvest failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string? HarvestFocusedContext(
+        string address,
+        string? processName,
+        string? title,
+        string? selfAppName,
+        CancellationToken ct
+    )
+    {
+        var remainingVisits = HarvestNodeVisitCap;
+
+        // Without any window hint (no process AND no title — e.g. Wayland without xdotool) we
+        // can't scope the harvest to the recorded window, so we must not read whatever happens
+        // to be focused: a focus change could feed an unrelated app's screen into cleanup. Bail.
+        if (string.IsNullOrWhiteSpace(processName) && string.IsNullOrWhiteSpace(title))
+        {
+            return null;
+        }
+
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- body has early-return, ref-counter mutation, and per-app subprocess calls; a LINQ rewrite would obscure the bounded walk
+        foreach (
+            var app in GetAccessibleChildren(
+                address,
+                new AccessibleRef(AtSpiRegistryBusName, AtSpiRootPath)
+            )
+        )
+        {
+            if (ct.IsCancellationRequested || remainingVisits <= 0)
+            {
+                break;
+            }
+
+            var appName = GetAccessibleName(address, app);
+            if (IsSelfApp(appName, selfAppName))
+            {
+                continue;
+            }
+
+            if (!IsFocusTargetApp(appName, processName, title))
+            {
+                continue;
+            }
+
+            var focused = FindFocusedElement(address, app, ref remainingVisits, ct);
+            if (focused is null)
+            {
+                continue;
+            }
+
+            // An app node hosts every window of the process (all Firefox windows share one app
+            // node), so the focused element could belong to a different window of the same app
+            // if focus moved. When we know the recorded window's title, require the focused
+            // node's top-level frame title to relate to it before reading — otherwise a focus
+            // switch to another same-app window could feed unrelated on-screen text into cleanup.
+            if (!FocusedNodeBelongsToWindow(address, focused.Value, title, ref remainingVisits, ct))
+            {
+                continue;
+            }
+
+            var context = ReadFocusedContext(address, focused.Value, ref remainingVisits, ct);
+            if (!string.IsNullOrWhiteSpace(context))
+            {
+                return context;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsSelfApp(string? appName, string? selfAppName)
+    {
+        if (string.IsNullOrWhiteSpace(appName))
+        {
+            return false;
+        }
+
+        if (
+            !string.IsNullOrWhiteSpace(selfAppName)
+            && appName.Contains(selfAppName, StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return true;
+        }
+
+        return appName.Contains("typewhisper", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsFocusTargetApp(string? appName, string? processHint, string? title)
+    {
+        if (string.IsNullOrWhiteSpace(appName))
+        {
+            return false;
+        }
+
+        // Exact app-identity match only — deliberately NOT IsMatchingApp: its browser-family
+        // aliasing (Edge ↔ Chrome ↔ Brave all "chromium") could harvest a *different* browser's
+        // focused window, and screen text is privacy-sensitive. Family bridging is fine for the
+        // URL walk (one app on the bus) but wrong when scoping a capture to the recorded window.
+        if (
+            !string.IsNullOrWhiteSpace(processHint)
+            && string.Equals(appName, processHint, StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return true;
+        }
+
+        // The AT-SPI app Name often differs from the process name but appears in the window
+        // title (process "code" ↔ Name "Visual Studio Code" ↔ title "file — Visual Studio Code").
+        // Require the Name to be a *trailing* segment of the title — window titles conventionally
+        // end with the app name — rather than any substring, so an app merely *mentioned*
+        // mid-title (a document/tab named after another app) can't be mistaken for the window.
+        return !string.IsNullOrWhiteSpace(title)
+               && appName.Length >= 3
+               && title.TrimEnd().EndsWith(appName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static AccessibleRef? FindFocusedElement(
+        string address,
+        AccessibleRef app,
+        ref int remainingVisits,
+        CancellationToken ct
+    )
+    {
+        // Fast path: a single Collection.GetMatches round trip returns the focused node
+        // directly (traverse=true searches the whole app subtree). Validate the returned
+        // node actually reports STATE_FOCUSED so a malformed/garbage result can't leak.
+        // ThrowIfCancellationRequested before each subprocess call keeps a hung a11y app from
+        // accumulating multiple ~1 s busctl waits past the harvest budget (caught at the top).
+        ct.ThrowIfCancellationRequested();
+        var interfaces = GetAccessibleInterfaces(address, app);
+        var match = interfaces.Contains(AtSpiCollectionInterface, StringComparer.Ordinal)
+            ? TryGetCollectionFocusedMatch(address, app)
+            : null;
+        if (
+            match is not null
+            && !ct.IsCancellationRequested
+            && ActiveWindowService.HasState(
+                GetAccessibleState(address, match.Value),
+                AtSpiStateFocused
+            )
+        )
+        {
+            return match;
+        }
+
+        // Fallback: tightly-bounded BFS for the first STATE_FOCUSED node.
+        ct.ThrowIfCancellationRequested();
+        return FindFocusedNodeBfs(address, app, ref remainingVisits, ct);
+    }
+
+    private static AccessibleRef? TryGetCollectionFocusedMatch(string address, AccessibleRef app)
+    {
+        // MatchRule signature (aiia{ss}iaiiasib): states=[1<<12, 0] (STATE_FOCUSED = bit 12),
+        // stateMatch=ANY(2), empty attributes/roles/interfaces, invert=false; then
+        // sortby=CANONICAL(0), count=1, traverse=true. Result is a(so) like GetChildren.
+        var output = RunBusctlCall(
+            address,
+            app.BusName,
+            app.ObjectPath,
+            AtSpiCollectionInterface,
+            "GetMatches",
+            "(aiia{ss}iaiiasib)uib",
+            "2",
+            "4096",
+            "0",
+            "2",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "false",
+            "0",
+            "1",
+            "true"
+        );
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        var values = ParseQuotedStrings(output);
+        return values.Count >= 2 ? new AccessibleRef(values[0], values[1]) : null;
+    }
+
+    private static AccessibleRef? FindFocusedNodeBfs(
+        string address,
+        AccessibleRef app,
+        ref int remainingVisits,
+        CancellationToken ct
+    )
+    {
+        var queue = new Queue<(AccessibleRef Node, int Depth)>();
+        queue.Enqueue((app, 0));
+
+        while (queue.Count > 0 && remainingVisits > 0)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                return null;
+            }
+
+            var (node, depth) = queue.Dequeue();
+            remainingVisits--;
+
+            var states = GetAccessibleState(address, node);
+            if (ActiveWindowService.HasState(states, AtSpiStateFocused))
+            {
+                return node;
+            }
+
+            if (depth >= HarvestBfsMaxDepth || ct.IsCancellationRequested)
+            {
+                continue;
+            }
+
+            foreach (var child in GetAccessibleChildren(address, node))
+            {
+                queue.Enqueue((child, depth + 1));
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ReadFocusedContext(
+        string address,
+        AccessibleRef focused,
+        ref int remainingVisits,
+        CancellationToken ct
+    )
+    {
+        // Cancellation checks before each subprocess call keep the harvest inside its budget
+        // even if this app's a11y calls block (each check throws to the top-level catch).
+        ct.ThrowIfCancellationRequested();
+        var interfaces = GetAccessibleInterfaces(address, focused);
+        ct.ThrowIfCancellationRequested();
+        var role = GetAccessibleRole(address, focused);
+        if (IsPasswordTextRole(role))
+        {
+            // Never read a password field, and never descend to its labels.
+            return null;
+        }
+
+        var raw = new List<string?>
+        {
+            TryGetAccessibleText(address, focused, interfaces, HarvestMaxOutputChars)
+            ?? GetAccessibleName(address, focused)
+        };
+
+        // Nearby labels: the focused node's parent's showing+visible, text-bearing children.
+        ct.ThrowIfCancellationRequested();
+        var parent = GetAccessibleParent(address, focused);
+        // ReSharper disable once InvertIf -- inverting to a guard would duplicate the trailing CombineFocusedSnippets return; the single-return form is clearer
+        if (parent is not null)
+        {
+            var labels = 0;
+            foreach (var sibling in GetAccessibleChildren(address, parent.Value))
+            {
+                if (
+                    ct.IsCancellationRequested
+                    || labels >= HarvestMaxNearbyLabels
+                    || remainingVisits <= 0
+                )
+                {
+                    break;
+                }
+
+                if (sibling.Equals(focused))
+                {
+                    continue;
+                }
+
+                remainingVisits--;
+                var states = GetAccessibleState(address, sibling);
+                if (
+                    !ActiveWindowService.HasState(states, AtSpiStateShowing)
+                    || !ActiveWindowService.HasState(states, AtSpiStateVisible)
+                )
+                {
+                    continue;
+                }
+
+                // Never read a password field's text/name, even as a "nearby label": a
+                // password input sitting next to the focused control would otherwise be
+                // captured and forwarded to LLM cleanup. Same guard as the focused node.
+                ct.ThrowIfCancellationRequested();
+                if (IsPasswordTextRole(GetAccessibleRole(address, sibling)))
+                {
+                    continue;
+                }
+
+                var siblingInterfaces = GetAccessibleInterfaces(address, sibling);
+                var siblingText =
+                    TryGetAccessibleText(address, sibling, siblingInterfaces, HarvestMaxOutputChars)
+                    ?? GetAccessibleName(address, sibling);
+                if (string.IsNullOrWhiteSpace(siblingText))
+                {
+                    continue;
+                }
+
+                raw.Add(siblingText);
+                labels++;
+            }
+        }
+
+        return CombineFocusedSnippets(raw, HarvestMaxOutputChars);
+    }
+
+    /// <summary>
+    ///     Confirms the focused node lives under the recorded window: walk up to the nearest
+    ///     frame/window ancestor and require its title to relate to <paramref name="recordedTitle" />.
+    ///     Best-effort — accepts (doesn't reject) when the title is unknown or the frame's own
+    ///     title can't be read, so a legitimate harvest is never dropped on missing data; only a
+    ///     positively-different window title rejects.
+    /// </summary>
+    private static bool FocusedNodeBelongsToWindow(
+        string address,
+        AccessibleRef focused,
+        string? recordedTitle,
+        ref int remainingVisits,
+        CancellationToken ct
+    )
+    {
+        if (string.IsNullOrWhiteSpace(recordedTitle))
+        {
+            return true;
+        }
+
+        var node = focused;
+        for (var i = 0; i < HarvestWindowAncestorCap && remainingVisits > 0; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            remainingVisits--;
+            var role = GetAccessibleRole(address, node);
+            if (role is AtSpiRoleFrame or AtSpiRoleWindow)
+            {
+                var frameTitle = GetAccessibleName(address, node);
+                // Unreadable frame title → can't disprove; keep best-effort behavior.
+                return string.IsNullOrWhiteSpace(frameTitle) || TitlesRelate(frameTitle, recordedTitle);
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var parent = GetAccessibleParent(address, node);
+            if (parent is null)
+            {
+                break;
+            }
+
+            node = parent.Value;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     True when two window titles plausibly name the same window: exact/contains-either-way,
+    ///     case-insensitive. The compositor snapshot title and the AT-SPI frame Name derive from
+    ///     the same window title in GTK/Qt, so this stays lenient to avoid false rejections while
+    ///     still rejecting a clearly different window's title.
+    /// </summary>
+    internal static bool TitlesRelate(string? a, string? b)
+    {
+        var x = a?.Trim();
+        var y = b?.Trim();
+        if (string.IsNullOrEmpty(x) || string.IsNullOrEmpty(y))
+        {
+            return false;
+        }
+
+        return x.Contains(y, StringComparison.OrdinalIgnoreCase)
+               || y.Contains(x, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    ///     Collapses whitespace, drops adjacent duplicate snippets, and hard-caps the joined
+    ///     length. Pure so the harvest's text-shaping is unit-testable without a live bus.
+    /// </summary>
+    internal static string? CombineFocusedSnippets(IReadOnlyList<string?> rawSnippets, int maxChars)
+    {
+        var collected = new List<string>();
+        var total = 0;
+        foreach (var raw in rawSnippets)
+        {
+            if (total >= maxChars)
+            {
+                break;
+            }
+
+            var snippet = CollapseWhitespace(raw);
+            if (snippet.Length == 0)
+            {
+                continue;
+            }
+
+            // Drop adjacent repeats (a labelled field often exposes its label twice).
+            if (collected.Count > 0 && string.Equals(collected[^1], snippet, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var separatorLength = collected.Count > 0 ? 1 : 0;
+            var budget = maxChars - total - separatorLength;
+            if (budget <= 0)
+            {
+                break;
+            }
+
+            if (snippet.Length > budget)
+            {
+                snippet = snippet[..budget];
+            }
+
+            collected.Add(snippet);
+            total += snippet.Length + separatorLength;
+        }
+
+        return collected.Count == 0 ? null : string.Join('\n', collected);
+    }
+
+    internal static string CollapseWhitespace(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(text.Length);
+        var pendingSpace = false;
+        foreach (var ch in text)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                pendingSpace = sb.Length > 0;
+                continue;
+            }
+
+            if (pendingSpace)
+            {
+                sb.Append(' ');
+                pendingSpace = false;
+            }
+
+            sb.Append(ch);
+        }
+
+        return sb.ToString();
+    }
+
+    internal static bool IsPasswordTextRole(int role)
+    {
+        return role == AtSpiRolePasswordText;
+    }
+
+    private static string? GetCachedAtSpiBusAddress()
+    {
+        lock (s_busAddressLock)
+        {
+            if (s_busAddressResolved)
+            {
+                return s_cachedBusAddress;
+            }
+
+            s_cachedBusAddress = GetAtSpiBusAddress();
+            s_busAddressResolved = true;
+            return s_cachedBusAddress;
+        }
+    }
+
+    private static AccessibleRef? GetAccessibleParent(string address, AccessibleRef node)
+    {
+        var output = RunBusctlGetProperty(
+            address,
+            node.BusName,
+            node.ObjectPath,
+            "org.a11y.atspi.Accessible",
+            "Parent"
+        );
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        var values = ParseQuotedStrings(output);
+        if (values.Count < 2)
+        {
+            return null;
+        }
+
+        var busName = values[0];
+        var path = values[1];
+        // A null parent is reported as an empty bus name / the "…/null" sentinel path.
+        if (string.IsNullOrEmpty(busName) || path.EndsWith("/null", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return new AccessibleRef(busName, path);
     }
 
     private void LogOnce(string message)
@@ -476,7 +1049,8 @@ public sealed partial class AtSpiUrlExtractor
     private static string? TryGetAccessibleText(
         string address,
         AccessibleRef node,
-        IReadOnlyList<string> interfaces
+        IReadOnlyList<string> interfaces,
+        int maxChars = int.MaxValue
     )
     {
         if (interfaces.Contains("org.a11y.atspi.Value", StringComparer.Ordinal))
@@ -490,7 +1064,7 @@ public sealed partial class AtSpiUrlExtractor
             );
             if (!string.IsNullOrWhiteSpace(valueText))
             {
-                return valueText;
+                return maxChars < valueText.Length ? valueText[..maxChars] : valueText;
             }
         }
 
@@ -511,6 +1085,10 @@ public sealed partial class AtSpiUrlExtractor
             return null;
         }
 
+        // Only request up to maxChars so a focused editor / large text area doesn't stream its
+        // whole buffer over busctl just to be truncated afterwards (latency + memory + the
+        // bounded-snippet privacy guarantee). The URL walker uses the default (unbounded).
+        var end = maxChars < characterCount ? maxChars : characterCount;
         var output = RunBusctlCall(
             address,
             node.BusName,
@@ -519,7 +1097,7 @@ public sealed partial class AtSpiUrlExtractor
             "GetText",
             "ii",
             "0",
-            characterCount.ToString()
+            end.ToString()
         );
 
         return ParseFirstQuotedString(output);

@@ -1149,7 +1149,10 @@ public sealed class TextInsertionServiceTests
 
         public InsertionFailureReason LastFailureReason => InsertionFailureReason.None;
 
-        public Task<string?> TryGetClipboardTextAsync()
+        public Task<string?> TryGetClipboardTextAsync(
+            int maxChars = int.MaxValue,
+            CancellationToken ct = default
+        )
         {
             return Task.FromResult(Clipboard);
         }

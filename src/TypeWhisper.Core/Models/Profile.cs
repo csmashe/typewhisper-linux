@@ -27,6 +27,11 @@ public sealed record Profile
     public ProfileStylePreset StylePreset { get; init; } = ProfileStylePreset.Raw;
     public CleanupLevel? CleanupLevelOverride { get; init; }
     public bool? DeveloperFormattingOverride { get; init; }
+
+    // Per-profile overrides for the two global reference-context toggles. Null =
+    // inherit the global AppSettings value (same shape as WhisperModeOverride).
+    public bool? ScreenContextOverride { get; init; }
+    public bool? ClipboardContextOverride { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
 }

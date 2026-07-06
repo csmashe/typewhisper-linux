@@ -292,7 +292,7 @@
 
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
-                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                                 <Border Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
@@ -498,6 +498,56 @@
                                 <Border Grid.Row="17" Background="#16FFFFFF" />
 
                                 <Border Grid.Row="18" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="{loc:Str Profiles.ScreenContextOverride}"
+                                                       Classes="row-label" />
+                                            <TextBlock
+                                                Text="{loc:Str Profiles.ScreenContextOverrideHint}"
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <!-- Reuses WhisperModeOptions (NullableBooleanOption list):
+                                             the three choices — inherit / on / off — are identical. -->
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding WhisperModeOptions}"
+                                                  SelectedItem="{Binding SelectedScreenContextOverrideOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:NullableBooleanOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="19" Background="#16FFFFFF" />
+
+                                <Border Grid.Row="20" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
+                                            <TextBlock Text="{loc:Str Profiles.ClipboardContextOverride}"
+                                                       Classes="row-label" />
+                                            <TextBlock
+                                                Text="{loc:Str Profiles.ClipboardContextOverrideHint}"
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding WhisperModeOptions}"
+                                                  SelectedItem="{Binding SelectedClipboardContextOverrideOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:NullableBooleanOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="21" Background="#16FFFFFF" />
+
+                                <Border Grid.Row="22" Padding="18,14">
                                     <Grid ColumnDefinitions="*,150"
                                           ColumnSpacing="16">
                                         <StackPanel>
@@ -513,9 +563,9 @@
                                                        Value="{Binding EditPriority}" />
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="19" Background="#16FFFFFF" />
+                                <Border Grid.Row="23" Background="#16FFFFFF" />
 
-                                <Border Grid.Row="20" Padding="18,14">
+                                <Border Grid.Row="24" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>

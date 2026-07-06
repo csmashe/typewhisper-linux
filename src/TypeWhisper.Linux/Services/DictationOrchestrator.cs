@@ -20,6 +20,8 @@ internal sealed record RecordingContext(
     string? AppProcess,
     string? AppTitle,
     string? AppUrl,
+    string? ScreenContext,
+    string? ClipboardContext,
     string? WindowId,
     Profile? Profile,
     string RecoveredPartialPreview,
@@ -38,6 +40,14 @@ public sealed class DictationOrchestrator : IDisposable
     // firing for the same press (~0.1s apart). 350ms is above both but below a
     // deliberate tap-tap.
     private static readonly TimeSpan s_toggleDebounce = TimeSpan.FromMilliseconds(350);
+
+    // Hard cap on each captured reference-context source (screen / clipboard). Keeps token
+    // cost small; the injection-safe framing re-caps at the same size in PromptProcessingService.
+    private const int ReferenceContextMaxChars = 2500;
+
+    // Budget for the clipboard read so a slow/hung clipboard owner can't stall the capture
+    // (the read is killed on timeout). Mirrors the screen harvest's ~1 s wall-clock budget.
+    private static readonly TimeSpan s_clipboardContextBudget = TimeSpan.FromMilliseconds(1000);
 
     private readonly ActiveWindowService _activeWindow;
     private readonly AudioRecordingService _audio;
@@ -91,6 +101,8 @@ public sealed class DictationOrchestrator : IDisposable
     private string? _recordingAppProcess;
     private string? _recordingAppTitle;
     private string? _recordingAppUrl;
+    private string? _recordingClipboardContext;
+    private string? _recordingScreenContext;
     private Profile? _recordingProfile;
 
     // Monotonically incremented per StartAsync. The active-window snapshot task
@@ -591,6 +603,8 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
+                _recordingScreenContext = null;
+                _recordingClipboardContext = null;
                 _recordingWindowId = _activeWindow.GetActiveWindowId();
                 _recordingProfile = null;
             }
@@ -678,6 +692,37 @@ public sealed class DictationOrchestrator : IDisposable
                 _models.PluginManager.EventBus.Publish(
                     new RecordingStartedEvent { AppName = appTitle, AppProcessName = appProcess }
                 );
+
+                // Reference-context capture (Feature 03): capture only the sources the matched
+                // profile enables AND when a Medium/High LLM cleanup will run. Only a browser
+                // window can be re-matched to a different (URL-specific) profile by the walk
+                // below, so:
+                //   - non-browser windows: capture NOW, concurrent with the (instant) URL
+                //     early-return — the matched profile is already final.
+                //   - browser windows: DEFER until after the URL rematch, so a URL-specific
+                //     profile can still turn a source OFF before we ever read it (honoring the
+                //     opt-out, not just dropping the data afterward).
+                // Either way the task is awaited before the snapshot task returns, so the stop
+                // ceiling covers it. Zero cost when both toggles are off (the common case).
+                var isBrowserWindow = ActiveWindowService.IsSupportedBrowserWindow(
+                    appProcess,
+                    appTitle
+                );
+                Task? contextCaptureTask = null;
+                if (!isBrowserWindow)
+                {
+                    var needs = EvaluateReferenceCaptureNeeds(matchedProfile);
+                    if (needs.Screen || needs.Clipboard)
+                    {
+                        contextCaptureTask = CaptureReferenceContextAsync(
+                            sessionId,
+                            needs.Screen,
+                            needs.Clipboard,
+                            appProcess,
+                            appTitle
+                        );
+                    }
+                }
 
                 try
                 {
@@ -779,6 +824,39 @@ public sealed class DictationOrchestrator : IDisposable
                 {
                     Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.Message}");
                 }
+
+                // Browser windows deferred their capture to here so the URL rematch's final
+                // profile (which may enable OR disable a source) is honored before any read.
+                if (isBrowserWindow)
+                {
+                    Profile? finalCaptureProfile;
+                    lock (_recordingSessionLock)
+                    {
+                        if (_recordingSession != sessionId)
+                        {
+                            return;
+                        }
+
+                        finalCaptureProfile = _recordingProfile;
+                    }
+
+                    var needs = EvaluateReferenceCaptureNeeds(finalCaptureProfile);
+                    if (needs.Screen || needs.Clipboard)
+                    {
+                        contextCaptureTask = CaptureReferenceContextAsync(
+                            sessionId,
+                            needs.Screen,
+                            needs.Clipboard,
+                            appProcess,
+                            appTitle
+                        );
+                    }
+                }
+
+                // Awaited before the snapshot task returns so the capture's results are committed
+                // (under the session-id guard) while AwaitRecordingSnapshotAsync's ceiling covers
+                // it. For non-browser windows the read overlapped the instant URL early-return.
+                await AwaitContextCaptureAsync(contextCaptureTask).ConfigureAwait(false);
             });
             _recordingSnapshotTask = recordingSnapshotTask;
         }
@@ -817,10 +895,15 @@ public sealed class DictationOrchestrator : IDisposable
             // ReSharper disable once MethodSupportsCancellation -- stop path must run teardown to completion; recording stop is intentionally non-cancellable.
             var wav = await _audio.StopRecordingAsync();
             var recoveredPartialPreview = await StopPartialTranscriptionSessionAsync();
-            await AwaitRecordingSnapshotAsync();
+
+            // Restore ducking/media BEFORE awaiting the background snapshot: that wait can now
+            // run up to 5 s (browser URL + deferred reference-context capture), and the user has
+            // already stopped speaking — leaving their audio ducked / media paused for that whole
+            // window is a jarring regression. The snapshot wait doesn't depend on audio state.
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
             earlyCleanupDone = true;
+            await AwaitRecordingSnapshotAsync();
             if (_settings.Current.SoundFeedbackEnabled)
             {
                 _soundFeedback.PlayRecordingStopped();
@@ -860,12 +943,23 @@ public sealed class DictationOrchestrator : IDisposable
                 _streamingModelId = null;
                 _streamingLanguageHint = null;
 
+                // Re-gate the captured context on the final (possibly URL-rematched) profile's
+                // toggles so a rematch to a profile that disables a source drops that source.
+                var finalScreenContext = ResolveScreenContextEnabled(_recordingProfile)
+                    ? _recordingScreenContext
+                    : null;
+                var finalClipboardContext = ResolveClipboardContextEnabled(_recordingProfile)
+                    ? _recordingClipboardContext
+                    : null;
+
                 recordingContext = new RecordingContext(
                     stoppedSessionId,
                     _recordingStart,
                     _recordingAppProcess,
                     _recordingAppTitle,
                     _recordingAppUrl,
+                    finalScreenContext,
+                    finalClipboardContext,
                     _recordingWindowId,
                     _recordingProfile,
                     recoveredPartialPreview,
@@ -880,6 +974,8 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
+                _recordingScreenContext = null;
+                _recordingClipboardContext = null;
                 _recordingWindowId = null;
                 _recordingProfile = null;
                 _recordingStart = default;
@@ -1416,6 +1512,7 @@ public sealed class DictationOrchestrator : IDisposable
             var translationTarget =
                 context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
             var cleanupLevel = ResolveCleanupLevel(context, promptAction);
+            var referenceContext = BuildReferenceContext(context);
 
             var pluginProcessors = _models
                 .PluginManager.PostProcessors.Select(processor => new PluginPostProcessor(
@@ -1448,6 +1545,7 @@ public sealed class DictationOrchestrator : IDisposable
                                         ReportStatus(context, message);
                                         return Task.CompletedTask;
                                     },
+                                    referenceContext,
                                     token
                                 ),
                     SnippetExpander = text =>
@@ -1786,19 +1884,236 @@ public sealed class DictationOrchestrator : IDisposable
 
     private CleanupLevel ResolveCleanupLevel(RecordingContext context, PromptAction? promptAction)
     {
-        if (context.Profile is null)
-        {
-            return _settings.Current.CleanupLevel;
-        }
-
-        var style = ProfileStylePresetService.Resolve(context.Profile.StylePreset);
-        var cleanupLevel = context.Profile.CleanupLevelOverride ?? style.CleanupLevel;
+        var cleanupLevel = ResolveBaseCleanupLevel(context.Profile);
 
         // Profile prompt actions are LLM transforms; don't run a separate cleanup
         // pass first — the action should receive the raw dictated text.
         return promptAction is not null && cleanupLevel > CleanupLevel.Light
             ? CleanupLevel.Light
             : cleanupLevel;
+    }
+
+    // Cleanup level before the prompt-action downgrade — the profile/style-preset choice
+    // on its own. Shared by ResolveCleanupLevel and the capture-time gate.
+    private CleanupLevel ResolveBaseCleanupLevel(Profile? profile)
+    {
+        if (profile is null)
+        {
+            return _settings.Current.CleanupLevel;
+        }
+
+        var style = ProfileStylePresetService.Resolve(profile.StylePreset);
+        return profile.CleanupLevelOverride ?? style.CleanupLevel;
+    }
+
+    private bool ResolveScreenContextEnabled(Profile? profile)
+    {
+        return profile?.ScreenContextOverride ?? _settings.Current.ScreenContextEnabled;
+    }
+
+    private bool ResolveClipboardContextEnabled(Profile? profile)
+    {
+        return profile?.ClipboardContextOverride ?? _settings.Current.ClipboardContextEnabled;
+    }
+
+    /// <summary>
+    ///     True when a Medium/High LLM cleanup pass will actually run for this profile, i.e.
+    ///     the only consumer of reference context. A profile prompt action forces cleanup down
+    ///     to Light (the action receives raw text), so it is excluded. Used to gate capture so
+    ///     no screen/clipboard read happens when the context could never be used.
+    /// </summary>
+    private bool WillLlmCleanupRun(Profile? profile)
+    {
+        if (profile is not null && !string.IsNullOrWhiteSpace(profile.PromptActionId))
+        {
+            return false;
+        }
+
+        // No available LLM provider ⇒ Medium/High cleanup falls back to Light without ever
+        // calling the provider, so the reference context can't be consumed. Don't read it.
+        if (!_promptProcessing.IsAnyProviderAvailable)
+        {
+            return false;
+        }
+
+        return ResolveBaseCleanupLevel(profile) is CleanupLevel.Medium or CleanupLevel.High;
+    }
+
+    /// <summary>
+    ///     Which reference-context sources to capture for a profile: each enabled toggle,
+    ///     but only when a Medium/High LLM cleanup will consume them. Evaluated once for the
+    ///     initial match and again for any URL-rematched profile so per-URL opt-ins still fire.
+    /// </summary>
+    private (bool Screen, bool Clipboard) EvaluateReferenceCaptureNeeds(Profile? profile)
+    {
+        return !WillLlmCleanupRun(profile)
+            ? (false, false)
+            : (ResolveScreenContextEnabled(profile), ResolveClipboardContextEnabled(profile));
+    }
+
+    /// <summary>
+    ///     Captures the opt-in reference context (clipboard read + focused-element harvest),
+    ///     each source independently gated, and commits it under the session-id guard so a late
+    ///     write can't corrupt the next dictation. Runs in the background snapshot task.
+    /// </summary>
+    private async Task CaptureReferenceContextAsync(
+        int sessionId,
+        bool screenEnabled,
+        bool clipboardEnabled,
+        string? windowProcess,
+        string? windowTitle
+    )
+    {
+        // Run the two reads concurrently (independent subprocesses) so the capture is bounded by
+        // max(clipboard, screen) ≈ 1 s, not their sum — keeps a post-URL supplementary capture
+        // inside the stop wait budget.
+        var clipboardTask = clipboardEnabled
+            ? CaptureClipboardContextAsync()
+            : Task.FromResult<string?>(null);
+        var screenTask = screenEnabled
+            ? CaptureScreenContextAsync(windowProcess, windowTitle)
+            : Task.FromResult<string?>(null);
+
+        var clipboard = await clipboardTask.ConfigureAwait(false);
+        var screen = await screenTask.ConfigureAwait(false);
+
+        lock (_recordingSessionLock)
+        {
+            if (_recordingSession != sessionId)
+            {
+                return;
+            }
+
+            // Only write the sources this pass actually captured, so a supplementary (delta)
+            // capture can't clobber a source an earlier pass already committed.
+            if (screenEnabled)
+            {
+                _recordingScreenContext = screen;
+            }
+
+            if (clipboardEnabled)
+            {
+                _recordingClipboardContext = clipboard;
+            }
+        }
+    }
+
+    private async Task<string?> CaptureClipboardContextAsync()
+    {
+        try
+        {
+            using var clipboardCts = new CancellationTokenSource(s_clipboardContextBudget);
+            return TruncateReferenceContext(
+                await _textInsertion
+                    .TryGetClipboardTextAsync(ReferenceContextMaxChars, clipboardCts.Token)
+                    .ConfigureAwait(false)
+            );
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Clipboard context capture failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private async Task<string?> CaptureScreenContextAsync(string? windowProcess, string? windowTitle)
+    {
+        try
+        {
+            return TruncateReferenceContext(
+                await Task.Run(
+                        () => _activeWindow.GetFocusedScreenContext(windowProcess, windowTitle)
+                    )
+                    .ConfigureAwait(false)
+            );
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Screen context capture failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static async Task AwaitContextCaptureAsync(Task? captureTask)
+    {
+        if (captureTask is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await captureTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Reference-context capture failed: {ex.Message}");
+        }
+    }
+
+    private static string? TruncateReferenceContext(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var trimmed = text.Trim();
+        return trimmed.Length > ReferenceContextMaxChars
+            ? trimmed[..ReferenceContextMaxChars]
+            : trimmed;
+    }
+
+    /// <summary>
+    ///     Builds the labelled reference string threaded into cleanup, or null when both
+    ///     sources are empty. Untrusted content — the injection-safe framing lives in
+    ///     <see cref="PromptProcessingService.AppendReferenceContext" />.
+    /// </summary>
+    private static string? BuildReferenceContext(RecordingContext context)
+    {
+        return BuildReferenceContext(context.ScreenContext, context.ClipboardContext);
+    }
+
+    internal static string? BuildReferenceContext(string? screenContext, string? clipboardContext)
+    {
+        var screen = string.IsNullOrWhiteSpace(screenContext) ? null : screenContext.Trim();
+        var clipboard = string.IsNullOrWhiteSpace(clipboardContext) ? null : clipboardContext.Trim();
+        if (screen is null && clipboard is null)
+        {
+            return null;
+        }
+
+        // Split the shared budget when both sources are present so a long on-screen snippet
+        // can't push the clipboard section past the downstream cap (and vice-versa) — otherwise
+        // one enabled source silently never reaches the cleanup prompt.
+        var perSourceBudget = screen is not null && clipboard is not null
+            ? ReferenceContextMaxChars / 2
+            : ReferenceContextMaxChars;
+
+        var sections = new List<string>(2);
+        if (screen is not null)
+        {
+            sections.Add(FormatReferenceSection("On-screen text:", screen, perSourceBudget));
+        }
+
+        if (clipboard is not null)
+        {
+            sections.Add(FormatReferenceSection("Clipboard text:", clipboard, perSourceBudget));
+        }
+
+        return string.Join("\n\n", sections);
+    }
+
+    private static string FormatReferenceSection(string label, string text, int budget)
+    {
+        // budget covers the whole section (label + newline + text).
+        var room = budget - label.Length - 1;
+        if (room > 0 && text.Length > room)
+        {
+            text = text[..room];
+        }
+
+        return $"{label}\n{text}";
     }
 
     private string ApplyProfileStyleFormatting(RecordingContext context, string text)
@@ -2035,6 +2350,9 @@ public sealed class DictationOrchestrator : IDisposable
                 result?.DetectedLanguage
                 ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
 
+            // Reference context is only fed to (and thus "applied" by) a Medium/High LLM cleanup.
+            var referenceContextConsumed = cleanupLevel is CleanupLevel.Medium or CleanupLevel.High;
+
             _history.AddRecord(
                 new TranscriptionRecord
                 {
@@ -2073,7 +2391,15 @@ public sealed class DictationOrchestrator : IDisposable
                     TranslationApplied = WasPipelineStepChanged(
                         pipelineResult,
                         PostProcessingStepNames.Translation
-                    )
+                    ),
+                    // Coarse indicators: the context strings are only non-empty when the
+                    // toggle was effective and a Medium/High cleanup consumed them.
+                    ScreenContextApplied =
+                        referenceContextConsumed
+                        && !string.IsNullOrWhiteSpace(context.ScreenContext),
+                    ClipboardContextApplied =
+                        referenceContextConsumed
+                        && !string.IsNullOrWhiteSpace(context.ClipboardContext)
                 }
             );
         }
@@ -2516,24 +2842,27 @@ public sealed class DictationOrchestrator : IDisposable
         try
         {
             // Cover the deferred URL re-match's full background pipeline:
-            //   - initial snapshot         up to 500 ms
-            //   - AT-SPI URL walker        up to 2 500 ms (WalkBudget)
-            //   - verification snapshot    up to 500 ms (matches initial)
-            //   - rematch + lock overhead  small
-            // Worst case ~3.5 s, so 4 s gives margin without being absurd.
+            //   - initial snapshot          up to 500 ms
+            //   - AT-SPI URL walker         up to 2 500 ms (WalkBudget)
+            //   - verification snapshot     up to 500 ms (matches initial)
+            //   - supplementary ref capture up to ~1 000 ms (only when a URL rematch enables a
+            //                               reference-context source the initial pass didn't;
+            //                               runs after the walk, so it's additive to the tail)
+            //   - rematch + lock overhead   small
+            // Worst case ~4.5 s, so 5 s gives margin without being absurd.
             // Without this, any dictation shorter than the walker's runtime
             // would advance _recordingSession before the late URL write
             // lands, and the session-id guard would drop the write —
-            // silently dropping URL-based profile matches for short
-            // browser dictations.
+            // silently dropping URL-based profile matches (and per-URL
+            // reference-context opt-ins) for short browser dictations.
             //
-            // Cost: stop-to-transcription latency grows by up to ~4 s on
+            // Cost: stop-to-transcription latency grows by up to ~5 s on
             // browser tabs when the walker uses its full budget. Non-
             // browser processes early-return from GetBrowserUrl in
-            // milliseconds and aren't affected. Long dictations (>3 s of
+            // milliseconds and aren't affected. Long dictations (>4 s of
             // recording) also aren't affected because the walker has
             // already completed in the background by the time Stop fires.
-            await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(4000));
+            await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(5000));
         }
         catch (TimeoutException)
         {

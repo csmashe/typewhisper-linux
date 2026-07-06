@@ -16,10 +16,16 @@ public partial class AdvancedSectionViewModel : ObservableObject
     private readonly SpeechFeedbackService _speechFeedback;
 
     [ObservableProperty]
+    private bool _clipboardContextEnabled;
+
+    [ObservableProperty]
     private bool _memoryEnabled;
 
     [ObservableProperty]
     private bool _saveToHistoryEnabled;
+
+    [ObservableProperty]
+    private bool _screenContextEnabled;
 
     [ObservableProperty]
     private AutoUnloadOption? _selectedAutoUnloadOption;
@@ -168,6 +174,8 @@ public partial class AdvancedSectionViewModel : ObservableObject
     private void Refresh(AppSettings settings)
     {
         MemoryEnabled = settings.MemoryEnabled && CanUseMemory;
+        ScreenContextEnabled = settings.ScreenContextEnabled;
+        ClipboardContextEnabled = settings.ClipboardContextEnabled;
         SpokenFeedbackEnabled = settings.SpokenFeedbackEnabled && CanUseSpokenFeedback;
         SaveToHistoryEnabled = settings.SaveToHistoryEnabled;
         SelectedSpokenFeedbackProviderId = string.IsNullOrWhiteSpace(
@@ -201,6 +209,26 @@ public partial class AdvancedSectionViewModel : ObservableObject
         }
 
         _settings.Save(_settings.Current with { MemoryEnabled = value });
+    }
+
+    partial void OnScreenContextEnabledChanged(bool value)
+    {
+        if (_settings.Current.ScreenContextEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Save(_settings.Current with { ScreenContextEnabled = value });
+    }
+
+    partial void OnClipboardContextEnabledChanged(bool value)
+    {
+        if (_settings.Current.ClipboardContextEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Save(_settings.Current with { ClipboardContextEnabled = value });
     }
 
     partial void OnSelectedAutoUnloadOptionChanged(AutoUnloadOption? value)

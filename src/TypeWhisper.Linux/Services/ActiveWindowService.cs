@@ -18,6 +18,10 @@ public sealed class ActiveWindowService : IActiveWindowService
     private const int AtSpiStateEditable = 18;
     private const int AtSpiRoleEditBar = 77;
     private const int AtSpiRoleEntry = 79;
+
+    // Our own AT-SPI app Name, so the focused-context harvest never reads TypeWhisper's
+    // own window (the overlay/settings) instead of the app the user is dictating into.
+    private const string SelfAtSpiAppName = "TypeWhisper";
     private static readonly TimeSpan s_providerSyncBudget = TimeSpan.FromMilliseconds(150);
 
     private static readonly bool s_isXdotoolAvailable = CheckXdotoolAvailable();
@@ -124,6 +128,15 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
 
         return string.IsNullOrWhiteSpace(windowId) ? null : TryCaptureBrowserUrl(windowId);
+    }
+
+    public string? GetFocusedScreenContext(string? processName, string? title)
+    {
+        // Scoped to the recording's window (passed in by the caller) rather than re-snapshotting
+        // the active window here: a focus change between record-start and harvest must not let
+        // the harvest read a different app. The harvest still requires a STATE_FOCUSED element
+        // inside this app, so it returns null if that window is no longer focused.
+        return _atSpiUrlExtractor.TryHarvestFocusedContext(processName, title, SelfAtSpiAppName);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
