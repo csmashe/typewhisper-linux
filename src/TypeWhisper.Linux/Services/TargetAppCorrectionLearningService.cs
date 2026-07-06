@@ -62,6 +62,11 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     private readonly TimeSpan _baselineRetryDelay;
 
     private ArmedState? _armed;
+
+    // Incremented per arm. Timer callbacks capture the generation live at creation and are
+    // ignored if they fire after a re-arm/disarm (a disposed timer's callback can still be
+    // queued), so a stale idle/timeout can never commit or disarm a newer armed session.
+    private int _armGeneration;
     private bool _disposed;
     private Timer? _idleTimer;
     private bool _initialized;
@@ -270,10 +275,15 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         lock (_gate)
         {
             StopTimers();
-            _armed = new ArmedState(element, baseline);
+            var generation = unchecked(++_armGeneration);
+            _armed = new ArmedState(element, baseline, generation);
             _timeoutTimer = new Timer(
-                static state => ((TargetAppCorrectionLearningService)state!).OnTimeout(),
-                this,
+                static state =>
+                {
+                    var token = (TimerToken)state!;
+                    token.Owner.OnTimeout(token.Generation);
+                },
+                new TimerToken(this, generation),
                 _trackingWindow,
                 Timeout.InfiniteTimeSpan
             );
@@ -456,8 +466,12 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
 
             _armed.Edited = true;
             _idleTimer ??= new Timer(
-                static state => ((TargetAppCorrectionLearningService)state!).OnIdle(),
-                this,
+                static state =>
+                {
+                    var token = (TimerToken)state!;
+                    token.Owner.OnIdle(token.Generation);
+                },
+                new TimerToken(this, _armed.Generation),
                 Timeout.InfiniteTimeSpan,
                 Timeout.InfiniteTimeSpan
             );
@@ -481,27 +495,35 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         CommitInBackground(final: true);
     }
 
-    private void OnIdle()
+    private void OnIdle(int generation)
     {
         // Idle commits are NON-FINAL: we persist the current diff but stay armed on the same
         // baseline so a later focus-out/timeout can re-diff and overwrite a partial edit the
         // user was still typing when the idle timer fired (LearnCorrection overwrites the
         // Replacement for an Original it already knows — the self-heal mechanism).
-        CommitInBackground(final: false);
+        CommitInBackground(final: false, generation);
     }
 
-    private void OnTimeout()
+    private void OnTimeout(int generation)
     {
         // Timeout is a FINAL commit: learn any pending edit that never triggered a focus-out
         // or idle commit and drop the state.
-        CommitInBackground(final: true);
+        CommitInBackground(final: true, generation);
     }
 
-    private void CommitInBackground(bool final)
+    // generation is set for timer-driven commits (idle/timeout) and null for event-driven ones
+    // (focus-out). A timer callback can be queued just before StopTimers disposes its timer, so
+    // reject it when it belongs to a superseded armed session.
+    private void CommitInBackground(bool final, int? generation = null)
     {
         lock (_gate)
         {
             var state = _armed;
+            if (generation is not null && state?.Generation != generation)
+            {
+                return;
+            }
+
             if (state is null || !state.Edited)
             {
                 // Inverting to `if (!final) return;` would duplicate the return and split the
@@ -566,9 +588,9 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 // change of intent would be silently learned as a correction.
                 if (!IsLikelyRecognitionFix(suggestion.Original, suggestion.Replacement))
                 {
+                    // Redact the raw strings: they can contain sensitive target-app text.
                     Trace.WriteLine(
-                        $"[TargetAppLearning] Rejected low-similarity edit '{suggestion.Original}'"
-                        + $" -> '{suggestion.Replacement}' (likely a change of intent)."
+                        "[TargetAppLearning] Rejected low-similarity edit (likely a change of intent)."
                     );
                     continue;
                 }
@@ -589,8 +611,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                     if (IsWidening(previous, suggestion.Replacement))
                     {
                         Trace.WriteLine(
-                            $"[TargetAppLearning] Ignoring widened replacement '{suggestion.Original}'"
-                            + $" -> '{suggestion.Replacement}' (keeping '{previous}')."
+                            "[TargetAppLearning] Ignoring widened replacement (kept earlier value)."
                         );
                         continue;
                     }
@@ -598,10 +619,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
 
                 _dictionary.LearnCorrection(suggestion.Original, suggestion.Replacement);
                 state.LearnedByOriginal[suggestion.Original] = suggestion.Replacement;
-                Trace.WriteLine(
-                    $"[TargetAppLearning] Learned '{suggestion.Original}' -> "
-                    + $"'{suggestion.Replacement}' from target-app edit."
-                );
+                Trace.WriteLine("[TargetAppLearning] Learned a correction from a target-app edit.");
             }
         }
         catch (Exception ex)
@@ -647,10 +665,17 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         _errorLog.AddEntry(message, ErrorCategory.Detection);
     }
 
-    private sealed class ArmedState(AtSpiElementRef element, string baseline)
+    // Ties a timer callback to the owner and the arm generation it was created for.
+    private readonly record struct TimerToken(
+        TargetAppCorrectionLearningService Owner,
+        int Generation
+    );
+
+    private sealed class ArmedState(AtSpiElementRef element, string baseline, int generation)
     {
         public AtSpiElementRef Element { get; } = element;
         public string Baseline { get; } = baseline;
+        public int Generation { get; } = generation;
         public bool Edited { get; set; }
 
         // The last replacement persisted for each original during this armed session. Lets a
