@@ -238,6 +238,19 @@ public sealed class TextInsertionService
         return InsertionResult.Pasted;
     }
 
+    /// <summary>
+    ///     Reads the current clipboard text via the platform backend (wl-paste / xclip).
+    ///     Exposed for the opt-in clipboard reference-context capture; a single cheap
+    ///     subprocess, gated by the caller's toggle + "LLM cleanup will run" check.
+    /// </summary>
+    public Task<string?> TryGetClipboardTextAsync(
+        int maxChars = int.MaxValue,
+        CancellationToken ct = default
+    )
+    {
+        return _platform.TryGetClipboardTextAsync(maxChars, ct);
+    }
+
     public async Task<string> CaptureSelectedTextAsync()
     {
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
@@ -500,7 +513,14 @@ internal interface ITextInsertionPlatform
     bool PrefersDirectTypingForUnknownTarget { get; }
 
     InsertionFailureReason LastFailureReason { get; }
-    Task<string?> TryGetClipboardTextAsync();
+
+    /// <summary>
+    ///     Reads clipboard text. <paramref name="maxChars" /> caps how much is read from the
+    ///     backend (default unbounded, for the insertion-restore path which needs the full
+    ///     clipboard); the reference-context capture passes a small cap so a large clipboard
+    ///     isn't fully materialized just to keep a snippet.
+    /// </summary>
+    Task<string?> TryGetClipboardTextAsync(int maxChars = int.MaxValue, CancellationToken ct = default);
     Task<bool> SetClipboardTextAsync(string text);
     Task DelayAsync(TimeSpan delay);
     string? GetActiveWindowId();
@@ -622,7 +642,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
-    public async Task<string?> TryGetClipboardTextAsync()
+    public async Task<string?> TryGetClipboardTextAsync(
+        int maxChars = int.MaxValue,
+        CancellationToken ct = default
+    )
     {
         var psi = _isWayland
             ? new ProcessStartInfo("wl-paste", "--no-newline")
@@ -631,23 +654,80 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         psi.RedirectStandardError = true;
         psi.UseShellExecute = false;
 
+        Process? p = null;
         try
         {
-            using var p = Process.Start(psi);
+            p = Process.Start(psi);
             if (p is null)
             {
                 return null;
             }
 
-            var output = await p.StandardOutput.ReadToEndAsync();
-            await p.WaitForExitAsync();
+            // Bounded read: stop after maxChars so a huge clipboard (a copied log/file) isn't
+            // fully materialized just to keep a snippet. We don't drain or wait for exit — the
+            // finally kills the (possibly still-writing) process.
+            if (maxChars != int.MaxValue)
+            {
+                return await ReadBoundedAsync(p.StandardOutput, maxChars, ct).ConfigureAwait(false);
+            }
+
+            // Unbounded (insertion-restore path): read the full clipboard. Honor the caller's
+            // budget — a slow/hung clipboard owner (wl-paste/xclip block until the owner serves
+            // the selection) must not stall the caller; on timeout the finally kills the process.
+            var output = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await p.WaitForExitAsync(ct).ConfigureAwait(false);
             return p.ExitCode == 0 ? output : null;
+        }
+        catch (OperationCanceledException)
+        {
+            Trace.WriteLine("[TextInsertionService] clipboard read cancelled (budget exceeded).");
+            return null;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[TextInsertionService] clipboard read failed: {ex.Message}");
             return null;
         }
+        finally
+        {
+            if (p is { HasExited: false })
+            {
+                try
+                {
+                    p.Kill(true);
+                }
+                catch
+                {
+                    /* best effort */
+                }
+            }
+
+            p?.Dispose();
+        }
+    }
+
+    private static async Task<string> ReadBoundedAsync(
+        StreamReader reader,
+        int maxChars,
+        CancellationToken ct
+    )
+    {
+        var buffer = new char[maxChars];
+        var total = 0;
+        while (total < maxChars)
+        {
+            var read = await reader
+                .ReadAsync(buffer.AsMemory(total, maxChars - total), ct)
+                .ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            total += read;
+        }
+
+        return new string(buffer, 0, total);
     }
 
     public async Task<bool> SetClipboardTextAsync(string text)
