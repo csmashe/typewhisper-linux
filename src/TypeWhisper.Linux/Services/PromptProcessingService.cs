@@ -155,7 +155,13 @@ public sealed class PromptProcessingService
         }
 
         // Neutralise any attempt to close the block early and inject instructions after it.
-        var sanitized = trimmed.Replace("</reference_context>", "< /reference_context>");
+        // Case-insensitive: the text is attacker-controllable, and an LLM reads the pseudo-XML
+        // delimiter loosely, so "</Reference_Context>" must be defanged the same as lowercase.
+        var sanitized = trimmed.Replace(
+            "</reference_context>",
+            "< /reference_context>",
+            StringComparison.OrdinalIgnoreCase
+        );
 
         return $"""
                 {systemPrompt}

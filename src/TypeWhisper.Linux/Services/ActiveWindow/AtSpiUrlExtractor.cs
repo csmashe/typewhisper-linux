@@ -317,16 +317,23 @@ public sealed partial class AtSpiUrlExtractor
             return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(processHint) && IsMatchingApp(appName, processHint))
+        // Exact app-identity match only — deliberately NOT IsMatchingApp: its browser-family
+        // aliasing (Edge ↔ Chrome ↔ Brave all "chromium") could harvest a *different* browser's
+        // focused window, and screen text is privacy-sensitive. Family bridging is fine for the
+        // URL walk (one app on the bus) but wrong when scoping a capture to the recorded window.
+        if (
+            !string.IsNullOrWhiteSpace(processHint)
+            && string.Equals(appName, processHint, StringComparison.OrdinalIgnoreCase)
+        )
         {
             return true;
         }
 
         // The AT-SPI app Name often differs from the process name but appears in the window
-        // title (process "code" ↔ Name "Code" ↔ title "file — Visual Studio Code"). Require the
-        // Name to be a *trailing* segment of the title — window titles conventionally end with
-        // the app name — rather than any substring, so an app merely *mentioned* mid-title (e.g.
-        // a document/tab named after another app) can't be mistaken for the focused window.
+        // title (process "code" ↔ Name "Visual Studio Code" ↔ title "file — Visual Studio Code").
+        // Require the Name to be a *trailing* segment of the title — window titles conventionally
+        // end with the app name — rather than any substring, so an app merely *mentioned*
+        // mid-title (a document/tab named after another app) can't be mistaken for the window.
         return !string.IsNullOrWhiteSpace(title)
                && appName.Length >= 3
                && title.TrimEnd().EndsWith(appName, StringComparison.OrdinalIgnoreCase);

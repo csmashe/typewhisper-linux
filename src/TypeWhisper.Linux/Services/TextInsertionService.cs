@@ -654,29 +654,48 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         psi.RedirectStandardError = true;
         psi.UseShellExecute = false;
 
-        Process? p = null;
         try
         {
-            p = Process.Start(psi);
+            using var p = Process.Start(psi);
             if (p is null)
             {
                 return null;
             }
 
-            // Bounded read: stop after maxChars so a huge clipboard (a copied log/file) isn't
-            // fully materialized just to keep a snippet. We don't drain or wait for exit — the
-            // finally kills the (possibly still-writing) process.
-            if (maxChars != int.MaxValue)
+            // Kill a still-running process on the way out (timeout/cancel, or a bounded read
+            // that stopped before EOF) so wl-paste/xclip can't leak as a background read.
+            // Disposal is handled by the `using`.
+            try
             {
-                return await ReadBoundedAsync(p.StandardOutput, maxChars, ct).ConfigureAwait(false);
-            }
+                // Bounded read: stop after maxChars so a huge clipboard (a copied log/file) isn't
+                // fully materialized just to keep a snippet (we don't drain or wait for exit).
+                if (maxChars != int.MaxValue)
+                {
+                    return await ReadBoundedAsync(p.StandardOutput, maxChars, ct)
+                        .ConfigureAwait(false);
+                }
 
-            // Unbounded (insertion-restore path): read the full clipboard. Honor the caller's
-            // budget — a slow/hung clipboard owner (wl-paste/xclip block until the owner serves
-            // the selection) must not stall the caller; on timeout the finally kills the process.
-            var output = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
-            await p.WaitForExitAsync(ct).ConfigureAwait(false);
-            return p.ExitCode == 0 ? output : null;
+                // Unbounded (insertion-restore path): read the full clipboard. Honor the caller's
+                // budget — a slow/hung clipboard owner (wl-paste/xclip block until the owner
+                // serves the selection) must not stall the caller.
+                var output = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+                await p.WaitForExitAsync(ct).ConfigureAwait(false);
+                return p.ExitCode == 0 ? output : null;
+            }
+            finally
+            {
+                if (!p.HasExited)
+                {
+                    try
+                    {
+                        p.Kill(true);
+                    }
+                    catch
+                    {
+                        /* best effort */
+                    }
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -687,22 +706,6 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         {
             Trace.WriteLine($"[TextInsertionService] clipboard read failed: {ex.Message}");
             return null;
-        }
-        finally
-        {
-            if (p is { HasExited: false })
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-            }
-
-            p?.Dispose();
         }
     }
 

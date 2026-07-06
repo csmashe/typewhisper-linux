@@ -895,10 +895,15 @@ public sealed class DictationOrchestrator : IDisposable
             // ReSharper disable once MethodSupportsCancellation -- stop path must run teardown to completion; recording stop is intentionally non-cancellable.
             var wav = await _audio.StopRecordingAsync();
             var recoveredPartialPreview = await StopPartialTranscriptionSessionAsync();
-            await AwaitRecordingSnapshotAsync();
+
+            // Restore ducking/media BEFORE awaiting the background snapshot: that wait can now
+            // run up to 5 s (browser URL + deferred reference-context capture), and the user has
+            // already stopped speaking — leaving their audio ducked / media paused for that whole
+            // window is a jarring regression. The snapshot wait doesn't depend on audio state.
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
             earlyCleanupDone = true;
+            await AwaitRecordingSnapshotAsync();
             if (_settings.Current.SoundFeedbackEnabled)
             {
                 _soundFeedback.PlayRecordingStopped();
