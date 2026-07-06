@@ -36,7 +36,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private readonly StringBuilder _finalSegments = new();
     private readonly string? _language;
 
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Action<Exception> _onFault;
     private readonly Action<int, string> _onPartial;
     private readonly Queue<byte[]> _pending = new();
@@ -75,6 +75,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
     public bool Faulted { get; private set; }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (final-text availability flag); not currently called in-tree
     public bool HasFinalText
     {
         get
@@ -95,7 +96,13 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
         _disposed = true;
 
-        try { _cts?.Cancel(); }
+        try
+        {
+            if (_cts is not null)
+            {
+                await _cts.CancelAsync();
+            }
+        }
         catch
         {
             /* ignore */
@@ -202,6 +209,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
     public void AcceptAudioFrame(float[] samples, int sampleRate)
     {
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- public entry point fed by external capture callers; keep the defensive null guard despite the non-nullable annotation
         if (_disposed || Faulted || samples is null || samples.Length == 0)
         {
             return;
@@ -262,7 +270,13 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         // Pre-publish path: cancel _cts so a well-behaved plugin exits its connect.
         if (session is null)
         {
-            try { _cts?.Cancel(); }
+            try
+            {
+                if (_cts is not null)
+                {
+                    await _cts.CancelAsync();
+                }
+            }
             catch
             {
                 /* ignore */
@@ -386,20 +400,22 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             Trace.WriteLine($"[StreamingCoordinator] onPartial callback threw: {ex.Message}");
         }
 
-        if (evt.IsFinal && !string.IsNullOrWhiteSpace(evt.Text))
+        if (!evt.IsFinal || string.IsNullOrWhiteSpace(evt.Text))
         {
-            lock (_lock)
-            {
-                if (_finalSegments.Length > 0)
-                {
-                    _finalSegments.Append('\n');
-                }
+            return;
+        }
 
-                _finalSegments.Append(evt.Text.Trim());
+        lock (_lock)
+        {
+            if (_finalSegments.Length > 0)
+            {
+                _finalSegments.Append('\n');
             }
 
-            Volatile.Write(ref _lastFinalTickMs, Environment.TickCount64);
+            _finalSegments.Append(evt.Text.Trim());
         }
+
+        Volatile.Write(ref _lastFinalTickMs, Environment.TickCount64);
     }
 
     private void HandleFault(Exception ex)

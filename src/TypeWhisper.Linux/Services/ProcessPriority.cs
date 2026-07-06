@@ -18,10 +18,11 @@ internal static class ProcessPriority
     public static string ResetToDefaults()
     {
         var pid = Environment.ProcessId.ToString();
-        var results = new List<string>();
-
-        results.Add(Run("renice", $"-n 0 -p {pid}"));
-        results.Add(Run("ionice", $"-c 2 -n 4 -p {pid}"));
+        var results = new List<string>
+        {
+            Run("renice", $"-n 0 -p {pid}"),
+            Run("ionice", $"-c 2 -n 4 -p {pid}")
+        };
 
         return string.Join("; ", results);
     }

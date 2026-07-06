@@ -240,7 +240,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     {
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
-        return model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName)));
+        return model.Files.All(f => File.Exists(Path.Join(dir, f.FileName)));
     }
 
     public Task DeleteModelAsync(string modelId, CancellationToken ct)
@@ -280,7 +280,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
         foreach (var file in model.Files)
         {
-            var filePath = Path.Combine(dir, file.FileName);
+            var filePath = Path.Join(dir, file.FileName);
             if (File.Exists(filePath))
             {
                 // Credit an already-downloaded file's size so a resumed multi-file
@@ -332,7 +332,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
 
-        if (!model.Files.All(f => File.Exists(Path.Combine(dir, f.FileName))))
+        if (!model.Files.All(f => File.Exists(Path.Join(dir, f.FileName))))
             throw new FileNotFoundException($"Model files not found for: {modelId}");
 
         string desiredProvider;
@@ -566,7 +566,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     // doesn't look hung, without flooding the log) AND forwards a fraction mapped into
     // [start, end] of the overall provisioning bar to the host's progress reporter, so
     // the UI can show a real download bar instead of a static spinner.
-    private IProgress<double> ProvisionProgress(
+    private Progress<double> ProvisionProgress(
         string label,
         IProgress<double>? forward,
         double start,
@@ -723,10 +723,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private static OfflineRecognizer CreateParakeetRecognizer(string modelDir, string provider)
     {
         var config = new OfflineRecognizerConfig();
-        config.ModelConfig.Transducer.Encoder = Path.Combine(modelDir, "encoder.int8.onnx");
-        config.ModelConfig.Transducer.Decoder = Path.Combine(modelDir, "decoder.int8.onnx");
-        config.ModelConfig.Transducer.Joiner = Path.Combine(modelDir, "joiner.int8.onnx");
-        config.ModelConfig.Tokens = Path.Combine(modelDir, "tokens.txt");
+        config.ModelConfig.Transducer.Encoder = Path.Join(modelDir, "encoder.int8.onnx");
+        config.ModelConfig.Transducer.Decoder = Path.Join(modelDir, "decoder.int8.onnx");
+        config.ModelConfig.Transducer.Joiner = Path.Join(modelDir, "joiner.int8.onnx");
+        config.ModelConfig.Tokens = Path.Join(modelDir, "tokens.txt");
         config.ModelConfig.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
         config.ModelConfig.Provider = provider;
         config.ModelConfig.Debug = 0;
@@ -742,12 +742,12 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     )
     {
         var config = new OfflineRecognizerConfig();
-        config.ModelConfig.Canary.Encoder = Path.Combine(modelDir, "encoder.int8.onnx");
-        config.ModelConfig.Canary.Decoder = Path.Combine(modelDir, "decoder.int8.onnx");
+        config.ModelConfig.Canary.Encoder = Path.Join(modelDir, "encoder.int8.onnx");
+        config.ModelConfig.Canary.Decoder = Path.Join(modelDir, "decoder.int8.onnx");
         config.ModelConfig.Canary.SrcLang = srcLang;
         config.ModelConfig.Canary.TgtLang = tgtLang;
         config.ModelConfig.Canary.UsePnc = 1;
-        config.ModelConfig.Tokens = Path.Combine(modelDir, "tokens.txt");
+        config.ModelConfig.Tokens = Path.Join(modelDir, "tokens.txt");
         config.ModelConfig.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
         config.ModelConfig.Provider = provider;
         config.ModelConfig.Debug = 0;
@@ -944,21 +944,21 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var localAppData = Environment.GetFolderPath(
             Environment.SpecialFolder.LocalApplicationData
         );
-        var oldModelsDir = Path.Combine(localAppData, "TypeWhisper", "Models");
+        var oldModelsDir = Path.Join(localAppData, "TypeWhisper", "Models");
 
         if (!Directory.Exists(oldModelsDir))
             return;
 
         foreach (var model in Models)
         {
-            var oldDir = Path.Combine(oldModelsDir, model.Id);
+            var oldDir = Path.Join(oldModelsDir, model.Id);
             if (!Directory.Exists(oldDir))
                 continue;
 
             var newDir = GetModelDirectory(model.Id);
             if (
                 Directory.Exists(newDir)
-                && model.Files.All(f => File.Exists(Path.Combine(newDir, f.FileName)))
+                && model.Files.All(f => File.Exists(Path.Join(newDir, f.FileName)))
             )
                 continue; // Already migrated
 
@@ -966,8 +966,8 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
             foreach (var file in model.Files)
             {
-                var oldPath = Path.Combine(oldDir, file.FileName);
-                var newPath = Path.Combine(newDir, file.FileName);
+                var oldPath = Path.Join(oldDir, file.FileName);
+                var newPath = Path.Join(newDir, file.FileName);
 
                 if (File.Exists(oldPath) && !File.Exists(newPath))
                 {

@@ -1,7 +1,13 @@
-using System.Text.Json.Serialization;
-
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
+/// <summary>
+///     A context profile that overrides dictation behavior (language, task, model,
+///     cleanup, style, linked prompt action, hotkey) when the active window's
+///     process or URL matches its <see cref="ProcessNames" /> /
+///     <see cref="UrlPatterns" />. <see cref="Priority" /> breaks ties between
+///     profiles matching at the same specificity.
+/// </summary>
 public sealed record Profile
 {
     public required string Id { get; init; }
@@ -23,40 +29,4 @@ public sealed record Profile
     public bool? DeveloperFormattingOverride { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
-}
-
-/// <summary>
-///     Decides what a Profile's global hotkey does when pressed:
-///     <see cref="StartDictation" /> starts dictation forced to this profile
-///     (overriding window/URL context matching), while
-///     <see cref="ProcessSelectedText" /> runs the profile's linked
-///     <c>PromptAction</c> against the current selection without dictating.
-/// </summary>
-[JsonConverter(
-    typeof(JsonStringEnumConverter<ProfileHotkeyBehavior>))]
-public enum ProfileHotkeyBehavior
-{
-    StartDictation,
-    ProcessSelectedText
-}
-
-public enum ProfileStylePreset
-{
-    Raw,
-    Clean,
-    Concise,
-    FormalEmail,
-    CasualMessage,
-    Developer,
-    TerminalSafe,
-    MeetingNotes
-}
-
-public sealed record ProfileStyleSettings
-{
-    public required ProfileStylePreset Preset { get; init; }
-    public CleanupLevel CleanupLevel { get; init; }
-    public bool SmartFormattingEnabled { get; init; }
-    public bool DeveloperFormattingEnabled { get; init; }
-    public bool TerminalSafe { get; init; }
 }

@@ -17,14 +17,14 @@ public sealed class YdotoolSetupHelperTests
     public void UserUnitFilePath_honors_XDG_CONFIG_HOME_when_set()
     {
         var original = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        var custom = Path.Combine(Path.GetTempPath(), $"tw-xdg-{Guid.NewGuid():N}");
+        var custom = Path.Join(Path.GetTempPath(), $"tw-xdg-{Guid.NewGuid():N}");
         try
         {
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", custom);
 
             var path = YdotoolSetupHelper.UserUnitFilePath();
 
-            Assert.Equal(Path.Combine(custom, "systemd", "user", "ydotoold.service"), path);
+            Assert.Equal(Path.Join(custom, "systemd", "user", "ydotoold.service"), path);
         }
         finally
         {
@@ -44,7 +44,7 @@ public sealed class YdotoolSetupHelperTests
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             Assert.Equal(
-                Path.Combine(home, ".config", "systemd", "user", "ydotoold.service"),
+                Path.Join(home, ".config", "systemd", "user", "ydotoold.service"),
                 path
             );
         }
@@ -79,11 +79,11 @@ public sealed class YdotoolSetupHelperTests
     public void ResolveBinaryPath_finds_binary_on_PATH()
     {
         var original = Environment.GetEnvironmentVariable("PATH");
-        var dir = Path.Combine(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
+        var dir = Path.Join(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
         try
         {
             Directory.CreateDirectory(dir);
-            var fake = Path.Combine(dir, "fake-binary");
+            var fake = Path.Join(dir, "fake-binary");
             File.WriteAllText(fake, "#!/bin/sh\n");
 
             Environment.SetEnvironmentVariable("PATH", dir);
@@ -98,7 +98,10 @@ public sealed class YdotoolSetupHelperTests
             {
                 Directory.Delete(dir, true);
             }
-            catch { }
+            catch
+            {
+                // best effort
+            }
         }
     }
 
@@ -116,7 +119,7 @@ public sealed class YdotoolSetupHelperTests
             Assert.False(YdotoolSetupHelper.IsFileOwnedByTypeWhisper(withoutMarker));
             Assert.False(
                 YdotoolSetupHelper.IsFileOwnedByTypeWhisper(
-                    Path.Combine(Path.GetTempPath(), $"tw-missing-{Guid.NewGuid():N}")
+                    Path.Join(Path.GetTempPath(), $"tw-missing-{Guid.NewGuid():N}")
                 )
             );
         }
@@ -126,13 +129,19 @@ public sealed class YdotoolSetupHelperTests
             {
                 File.Delete(withMarker);
             }
-            catch { }
+            catch
+            {
+                // best effort
+            }
 
             try
             {
                 File.Delete(withoutMarker);
             }
-            catch { }
+            catch
+            {
+                // best effort
+            }
         }
     }
 
@@ -152,14 +161,17 @@ public sealed class YdotoolSetupHelperTests
             {
                 File.Delete(path);
             }
-            catch { }
+            catch
+            {
+                // best effort
+            }
         }
     }
 
     // --- RemoveAsync ownership gating -------------------------------------
     // RemoveAsync runs `systemctl`, so it's only testable through the
     // IProcessRunner seam. The regression these guard: SetUpAsync respects a
-    // pre-existing foreign ydotoold user unit but also `enable --now`s it, so
+    // pre-existing foreign ydotoold user unit but also `enable --now's it, so
     // an unconditional `disable --now` on remove would kill a service the
     // user relies on, persistently, past logout.
 
@@ -169,10 +181,10 @@ public sealed class YdotoolSetupHelperTests
         using var env = new TempEnvironment();
         // A ydotoold user unit the user (or a distro/AUR package) wrote —
         // no TypeWhisper ownership marker.
-        env.WriteUserUnit(
+        TempEnvironment.WriteUserUnit(
             "# Some other tool's ydotoold unit\n[Service]\nExecStart=/usr/bin/ydotoold\n"
         );
-        // systemctl on PATH so the disable isn't skipped for the *wrong*
+        // systemctl on PATH so the disable action isn't skipped for the *wrong*
         // reason — this proves the ownership gate, not a missing binary.
         env.PutFakeBinaryOnPath("systemctl");
 
@@ -194,7 +206,7 @@ public sealed class YdotoolSetupHelperTests
     public async Task RemoveAsync_disables_and_deletes_a_TypeWhisper_owned_user_unit()
     {
         using var env = new TempEnvironment();
-        env.WriteUserUnit(YdotoolSetupHelper.BuildUserUnitContent("/usr/bin/ydotoold"));
+        TempEnvironment.WriteUserUnit(YdotoolSetupHelper.BuildUserUnitContent("/usr/bin/ydotoold"));
         env.PutFakeBinaryOnPath("systemctl");
 
         var runner = new FakeProcessRunner();
@@ -217,7 +229,7 @@ public sealed class YdotoolSetupHelperTests
     public async Task RemoveAsync_keeps_the_unit_file_when_disable_fails()
     {
         using var env = new TempEnvironment();
-        env.WriteUserUnit(YdotoolSetupHelper.BuildUserUnitContent("/usr/bin/ydotoold"));
+        TempEnvironment.WriteUserUnit(YdotoolSetupHelper.BuildUserUnitContent("/usr/bin/ydotoold"));
         env.PutFakeBinaryOnPath("systemctl");
 
         var runner = new FakeProcessRunner();
@@ -240,13 +252,13 @@ public sealed class YdotoolSetupHelperTests
     ///     Points XDG_CONFIG_HOME and PATH at throwaway temp dirs for one test,
     ///     then restores them. PATH is deliberately restricted to the temp dir so
     ///     the test can never reach the real systemctl/pkexec — process execution
-    ///     goes through the injected <see cref="RecordingProcessRunner" />, while
+    ///     goes through the injected <see cref="FakeProcessRunner" />, while
     ///     <c>DesktopDetector.BinaryExists</c> still resolves whatever fake
     ///     binaries the test places there.
     /// </summary>
     private sealed class TempEnvironment : IDisposable
     {
-        private readonly string _configHome = Path.Combine(
+        private readonly string _configHome = Path.Join(
             Path.GetTempPath(),
             $"tw-cfg-{Guid.NewGuid():N}"
         );
@@ -257,7 +269,7 @@ public sealed class YdotoolSetupHelperTests
             "XDG_CONFIG_HOME"
         );
 
-        private readonly string _pathDir = Path.Combine(
+        private readonly string _pathDir = Path.Join(
             Path.GetTempPath(),
             $"tw-path-{Guid.NewGuid():N}"
         );
@@ -270,7 +282,7 @@ public sealed class YdotoolSetupHelperTests
         // never reaches the privileged pkexec scripts in production.
         private readonly string? _originalSysConf = YdotoolSetupHelper.SysConfDirOverride;
 
-        private readonly string _sysConfDir = Path.Combine(
+        private readonly string _sysConfDir = Path.Join(
             Path.GetTempPath(),
             $"tw-etc-{Guid.NewGuid():N}"
         );
@@ -317,7 +329,7 @@ public sealed class YdotoolSetupHelperTests
             }
         }
 
-        public void WriteUserUnit(string content)
+        public static void WriteUserUnit(string content)
         {
             var path = YdotoolSetupHelper.UserUnitFilePath();
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -326,7 +338,7 @@ public sealed class YdotoolSetupHelperTests
 
         public void PutFakeBinaryOnPath(string name)
         {
-            File.WriteAllText(Path.Combine(_pathDir, name), "#!/bin/sh\n");
+            File.WriteAllText(Path.Join(_pathDir, name), "#!/bin/sh\n");
         }
     }
 }

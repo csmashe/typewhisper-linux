@@ -338,7 +338,7 @@ public sealed partial class GroqPlugin
     internal string ResolveLlmModelId(string? requestedModel) =>
         !string.IsNullOrWhiteSpace(requestedModel)
             ? requestedModel
-            : _selectedLlmModelId ?? SupportedModels.First().Id;
+            : _selectedLlmModelId ?? SupportedModels[0].Id;
 
     private void NormalizeSelectedLlmModel()
     {
@@ -349,7 +349,7 @@ public sealed partial class GroqPlugin
         if (_selectedLlmModelId is not null && availableIds.Contains(_selectedLlmModelId))
             return;
 
-        _selectedLlmModelId = SupportedModels.FirstOrDefault()?.Id;
+        _selectedLlmModelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id;
         if (_selectedLlmModelId is not null)
             _host?.SetSetting("selectedLlmModel", _selectedLlmModelId);
     }

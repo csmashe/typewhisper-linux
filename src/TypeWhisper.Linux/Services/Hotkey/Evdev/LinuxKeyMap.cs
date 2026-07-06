@@ -37,6 +37,7 @@ internal static class LinuxKeyMap
         };
     }
 
+    // ReSharper disable once UnusedMember.Global  companion predicate to ToModifier in the evdev KEY_* mapping surface; not currently called in-tree
     public static bool IsModifier(int linuxCode)
     {
         return ToModifier(linuxCode) != ModifierMask.None;

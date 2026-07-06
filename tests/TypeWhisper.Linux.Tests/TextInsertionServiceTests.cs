@@ -48,7 +48,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteResults = new Queue<bool>(new[] { false, false, true })
+            PasteResults = new Queue<bool>([false, false, true])
         };
         var sut = new TextInsertionService(platform);
 
@@ -387,7 +387,7 @@ public sealed class TextInsertionServiceTests
         // (or one of the known direct-typing apps), respect that — they
         // know paste won't work in their app, and a layout-mangled
         // character is still a better fix than silently doing nothing.
-        // If they want pristine unicode, they can switch to clipboard
+        // If they want pristine Unicode, they can switch to clipboard
         // strategy in their settings.
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
         var sut = new TextInsertionService(platform);
@@ -454,7 +454,7 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         var call = Assert.Single(runner.Calls);
         Assert.Equal("wtype", call.FileName);
-        Assert.Equal(new[] { "-M", "ctrl", "v", "-m", "ctrl" }, call.Arguments);
+        Assert.Equal(["-M", "ctrl", "v", "-m", "ctrl"], call.Arguments);
     }
 
     [Fact]
@@ -475,7 +475,7 @@ public sealed class TextInsertionServiceTests
         Assert.Contains(
             runner.Calls,
             call =>
-                call.Arguments.SequenceEqual(new[] { "keydown", "--clearmodifiers", "Control_L" })
+                call.Arguments.SequenceEqual(["keydown", "--clearmodifiers", "Control_L"])
         );
     }
 
@@ -529,7 +529,7 @@ public sealed class TextInsertionServiceTests
         var call = Assert.Single(runner.Calls);
         Assert.Equal("xdotool", call.FileName);
         Assert.Equal(
-            new[] { "type", "--clearmodifiers", "--delay", "8", "--", "hello" },
+            ["type", "--clearmodifiers", "--delay", "8", "--", "hello"],
             call.Arguments
         );
     }
@@ -548,7 +548,7 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         var call = Assert.Single(runner.Calls);
         Assert.Equal("wtype", call.FileName);
-        Assert.Equal(new[] { "--", "--flag value" }, call.Arguments);
+        Assert.Equal(["--", "--flag value"], call.Arguments);
     }
 
     [Fact]
@@ -565,7 +565,7 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         var call = Assert.Single(runner.Calls);
         Assert.Equal("wtype", call.FileName);
-        Assert.Equal(new[] { "-k", "Return" }, call.Arguments);
+        Assert.Equal(["-k", "Return"], call.Arguments);
     }
 
     [Fact]
@@ -629,7 +629,7 @@ public sealed class TextInsertionServiceTests
         // Speed flags --key-delay 2 --key-hold 2 are part of TypeArgs to
         // bring ydotool's ~40 ms/char default down to ~4 ms/char.
         Assert.Equal(
-            new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "hi" },
+            ["type", "--key-delay", "2", "--key-hold", "2", "--", "hi"],
             call.Arguments
         );
     }
@@ -752,8 +752,8 @@ public sealed class TextInsertionServiceTests
                 true,
                 true
             ),
-            (file, args, env) => runner.Run(file, args),
-            (file, args) => runner.RunWithStderr(file, args)
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
         );
 
         var ok = await platform.TypeTextAsync("hi");
@@ -761,7 +761,7 @@ public sealed class TextInsertionServiceTests
         Assert.True(ok);
         // ydotool was tried first, then wtype, then xdotool succeeded.
         Assert.Equal(
-            new[] { "ydotool", "wtype", "xdotool" },
+            ["ydotool", "wtype", "xdotool"],
             runner.Calls.Select(c => c.FileName).ToArray()
         );
 
@@ -796,8 +796,8 @@ public sealed class TextInsertionServiceTests
                 true,
                 true
             ),
-            (file, args, env) => runner.Run(file, args),
-            (file, args) => runner.RunWithStderr(file, args)
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
         );
 
         var ok = await platform.TypeTextAsync("hi");
@@ -860,7 +860,7 @@ public sealed class TextInsertionServiceTests
         var runner = new RecordingProcessRunner();
         var platform = new LinuxTextInsertionPlatform(
             commands,
-            (file, args, env) => runner.Run(file, args),
+            (file, args, _) => runner.Run(file, args),
             async (file, args) => (await runner.Run(file, args).ConfigureAwait(false), string.Empty)
         );
 
@@ -908,12 +908,11 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         Assert.All(runner.Calls, call => Assert.Equal("wtype", call.FileName));
         Assert.Equal(
-            new[]
-            {
-                new[] { "--", "line one" },
-                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
-                new[] { "--", "line two" }
-            },
+            [
+                ["--", "line one"],
+                ["-M", "shift", "-k", "Return", "-m", "shift"],
+                ["--", "line two"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -932,13 +931,12 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         Assert.All(runner.Calls, call => Assert.Equal("ydotool", call.FileName));
         Assert.Equal(
-            new[]
-            {
-                new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "line one" },
+            [
+                ["type", "--key-delay", "2", "--key-hold", "2", "--", "line one"],
                 // LEFTSHIFT(42)+ENTER(28) press/release pairs.
-                new[] { "key", "42:1", "28:1", "28:0", "42:0" },
-                new[] { "type", "--key-delay", "2", "--key-hold", "2", "--", "line two" }
-            },
+                ["key", "42:1", "28:1", "28:0", "42:0"],
+                ["type", "--key-delay", "2", "--key-hold", "2", "--", "line two"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -957,12 +955,11 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         Assert.All(runner.Calls, call => Assert.Equal("xdotool", call.FileName));
         Assert.Equal(
-            new[]
-            {
-                new[] { "type", "--clearmodifiers", "--delay", "8", "--", "line one" },
-                new[] { "key", "--clearmodifiers", "shift+Return" },
-                new[] { "type", "--clearmodifiers", "--delay", "8", "--", "line two" }
-            },
+            [
+                ["type", "--clearmodifiers", "--delay", "8", "--", "line one"],
+                ["key", "--clearmodifiers", "shift+Return"],
+                ["type", "--clearmodifiers", "--delay", "8", "--", "line two"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -982,13 +979,12 @@ public sealed class TextInsertionServiceTests
 
         Assert.True(result);
         Assert.Equal(
-            new[]
-            {
-                new[] { "--", "first" },
-                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
-                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
-                new[] { "--", "second" }
-            },
+            [
+                ["--", "first"],
+                ["-M", "shift", "-k", "Return", "-m", "shift"],
+                ["-M", "shift", "-k", "Return", "-m", "shift"],
+                ["--", "second"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -1006,12 +1002,11 @@ public sealed class TextInsertionServiceTests
 
         Assert.True(result);
         Assert.Equal(
-            new[]
-            {
-                new[] { "--", "a" },
-                new[] { "-M", "shift", "-k", "Return", "-m", "shift" },
-                new[] { "--", "b" }
-            },
+            [
+                ["--", "a"],
+                ["-M", "shift", "-k", "Return", "-m", "shift"],
+                ["--", "b"]
+            ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
     }
@@ -1032,7 +1027,7 @@ public sealed class TextInsertionServiceTests
         Assert.True(result);
         var call = Assert.Single(runner.Calls);
         Assert.Equal("wtype", call.FileName);
-        Assert.Equal(new[] { "--", "just one line" }, call.Arguments);
+        Assert.Equal(["--", "just one line"], call.Arguments);
     }
 
     private static LinuxCapabilitySnapshot SnapshotFor(
@@ -1041,6 +1036,10 @@ public sealed class TextInsertionServiceTests
         bool hasWtype
     )
     {
+        // ReSharper disable once IntroduceOptionalParameters.Local — keeping the
+        // 3-arg X11 convenience overload separate reads clearer than three optional
+        // positional params on the 6-arg form; merging would also turn the existing
+        // "…, false, false" 6-arg call sites into redundant-argument warnings.
         return SnapshotFor(
             sessionType,
             hasXdotool,
@@ -1083,13 +1082,12 @@ public sealed class TextInsertionServiceTests
 
     private sealed class RecordingProcessRunner
     {
-        public List<(string FileName, string[] Arguments)> Calls { get; } = new();
-        public int ExitCode { get; set; }
+        public List<(string FileName, string[] Arguments)> Calls { get; } = [];
 
         public Task<int> Run(string fileName, IReadOnlyList<string> args)
         {
             Calls.Add((fileName, args.ToArray()));
-            return Task.FromResult(ExitCode);
+            return Task.FromResult(0);
         }
     }
 
@@ -1100,7 +1098,7 @@ public sealed class TextInsertionServiceTests
     /// </summary>
     private sealed class ScriptedProcessRunner
     {
-        public List<(string FileName, string[] Arguments)> Calls { get; } = new();
+        public List<(string FileName, string[] Arguments)> Calls { get; } = [];
         public Queue<(string Expected, int ExitCode, string Stderr)> Queue { get; } = new();
 
         public Task<int> Run(string fileName, IReadOnlyList<string> args)
@@ -1131,12 +1129,11 @@ public sealed class TextInsertionServiceTests
     {
         public string? Clipboard { get; set; }
         public string? ActiveWindowId { get; set; }
-        public bool ClipboardSetAvailable { get; set; } = true;
-        public bool PasteAvailable { get; set; } = true;
-        public bool ActivateSucceeds { get; set; } = true;
-        public bool PasteSucceeds { get; set; } = true;
-        public bool TypeSucceeds { get; } = true;
-        public Queue<bool>? PasteResults { get; set; }
+        public bool ClipboardSetAvailable { get; init; } = true;
+        public bool PasteAvailable { get; init; } = true;
+        public bool ActivateSucceeds { get; init; } = true;
+        public bool PasteSucceeds { get; init; } = true;
+        public Queue<bool>? PasteResults { get; init; }
         public bool PasteSent { get; private set; }
         public int PasteAttemptCount { get; private set; }
         public bool EnterSent { get; private set; }
@@ -1146,11 +1143,11 @@ public sealed class TextInsertionServiceTests
 
         public bool IsPasteAvailable => PasteAvailable;
 
-        public bool IsKdePlasma { get; set; }
+        public bool IsKdePlasma => false;
 
-        public bool PrefersDirectTypingForUnknownTarget { get; set; }
+        public bool PrefersDirectTypingForUnknownTarget { get; init; }
 
-        public InsertionFailureReason LastFailureReason { get; } = InsertionFailureReason.None;
+        public InsertionFailureReason LastFailureReason => InsertionFailureReason.None;
 
         public Task<string?> TryGetClipboardTextAsync()
         {
@@ -1195,7 +1192,7 @@ public sealed class TextInsertionServiceTests
         public Task<bool> TypeTextAsync(string text)
         {
             TypedText = text;
-            return Task.FromResult(TypeSucceeds);
+            return Task.FromResult(true);
         }
 
         public Task<bool> SendCopyAsync()

@@ -1,5 +1,11 @@
 namespace TypeWhisper.Core.Models;
 
+/// <summary>
+///     A text-expansion rule: when its <see cref="Trigger" /> appears in
+///     transcribed text it is replaced with <see cref="Replacement" />.
+///     <see cref="TriggerMode" /> controls how the trigger is matched, and
+///     <see cref="ProfileIds" /> can scope it to specific profiles.
+/// </summary>
 public sealed record Snippet
 {
     public required string Id { get; init; }
@@ -12,11 +18,10 @@ public sealed record Snippet
     public DateTime? LastUsedAt { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public string Tags { get; init; } = "";
-    public IReadOnlyList<string> ProfileIds { get; init; } = [];
-}
-
-public enum SnippetTriggerMode
-{
-    Anywhere,
-    ExactPhrase
+    /// <summary>
+    ///     Profiles this snippet is scoped to; null/empty means "applies to all profiles".
+    ///     Nullable because JSON with an explicit <c>"profileIds": null</c> overrides the
+    ///     <c>[]</c> initializer, so consumers must null-guard before use.
+    /// </summary>
+    public IReadOnlyList<string>? ProfileIds { get; init; } = [];
 }

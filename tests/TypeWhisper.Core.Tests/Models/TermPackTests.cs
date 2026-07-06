@@ -1,7 +1,13 @@
 using TypeWhisper.Core.Models;
 
+// The Assert.All lambdas in this file assert on each element; ReSharper reads xUnit
+// asserts as precondition checks and concludes the element parameter is only
+// validated, never used — but asserting on each element is exactly the test's
+// purpose, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
 namespace TypeWhisper.Core.Tests.Models;
 
+/// <summary>Guards the built-in <see cref="TermPack" /> catalog and <see cref="IndustryPreset" /> lookup/merge behavior.</summary>
 public class TermPackTests
 {
     [Fact]
@@ -69,7 +75,7 @@ public class TermPackTests
         var pack = TermPack.FindById(id);
 
         Assert.NotNull(pack);
-        Assert.Equal(id, pack!.Id, ignoreCase: true);
+        Assert.Equal(id, pack.Id, ignoreCase: true);
     }
 
     [Fact]
@@ -84,7 +90,7 @@ public class TermPackTests
         var ids = IndustryPreset.All.Select(p => p.Id).ToArray();
 
         Assert.Equal(4, IndustryPreset.All.Length);
-        Assert.Equal(new[] { "general", "real-estate", "architecture", "legal" }, ids);
+        Assert.Equal(["general", "real-estate", "architecture", "legal"], ids);
     }
 
     [Fact]
@@ -135,7 +141,7 @@ public class TermPackTests
 
         var result = IndustryPreset.MergeIntoEnabledPackIds(input, "real-estate");
 
-        Assert.Equal(new[] { "web-dev", "real-estate" }, result);
+        Assert.Equal(["web-dev", "real-estate"], result);
     }
 
     [Fact]

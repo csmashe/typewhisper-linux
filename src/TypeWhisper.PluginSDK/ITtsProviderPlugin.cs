@@ -1,3 +1,6 @@
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSDK;
@@ -5,6 +8,7 @@ namespace TypeWhisper.PluginSDK;
 /// <summary>
 ///     Plugin that provides text-to-speech playback for spoken feedback and readback.
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public interface ITtsProviderPlugin : ITypeWhisperPlugin
 {
     /// <summary>Unique provider identifier.</summary>
@@ -23,6 +27,7 @@ public interface ITtsProviderPlugin : ITypeWhisperPlugin
     string? SelectedVoiceId { get; }
 
     /// <summary>Optional summary of current provider-specific settings.</summary>
+    // ReSharper disable once UnusedMember.Global
     string? SettingsSummary => null;
 
     /// <summary>Selects a voice by provider-specific ID, or null for the provider default.</summary>

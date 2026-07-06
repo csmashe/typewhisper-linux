@@ -35,7 +35,10 @@ internal static class JsonControlProtocol
 
     public const string StateIdle = "idle";
     public const string StateRecording = "recording";
+    // ReSharper disable once UnusedMember.Global  IPC control-protocol state string (status wire vocabulary, mirrors StateIdle/StateRecording); part of the protocol surface even if not emitted in-tree
     public const string StateTranscribing = "transcribing";
+
+    // ReSharper disable once UnusedMember.Global  IPC control-protocol state string (status wire vocabulary, mirrors StateIdle/StateRecording); part of the protocol surface even if not emitted in-tree
     public const string StateInjecting = "injecting";
 
     public const string ErrUnknownCommand = "unknown-command";
@@ -81,17 +84,20 @@ internal static class JsonControlProtocol
     public sealed class Request
     {
         [JsonPropertyName("v")]
-        public int Version { get; set; }
+        public int Version { get; init; }
 
         [JsonPropertyName("cmd")]
-        public string? Command { get; set; }
+        public string? Command { get; init; }
     }
 
+    // Serialized to JSON via JsonOptions (reflection); the get accessors are read by the
+    // serializer, which ReSharper cannot see.
+    // ReSharper disable UnusedAutoPropertyAccessor.Local
     /// <summary>
     ///     Outbound success response. <see cref="Prev" /> is the state before the
     ///     verb executed; <see cref="State" /> is the state after.
     /// </summary>
-    public sealed class ActionResponse
+    private sealed class ActionResponse
     {
         [JsonPropertyName("v")]
         public int Version { get; set; } = CurrentVersion;
@@ -108,6 +114,7 @@ internal static class JsonControlProtocol
         [JsonPropertyName("error")]
         public string? Error { get; set; }
     }
+    // ReSharper restore UnusedAutoPropertyAccessor.Local
 
     /// <summary>
     ///     Outbound <c>status</c> response. Fields that deviate from snake_case
@@ -117,24 +124,31 @@ internal static class JsonControlProtocol
     public sealed class StatusResponse
     {
         [JsonPropertyName("v")]
+        // ReSharper disable once UnusedMember.Global  get read by the reflection JSON serializer (JsonControlProtocol.JsonOptions) in SerializeStatus; part of the status response wire shape
         public int Version { get; set; } = CurrentVersion;
 
         [JsonPropertyName("ok")]
+        // ReSharper disable once UnusedAutoPropertyAccessor.Global  read by the reflection JSON serializer (JsonControlProtocol.JsonOptions) in SerializeStatus
         public bool Ok { get; set; } = true;
 
         [JsonPropertyName("state")]
+        // ReSharper disable once UnusedAutoPropertyAccessor.Global  read by the reflection JSON serializer (JsonControlProtocol.JsonOptions) in SerializeStatus
         public string? State { get; set; }
 
         [JsonPropertyName("backend")]
+        // ReSharper disable once UnusedAutoPropertyAccessor.Global  read by the reflection JSON serializer (JsonControlProtocol.JsonOptions) in SerializeStatus
         public string? Backend { get; set; }
 
         [JsonPropertyName("supports_press_release")]
+        // ReSharper disable once UnusedAutoPropertyAccessor.Global  read by the reflection JSON serializer (JsonControlProtocol.JsonOptions) in SerializeStatus
         public bool SupportsPressRelease { get; set; }
 
         [JsonPropertyName("active_binding")]
+        // ReSharper disable once UnusedAutoPropertyAccessor.Global  read by the reflection JSON serializer (JsonControlProtocol.JsonOptions) in SerializeStatus
         public string? ActiveBinding { get; set; }
 
         [JsonPropertyName("mode")]
+        // ReSharper disable once UnusedAutoPropertyAccessor.Global  read by the reflection JSON serializer (JsonControlProtocol.JsonOptions) in SerializeStatus
         public string? Mode { get; set; }
     }
 }

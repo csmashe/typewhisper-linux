@@ -17,7 +17,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
     public PluginCollectionSettingsViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "tw-vm-collection-" + Guid.NewGuid().ToString("N")
         );
@@ -247,9 +247,8 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             false,
             PluginSettingKind.Boolean,
             "false"
-        );
+        ) { BoolValue = true };
 
-        field.BoolValue = true;
         Assert.Equal("true", field.Value);
 
         field.BoolValue = false;

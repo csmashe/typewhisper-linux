@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="HistoryInsightsService" /> aggregation: totals, averages, top apps, and insertion/feature counts.</summary>
 public sealed class HistoryInsightsServiceTests
 {
     private readonly HistoryInsightsService _sut = new();

@@ -13,7 +13,7 @@ namespace TypeWhisper.Linux.Services;
 ///     Best-effort: failures are swallowed; no-ops when there is no
 ///     <c>DESKTOP_STARTUP_ID</c> or no X display.
 /// </summary>
-internal static class LinuxStartupNotification
+internal static partial class LinuxStartupNotification
 {
     private const string Lib = "libX11.so.6";
     private const int ClientMessage = 33;
@@ -90,7 +90,7 @@ internal static class LinuxStartupNotification
 
             // A throwaway never-mapped window owns the broadcast, per the spec.
             window = XCreateSimpleWindow(display, root, -100, -100, 1, 1, 0, 0, 0);
-            XSelectInput(display, window, (nint)(PropertyChangeMask | StructureNotifyMask));
+            _ = XSelectInput(display, window, (nint)(PropertyChangeMask | StructureNotifyMask));
 
             var begin = XInternAtom(display, "_NET_STARTUP_INFO_BEGIN", false);
             var info = XInternAtom(display, "_NET_STARTUP_INFO", false);
@@ -117,12 +117,12 @@ internal static class LinuxStartupNotification
                     Marshal.WriteByte(ev, OffData + i, payload[offset + i]);
                 }
 
-                XSendEvent(display, root, false, (nint)PropertyChangeMask, ev);
+                _ = XSendEvent(display, root, false, (nint)PropertyChangeMask, ev);
                 offset += DataBytes;
                 first = false;
             }
 
-            XFlush(display);
+            _ = XFlush(display);
         }
         finally
         {
@@ -133,10 +133,10 @@ internal static class LinuxStartupNotification
 
             if (window != 0)
             {
-                XDestroyWindow(display, window);
+                _ = XDestroyWindow(display, window);
             }
 
-            XCloseDisplay(display);
+            _ = XCloseDisplay(display);
         }
     }
 
@@ -169,20 +169,20 @@ internal static class LinuxStartupNotification
         }
     }
 
-    [DllImport(Lib)]
-    private static extern IntPtr XOpenDisplay(string? name);
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial IntPtr XOpenDisplay(string? name);
 
-    [DllImport(Lib)]
-    private static extern int XCloseDisplay(IntPtr display);
+    [LibraryImport(Lib)]
+    private static partial int XCloseDisplay(IntPtr display);
 
-    [DllImport(Lib)]
-    private static extern int XDefaultScreen(IntPtr display);
+    [LibraryImport(Lib)]
+    private static partial int XDefaultScreen(IntPtr display);
 
-    [DllImport(Lib)]
-    private static extern nuint XRootWindow(IntPtr display, int screen);
+    [LibraryImport(Lib)]
+    private static partial nuint XRootWindow(IntPtr display, int screen);
 
-    [DllImport(Lib)]
-    private static extern nuint XCreateSimpleWindow(
+    [LibraryImport(Lib)]
+    private static partial nuint XCreateSimpleWindow(
         IntPtr display,
         nuint parent,
         int x,
@@ -194,19 +194,20 @@ internal static class LinuxStartupNotification
         nuint background
     );
 
-    [DllImport(Lib, CharSet = CharSet.Ansi)]
-    private static extern nuint XInternAtom(
+    // Linux marshals "ANSI" strings as UTF-8, so StringMarshalling.Utf8 matches the prior CharSet.Ansi behavior for ASCII atom names.
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nuint XInternAtom(
         IntPtr display,
         string name,
         [MarshalAs(UnmanagedType.Bool)]
         bool onlyIfExists
     );
 
-    [DllImport(Lib)]
-    private static extern int XSelectInput(IntPtr display, nuint window, nint eventMask);
+    [LibraryImport(Lib)]
+    private static partial int XSelectInput(IntPtr display, nuint window, nint eventMask);
 
-    [DllImport(Lib)]
-    private static extern int XSendEvent(
+    [LibraryImport(Lib)]
+    private static partial int XSendEvent(
         IntPtr display,
         nuint window,
         [MarshalAs(UnmanagedType.Bool)]
@@ -215,9 +216,9 @@ internal static class LinuxStartupNotification
         IntPtr eventSend
     );
 
-    [DllImport(Lib)]
-    private static extern int XFlush(IntPtr display);
+    [LibraryImport(Lib)]
+    private static partial int XFlush(IntPtr display);
 
-    [DllImport(Lib)]
-    private static extern int XDestroyWindow(IntPtr display, nuint window);
+    [LibraryImport(Lib)]
+    private static partial int XDestroyWindow(IntPtr display, nuint window);
 }

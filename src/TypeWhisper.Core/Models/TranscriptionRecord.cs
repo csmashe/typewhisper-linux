@@ -1,5 +1,12 @@
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
+/// <summary>
+///     A persisted history entry for one completed dictation: the raw and final
+///     text, the app/URL/profile context it ran in, which engine and model
+///     produced it, which processing steps were applied, and how the text was
+///     inserted.
+/// </summary>
 public sealed record TranscriptionRecord
 {
     public required string Id { get; init; }
@@ -31,18 +38,4 @@ public sealed record TranscriptionRecord
 
     public string Preview =>
         FinalText.Length > 100 ? string.Concat(FinalText.AsSpan(0, 100), "...") : FinalText;
-}
-
-public enum TextInsertionStatus
-{
-    Unknown,
-    Pasted,
-    Typed,
-    CopiedToClipboard,
-    NoText,
-    ActionHandled,
-    ActionFailed,
-    MissingClipboardTool,
-    MissingPasteTool,
-    Failed
 }

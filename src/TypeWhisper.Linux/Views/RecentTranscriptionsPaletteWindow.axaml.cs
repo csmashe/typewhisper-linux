@@ -58,6 +58,8 @@ public partial class RecentTranscriptionsPaletteWindow : Window
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        // Other keys fall through to the SearchBox for normal text input.
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
         switch (e.Key)
         {
             case Key.Down:
@@ -91,6 +93,8 @@ public partial class RecentTranscriptionsPaletteWindow : Window
 
     private void Entry_PointerReleased(object? sender, PointerReleasedEventArgs e)
     {
+        // ReSharper disable once InvertIf — pattern variable `item` is used in the block;
+        // inverting would orphan the binding.
         if ((sender as Control)?.DataContext is RecentTranscriptionPaletteItem item)
         {
             SelectAndClose(item);

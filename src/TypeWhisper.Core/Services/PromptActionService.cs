@@ -1,18 +1,28 @@
+using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     File-backed <see cref="IPromptActionService" />: persists the user's LLM prompt actions as
+///     JSON and seeds the built-in presets and first-run defaults.
+/// </summary>
 public sealed class PromptActionService : IPromptActionService
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     private readonly string _filePath;
+    private readonly IErrorLogService? _errorLog;
     private List<PromptAction> _cache = [];
     private bool _cacheLoaded;
+    private bool _loadFailed;
 
-    public PromptActionService(string filePath)
+    public PromptActionService(string filePath, IErrorLogService? errorLog = null)
     {
         _filePath = filePath;
+        _errorLog = errorLog;
     }
 
     public IReadOnlyList<PromptAction> Actions
@@ -171,12 +181,27 @@ public sealed class PromptActionService : IPromptActionService
             if (File.Exists(_filePath))
             {
                 var json = File.ReadAllText(_filePath);
-                _cache = JsonSerializer.Deserialize<List<PromptAction>>(json) ?? [];
+                // A blank file is a benign "no actions yet" state (e.g. freshly created), not
+                // corruption — leave the cache empty so normal saves still happen. Only non-empty
+                // content that fails to parse is treated as a load failure below.
+                if (!string.IsNullOrWhiteSpace(json))
+                {
+                    _cache = JsonSerializer.Deserialize<List<PromptAction>>(json) ?? [];
+                }
             }
         }
-        catch
+        catch (Exception ex)
         {
+            // The user's saved prompt actions are unreadable — they'll see only the
+            // built-in presets until the file is repaired, so make that visible.
+            _errorLog?.AddEntry(
+                $"Could not load saved prompt actions from {_filePath}: {ex.Message}",
+                ErrorCategory.Prompt
+            );
             _cache = [];
+            // The file exists but couldn't be parsed. Treat the cache as untrustworthy so a
+            // later add/update doesn't overwrite the (possibly recoverable) file with an empty set.
+            _loadFailed = true;
         }
 
         _cacheLoaded = true;
@@ -184,6 +209,19 @@ public sealed class PromptActionService : IPromptActionService
 
     private void SaveToDisk()
     {
+        if (_loadFailed)
+        {
+            // We couldn't read the existing actions file, so the in-memory cache is incomplete.
+            // Persisting now would clobber the user's saved actions with a partial set, so refuse
+            // until the file loads cleanly again (e.g. after the user repairs it and relaunches).
+            _errorLog?.AddEntry(
+                $"Not saving prompt actions: the existing file at {_filePath} could not be loaded, "
+                + "so writing now would overwrite your saved actions.",
+                ErrorCategory.Prompt
+            );
+            return;
+        }
+
         try
         {
             var dir = Path.GetDirectoryName(_filePath);
@@ -192,12 +230,17 @@ public sealed class PromptActionService : IPromptActionService
                 Directory.CreateDirectory(dir);
             }
 
-            var json = JsonSerializer.Serialize(
-                _cache,
-                new JsonSerializerOptions { WriteIndented = true }
-            );
+            var json = JsonSerializer.Serialize(_cache, s_jsonOptions);
             File.WriteAllText(_filePath, json);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // Best-effort persistence: don't crash the caller, but log so a failing save is visible.
+            Trace.WriteLine($"[PromptActionService] Failed to save prompt actions to {_filePath}: {ex}");
+            _errorLog?.AddEntry(
+                $"Could not save prompt actions to {_filePath}: {ex.Message}",
+                ErrorCategory.Prompt
+            );
+        }
     }
 }

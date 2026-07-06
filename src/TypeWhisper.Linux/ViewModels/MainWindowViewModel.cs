@@ -103,25 +103,27 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     // All section VMs stay in memory so nav switches are instantaneous.
-    public DashboardSectionViewModel Dashboard { get; }
-    public DictationSectionViewModel Dictation { get; }
-    public ShortcutsSectionViewModel Shortcuts { get; }
-    public TextInsertionSectionViewModel TextInsertion { get; }
-    public FileTranscriptionSectionViewModel FileTranscription { get; }
-    public RecorderSectionViewModel Recorder { get; }
-    public HistorySectionViewModel History { get; }
-    public DictionarySectionViewModel Dictionary { get; }
-    public SnippetsSectionViewModel Snippets { get; }
-    public ProfilesSectionViewModel Profiles { get; }
-    public PromptsSectionViewModel Prompts { get; }
-    public PluginsSectionViewModel Plugins { get; }
-    public GeneralSectionViewModel General { get; }
-    public AppearanceSectionViewModel Appearance { get; }
-    public AdvancedSectionViewModel Advanced { get; }
-    public AboutSectionViewModel About { get; }
+    private DashboardSectionViewModel Dashboard { get; }
+    private DictationSectionViewModel Dictation { get; }
+    private ShortcutsSectionViewModel Shortcuts { get; }
+    private TextInsertionSectionViewModel TextInsertion { get; }
+    private FileTranscriptionSectionViewModel FileTranscription { get; }
+    private RecorderSectionViewModel Recorder { get; }
+    private HistorySectionViewModel History { get; }
+    private DictionarySectionViewModel Dictionary { get; }
+    private SnippetsSectionViewModel Snippets { get; }
+    private ProfilesSectionViewModel Profiles { get; }
+    private PromptsSectionViewModel Prompts { get; }
+    private PluginsSectionViewModel Plugins { get; }
+    private GeneralSectionViewModel General { get; }
+    private AppearanceSectionViewModel Appearance { get; }
+    private AdvancedSectionViewModel Advanced { get; }
+    private AboutSectionViewModel About { get; }
 
     public ObservableCollection<NavItem> NavItems { get; }
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string AppTitle => "TypeWhisper";
     public string VersionLabel => About.Version == "dev" ? "dev" : $"v{About.Version}";
 
@@ -143,9 +145,7 @@ public partial class MainWindowViewModel : ObservableObject
 
         if (
             Application.Current?.ApplicationLifetime
-                is IClassicDesktopStyleApplicationLifetime desktop
-            && desktop.MainWindow is { } owner
-        )
+            is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
         {
             wizard.ShowDialog(owner);
         }
@@ -228,6 +228,7 @@ public partial class MainWindowViewModel : ObservableObject
 
 public partial class NavItem : ObservableObject
 {
+    // ReSharper disable once ReplaceWithFieldKeyword -- set in the constructor (where `field` is inaccessible); Label must stay a computed property to re-resolve localization on language change.
     private readonly string _labelKey;
 
     [ObservableProperty]

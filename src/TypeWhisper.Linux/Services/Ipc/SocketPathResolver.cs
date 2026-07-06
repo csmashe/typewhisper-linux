@@ -12,7 +12,7 @@ namespace TypeWhisper.Linux.Services.Ipc;
 ///     already 0700 via systemd-logind). Falls back to <c>/tmp/typewhisper-$UID/</c>
 ///     with an explicit chmod 0700 when <c>XDG_RUNTIME_DIR</c> is unset.
 /// </remarks>
-internal static class SocketPathResolver
+internal static partial class SocketPathResolver
 {
     private const string SocketFileName = "control.sock";
 
@@ -74,12 +74,9 @@ internal static class SocketPathResolver
             return CreatePrivateSocketPath(uid);
         }
 
-        if (!IsDirectoryPrivateAndOwned(fallback, uid))
-        {
-            return CreatePrivateSocketPath(uid);
-        }
-
-        return Path.Combine(fallback, SocketFileName);
+        return !IsDirectoryPrivateAndOwned(fallback, uid)
+            ? CreatePrivateSocketPath(uid)
+            : Path.Join(fallback, SocketFileName);
     }
 
     /// <summary>Best-effort <c>chmod</c>; logs on failure but never throws.</summary>
@@ -103,7 +100,7 @@ internal static class SocketPathResolver
 
     private static string CreatePrivateSocketPath(int uid)
     {
-        var privatePath = Path.Combine(
+        var privatePath = Path.Join(
             Path.GetTempPath(),
             $"typewhisper-{uid}-{Environment.ProcessId}"
         );
@@ -128,7 +125,7 @@ internal static class SocketPathResolver
         }
 
         Trace.WriteLine($"[SocketPathResolver] Using private socket directory {privatePath}.");
-        return Path.Combine(privatePath, SocketFileName);
+        return Path.Join(privatePath, SocketFileName);
     }
 
     private static bool IsDirectoryPrivateAndOwned(string path, int uid)
@@ -141,18 +138,18 @@ internal static class SocketPathResolver
                 return false;
             }
 
-            if (ownerUid != uid)
+            if (ownerUid == uid)
             {
-                Trace.WriteLine(
-                    $"[SocketPathResolver] {path} not owned by uid {uid} (actual {ownerUid})."
+                return DirectoryHasExpectedMode(
+                    path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
                 );
-                return false;
             }
 
-            return DirectoryHasExpectedMode(
-                path,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            Trace.WriteLine(
+                $"[SocketPathResolver] {path} not owned by uid {uid} (actual {ownerUid})."
             );
+            return false;
         }
         catch (Exception ex)
         {
@@ -217,14 +214,17 @@ internal static class SocketPathResolver
         }
     }
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern uint geteuid();
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial uint geteuid();
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int chmod(string path, uint mode);
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int chmod(string path, uint mode);
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int statx(
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int statx(
         int dirfd,
         string pathname,
         int flags,

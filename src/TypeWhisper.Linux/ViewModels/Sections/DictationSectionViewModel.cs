@@ -12,6 +12,9 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class DictationSectionViewModel : ObservableObject
 {
     private readonly AudioRecordingService _audio;
@@ -276,18 +279,24 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool CanUseAudioDucking => _commands.HasPactl;
     public bool ShowAudioDuckingUnavailableReason => !CanUseAudioDucking;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string AudioDuckingUnavailableReason =>
         Loc.Instance["Dictation.PactlUnavailable"];
 
     public bool CanUseMediaPause => _commands.HasPlayerCtl;
     public bool ShowMediaPauseUnavailableReason => !CanUseMediaPause;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string MediaPauseUnavailableReason =>
         Loc.Instance["Dictation.PlayerctlUnavailable"];
 
     public bool CanUseSoundFeedback => _commands.HasAudioPlayer;
     public bool ShowSoundFeedbackUnavailableReason => !CanUseSoundFeedback;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string SoundFeedbackUnavailableReason =>
         Loc.Instance["Dictation.AudioPlayerUnavailable"];
 
@@ -305,6 +314,8 @@ public partial class DictationSectionViewModel : ObservableObject
         && !_commands.HasCudaRuntimeLibraries
         && FindCuda12LibraryPath() is not null;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string CudaLibraryPathActionText => Loc.Instance["Dictation.FixCudaPath"];
 
     // CUDA is usable only when the GPU/driver is present AND the runtime the SELECTED engine
@@ -352,6 +363,8 @@ public partial class DictationSectionViewModel : ObservableObject
         && !_gpuRuntimeClearedPendingRestart
         && SelectedModelPlugin?.ProvisionsCudaRuntimeOnDemand == true;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string DownloadCudaRuntimeText => Loc.Instance["Dictation.DownloadCudaRuntime"];
 
     // Offer "Clear GPU runtime" exactly in the corrupt-but-present case: a provisioning
@@ -365,6 +378,8 @@ public partial class DictationSectionViewModel : ObservableObject
         && !IsClearingGpuRuntime
         && !IsDownloadingCudaRuntime;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ClearGpuRuntimeText => Loc.Instance["Dictation.ClearGpuRuntime"];
 
     public string AccelerationStatusText
@@ -517,7 +532,11 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _modelSelectionCts?.Cancel();
+        if (_modelSelectionCts is not null)
+        {
+            await _modelSelectionCts.CancelAsync();
+        }
+
         StatusText = Loc.Instance.GetString("Dictation.DeletingModel", selected.DisplayLabel);
 
         try
@@ -560,7 +579,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private void RefreshDevices()
     {
         Devices.Clear();
-        foreach (var d in _audio.GetInputDevices())
+        foreach (var d in AudioRecordingService.GetInputDevices())
         {
             Devices.Add(d);
         }
@@ -914,7 +933,11 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private async Task DownloadAndLoadSelectedModelAsync(DictationModelOption selected)
     {
-        _modelSelectionCts?.Cancel();
+        if (_modelSelectionCts is not null)
+        {
+            await _modelSelectionCts.CancelAsync();
+        }
+
         _modelSelectionCts?.Dispose();
         var cts = _modelSelectionCts = new CancellationTokenSource();
 
@@ -1125,15 +1148,12 @@ public partial class DictationSectionViewModel : ObservableObject
         var shell = Environment.GetEnvironmentVariable("SHELL") ?? string.Empty;
         if (shell.EndsWith("/zsh", StringComparison.Ordinal))
         {
-            return Path.Combine(home, ".zshrc");
+            return Path.Join(home, ".zshrc");
         }
 
-        if (shell.EndsWith("/fish", StringComparison.Ordinal))
-        {
-            return Path.Combine(home, ".config", "fish", "config.fish");
-        }
-
-        return Path.Combine(home, ".bashrc");
+        return shell.EndsWith("/fish", StringComparison.Ordinal)
+            ? Path.Join(home, ".config", "fish", "config.fish")
+            : Path.Join(home, ".bashrc");
     }
 
     private static string GetCudaLibraryPathExport(string profilePath, string cudaLibraryPath)
@@ -1145,12 +1165,13 @@ public partial class DictationSectionViewModel : ObservableObject
 
     // ~/.config/environment.d/ is picked up by systemd-environment-d-generator for GUI sessions
     // on Wayland, covering app-menu launches where the shell profile isn't sourced.
+    // ReSharper disable once UnusedMethodReturnValue.Local -- returns the written path for callers that want it; the current caller invokes it for its file-writing side effect.
     private static string WriteDesktopEnvironmentFile(string home, string cudaLibraryPath)
     {
-        var environmentDir = Path.Combine(home, ".config", "environment.d");
+        var environmentDir = Path.Join(home, ".config", "environment.d");
         Directory.CreateDirectory(environmentDir);
 
-        var path = Path.Combine(environmentDir, "typewhisper-cuda.conf");
+        var path = Path.Join(environmentDir, "typewhisper-cuda.conf");
         File.WriteAllText(
             path,
             $"# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}{Environment.NewLine}"
@@ -1505,11 +1526,13 @@ public sealed class AppInsertionStrategyRow : ObservableObject
         get => _strategy;
         set
         {
-            if (SetProperty(ref _strategy, value))
+            if (!SetProperty(ref _strategy, value))
             {
-                OnPropertyChanged(nameof(SelectedStrategyOption));
-                _changed();
+                return;
             }
+
+            OnPropertyChanged(nameof(SelectedStrategyOption));
+            _changed();
         }
     }
 

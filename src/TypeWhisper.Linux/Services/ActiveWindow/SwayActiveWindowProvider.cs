@@ -20,12 +20,8 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
 
     public bool IsApplicable()
     {
-        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SWAYSOCK")))
-        {
-            return false;
-        }
-
-        return DesktopDetector.BinaryExists("swaymsg");
+        return !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SWAYSOCK"))
+            && DesktopDetector.BinaryExists("swaymsg");
     }
 
     public async Task<ActiveWindowSnapshot?> TryGetActiveWindowAsync(CancellationToken ct)
@@ -96,8 +92,7 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 windowId,
                 string.IsNullOrWhiteSpace(appId) ? null : appId,
-                Name,
-                true
+                Name
             );
         }
         catch (OperationCanceledException)
@@ -115,12 +110,12 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
         }
         catch (JsonException ex)
         {
-            Console.Error.WriteLine($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}");
+            await Console.Error.WriteLineAsync($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}").ConfigureAwait(false);
             return null;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}");
+            await Console.Error.WriteLineAsync($"SwayActiveWindowProvider: {ex.GetType().Name}: {ex.Message}").ConfigureAwait(false);
             return null;
         }
     }
@@ -142,6 +137,7 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
 
         if (node.TryGetProperty("nodes", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
         {
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- recursive early-return walk; the explicit loop avoids boxing the struct JsonElement.ArrayEnumerator into LINQ
             foreach (var child in nodes.EnumerateArray())
             {
                 var match = FindFocusedNode(child);
@@ -155,17 +151,20 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
         // Focused floating windows appear only in floating_nodes, not nodes —
         // both arrays must be searched at every container level.
         if (
-            node.TryGetProperty("floating_nodes", out var floating)
-            && floating.ValueKind == JsonValueKind.Array
+            !node.TryGetProperty("floating_nodes", out var floating)
+            || floating.ValueKind != JsonValueKind.Array
         )
         {
-            foreach (var child in floating.EnumerateArray())
+            return null;
+        }
+
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- recursive early-return walk; the explicit loop avoids boxing the struct JsonElement.ArrayEnumerator into LINQ
+        foreach (var child in floating.EnumerateArray())
+        {
+            var match = FindFocusedNode(child);
+            if (match is not null)
             {
-                var match = FindFocusedNode(child);
-                if (match is not null)
-                {
-                    return match;
-                }
+                return match;
             }
         }
 
@@ -187,12 +186,9 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
         try
         {
             var path = $"/proc/{pid}/comm";
-            if (!File.Exists(path))
-            {
-                return null;
-            }
-
-            return (await File.ReadAllTextAsync(path, ct).ConfigureAwait(false)).Trim();
+            return !File.Exists(path)
+                ? null
+                : (await File.ReadAllTextAsync(path, ct).ConfigureAwait(false)).Trim();
         }
         catch
         {

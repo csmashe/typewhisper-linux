@@ -57,8 +57,8 @@ public sealed record GlobalShortcutSet(
             cancelModifiers,
             mode,
             isCancelEnabled,
-            Array.Empty<PromptActionHotkey>(),
-            Array.Empty<ProfileHotkey>()
+            [],
+            []
         )
     {
     }

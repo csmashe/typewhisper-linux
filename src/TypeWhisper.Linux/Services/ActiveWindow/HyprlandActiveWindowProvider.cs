@@ -18,12 +18,8 @@ public sealed class HyprlandActiveWindowProvider : IActiveWindowProvider
 
     public bool IsApplicable()
     {
-        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE")))
-        {
-            return false;
-        }
-
-        return DesktopDetector.BinaryExists("hyprctl");
+        return !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE"))
+            && DesktopDetector.BinaryExists("hyprctl");
     }
 
     public async Task<ActiveWindowSnapshot?> TryGetActiveWindowAsync(CancellationToken ct)
@@ -78,8 +74,7 @@ public sealed class HyprlandActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 string.IsNullOrWhiteSpace(address) ? null : address,
                 string.IsNullOrWhiteSpace(klass) ? null : klass,
-                Name,
-                true
+                Name
             );
         }
         catch
@@ -103,12 +98,7 @@ public sealed class HyprlandActiveWindowProvider : IActiveWindowProvider
         try
         {
             var path = $"/proc/{pid}/comm";
-            if (!File.Exists(path))
-            {
-                return null;
-            }
-
-            return File.ReadAllText(path).Trim();
+            return !File.Exists(path) ? null : File.ReadAllText(path).Trim();
         }
         catch
         {

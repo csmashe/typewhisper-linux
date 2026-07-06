@@ -1,5 +1,4 @@
 using TypeWhisper.Cli.Models;
-using TypeWhisper.Cli.Services;
 using Xunit;
 
 namespace TypeWhisper.Cli.Tests;
@@ -46,57 +45,5 @@ public class CommandLineParserTests
         var options = CliOptions.Parse(["status"]);
         Assert.Equal(9876, options.Port);
         Assert.False(options.PortWasExplicit);
-    }
-}
-
-public class StdinAudioSnifferTests
-{
-    [Fact]
-    public void DetectsWavMagic()
-    {
-        var bytes = new byte[]
-        {
-            (byte)'R', (byte)'I', (byte)'F', (byte)'F',
-            0, 0, 0, 0,
-            (byte)'W', (byte)'A', (byte)'V', (byte)'E'
-        };
-        Assert.Equal("wav", StdinAudioSniffer.Detect(bytes));
-    }
-
-    [Fact]
-    public void DetectsFlacMagic()
-    {
-        Assert.Equal("flac", StdinAudioSniffer.Detect("fLaC"u8.ToArray()));
-    }
-
-    [Fact]
-    public void DetectsOggMagic()
-    {
-        Assert.Equal("ogg", StdinAudioSniffer.Detect("OggS"u8.ToArray()));
-    }
-
-    [Fact]
-    public void DetectsId3Mp3()
-    {
-        Assert.Equal("mp3", StdinAudioSniffer.Detect("ID3"u8.ToArray()));
-    }
-
-    [Fact]
-    public void DetectsMp3FrameSync()
-    {
-        Assert.Equal("mp3", StdinAudioSniffer.Detect(new byte[] { 0xFF, 0xFB }));
-        Assert.Equal("mp3", StdinAudioSniffer.Detect(new byte[] { 0xFF, 0xF3 }));
-    }
-
-    [Fact]
-    public void DefaultsToWavOnUnknownHeader()
-    {
-        Assert.Equal("wav", StdinAudioSniffer.Detect("random   "u8.ToArray()));
-    }
-
-    [Fact]
-    public void DefaultsToWavOnShortBuffer()
-    {
-        Assert.Equal("wav", StdinAudioSniffer.Detect(ReadOnlySpan<byte>.Empty));
     }
 }

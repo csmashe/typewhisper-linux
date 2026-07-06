@@ -14,6 +14,5 @@ public sealed record ActiveWindowSnapshot(
     string? Title,
     string? WindowId,
     string? AppId,
-    string Source,
-    bool IsTrusted
+    string Source
 );

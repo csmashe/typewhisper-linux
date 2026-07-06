@@ -4,6 +4,7 @@ using TypeWhisper.Core.Audio;
 
 namespace TypeWhisper.Core.Tests.Audio;
 
+/// <summary>Verifies <see cref="WavEncoder" /> writes a valid 44-byte PCM header and clamps/encodes samples correctly.</summary>
 public class WavEncoderTests
 {
     [Fact]

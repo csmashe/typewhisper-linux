@@ -1,11 +1,9 @@
 using System.Net;
-using System.Net.Http;
-using System.IO;
-using System.Text;
 using System.Text.Json;
 using TypeWhisper.Plugin.SupertonicTts;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+// ReSharper disable PropertyCanBeMadeInitOnly.Local
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -109,7 +107,7 @@ public class SupertonicTtsPluginTests
         Assert.True(session.IsActive);
         Assert.Equal("Hallo Welt", synth.LastRequest?.Text);
         Assert.Equal("de", synth.LastRequest?.Language);
-        Assert.EndsWith(Path.Combine("voice_styles", "F3.json"), synth.LastRequest?.VoiceStylePath);
+        Assert.EndsWith(Path.Join("voice_styles", "F3.json"), synth.LastRequest?.VoiceStylePath);
         Assert.Equal(1.25, synth.LastRequest?.Speed);
         Assert.Equal(12, synth.LastRequest?.DenoisingSteps);
         Assert.NotNull(playedSamples);
@@ -120,20 +118,20 @@ public class SupertonicTtsPluginTests
     [Fact]
     public async Task AssetManager_DownloadsMissingFilesAtomicallyAndWritesSourceMetadata()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         var calls = new List<string>();
         var handler = new CapturingHandler(request =>
         {
             calls.Add(request.RequestUri!.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent(Encoding.UTF8.GetBytes("payload"))
+                Content = new ByteArrayContent("payload"u8.ToArray())
             };
         });
         var files = new[]
         {
             new SupertonicAssetFile("onnx/a.onnx", "https://example.test/a.onnx", 1),
-            new SupertonicAssetFile("voice_styles/M1.json", "https://example.test/M1.json", 1),
+            new SupertonicAssetFile("voice_styles/M1.json", "https://example.test/M1.json", 1)
         };
         using var httpClient = new HttpClient(handler);
         var sut = new SupertonicAssetManager(tempDir, httpClient, files, "https://example.test/LICENSE");
@@ -141,14 +139,14 @@ public class SupertonicTtsPluginTests
 
         try
         {
-            await sut.DownloadMissingAssetsAsync(new Progress<double>(p => progressValues.Add(p)), CancellationToken.None);
+            await sut.DownloadMissingAssetsAsync(new Progress<double>(progressValues.Add), CancellationToken.None);
 
             Assert.True(sut.AreAssetsReady);
             Assert.Equal(3, calls.Count);
-            Assert.True(File.Exists(Path.Combine(tempDir, "onnx", "a.onnx")));
-            Assert.True(File.Exists(Path.Combine(tempDir, "voice_styles", "M1.json")));
-            Assert.False(File.Exists(Path.Combine(tempDir, "onnx", "a.onnx.tmp")));
-            Assert.Contains("https://example.test/LICENSE", File.ReadAllText(Path.Combine(tempDir, "SOURCE.txt")));
+            Assert.True(File.Exists(Path.Join(tempDir, "onnx", "a.onnx")));
+            Assert.True(File.Exists(Path.Join(tempDir, "voice_styles", "M1.json")));
+            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx.tmp")));
+            Assert.Contains("https://example.test/LICENSE", await File.ReadAllTextAsync(Path.Join(tempDir, "SOURCE.txt")));
             Assert.Equal(1.0, progressValues.Last(), precision: 3);
         }
         finally
@@ -172,7 +170,7 @@ public class SupertonicTtsPluginTests
                 SupertonicTtsPlugin.LicenseAcceptedSettingName,
                 SupertonicTtsPlugin.SelectedVoiceSettingName,
                 SupertonicTtsPlugin.SpeedSettingName,
-                SupertonicTtsPlugin.DenoisingStepsSettingName,
+                SupertonicTtsPlugin.DenoisingStepsSettingName
             ],
             keys);
 
@@ -181,7 +179,7 @@ public class SupertonicTtsPluginTests
 
         var voice = definitions.Single(d => d.Key == SupertonicTtsPlugin.SelectedVoiceSettingName);
         Assert.NotNull(voice.Options);
-        Assert.Equal(10, voice.Options!.Count);
+        Assert.Equal(10, voice.Options.Count);
         Assert.Contains(voice.Options!, option => option.Value == "F3");
     }
 
@@ -217,14 +215,14 @@ public class SupertonicTtsPluginTests
 
         var blocked = await sut.ValidateAsync();
         Assert.NotNull(blocked);
-        Assert.False(blocked!.IsSuccess);
+        Assert.False(blocked.IsSuccess);
         Assert.Equal(0, assets.DownloadCount);
 
         await sut.SetSettingValueAsync(SupertonicTtsPlugin.LicenseAcceptedSettingName, "true");
         var downloaded = await sut.ValidateAsync();
 
         Assert.NotNull(downloaded);
-        Assert.True(downloaded!.IsSuccess);
+        Assert.True(downloaded.IsSuccess);
         Assert.Equal(1, assets.DownloadCount);
         Assert.True(sut.IsConfigured);
         Assert.Null(sut.SettingsProgress);
@@ -234,12 +232,12 @@ public class SupertonicTtsPluginTests
     [Fact]
     public async Task AssetManager_RejectsTruncatedDownloadAndLeavesNoPartialFile()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         var handler = new CapturingHandler(_ =>
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent(Encoding.UTF8.GetBytes("short")),
+                Content = new ByteArrayContent("short"u8.ToArray())
             };
             response.Content.Headers.ContentLength = 4096; // server claims more than it sent
             return response;
@@ -254,8 +252,8 @@ public class SupertonicTtsPluginTests
                 sut.DownloadMissingAssetsAsync(null, CancellationToken.None));
 
             Assert.False(sut.AreAssetsReady);
-            Assert.False(File.Exists(Path.Combine(tempDir, "onnx", "a.onnx")));
-            Assert.False(File.Exists(Path.Combine(tempDir, "onnx", "a.onnx.tmp")));
+            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx")));
+            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx.tmp")));
         }
         finally
         {
@@ -314,13 +312,13 @@ public class SupertonicTtsPluginTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray());
+            var candidate = Path.Join(new[] { dir.FullName }.Concat(parts).ToArray());
             if (File.Exists(candidate))
                 return candidate;
             dir = dir.Parent;
         }
 
-        throw new FileNotFoundException($"Could not find {Path.Combine(parts)}");
+        throw new FileNotFoundException($"Could not find {Path.Join(parts)}");
     }
 
     private sealed class FakeSupertonicAssets : ISupertonicAssetManager
@@ -379,7 +377,7 @@ public class SupertonicTtsPluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
@@ -393,11 +391,11 @@ public class SupertonicTtsPluginTests
 
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value)
-                ? value.Deserialize<T>(JsonOptions)
+                ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

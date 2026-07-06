@@ -7,6 +7,9 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class DictationOverlayViewModel : ObservableObject
 {
     // 5 samples of audio-level history feed the waveform dots; chosen to match
@@ -323,9 +326,7 @@ public partial class DictationOverlayViewModel : ObservableObject
                 _ => ""
             },
             OverlayWidget.AppName => ActiveAppName ?? "",
-            OverlayWidget.Indicator => "",
-            OverlayWidget.Waveform => "",
-            OverlayWidget.None => "",
+            // Indicator, Waveform and None render no text; handled by the default arm.
             _ => ""
         };
     }

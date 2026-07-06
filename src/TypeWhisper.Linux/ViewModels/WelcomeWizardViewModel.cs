@@ -28,6 +28,9 @@ namespace TypeWhisper.Linux.ViewModels;
 ///     5. First-dictation check.
 ///     6. Done — sets HasCompletedOnboarding.
 /// </summary>
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class WelcomeWizardViewModel : ObservableObject
 {
     private const string PasteSmokeExpectedText = "typewhisper paste test";
@@ -154,7 +157,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     public ObservableCollection<AudioInputDevice> Mics { get; } = [];
     public ObservableCollection<IndustryPreset> IndustryPresets { get; } = [];
 
-    public int StepCount => 6;
+    private static int StepCount => 6;
     public bool IsFirstStep => StepIndex == 0;
     public bool IsLastStep => StepIndex == StepCount - 1;
     public string NextLabel => IsLastStep ? Loc.Instance["Common.Finish"] : Loc.Instance["Common.Next"];
@@ -204,25 +207,22 @@ public partial class WelcomeWizardViewModel : ObservableObject
             return false;
         }
 
-        if (result is InsertionResult.MissingClipboardTool)
+        // Remaining values (Pasted, Typed, NoText, …) are handled by the check below.
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
+        switch (result)
         {
-            PasteTestStatus = Loc.Instance["Wizard.PasteTestMissingClipboard"];
-            return false;
-        }
-
-        if (result is InsertionResult.MissingPasteTool)
-        {
-            PasteTestStatus = Loc.Instance.GetString(
-                "Wizard.PasteTestMissingPaste",
-                _commands.GetSnapshot().PasteToolInstallHint
-            );
-            return false;
-        }
-
-        if (result is InsertionResult.CopiedToClipboard)
-        {
-            PasteTestStatus = Loc.Instance["Wizard.PasteTestCopiedOnly"];
-            return false;
+            case InsertionResult.MissingClipboardTool:
+                PasteTestStatus = Loc.Instance["Wizard.PasteTestMissingClipboard"];
+                return false;
+            case InsertionResult.MissingPasteTool:
+                PasteTestStatus = Loc.Instance.GetString(
+                    "Wizard.PasteTestMissingPaste",
+                    _commands.GetSnapshot().PasteToolInstallHint
+                );
+                return false;
+            case InsertionResult.CopiedToClipboard:
+                PasteTestStatus = Loc.Instance["Wizard.PasteTestCopiedOnly"];
+                return false;
         }
 
         if (result is not InsertionResult.Pasted)
@@ -348,7 +348,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private void LoadMics()
     {
         Mics.Clear();
-        foreach (var d in _audio.GetInputDevices())
+        foreach (var d in AudioRecordingService.GetInputDevices())
         {
             Mics.Add(d);
         }
@@ -361,9 +361,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     private void RefreshPluginState()
     {
-        for (var i = 0; i < ExtensionPlugins.Count; i++)
+        foreach (var existing in ExtensionPlugins)
         {
-            var existing = ExtensionPlugins[i];
             var isEnabled = _pluginManager.IsEnabled(existing.Id);
             if (isEnabled != existing.IsEnabled)
             {
@@ -406,13 +405,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
             var downloaded = engine.SupportsModelDownload
                 ? engine.IsModelDownloaded(rawModelId)
                 : engine.IsConfigured;
-            if (downloaded != existing.IsDownloaded)
+            if (downloaded == existing.IsDownloaded)
             {
-                AvailableModels[i] = existing with { IsDownloaded = downloaded };
-                if (SelectedModel?.ModelId == existing.ModelId)
-                {
-                    SelectedModel = AvailableModels[i];
-                }
+                continue;
+            }
+
+            AvailableModels[i] = existing with { IsDownloaded = downloaded };
+            if (SelectedModel?.ModelId == existing.ModelId)
+            {
+                SelectedModel = AvailableModels[i];
             }
         }
     }
@@ -659,7 +660,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             hotkeyRow is not null
             && hotkeyRow.Summary.Contains("log out", StringComparison.OrdinalIgnoreCase);
 
-        var outstanding = SetupItems.Where(r => r.IsRequired && !r.IsSatisfied).ToList();
+        var outstanding = SetupItems.Where(r => r is { IsRequired: true, IsSatisfied: false }).ToList();
         SetupSummary = SetupItems.All(r => r.IsSatisfied)
             ? Loc.Instance["Wizard.SetupAllSet"]
             : outstanding.Count == 0
@@ -832,6 +833,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                     null,
                     CancellationToken.None
                 );
+                // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Text comes from an external ITranscriptionEnginePlugin; its non-null annotation may not hold, keep the defensive ?.
                 transcript = result.Text?.Trim() ?? "";
             }
 

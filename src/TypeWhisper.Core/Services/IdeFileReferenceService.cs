@@ -8,7 +8,7 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public sealed partial class IdeFileReferenceService
 {
-    private static readonly string[] AtReferencePrefixes =
+    private static readonly string[] s_atReferencePrefixes =
     [
         "at ",
         "tag ",
@@ -17,9 +17,9 @@ public sealed partial class IdeFileReferenceService
         "reference "
     ];
 
-    private static readonly string[] PlainReferencePrefixes = ["file ", "open file "];
+    private static readonly string[] s_plainReferencePrefixes = ["file ", "open file "];
 
-    private static readonly Dictionary<string, string> ExtensionAliases = new(
+    private static readonly Dictionary<string, string> s_extensionAliases = new(
         StringComparer.OrdinalIgnoreCase
     )
     {
@@ -41,7 +41,7 @@ public sealed partial class IdeFileReferenceService
         ["env"] = "env"
     };
 
-    public string ToFileReference(string spokenText)
+    public static string ToFileReference(string spokenText)
     {
         if (string.IsNullOrWhiteSpace(spokenText))
         {
@@ -66,20 +66,18 @@ public sealed partial class IdeFileReferenceService
             return ".env";
         }
 
-        if (LooksLikeFileName(normalized))
-        {
-            return normalized;
-        }
-
-        return Slug(normalized);
+        return LooksLikeFileName(normalized) ? normalized : Slug(normalized);
     }
 
-    public string ToAtReference(string spokenText)
+    public static string ToAtReference(string spokenText)
     {
         var fileReference = ToFileReference(spokenText);
         return string.IsNullOrWhiteSpace(fileReference) ? "" : "@" + fileReference;
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public string? TryFormatReferenceCommand(string spokenText)
     {
         if (string.IsNullOrWhiteSpace(spokenText))
@@ -93,22 +91,27 @@ public sealed partial class IdeFileReferenceService
             return null;
         }
 
-        foreach (var prefix in AtReferencePrefixes)
+        foreach (var prefix in s_atReferencePrefixes)
         {
-            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            if (!normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             {
-                var candidate = normalized[prefix.Length..].Trim();
-                return LooksLikeSpokenFileName(candidate) ? ToAtReference(candidate) : null;
+                continue;
             }
+
+            var candidate = normalized[prefix.Length..].Trim();
+            return LooksLikeSpokenFileName(candidate) ? ToAtReference(candidate) : null;
         }
 
-        foreach (var prefix in PlainReferencePrefixes)
+        // ReSharper disable once LoopCanBeConvertedToQuery
+        foreach (var prefix in s_plainReferencePrefixes)
         {
-            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            if (!normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             {
-                var candidate = normalized[prefix.Length..].Trim();
-                return LooksLikeSpokenFileName(candidate) ? ToFileReference(candidate) : null;
+                continue;
             }
+
+            var candidate = normalized[prefix.Length..].Trim();
+            return LooksLikeSpokenFileName(candidate) ? ToFileReference(candidate) : null;
         }
 
         return null;
@@ -122,7 +125,7 @@ public sealed partial class IdeFileReferenceService
     private static string? ResolveExtension(string value)
     {
         value = value.Trim().Replace(" dot ", ".", StringComparison.OrdinalIgnoreCase);
-        return ExtensionAliases.TryGetValue(value, out var extension) ? extension
+        return s_extensionAliases.TryGetValue(value, out var extension) ? extension
             : value.Length is >= 1 and <= 5 && PlainExtensionRegex().IsMatch(value) ? value
             : null;
     }
@@ -139,7 +142,7 @@ public sealed partial class IdeFileReferenceService
     {
         return value.Contains('.', StringComparison.Ordinal)
                || value.Contains('/', StringComparison.Ordinal)
-               || value.StartsWith("@", StringComparison.Ordinal);
+               || value.StartsWith('@');
     }
 
     private static bool LooksLikeSpokenFileName(string value)
@@ -153,10 +156,10 @@ public sealed partial class IdeFileReferenceService
     [GeneratedRegex(@"^(?<name>.+?)\s+dot\s+(?<extension>[a-z0-9+# ]+)$", RegexOptions.IgnoreCase)]
     private static partial Regex ExtensionRegex();
 
-    [GeneratedRegex(@"^[a-z0-9]+$")]
+    [GeneratedRegex("^[a-z0-9]+$")]
     private static partial Regex PlainExtensionRegex();
 
-    [GeneratedRegex(@"[a-z0-9]+")]
+    [GeneratedRegex("[a-z0-9]+")]
     private static partial Regex WordRegex();
 
     [GeneratedRegex(@"\s+")]

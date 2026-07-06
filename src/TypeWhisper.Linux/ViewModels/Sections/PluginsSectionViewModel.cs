@@ -197,11 +197,13 @@ public partial class PluginsSectionViewModel : ObservableObject
         var expandedPlugin = PluginGroups
             .SelectMany(group => group.Plugins)
             .FirstOrDefault(plugin => plugin.Id == expandedPluginId);
-        if (expandedPlugin is not null)
+        if (expandedPlugin is null)
         {
-            expandedPlugin.IsExpanded = true;
-            _ = LoadPluginSettingsAsync(expandedPlugin);
+            return;
         }
+
+        expandedPlugin.IsExpanded = true;
+        _ = LoadPluginSettingsAsync(expandedPlugin);
     }
 
     [RelayCommand]
@@ -243,6 +245,10 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
+        // A plugin can implement both interfaces (e.g. OpenAiCompatiblePlugin), so check each
+        // independently rather than via a mutually-exclusive switch — otherwise only the first
+        // matching kind of settings would ever persist.
+        // ReSharper disable once ConvertIfStatementToSwitchStatement — see above; the checks are independent.
         if (loaded.Instance is IPluginSettingsProvider provider)
         {
             foreach (var field in row.SettingFields)
@@ -257,16 +263,18 @@ public partial class PluginsSectionViewModel : ObservableObject
             {
                 var items = collection
                     .Items.Select(item => new PluginCollectionItem(
-                        item.Fields.ToDictionary(field => field.Key, field => (string?)field.Value)
+                        item.Fields.ToDictionary(field => field.Key, string? (field) => field.Value)
                     ))
                     .ToList();
 
                 var result = await collectionProvider.SetItemsAsync(collection.Key, items);
-                if (!result.IsSuccess)
+                if (result.IsSuccess)
                 {
-                    row.Status = result.Message;
-                    return;
+                    continue;
                 }
+
+                row.Status = result.Message;
+                return;
             }
         }
 
@@ -366,7 +374,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     // language, falling back to the manifest literal when the catalog has no
     // entry (third-party plugins, or keys not yet translated). PluginLocalization
     // returns the key itself on a miss, so an unchanged key signals "no entry".
-    private static string LocalizeManifest(IPluginLocalization loc, string key, string fallback)
+    private static string LocalizeManifest(PluginLocalization loc, string key, string fallback)
     {
         var localized = loc.GetString(key);
         return string.Equals(localized, key, StringComparison.Ordinal) ? fallback : localized;
@@ -392,22 +400,15 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         var combined = $"{manifest.Name} {manifest.Description}".ToLowerInvariant();
-        if (
-            combined.Contains("offline")
-            || combined.Contains("local")
-            || combined.Contains("on-device")
-            || combined.Contains("on device")
-            || combined.Contains("file-based")
-            || combined.Contains("file based")
-            || combined.Contains("obsidian")
-            || combined.Contains("shell script")
-            || combined.Contains("webhook")
-        )
-        {
-            return true;
-        }
-
-        return false;
+        return combined.Contains("offline")
+               || combined.Contains("local")
+               || combined.Contains("on-device")
+               || combined.Contains("on device")
+               || combined.Contains("file-based")
+               || combined.Contains("file based")
+               || combined.Contains("obsidian")
+               || combined.Contains("shell script")
+               || combined.Contains("webhook");
     }
 
     // Manifest Category takes precedence; fall back to known-ID lists then keyword heuristics.
@@ -623,7 +624,7 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         Options = options;
         Kind = ResolveKind(kind, options, isSecret);
         _value = value;
-        _selectedOption = Options.FirstOrDefault(o => o.Value == value) ?? Options.FirstOrDefault();
+        _selectedOption = Options.FirstOrDefault(o => o.Value == value) ?? (Options.Count > 0 ? Options[0] : null);
         if (_selectedOption is not null && string.IsNullOrEmpty(_value))
         {
             _value = _selectedOption.Value;
@@ -687,12 +688,14 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
             }
         }
 
-        if (!_syncingBoolValue)
+        if (_syncingBoolValue)
         {
-            _syncingBoolValue = true;
-            BoolValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-            _syncingBoolValue = false;
+            return;
         }
+
+        _syncingBoolValue = true;
+        BoolValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        _syncingBoolValue = false;
     }
 
     partial void OnBoolValueChanged(bool value)

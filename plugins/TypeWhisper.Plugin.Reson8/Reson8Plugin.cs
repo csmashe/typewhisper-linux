@@ -501,7 +501,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private static string NormalizeBaseUrl(string? url)
     {
         var normalized = string.IsNullOrWhiteSpace(url) ? DefaultBaseUrl : url.Trim();
-        while (normalized.EndsWith("/", StringComparison.Ordinal))
+        while (normalized.EndsWith('/'))
             normalized = normalized[..^1];
 
         return string.IsNullOrWhiteSpace(normalized) ? DefaultBaseUrl : normalized;

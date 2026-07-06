@@ -1,7 +1,4 @@
 extern alias SherpaOnnx;
-
-using System.IO;
-using System.Net.Http;
 using SherpaOnnx::TypeWhisper.Plugin.SherpaOnnx;
 using TypeWhisper.Plugin.WhisperCpp;
 using Provisioner = SherpaOnnx::TypeWhisper.Plugins.Shared.Cuda.CudaRuntimeProvisioner;
@@ -26,7 +23,7 @@ public class CudaRuntimeCacheClearTests
             // CacheDirectory is cacheRoot/<BundleVersion>; ClearCache deletes its parent
             // (the whole cuda tree, all bundle versions).
             Directory.CreateDirectory(provisioner.CacheDirectory);
-            File.WriteAllText(Path.Join(provisioner.CacheDirectory, "libcudart.so.12"), "dummy");
+            await File.WriteAllTextAsync(Path.Join(provisioner.CacheDirectory, "libcudart.so.12"), "dummy");
             Assert.True(Directory.Exists(cacheRoot));
 
             await provisioner.ClearCacheAsync(CancellationToken.None);
@@ -51,7 +48,7 @@ public class CudaRuntimeCacheClearTests
             var installer = new SherpaCudaRuntimeInstaller(temp, http);
 
             Directory.CreateDirectory(installer.RuntimeDirectory);
-            File.WriteAllText(Path.Join(installer.RuntimeDirectory, "libsherpa-onnx-c-api.so"), "dummy");
+            await File.WriteAllTextAsync(Path.Join(installer.RuntimeDirectory, "libsherpa-onnx-c-api.so"), "dummy");
 
             // ClearCache deletes the whole sherpa-onnx-cuda tree (every runtime version).
             var runtimeTree = Path.Join(temp, "Runtimes", "sherpa-onnx-cuda");
@@ -78,7 +75,7 @@ public class CudaRuntimeCacheClearTests
             var installer = new WhisperCudaRuntimeInstaller(temp, http);
 
             Directory.CreateDirectory(installer.NativeDirectory);
-            File.WriteAllText(Path.Join(installer.NativeDirectory, "libwhisper.so"), "dummy");
+            await File.WriteAllTextAsync(Path.Join(installer.NativeDirectory, "libwhisper.so"), "dummy");
 
             // ClearCache deletes the whole whisper-cuda tree (every runtime version).
             var runtimeTree = Path.Join(temp, "Runtimes", "whisper-cuda");

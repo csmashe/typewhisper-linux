@@ -13,7 +13,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 ///     ydotool device is excluded by name to prevent synthetic Ctrl+V chords from
 ///     forming phantom hotkeys against real keypresses.
 /// </summary>
-internal static class KeyboardDeviceDiscovery
+internal static partial class KeyboardDeviceDiscovery
 {
     private const string InputDir = "/dev/input";
 
@@ -48,13 +48,8 @@ internal static class KeyboardDeviceDiscovery
                 return result;
             }
 
-            foreach (var node in Directory.EnumerateFiles(InputDir, "event*"))
-            {
-                if (IsKeyboardNode(node))
-                {
-                    result.Add(node);
-                }
-            }
+            result.AddRange(
+                Directory.EnumerateFiles(InputDir, "event*").Where(IsKeyboardNode));
         }
         catch (Exception ex)
         {
@@ -163,6 +158,9 @@ internal static class KeyboardDeviceDiscovery
         return (IocRead << 30) | ((uint)len << 16) | (EvdevIocType << 8) | 0x06u;
     }
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int ioctl(SafeFileHandle fd, nuint request, byte[] buf);
+    // byte[] is blittable, so the source-generated marshaller pins it (same as DllImport); [Out] makes
+    // explicit that ioctl writes the device-name bytes back into buf.
+    // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int ioctl(SafeFileHandle fd, nuint request, [Out] byte[] buf);
 }

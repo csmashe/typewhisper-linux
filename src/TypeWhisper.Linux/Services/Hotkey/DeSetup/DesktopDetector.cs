@@ -8,7 +8,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 public static class DesktopDetector
 {
     /// <summary>Stable token for unknown / unsupported desktops.</summary>
-    public const string Unknown = "unknown";
+    private const string Unknown = "unknown";
 
     /// <summary>
     ///     Returns one of "gnome", "kde", "hyprland", "sway", or "unknown".
@@ -129,7 +129,7 @@ public static class DesktopDetector
 
             try
             {
-                var candidate = Path.Combine(dir, name);
+                var candidate = Path.Join(dir, name);
                 if (File.Exists(candidate))
                 {
                     return true;

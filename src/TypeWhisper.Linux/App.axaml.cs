@@ -31,7 +31,7 @@ public class App : Application
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
     ///     whether to actually quit or hide to the tray.
     /// </summary>
-    public static bool ShuttingDown { get; private set; }
+    private static bool ShuttingDown { get; set; }
 
     public override void Initialize()
     {
@@ -247,7 +247,7 @@ public class App : Application
             var promptPalette = services.GetRequiredService<PromptPaletteService>();
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
             hotkey.PromptActionHotkeyTriggered += (_, actionId) =>
-                _ = promptPalette.ExecuteActionDirectAsync(actionId);
+                FireAndForget(promptPalette.ExecuteActionDirectAsync(actionId));
 
             // Per-profile hotkeys. ProcessSelectedText runs the profile's
             // linked prompt action against the current selection; the dictation
@@ -262,15 +262,16 @@ public class App : Application
 
                 if (!string.IsNullOrWhiteSpace(profile.PromptActionId))
                 {
-                    _ = promptPalette.ExecuteActionDirectAsync(profile.PromptActionId);
+                    FireAndForget(promptPalette.ExecuteActionDirectAsync(profile.PromptActionId));
                 }
                 // else: nothing linked — no-op.
             };
             hotkey.ProfileDictationToggleRequested += (_, profileId) =>
-                _ = dictation.ToggleAsync(profileId);
+                FireAndForget(dictation.ToggleAsync(profileId));
             hotkey.ProfileDictationStartRequested += (_, profileId) =>
-                _ = dictation.StartAsync(profileId);
-            hotkey.ProfileDictationStopRequested += (_, _) => _ = dictation.StopAsync();
+                FireAndForget(dictation.StartAsync(profileId));
+            hotkey.ProfileDictationStopRequested += (_, _) =>
+                FireAndForget(dictation.StopAsync());
 
             var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
             recentTranscriptions.FeedbackRequested += (message, isError) =>
@@ -396,6 +397,16 @@ public class App : Application
     }
 
     /// <summary>
+    ///     Fire-and-forget a hotkey-triggered async action: starts the task and
+    ///     never blocks the handler. Failures are logged rather than crashing the
+    ///     app or vanishing as an unobserved task exception.
+    /// </summary>
+    private static void FireAndForget(Task task) =>
+        task.ContinueWith(
+            static t => Debug.WriteLine($"[App] Background hotkey action failed: {t.Exception}"),
+            TaskContinuationOptions.OnlyOnFaulted);
+
+    /// <summary>
     ///     Best-effort ordered shutdown of services that own native threads.
     ///     Runs before desktop.Shutdown() so the Host isn't left racing
     ///     libuiohook / PortAudio on exit.
@@ -404,8 +415,9 @@ public class App : Application
     {
         try
         {
-            var sessionAudio = services.GetService<SessionAudioFileService>();
-            sessionAudio?.DeleteSessionCaptures();
+            // Resolve to ensure the service is constructed before clearing its captures.
+            _ = services.GetService<SessionAudioFileService>();
+            SessionAudioFileService.DeleteSessionCaptures();
         }
         catch (Exception ex)
         {
@@ -455,7 +467,10 @@ public class App : Application
         try
         {
             var models = services.GetService<ModelManagerService>();
-            models?.UnloadModel();
+            if (models is not null)
+            {
+                await models.UnloadModelAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -516,15 +531,15 @@ public class App : Application
         await history.EnsureLoadedAsync();
         BootTrace.Stage("history.EnsureLoadedAsync");
 
-        var sessionAudio = services.GetRequiredService<SessionAudioFileService>();
-        sessionAudio.DeleteSessionCaptures();
+        _ = services.GetRequiredService<SessionAudioFileService>();
+        SessionAudioFileService.DeleteSessionCaptures();
 
         var audio = services.GetRequiredService<AudioRecordingService>();
         ApplyConfiguredMicrophone(audio, settings);
         BootTrace.Stage("audio configured");
 
-        var deployer = services.GetRequiredService<BundledPluginDeployer>();
-        deployer.DeployIfMissing();
+        _ = services.GetRequiredService<BundledPluginDeployer>();
+        BundledPluginDeployer.DeployIfMissing();
         BootTrace.Stage("BundledPluginDeployer.DeployIfMissing");
 
         var pluginManager = services.GetRequiredService<PluginManager>();

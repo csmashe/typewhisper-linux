@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -14,11 +15,17 @@ public sealed class LlmCleanupService
 {
     private readonly CleanupService _cleanup;
     private readonly PromptProcessingService _promptProcessing;
+    private readonly IErrorLogService? _errorLog;
 
-    public LlmCleanupService(CleanupService cleanup, PromptProcessingService promptProcessing)
+    public LlmCleanupService(
+        CleanupService cleanup,
+        PromptProcessingService promptProcessing,
+        IErrorLogService? errorLog = null
+    )
     {
         _cleanup = cleanup;
         _promptProcessing = promptProcessing;
+        _errorLog = errorLog;
     }
 
     public async Task<string> CleanAsync(
@@ -28,14 +35,14 @@ public sealed class LlmCleanupService
         CancellationToken ct = default
     )
     {
-        if (level == CleanupLevel.None)
+        // Medium/High intentionally fall through to the LLM cleanup path below.
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
+        switch (level)
         {
-            return text;
-        }
-
-        if (level == CleanupLevel.Light)
-        {
-            return _cleanup.Clean(text, CleanupLevel.Light);
+            case CleanupLevel.None:
+                return text;
+            case CleanupLevel.Light:
+                return _cleanup.Clean(text, CleanupLevel.Light);
         }
 
         var lightText = _cleanup.Clean(text, CleanupLevel.Light);
@@ -66,6 +73,12 @@ public sealed class LlmCleanupService
         catch (Exception ex)
         {
             Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {ex.Message}");
+            // User-actionable: the requested Medium/High cleanup silently degraded to
+            // Light because the LLM call failed (key, network, provider outage).
+            _errorLog?.AddEntry(
+                $"AI cleanup failed and fell back to Light cleanup: {ex.Message}",
+                ErrorCategory.Prompt
+            );
             await NotifyStatusAsync(statusCallback, "Cleanup failed. Using Light cleanup.");
             return lightText;
         }

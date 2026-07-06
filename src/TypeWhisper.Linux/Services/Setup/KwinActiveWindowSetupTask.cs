@@ -31,7 +31,7 @@ public sealed class KwinActiveWindowSetupTask : ISetupTask
     {
         // Gate on compositor + session type so this never surfaces on GNOME or KDE X11.
         var snapshot = _commands.GetSnapshot();
-        return snapshot.SessionType == "Wayland" && snapshot.Compositor == "kde";
+        return snapshot is { SessionType: "Wayland", Compositor: "kde" };
     }
 
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
@@ -52,14 +52,14 @@ public sealed class KwinActiveWindowSetupTask : ISetupTask
                 Loc.Instance["Setup.KdotoolNotInstalled"],
                 Loc.Instance["Setup.KdotoolNotInstalledDetail"],
                 Loc.Instance["Setup.KdotoolInstall"],
-                _installer.BuildSudoCommand(new[] { "kdotool" })
+                _installer.BuildSudoCommand(["kdotool"])
             )
         );
     }
 
     public async Task<SetupActionOutcome> RunActionAsync(CancellationToken ct)
     {
-        var outcome = await _installer.InstallAsync(new[] { "kdotool" }, ct).ConfigureAwait(false);
+        var outcome = await _installer.InstallAsync(["kdotool"], ct).ConfigureAwait(false);
         _commands.RefreshSnapshot();
         return outcome;
     }

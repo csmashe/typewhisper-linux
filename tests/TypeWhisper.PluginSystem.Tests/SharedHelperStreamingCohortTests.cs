@@ -21,7 +21,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         var (chunks, body, url) = await StreamAsync(h => new CerebrasPlugin(h), "api-key", "llama-test");
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         Assert.Equal("https://api.cerebras.ai/v1/chat/completions", url);
         AssertStreamBody(body, "llama-test");
     }
@@ -31,7 +31,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         var (chunks, body, url) = await StreamAsync(h => new CoherePlugin(h), "apiKey", "command-test");
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         Assert.Equal("https://api.cohere.com/compatibility/v1/chat/completions", url);
         AssertStreamBody(body, "command-test");
     }
@@ -41,7 +41,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         var (chunks, body, url) = await StreamAsync(h => new FireworksPlugin(h), "apiKey", "fw-test");
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         Assert.Equal("https://api.fireworks.ai/v1/chat/completions", url);
         AssertStreamBody(body, "fw-test");
     }
@@ -51,7 +51,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         var (chunks, body, url) = await StreamAsync(h => new GeminiPlugin(h), "api-key", "gemini-test");
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         Assert.Equal(
             "https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions",
             url);
@@ -90,12 +90,12 @@ public sealed class SharedHelperStreamingCohortTests
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "test-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "test-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var sut = new CerebrasPlugin(httpClient);
         await sut.ActivateAsync(host);
 
@@ -109,7 +109,7 @@ public sealed class SharedHelperStreamingCohortTests
             }
         });
 
-        Assert.Equal(new[] { "Hel" }, chunks);
+        Assert.Equal(["Hel"], chunks);
         Assert.Equal("server had an error", ex.Message);
     }
 
@@ -141,13 +141,13 @@ public sealed class SharedHelperStreamingCohortTests
             capturedUrl = request.RequestUri?.ToString();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
             };
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets[secretKey] = "test-key";
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        var host = new TestPluginHostServices { Secrets = { [secretKey] = "test-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var plugin = factory(httpClient);
         await plugin.ActivateAsync(host);
 
@@ -170,13 +170,13 @@ public sealed class SharedHelperStreamingCohortTests
         {
             Content = new StringContent(
                 """{"choices":[{"message":{"content":"bulk"}}]}""",
-                Encoding.UTF8, "application/json"),
+                Encoding.UTF8, "application/json")
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets[secretKey] = "test-key";
+        var host = new TestPluginHostServices { Secrets = { [secretKey] = "test-key" } };
         host.SetSetting("streamResponses", false);
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
         var plugin = factory(httpClient);
         await plugin.ActivateAsync(host);
 
@@ -208,9 +208,9 @@ public sealed class SharedHelperStreamingCohortTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true,
+            PropertyNameCaseInsensitive = true
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
@@ -223,7 +223,7 @@ public sealed class SharedHelperStreamingCohortTests
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            Task.FromResult(Secrets.GetValueOrDefault(key));
 
         public Task DeleteSecretAsync(string key)
         {
@@ -232,10 +232,10 @@ public sealed class SharedHelperStreamingCohortTests
         }
 
         public T? GetSetting<T>(string key) =>
-            _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(JsonOptions) : default;
+            _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(s_jsonOptions) : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

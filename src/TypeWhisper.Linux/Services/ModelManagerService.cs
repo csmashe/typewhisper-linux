@@ -57,16 +57,18 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     {
         get
         {
-            if (_activeModelId is not null && IsPluginModel(_activeModelId))
+            if (_activeModelId is null || !IsPluginModel(_activeModelId))
             {
-                var (pluginId, _) = ParsePluginModelId(_activeModelId);
-                var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
-                    e.GetTranscriptionSelectionId() == pluginId
-                );
-                if (plugin is not null)
-                {
-                    return new PluginTranscriptionEngineAdapter(plugin);
-                }
+                return NoOpTranscriptionEngine.Instance;
+            }
+
+            var (pluginId, _) = ParsePluginModelId(_activeModelId);
+            var plugin = PluginManager.TranscriptionEngines.FirstOrDefault(e =>
+                e.GetTranscriptionSelectionId() == pluginId
+            );
+            if (plugin is not null)
+            {
+                return new PluginTranscriptionEngineAdapter(plugin);
             }
 
             return NoOpTranscriptionEngine.Instance;
@@ -122,12 +124,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         var firstColon = modelId.IndexOf(':');
         var secondColon = modelId.IndexOf(':', firstColon + 1);
-        if (secondColon < 0)
-        {
-            throw new ArgumentException($"Invalid plugin model ID format: {modelId}");
-        }
-
-        return (modelId[(firstColon + 1)..secondColon], modelId[(secondColon + 1)..]);
+        return secondColon < 0
+            ? throw new ArgumentException($"Invalid plugin model ID format: {modelId}")
+            : (modelId[(firstColon + 1)..secondColon], modelId[(secondColon + 1)..]);
     }
 
     public static string GetPluginModelId(string pluginId, string modelId)
@@ -189,12 +188,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             return false;
         }
 
-        if (plugin.SupportsModelDownload)
-        {
-            return plugin.IsModelDownloaded(pluginModelId);
-        }
-
-        return plugin.IsConfigured;
+        return plugin.SupportsModelDownload
+            ? plugin.IsModelDownloaded(pluginModelId)
+            : plugin.IsConfigured;
     }
 
     public async Task DownloadAndLoadModelAsync(
@@ -299,6 +295,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (fire-and-forget wrapper over DeleteModelAsync); not currently called in-tree
     public void DeleteModel(string modelId)
     {
         _ = DeleteModelAsync(modelId);
@@ -473,7 +470,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public static string? MigrateModelId(string? modelId)
+    private static string? MigrateModelId(string? modelId)
     {
         return modelId switch
         {
@@ -489,7 +486,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         };
     }
 
-    internal static TranscriptionAccelerationPreference GetAccelerationPreference(string? value)
+    private static TranscriptionAccelerationPreference GetAccelerationPreference(string? value)
     {
         var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
         return normalized switch
@@ -505,7 +502,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     ///     Resolves Auto → NvidiaCuda or Cpu via the CUDA 12 preflight; explicit preferences
     ///     pass through unchanged. <paramref name="cudaPreflight" /> overrides the default for tests.
     /// </summary>
-    internal static TranscriptionAccelerationPreference ResolveAutoPreference(
+    private static TranscriptionAccelerationPreference ResolveAutoPreference(
         TranscriptionAccelerationPreference requested,
         Func<bool>? cudaPreflight = null
     )
@@ -564,6 +561,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 var downloadInProgress = true;
                 var progress = new Progress<double>(p =>
                 {
+                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: downloadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
                     if (!Volatile.Read(ref downloadInProgress))
                         return;
                     SetStatus(modelId, ModelStatus.DownloadingModel(p));
@@ -599,7 +597,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId)
             ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
 
-        if (!plugin.IsConfigured && !plugin.SupportsModelDownload)
+        if (plugin is { IsConfigured: false, SupportsModelDownload: false })
         {
             throw new InvalidOperationException(
                 $"{plugin.ProviderDisplayName}: not configured (missing API key or model)."
@@ -690,6 +688,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 var loadInProgress = true;
                 var loadProgress = new Progress<double>(p =>
                 {
+                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: loadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
                     if (!Volatile.Read(ref loadInProgress))
                         return;
                     SetStatus(
@@ -902,7 +901,7 @@ internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
         _plugin = plugin;
     }
 
-    public bool IsModelLoaded => _plugin.IsConfigured && _plugin.SelectedModelId is not null;
+    public bool IsModelLoaded => _plugin is { IsConfigured: true, SelectedModelId: not null };
 
     public Task LoadModelAsync(string modelPath, CancellationToken cancellationToken = default)
     {

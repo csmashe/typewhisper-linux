@@ -40,21 +40,19 @@ internal static class LinuxDictationShortSpeechPolicy
         bool transcribeShortQuietClipsAggressively = false
     )
     {
-        if (rawDuration < UltraShortTapSeconds)
+        switch (rawDuration)
         {
-            return LinuxShortSpeechDecision.DiscardTooShort;
-        }
+            case < UltraShortTapSeconds:
+                return LinuxShortSpeechDecision.DiscardTooShort;
+            case < ShortClipSeconds:
+                if (peakLevel < ShortClipQuietPeakThreshold)
+                {
+                    return transcribeShortQuietClipsAggressively
+                        ? LinuxShortSpeechDecision.Transcribe
+                        : LinuxShortSpeechDecision.DiscardNoSpeech;
+                }
 
-        if (rawDuration < ShortClipSeconds)
-        {
-            if (peakLevel < ShortClipQuietPeakThreshold)
-            {
-                return transcribeShortQuietClipsAggressively
-                    ? LinuxShortSpeechDecision.Transcribe
-                    : LinuxShortSpeechDecision.DiscardNoSpeech;
-            }
-
-            return LinuxShortSpeechDecision.Transcribe;
+                return LinuxShortSpeechDecision.Transcribe;
         }
 
         if (peakLevel < LongClipQuietPeakThreshold)

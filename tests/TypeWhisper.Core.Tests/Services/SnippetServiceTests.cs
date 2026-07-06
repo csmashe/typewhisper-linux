@@ -3,7 +3,8 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
-public class SnippetServiceTests : IDisposable
+/// <summary>Covers <see cref="SnippetService" />: trigger expansion, placeholders, tags, profile scoping, and JSON import/export.</summary>
+public sealed class SnippetServiceTests : IDisposable
 {
     private readonly string _filePath;
     private readonly SnippetService _sut;
@@ -239,11 +240,11 @@ public class SnippetServiceTests : IDisposable
             }
         );
 
-        var json = """
-                   [
-                       {"Id":"x","Trigger":"neu","Replacement":"Neuer Snippet","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"Import","CreatedAt":"2026-01-01T00:00:00"}
-                   ]
-                   """;
+        const string json = """
+                            [
+                                {"Id":"x","Trigger":"neu","Replacement":"Neuer Snippet","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"Import","CreatedAt":"2026-01-01T00:00:00"}
+                            ]
+                            """;
 
         var count = _sut.ImportFromJson(json);
         Assert.Equal(1, count);
@@ -263,12 +264,12 @@ public class SnippetServiceTests : IDisposable
             }
         );
 
-        var json = """
-                   [
-                       {"Id":"x","Trigger":"mfg","Replacement":"Anderer Text","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"","CreatedAt":"2026-01-01T00:00:00"},
-                       {"Id":"y","Trigger":"neu","Replacement":"Neuer Text","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"","CreatedAt":"2026-01-01T00:00:00"}
-                   ]
-                   """;
+        const string json = """
+                            [
+                                {"Id":"x","Trigger":"mfg","Replacement":"Anderer Text","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"","CreatedAt":"2026-01-01T00:00:00"},
+                                {"Id":"y","Trigger":"neu","Replacement":"Neuer Text","CaseSensitive":false,"IsEnabled":true,"UsageCount":0,"Tags":"","CreatedAt":"2026-01-01T00:00:00"}
+                            ]
+                            """;
 
         var count = _sut.ImportFromJson(json);
         Assert.Equal(1, count); // only "neu" imported, "mfg" skipped

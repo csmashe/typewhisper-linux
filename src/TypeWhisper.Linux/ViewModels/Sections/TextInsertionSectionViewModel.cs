@@ -33,6 +33,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     private YdotoolSetupHelper.Status YdotoolStatus => _setup.IsCurrentlyConfigured();
 
     public string SessionType => Snapshot.SessionType;
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string CompositorDisplayName => DesktopDetector.DisplayName();
     public string ClipboardToolStatus => Snapshot.ClipboardStatus;
 
@@ -98,7 +100,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
 
             // Only flag the missing udev rule when /dev/uinput isn't already
             // accessible — if the kernel grants it directly the rule isn't needed.
-            if (!status.UdevRulePresent && !status.UinputAccessible)
+            if (status is { UdevRulePresent: false, UinputAccessible: false })
             {
                 return Loc.Instance["TextInsertion.YdotoolUdevRuleMissing"];
             }
@@ -115,22 +117,20 @@ public partial class TextInsertionSectionViewModel : ObservableObject
 
             // Probe failed: daemon is up but /dev/uinput is unwritable (usually EACCES).
             // Showing "Ready" here would contradict the setup-result popup.
-            if (!status.ProbeSucceeded)
-            {
-                return
-                    "ydotoold socket reachable, but a test keystroke failed. Check that your user has read/write access to /dev/uinput (run `groups` — you should see `input`; if not, `sudo usermod -aG input $USER` then log out and back in).";
-            }
-
-            return Loc.Instance.GetString("TextInsertion.YdotoolReady", status.SocketPath);
+            return !status.ProbeSucceeded
+                ? Loc.Instance["TextInsertion.YdotoolProbeFailed"]
+                : Loc.Instance.GetString("TextInsertion.YdotoolReady", status.SocketPath);
         }
     }
 
     public string YdotoolStatusTone => YdotoolStatus.IsFullyConfigured ? "ok" : "missing";
 
-    public string SetupPreview => _setup.PreviewLines();
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
+    public string SetupPreview => YdotoolSetupHelper.PreviewLines();
 
     public bool CanSetUpAutomatically =>
-        YdotoolStatus.BinaryInstalled && !YdotoolStatus.IsFullyConfigured;
+        YdotoolStatus is { BinaryInstalled: true, IsFullyConfigured: false };
 
     public bool ShowManualInstructions => !YdotoolStatus.BinaryInstalled;
 
@@ -139,6 +139,8 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     public bool CanRemoveIntegration =>
         YdotoolStatus.UdevRulePresent || YdotoolStatus.SystemdUnitActive;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ManualInstallCommand =>
         "Fedora:        sudo dnf install ydotool\n"
         + "Debian/Ubuntu: sudo apt install ydotool\n"

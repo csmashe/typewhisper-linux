@@ -55,6 +55,13 @@ public sealed class LlmStreamPumpTests
         var pump = new LlmStreamPump(emissions.Add, TimeSpan.FromSeconds(10));
         using var cts = new CancellationTokenSource();
 
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => pump.RunAsync(CancellingSource(cts.Token), cts.Token));
+
+        Assert.False(pump.Faulted);
+        Assert.Equal("part1part2", emissions[^1]);
+        return;
+
         async IAsyncEnumerable<string> CancellingSource(
             [EnumeratorCancellation] CancellationToken ct)
         {
@@ -64,12 +71,6 @@ public sealed class LlmStreamPumpTests
             ct.ThrowIfCancellationRequested();
             yield return "never";
         }
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => pump.RunAsync(CancellingSource(cts.Token), cts.Token));
-
-        Assert.False(pump.Faulted);
-        Assert.Equal("part1part2", emissions[^1]);
     }
 
     [Fact]
@@ -78,6 +79,13 @@ public sealed class LlmStreamPumpTests
         var emissions = new List<string>();
         var pump = new LlmStreamPump(emissions.Add, TimeSpan.FromSeconds(10));
 
+        var result = await pump.RunAsync(FaultingSource(), CancellationToken.None);
+
+        Assert.True(pump.Faulted);
+        Assert.Equal("good data", result);
+        Assert.Equal("good data", emissions[^1]);
+        return;
+
         async IAsyncEnumerable<string> FaultingSource()
         {
             yield return "good ";
@@ -85,12 +93,6 @@ public sealed class LlmStreamPumpTests
             await Task.Yield();
             throw new HttpRequestException("boom");
         }
-
-        var result = await pump.RunAsync(FaultingSource(), CancellationToken.None);
-
-        Assert.True(pump.Faulted);
-        Assert.Equal("good data", result);
-        Assert.Equal("good data", emissions[^1]);
     }
 
     [Fact]

@@ -368,6 +368,7 @@
                                                     </DataTemplate>
                                                 </ComboBox.ItemTemplate>
                                             </ComboBox>
+                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                             <Button Grid.Column="2"
                                                     Content="{loc:Str Common.Remove}"
                                                     Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).RemoveAppInsertionStrategyCommand}"

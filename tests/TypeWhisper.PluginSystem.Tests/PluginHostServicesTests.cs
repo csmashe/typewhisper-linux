@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class PluginHostServicesTests : IDisposable
+public sealed class PluginHostServicesTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly Mock<IPluginEventBus> _eventBus = new();
@@ -16,7 +16,7 @@ public class PluginHostServicesTests : IDisposable
     public PluginHostServicesTests()
     {
         _profiles.Setup(p => p.Profiles).Returns(new List<Profile>());
-        _tempDir = Path.Combine(Path.GetTempPath(), $"tw-test-{Guid.NewGuid():N}");
+        _tempDir = Path.Join(Path.GetTempPath(), $"tw-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
     }
 
@@ -47,7 +47,7 @@ public class PluginHostServicesTests : IDisposable
     public void NotifyCapabilitiesChanged_WithNoCallback_DoesNotThrow()
     {
         var services = CreateServices();
-        var ex = Record.Exception(() => services.NotifyCapabilitiesChanged());
+        var ex = Record.Exception(services.NotifyCapabilitiesChanged);
         Assert.Null(ex);
     }
 

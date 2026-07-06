@@ -15,7 +15,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
 
     public ProfilesSectionViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.Linux.Tests_" + Guid.NewGuid().ToString("N")
         );
@@ -43,7 +43,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         var service = CreateProfileService();
         var activeWindow = CreateActiveWindowService();
         using var pluginManager = CreatePluginManager();
-        var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
 
         var sut = new ProfilesSectionViewModel(
             service,
@@ -66,7 +66,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         var service = CreateProfileService();
         var activeWindow = CreateActiveWindowService();
         using var pluginManager = CreatePluginManager();
-        var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
 
         var sut = new ProfilesSectionViewModel(
             service,
@@ -132,10 +132,10 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         );
 
         var activeWindow = CreateActiveWindowService();
-        activeWindow.Setup(service => service.GetActiveWindowProcessName()).Returns("firefox");
-        activeWindow.Setup(service => service.GetActiveWindowTitle()).Returns("Docs");
+        activeWindow.Setup(s => s.GetActiveWindowProcessName()).Returns("firefox");
+        activeWindow.Setup(s => s.GetActiveWindowTitle()).Returns("Docs");
         using var pluginManager = CreatePluginManager();
-        var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
 
         var sut = new ProfilesSectionViewModel(
             service,
@@ -159,7 +159,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         var service = CreateProfileService();
         var activeWindow = CreateActiveWindowService();
         using var pluginManager = CreatePluginManager();
-        var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
         promptActions.AddAction(
             new PromptAction
             {
@@ -199,9 +199,9 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     {
         var service = CreateProfileService();
         var activeWindow = CreateActiveWindowService();
-        activeWindow.Setup(service => service.GetActiveWindowProcessName()).Returns("firefox");
+        activeWindow.Setup(s => s.GetActiveWindowProcessName()).Returns("firefox");
         using var pluginManager = CreatePluginManager();
-        var promptActions = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
 
         var sut = new ProfilesSectionViewModel(
             service,
@@ -222,7 +222,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
 
     private ProfileService CreateProfileService()
     {
-        return new ProfileService(Path.Combine(_tempDir, "profiles.json"));
+        return new ProfileService(Path.Join(_tempDir, "profiles.json"));
     }
 
     private static Mock<IActiveWindowService> CreateActiveWindowService()

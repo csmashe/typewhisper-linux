@@ -1,17 +1,21 @@
 using System.Diagnostics;
-using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
-public sealed class HistoryService : IHistoryService
+/// <summary>
+///     File-backed <see cref="IHistoryService" />: persists transcription records as JSON, caches
+///     them with running totals, and deletes the associated audio files when records are removed.
+/// </summary>
+public sealed partial class HistoryService : IHistoryService
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     private readonly string? _audioDirectory;
     private readonly string _filePath;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private List<TranscriptionRecord> _cache = [];
 
@@ -133,8 +137,7 @@ public sealed class HistoryService : IHistoryService
 
             var old = _cache[idx];
             var updated = old with { FinalText = finalText };
-            var newCache = new List<TranscriptionRecord>(_cache);
-            newCache[idx] = updated;
+            var newCache = new List<TranscriptionRecord>(_cache) { [idx] = updated };
             SaveToDisk(newCache);
 
             _cache = newCache;
@@ -274,132 +277,6 @@ public sealed class HistoryService : IHistoryService
         RecordsChanged?.Invoke();
     }
 
-    public string ExportToText(
-        IReadOnlyList<TranscriptionRecord> records,
-        ExportLabels? labels = null
-    )
-    {
-        var l = labels ?? ExportLabels.Default;
-        var sb = new StringBuilder();
-        sb.AppendLine(l.Header);
-        sb.AppendLine($"{l.Exported}: {DateTime.Now:dd.MM.yyyy HH:mm}");
-        sb.AppendLine($"{l.Entries}: {records.Count}");
-        sb.AppendLine(new string('─', 60));
-        sb.AppendLine();
-
-        foreach (var r in records)
-        {
-            sb.AppendLine(
-                $"[{r.Timestamp:dd.MM.yyyy HH:mm}] {r.AppProcessName ?? "–"} ({r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)}s)"
-            );
-            sb.AppendLine(r.FinalText);
-            sb.AppendLine();
-        }
-
-        return sb.ToString();
-    }
-
-    public string ExportToCsv(
-        IReadOnlyList<TranscriptionRecord> records,
-        ExportLabels? labels = null
-    )
-    {
-        var l = labels ?? ExportLabels.Default;
-        var sb = new StringBuilder();
-        sb.AppendLine(
-            string.Join(
-                ',',
-                CsvEscape(l.Timestamp),
-                CsvEscape(l.App),
-                CsvEscape(l.Text),
-                CsvEscape(l.Duration),
-                CsvEscape(l.Words),
-                CsvEscape(l.Language)
-            )
-        );
-
-        foreach (var r in records)
-        {
-            sb.AppendLine(
-                string.Join(
-                    ',',
-                    CsvEscape(
-                        r.Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
-                    ),
-                    CsvEscape(r.AppProcessName ?? ""),
-                    CsvEscape(r.FinalText),
-                    CsvEscape(r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)),
-                    CsvEscape(r.WordCount.ToString(CultureInfo.InvariantCulture)),
-                    CsvEscape(r.Language ?? "")
-                )
-            );
-        }
-
-        return sb.ToString();
-    }
-
-    public string ExportToMarkdown(
-        IReadOnlyList<TranscriptionRecord> records,
-        ExportLabels? labels = null
-    )
-    {
-        var l = labels ?? ExportLabels.Default;
-        var sb = new StringBuilder();
-        sb.AppendLine($"# {l.Header}");
-        sb.AppendLine();
-        sb.AppendLine($"- **{l.Exported}:** {DateTime.Now:dd.MM.yyyy HH:mm}");
-        sb.AppendLine($"- **{l.Entries}:** {records.Count}");
-        sb.AppendLine();
-        sb.AppendLine("---");
-        sb.AppendLine();
-
-        foreach (var r in records)
-        {
-            sb.AppendLine($"## {r.Timestamp:dd.MM.yyyy HH:mm}");
-            sb.AppendLine();
-            if (!string.IsNullOrEmpty(r.AppProcessName))
-            {
-                sb.AppendLine($"- **{l.App}:** {r.AppProcessName}");
-            }
-
-            sb.AppendLine(
-                $"- **{l.Duration}:** {r.DurationSeconds.ToString("F1", CultureInfo.InvariantCulture)}s"
-            );
-            if (!string.IsNullOrEmpty(r.Language))
-            {
-                sb.AppendLine($"- **{l.Language}:** {r.Language}");
-            }
-
-            sb.AppendLine();
-            sb.AppendLine(r.FinalText);
-            sb.AppendLine();
-        }
-
-        return sb.ToString();
-    }
-
-    public string ExportToJson(IReadOnlyList<TranscriptionRecord> records)
-    {
-        var data = records.Select(r => new
-        {
-            id = r.Id,
-            timestamp = r.Timestamp.ToString("o"),
-            text = r.FinalText,
-            raw_text = r.RawText,
-            app = r.AppProcessName,
-            duration_seconds = r.DurationSeconds,
-            language = r.Language,
-            engine = r.EngineUsed,
-            model = r.ModelUsed,
-            profile = r.ProfileName,
-            insertion_status = r.InsertionStatus.ToString(),
-            insertion_failure_reason = r.InsertionFailureReason,
-            words = r.WordCount
-        });
-
-        return JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-    }
-
     // Synchronous fallback. Do not call from a thread that already holds _loadLock — deadlock.
     private void EnsureCacheLoaded()
     {
@@ -481,10 +358,7 @@ public sealed class HistoryService : IHistoryService
             Directory.CreateDirectory(dir);
         }
 
-        var json = JsonSerializer.Serialize(
-            records,
-            new JsonSerializerOptions { WriteIndented = true }
-        );
+        var json = JsonSerializer.Serialize(records, s_jsonOptions);
 
         // Atomic write via temp file so a mid-write crash can't truncate history.
         var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -502,32 +376,19 @@ public sealed class HistoryService : IHistoryService
         }
         catch
         {
-            if (File.Exists(tempPath))
+            if (!File.Exists(tempPath))
             {
-                try { File.Delete(tempPath); }
-                catch
-                {
-                    /* best effort */
-                }
+                throw;
+            }
+
+            try { File.Delete(tempPath); }
+            catch
+            {
+                /* best effort */
             }
 
             throw;
         }
-    }
-
-    private static string CsvEscape(string value)
-    {
-        if (
-            !value.Contains(',')
-            && !value.Contains('"')
-            && !value.Contains('\n')
-            && !value.Contains('\r')
-        )
-        {
-            return value;
-        }
-
-        return "\"" + value.Replace("\"", "\"\"") + "\"";
     }
 
     private static void PreserveBrokenFile(string path)
@@ -596,7 +457,7 @@ public sealed class HistoryService : IHistoryService
                 directoryRoot += separator;
             }
 
-            var candidate = Path.GetFullPath(Path.Combine(_audioDirectory, safeName));
+            var candidate = Path.GetFullPath(Path.Join(_audioDirectory, safeName));
             if (!candidate.StartsWith(directoryRoot, StringComparison.Ordinal))
             {
                 return;
@@ -607,7 +468,14 @@ public sealed class HistoryService : IHistoryService
                 File.Delete(candidate);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // Best-effort cleanup: a locked file or permission error shouldn't fail the
+            // record delete, but log it so a recurring problem (e.g. orphaned audio) is visible.
+            Trace.WriteLine(
+                $"[HistoryService] Could not delete audio file '{audioFileName}': {ex.Message}"
+            );
+        }
     }
 
     private void DeleteAudioFiles(IEnumerable<string?> audioFileNames)

@@ -13,7 +13,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
 
     public HistorySectionViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.History.Tests_" + Guid.NewGuid().ToString("N")
         );
@@ -51,7 +51,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.True(suggestion.IsApproved);
         Assert.Equal("Kubernets", suggestion.Original);
         Assert.Equal("Kubernetes", suggestion.Replacement);
-        Assert.Single(history.Records.First().PendingCorrectionSuggestions);
+        Assert.Single(history.Records[0].PendingCorrectionSuggestions);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.Equal("Kubernets", entry.Original);
         Assert.Equal("Kubernetes", entry.Replacement);
         Assert.Empty(row.CorrectionSuggestions);
-        Assert.Empty(history.Records.First().PendingCorrectionSuggestions);
+        Assert.Empty(history.Records[0].PendingCorrectionSuggestions);
     }
 
     [Fact]
@@ -114,18 +114,18 @@ public sealed class HistorySectionViewModelTests : IDisposable
 
     private HistoryService CreateHistoryService()
     {
-        return new HistoryService(Path.Combine(_tempDir, "history.json"), Path.Combine(_tempDir, "audio"));
+        return new HistoryService(Path.Join(_tempDir, "history.json"), Path.Join(_tempDir, "audio"));
     }
 
     private DictionaryService CreateDictionaryService()
     {
-        return new DictionaryService(Path.Combine(_tempDir, "dictionary.json"));
+        return new DictionaryService(Path.Join(_tempDir, "dictionary.json"));
     }
 
     private SettingsService CreateSettingsService(bool autoAddCorrections = false)
     {
         var settings = new SettingsService(
-            Path.Combine(_tempDir, $"settings-{Guid.NewGuid():N}.json")
+            Path.Join(_tempDir, $"settings-{Guid.NewGuid():N}.json")
         );
         settings.Save(
             AppSettings.Default with
@@ -145,7 +145,6 @@ public sealed class HistorySectionViewModelTests : IDisposable
             history,
             dictionary,
             settings ?? CreateSettingsService(),
-            new CorrectionSuggestionService(),
             new SessionAudioFileService(),
             // AudioPlaybackService opens audio hardware in its constructor — not
             // available in CI. GetUninitializedObject bypasses the constructor so

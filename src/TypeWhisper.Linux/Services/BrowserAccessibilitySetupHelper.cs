@@ -14,9 +14,9 @@ namespace TypeWhisper.Linux.Services;
 ///     Both artifacts carry <see cref="OwnershipMarker" /> so <see cref="RemoveAsync" /> can
 ///     confirm ownership before deletion.
 /// </summary>
-public sealed class BrowserAccessibilitySetupHelper
+public sealed partial class BrowserAccessibilitySetupHelper
 {
-    internal const string OwnershipMarker = "Installed by TypeWhisper";
+    private const string OwnershipMarker = "Installed by TypeWhisper";
 
     private const string EnvFileName = "typewhisper-accessibility.conf";
 
@@ -34,9 +34,6 @@ public sealed class BrowserAccessibilitySetupHelper
 
     private const string FirefoxEnvWrapper =
         "env MOZ_ENABLE_ACCESSIBILITY=1 GTK_MODULES=gail:atk-bridge";
-
-    private const string ForceDisabledNegOnePattern =
-        @"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;";
 
     private const string UserJsOwnershipMarker = "// Set by TypeWhisper";
 
@@ -76,13 +73,13 @@ public sealed class BrowserAccessibilitySetupHelper
     ///     so prompting the user to enable browser accessibility there
     ///     would just be noise.
     /// </summary>
-    public bool IsApplicable()
+    public static bool IsApplicable()
     {
         var sessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
         return string.Equals(sessionType, "wayland", StringComparison.OrdinalIgnoreCase);
     }
 
-    public Status IsCurrentlyConfigured()
+    public static Status IsCurrentlyConfigured()
     {
         var envFilePresent = File.Exists(EnvFilePath());
         // "LauncherPresent" means every installed launcher in this family is patched, not just
@@ -119,7 +116,7 @@ public sealed class BrowserAccessibilitySetupHelper
     ///     <c>user.js</c>, and a running Firefox won't clobber our change on
     ///     its next save. Takes effect on the next Firefox restart.
     /// </summary>
-    public SetupResult ForceEnableFirefoxAccessibility()
+    private static SetupResult ForceEnableFirefoxAccessibility()
     {
         var patched = new List<string>();
         var skipped = new List<string>();
@@ -128,12 +125,12 @@ public sealed class BrowserAccessibilitySetupHelper
         {
             foreach (var profileDir in EnumerateFirefoxProfileDirs())
             {
-                var userJsPath = Path.Combine(profileDir, "user.js");
+                var userJsPath = Path.Join(profileDir, "user.js");
                 try
                 {
                     var existing = File.Exists(userJsPath) ? File.ReadAllText(userJsPath) : "";
 
-                    if (Regex.IsMatch(existing, ForceDisabledNegOnePattern))
+                    if (ForceDisabledNegOneMultilineRegex().IsMatch(existing))
                     {
                         patched.Add(Path.GetFileName(profileDir));
                         continue;
@@ -141,17 +138,13 @@ public sealed class BrowserAccessibilitySetupHelper
 
                     // Replace any other accessibility.force_disabled line so
                     // we don't leave two contradictory pref entries.
-                    var cleaned = Regex.Replace(
-                        existing,
-                        @"^\s*user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-?\d+\s*\)\s*;\s*\r?\n?",
-                        "",
-                        RegexOptions.Multiline
-                    );
+                    var cleaned = ForceDisabledAnyValueLineRegex().Replace(existing, "");
 
                     var prefixNewline = cleaned.Length > 0 && !cleaned.EndsWith('\n') ? "\n" : "";
                     var addition =
                         prefixNewline
-                        + "// Set by TypeWhisper — required for AT-SPI URL detection on Wayland.\n"
+                        + UserJsOwnershipMarker
+                        + " — required for AT-SPI URL detection on Wayland.\n"
                         + "user_pref(\"accessibility.force_disabled\", -1);\n";
 
                     var tmp = userJsPath + ".tmp";
@@ -212,6 +205,10 @@ public sealed class BrowserAccessibilitySetupHelper
         }
     }
 
+    // kept instance: invoked on the injected _browserSetup seam by callers (static would orphan the DI field)
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    // ReSharper disable once UnusedParameter.Global -- part of the setup API contract (cancellation support and signature symmetry with RemoveAsync)
     public Task<SetupResult> SetUpAsync(CancellationToken ct)
     {
         try
@@ -300,6 +297,8 @@ public sealed class BrowserAccessibilitySetupHelper
     ///     done in a prior run are omitted from the list so the dialog never
     ///     over-claims what it's doing.
     /// </summary>
+    // kept instance: invoked on the injected _browserSetup seam by callers (static would orphan the DI field)
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     public IReadOnlyList<string> DescribePendingActions()
     {
         var status = IsCurrentlyConfigured();
@@ -313,7 +312,7 @@ public sealed class BrowserAccessibilitySetupHelper
             );
         }
 
-        if (status.FirefoxInstalled && !status.FirefoxLauncherPresent)
+        if (status is { FirefoxInstalled: true, FirefoxLauncherPresent: false })
         {
             actions.Add(
                 $"• Shadow Firefox / Zen .desktop launchers in {UserApplicationsDir()}\n"
@@ -322,7 +321,7 @@ public sealed class BrowserAccessibilitySetupHelper
             );
         }
 
-        if (status.ChromiumInstalled && !status.ChromiumLauncherPresent)
+        if (status is { ChromiumInstalled: true, ChromiumLauncherPresent: false })
         {
             actions.Add(
                 $"• Shadow Chromium-family .desktop launchers in {UserApplicationsDir()}\n"
@@ -331,25 +330,26 @@ public sealed class BrowserAccessibilitySetupHelper
         }
 
         if (
-            status.FirefoxInstalled
-            && status.FirefoxProfileFound
-            && !status.FirefoxAccessibilityForceEnabled
+            status is not { FirefoxInstalled: true, FirefoxProfileFound: true, FirefoxAccessibilityForceEnabled: false }
         )
         {
-            var profiles = EnumerateFirefoxProfileDirs().Select(d => Path.Combine(d, "user.js"));
-            actions.Add(
-                "• Write user.js in your Firefox profile(s) to force-enable accessibility:\n"
-                + string.Join("\n", profiles.Select(p => "    " + p))
-                + "\n"
-                + "  Appends user_pref(\"accessibility.force_disabled\", -1); — Firefox reads user.js\n"
-                + "  at every startup as the override file and never writes back to it."
-            );
+            return actions;
         }
+
+        var profiles = EnumerateFirefoxProfileDirs().Select(d => Path.Join(d, "user.js"));
+        actions.Add(
+            "• Write user.js in your Firefox profile(s) to force-enable accessibility:\n"
+            + string.Join("\n", profiles.Select(p => "    " + p))
+            + "\n"
+            + "  Appends user_pref(\"accessibility.force_disabled\", -1); — Firefox reads user.js\n"
+            + "  at every startup as the override file and never writes back to it."
+        );
 
         return actions;
     }
 
-    public Task<SetupResult> RemoveAsync(CancellationToken ct)
+    // ReSharper disable once UnusedParameter.Global -- part of the setup API contract (cancellation support and signature symmetry with SetUpAsync)
+    public static Task<SetupResult> RemoveAsync(CancellationToken ct)
     {
         try
         {
@@ -371,13 +371,15 @@ public sealed class BrowserAccessibilitySetupHelper
                 summary.Append('.');
             }
 
-            if (cleanedProfiles.Count > 0)
+            if (cleanedProfiles.Count <= 0)
             {
-                summary.Append(' ');
-                summary.Append("Cleaned Firefox profile(s): ");
-                summary.Append(string.Join(", ", cleanedProfiles));
-                summary.Append('.');
+                return Task.FromResult(new SetupResult(true, summary.ToString()));
             }
+
+            summary.Append(' ');
+            summary.Append("Cleaned Firefox profile(s): ");
+            summary.Append(string.Join(", ", cleanedProfiles));
+            summary.Append('.');
 
             return Task.FromResult(new SetupResult(true, summary.ToString()));
         }
@@ -400,7 +402,7 @@ public sealed class BrowserAccessibilitySetupHelper
     ///     Firefox prefs.js entries here: those might have been set by the
     ///     user via about:config and aren't ours to remove.
     /// </summary>
-    public bool HasInstalledChanges()
+    public static bool HasInstalledChanges()
     {
         if (File.Exists(EnvFilePath()) && FileStartsWithOwnershipMarker(EnvFilePath()))
         {
@@ -418,7 +420,7 @@ public sealed class BrowserAccessibilitySetupHelper
         }
 
         return EnumerateFirefoxProfileDirs()
-            .Any(dir => UserJsHasOwnedAccessibilityEntry(Path.Combine(dir, "user.js")));
+            .Any(dir => UserJsHasOwnedAccessibilityEntry(Path.Join(dir, "user.js")));
     }
 
     /// <summary>
@@ -428,7 +430,7 @@ public sealed class BrowserAccessibilitySetupHelper
     ///     touched, including which Firefox profile(s) will lose the
     ///     accessibility override.
     /// </summary>
-    public IReadOnlyList<string> DescribeRevertActions()
+    public static IReadOnlyList<string> DescribeRevertActions()
     {
         var actions = new List<string>();
 
@@ -444,7 +446,7 @@ public sealed class BrowserAccessibilitySetupHelper
             foreach (var path in ownedLaunchers)
             {
                 var name = Path.GetFileName(path);
-                var backupExists = File.Exists(Path.Combine(LauncherBackupDir(), name));
+                var backupExists = File.Exists(Path.Join(LauncherBackupDir(), name));
                 sb.Append("    ").Append(path);
                 sb.Append(backupExists ? "  (restore from backup)" : "  (delete)");
                 sb.Append('\n');
@@ -454,8 +456,8 @@ public sealed class BrowserAccessibilitySetupHelper
         }
 
         var profilesWithOwnership = EnumerateFirefoxProfileDirs()
-            .Where(dir => UserJsHasOwnedAccessibilityEntry(Path.Combine(dir, "user.js")))
-            .Select(dir => Path.Combine(dir, "user.js"))
+            .Where(dir => UserJsHasOwnedAccessibilityEntry(Path.Join(dir, "user.js")))
+            .Select(dir => Path.Join(dir, "user.js"))
             .ToList();
         if (profilesWithOwnership.Count > 0)
         {
@@ -537,7 +539,7 @@ public sealed class BrowserAccessibilitySetupHelper
         // prefs.js — whichever already has the right value satisfies us.
         foreach (var name in new[] { "user.js", "prefs.js" })
         {
-            var path = Path.Combine(profileDir, name);
+            var path = Path.Join(profileDir, name);
             if (!File.Exists(path))
             {
                 continue;
@@ -546,7 +548,7 @@ public sealed class BrowserAccessibilitySetupHelper
             try
             {
                 var content = File.ReadAllText(path);
-                if (Regex.IsMatch(content, ForceDisabledNegOnePattern, RegexOptions.Multiline))
+                if (ForceDisabledNegOneMultilineRegex().IsMatch(content))
                 {
                     return true;
                 }
@@ -590,8 +592,8 @@ public sealed class BrowserAccessibilitySetupHelper
                 // run) or times.json (created on profile bootstrap). Filter
                 // out the Crash Reports / Pending Pings sibling dirs.
                 if (
-                    File.Exists(Path.Combine(dir, "prefs.js"))
-                    || File.Exists(Path.Combine(dir, "times.json"))
+                    File.Exists(Path.Join(dir, "prefs.js"))
+                    || File.Exists(Path.Join(dir, "times.json"))
                 )
                 {
                     yield return dir;
@@ -610,7 +612,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
         foreach (var name in s_firefoxLauncherNames.Concat(s_chromiumLauncherNames))
         {
-            var path = Path.Combine(dir, name);
+            var path = Path.Join(dir, name);
             if (File.Exists(path) && FileStartsWithOwnershipMarker(path))
             {
                 yield return path;
@@ -628,10 +630,11 @@ public sealed class BrowserAccessibilitySetupHelper
         try
         {
             var content = File.ReadAllText(userJsPath);
-            // Owned entries are flagged by our attribution comment that
-            // immediately precedes the pref line we wrote. We never claim
-            // ownership of a bare user_pref that was hand-added.
-            return content.Contains(UserJsOwnershipMarker, StringComparison.Ordinal);
+            // Match the exact owned entry (attribution comment + the pref line we
+            // wrote) using the same regex the removal path strips. Detecting on the
+            // bare marker comment alone would report "installed" for a stale marker
+            // whose pref line no longer matches — something Revert can't remove.
+            return OwnedAccessibilityEntryRegex().IsMatch(content);
         }
         catch
         {
@@ -639,12 +642,12 @@ public sealed class BrowserAccessibilitySetupHelper
         }
     }
 
-    private static IReadOnlyList<string> RemoveOwnedFirefoxAccessibilityEntries()
+    private static List<string> RemoveOwnedFirefoxAccessibilityEntries()
     {
         var cleaned = new List<string>();
         foreach (var profileDir in EnumerateFirefoxProfileDirs())
         {
-            var userJsPath = Path.Combine(profileDir, "user.js");
+            var userJsPath = Path.Join(profileDir, "user.js");
             if (!UserJsHasOwnedAccessibilityEntry(userJsPath))
             {
                 continue;
@@ -658,10 +661,7 @@ public sealed class BrowserAccessibilitySetupHelper
                 // untouched, including a manually-added force_disabled that
                 // happens to share the value — we only remove the pair we
                 // wrote ourselves, identified by the comment marker.
-                var pattern =
-                    @"^//\s*Set by TypeWhisper[^\r\n]*\r?\n"
-                    + @"user_pref\(\s*""accessibility\.force_disabled""\s*,\s*-1\s*\)\s*;\s*\r?\n?";
-                var stripped = Regex.Replace(content, pattern, "", RegexOptions.Multiline);
+                var stripped = OwnedAccessibilityEntryRegex().Replace(content, "");
 
                 if (stripped == content)
                 {
@@ -701,7 +701,7 @@ public sealed class BrowserAccessibilitySetupHelper
         File.Move(tempPath, path, true);
     }
 
-    private static IReadOnlyList<string> PatchLaunchers(
+    private static List<string> PatchLaunchers(
         IReadOnlyList<string> names,
         Func<string, string> transformContent
     )
@@ -713,7 +713,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
         foreach (var name in names)
         {
-            var userCopy = Path.Combine(userAppsDir, name);
+            var userCopy = Path.Join(userAppsDir, name);
             var userCopyExists = File.Exists(userCopy);
 
             if (userCopyExists && FileStartsWithOwnershipMarker(userCopy))
@@ -779,7 +779,7 @@ public sealed class BrowserAccessibilitySetupHelper
         {
             var backupDir = LauncherBackupDir();
             Directory.CreateDirectory(backupDir);
-            var backupPath = Path.Combine(backupDir, name);
+            var backupPath = Path.Join(backupDir, name);
             // Preserve the oldest backup if we ran setup multiple times.
             if (!File.Exists(backupPath))
             {
@@ -822,25 +822,26 @@ public sealed class BrowserAccessibilitySetupHelper
         for (var i = searchStart; i < line.Length; i++)
         {
             var c = line[i];
-            if (c == '%' && i + 1 < line.Length)
+            switch (c)
             {
-                var next = line[i + 1];
-                // %% is an XDG-escaped literal percent — skip both chars so
-                // it doesn't masquerade as a real field code like %f.
-                if (next == '%')
-                {
-                    i++;
-                    continue;
-                }
+                case '%' when i + 1 < line.Length:
+                    var next = line[i + 1];
+                    // %% is an XDG-escaped literal percent — skip both chars so
+                    // it doesn't masquerade as a real field code like %f.
+                    if (next == '%')
+                    {
+                        i++;
+                        continue;
+                    }
 
-                if (char.IsLetterOrDigit(next))
-                {
+                    if (char.IsLetterOrDigit(next))
+                    {
+                        return i;
+                    }
+
+                    break;
+                case '@' when i + 1 < line.Length && line[i + 1] == '@':
                     return i;
-                }
-            }
-            else if (c == '@' && i + 1 < line.Length && line[i + 1] == '@')
-            {
-                return i;
             }
         }
 
@@ -849,16 +850,9 @@ public sealed class BrowserAccessibilitySetupHelper
 
     private static string? FindSystemLauncher(string name)
     {
-        foreach (var dir in s_systemLauncherDirectories)
-        {
-            var candidate = Path.Combine(dir, name);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
+        return s_systemLauncherDirectories
+            .Select(dir => Path.Join(dir, name))
+            .FirstOrDefault(File.Exists);
     }
 
     private static bool HasOwnedLauncher(IReadOnlyList<string> launcherNames)
@@ -869,16 +863,11 @@ public sealed class BrowserAccessibilitySetupHelper
             return false;
         }
 
-        foreach (var name in launcherNames)
+        return launcherNames.Any(name =>
         {
-            var path = Path.Combine(dir, name);
-            if (File.Exists(path) && FileStartsWithOwnershipMarker(path))
-            {
-                return true;
-            }
-        }
-
-        return false;
+            var path = Path.Join(dir, name);
+            return File.Exists(path) && FileStartsWithOwnershipMarker(path);
+        });
     }
 
     /// <summary>
@@ -890,6 +879,7 @@ public sealed class BrowserAccessibilitySetupHelper
     private static bool AllInstalledLaunchersOwned(IReadOnlyList<string> launcherNames)
     {
         var userDir = UserApplicationsDir();
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the continue-skip over not-installed launchers mirrors the documented "every installed launcher is owned" semantics more clearly than a chained Where/All.
         foreach (var name in launcherNames)
         {
             var isInstalled =
@@ -900,7 +890,7 @@ public sealed class BrowserAccessibilitySetupHelper
                 continue;
             }
 
-            var ownedShadow = Path.Combine(userDir, name);
+            var ownedShadow = Path.Join(userDir, name);
             if (!File.Exists(ownedShadow) || !FileStartsWithOwnershipMarker(ownedShadow))
             {
                 return false;
@@ -912,7 +902,7 @@ public sealed class BrowserAccessibilitySetupHelper
 
     private static bool HasUserOwnedOrNonOwnedLauncher(string userDir, string name)
     {
-        var path = Path.Combine(userDir, name);
+        var path = Path.Join(userDir, name);
         return File.Exists(path);
     }
 
@@ -923,7 +913,7 @@ public sealed class BrowserAccessibilitySetupHelper
         {
             // A patched shadow doesn't count as "installed" — only non-owned user launchers
             // and system launchers do, so an env-file-only run isn't treated as installed.
-            var userPath = Path.Combine(userDir, name);
+            var userPath = Path.Join(userDir, name);
             if (File.Exists(userPath) && !FileStartsWithOwnershipMarker(userPath))
             {
                 return true;
@@ -938,7 +928,7 @@ public sealed class BrowserAccessibilitySetupHelper
         return false;
     }
 
-    private static IReadOnlyList<string> RemoveOwnedLaunchers()
+    private static List<string> RemoveOwnedLaunchers()
     {
         var dir = UserApplicationsDir();
         if (!Directory.Exists(dir))
@@ -956,7 +946,7 @@ public sealed class BrowserAccessibilitySetupHelper
             }
 
             var name = Path.GetFileName(file);
-            var backupPath = Path.Combine(backupDir, name);
+            var backupPath = Path.Join(backupDir, name);
 
             try
             {
@@ -1048,19 +1038,19 @@ public sealed class BrowserAccessibilitySetupHelper
     private static string EnvFilePath()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".config", "environment.d", EnvFileName);
+        return Path.Join(home, ".config", "environment.d", EnvFileName);
     }
 
     private static string UserApplicationsDir()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".local", "share", "applications");
+        return Path.Join(home, ".local", "share", "applications");
     }
 
     private static string LauncherBackupDir()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".local", "share", "typewhisper", "launcher-backups");
+        return Path.Join(home, ".local", "share", "typewhisper", "launcher-backups");
     }
 
     public sealed record Status(
@@ -1085,6 +1075,20 @@ public sealed class BrowserAccessibilitySetupHelper
             && (!ChromiumInstalled || ChromiumLauncherPresent)
             && (!FirefoxInstalled || !FirefoxProfileFound || FirefoxAccessibilityForceEnabled);
     }
+
+    // accessibility.force_disabled = -1 pref line, matched per-line across full user.js content
+    // (Multiline so the line is recognized even when our attribution comment precedes it).
+    [GeneratedRegex("""^\s*user_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
+    private static partial Regex ForceDisabledNegOneMultilineRegex();
+
+    // Any accessibility.force_disabled line (any value) so we don't leave contradictory prefs.
+    [GeneratedRegex("""^\s*user_pref\(\s*"accessibility\.force_disabled"\s*,\s*-?\d+\s*\)\s*;\s*\r?\n?""", RegexOptions.Multiline)]
+    private static partial Regex ForceDisabledAnyValueLineRegex();
+
+    // Our attribution comment plus the following force_disabled=-1 pref line we wrote
+    // ourselves, matched as a single pair across full user.js content (Multiline).
+    [GeneratedRegex("""^//\s*Set by TypeWhisper[^\r\n]*\r?\nuser_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)\s*;\s*\r?\n?""", RegexOptions.Multiline)]
+    private static partial Regex OwnedAccessibilityEntryRegex();
 
     public sealed record SetupResult(bool Success, string Message, string? Detail = null);
 }

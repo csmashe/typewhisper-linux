@@ -44,7 +44,7 @@ public sealed class SuppressXsmpWarningLogSinkTests
         sink.Log(LogEventLevel.Warning, "X11Platform", null, "Some other warning");
         sink.Log(LogEventLevel.Error, "Layout", null, "Measure failed for {0}", "Button");
 
-        Assert.Equal(new[] { "Some other warning", "Measure failed for {0}" }, inner.Messages);
+        Assert.Equal(["Some other warning", "Measure failed for {0}"], inner.Messages);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public sealed class SuppressXsmpWarningLogSinkTests
         // not be swallowed just because it shares the warning's wording.
         sink.Log(LogEventLevel.Error, "X11Platform", null, XsmpWarning);
 
-        Assert.Equal(new[] { XsmpWarning }, inner.Messages);
+        Assert.Equal([XsmpWarning], inner.Messages);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public sealed class SuppressXsmpWarningLogSinkTests
         const string otherError = "SMLib/ICELib reported a new error: connection refused";
         sink.Log(LogEventLevel.Warning, "X11Platform", null, otherError);
 
-        Assert.Equal(new[] { otherError }, inner.Messages);
+        Assert.Equal([otherError], inner.Messages);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public sealed class SuppressXsmpWarningLogSinkTests
     /// <summary>Inner sink that records the message templates it receives.</summary>
     private sealed class RecordingSink : ILogSink
     {
-        public List<string> Messages { get; } = new();
+        public List<string> Messages { get; } = [];
         public bool IsEnabledResult { get; set; } = true;
 
         public bool IsEnabled(LogEventLevel level, string area)

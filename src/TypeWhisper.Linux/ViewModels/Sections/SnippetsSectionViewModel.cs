@@ -8,6 +8,9 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 {
     private readonly IDictionaryService _dictionary;
@@ -88,6 +91,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     {
         _snippets.SnippetsChanged -= _snippetsChangedHandler;
         _dictionary.EntriesChanged -= _entriesChangedHandler;
+        GC.SuppressFinalize(this);
     }
 
     public string ExportToJson()
@@ -206,7 +210,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         NewTrigger = snippet.Trigger;
         NewReplacement = snippet.Replacement;
         NewTags = snippet.Tags;
-        NewProfileIds = string.Join(", ", snippet.ProfileIds);
+        NewProfileIds = string.Join(", ", snippet.ProfileIds ?? []);
         CaseSensitive = snippet.CaseSensitive;
         SelectedTriggerMode = snippet.TriggerMode;
         ShowEditor = true;
@@ -317,7 +321,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
             AvailableTags.Contains(current) ? current : Loc.Instance["Snippets.AllTags"];
     }
 
-    private static IReadOnlyList<string> ParseProfileIds(string value)
+    private static List<string> ParseProfileIds(string value)
     {
         return value
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

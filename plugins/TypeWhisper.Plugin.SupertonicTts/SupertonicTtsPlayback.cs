@@ -49,7 +49,7 @@ internal sealed class SupertonicTtsPlaybackSession : ITtsPlaybackSession, IDispo
         string wavFilePath;
         try
         {
-            wavFilePath = Path.Combine(
+            wavFilePath = Path.Join(
                 Path.GetTempPath(),
                 $"typewhisper-supertonic-tts-{Guid.NewGuid():N}.wav");
             File.WriteAllBytes(wavFilePath, BuildWav(samples, sampleRate));

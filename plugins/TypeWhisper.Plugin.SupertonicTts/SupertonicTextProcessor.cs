@@ -6,7 +6,7 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace TypeWhisper.Plugin.SupertonicTts;
 
-internal sealed class SupertonicTextProcessor
+internal sealed partial class SupertonicTextProcessor
 {
     public static readonly ISet<string> SupportedLanguages = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -65,12 +65,12 @@ internal sealed class SupertonicTextProcessor
         foreach (var (from, to) in Replacements)
             text = text.Replace(from, to);
 
-        text = Regex.Replace(text, @"[♥☆♡©\\]", "");
+        text = SpecialSymbolsRegex().Replace(text, "");
         text = text.Replace("@", " at ", StringComparison.Ordinal);
         text = text.Replace("e.g.,", "for example, ", StringComparison.OrdinalIgnoreCase);
         text = text.Replace("i.e.,", "that is, ", StringComparison.OrdinalIgnoreCase);
 
-        text = Regex.Replace(text, @"\s+([,.!?;:'])", "$1");
+        text = SpaceBeforePunctuationRegex().Replace(text, "$1");
         while (text.Contains("\"\"", StringComparison.Ordinal))
             text = text.Replace("\"\"", "\"", StringComparison.Ordinal);
         while (text.Contains("''", StringComparison.Ordinal))
@@ -78,10 +78,10 @@ internal sealed class SupertonicTextProcessor
         while (text.Contains("``", StringComparison.Ordinal))
             text = text.Replace("``", "`", StringComparison.Ordinal);
 
-        text = Regex.Replace(text, @"\s+", " ").Trim();
+        text = WhitespaceRunRegex().Replace(text, " ").Trim();
         if (text.Length == 0)
             text = ".";
-        if (!Regex.IsMatch(text, "[.!?;:,'\"')\\]}…。」』〗〉》›»]$"))
+        if (!SentenceTerminatorRegex().IsMatch(text))
             text += ".";
 
         return $"<{language}>{text}";
@@ -146,6 +146,18 @@ internal sealed class SupertonicTextProcessor
         ("→", " "),
         ("←", " "),
     ];
+
+    [GeneratedRegex(@"[♥☆♡©\\]")]
+    private static partial Regex SpecialSymbolsRegex();
+
+    [GeneratedRegex(@"\s+([,.!?;:'])")]
+    private static partial Regex SpaceBeforePunctuationRegex();
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRunRegex();
+
+    [GeneratedRegex("[.!?;:,'\"')\\]}…。」』〗〉》›»]$")]
+    private static partial Regex SentenceTerminatorRegex();
 }
 
 internal sealed record SupertonicTextFeatures(DenseTensor<long> TextIds, DenseTensor<float> TextMask);

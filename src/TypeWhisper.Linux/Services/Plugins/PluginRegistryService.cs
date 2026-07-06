@@ -52,6 +52,9 @@ public sealed class PluginRegistryService
     };
 
     private readonly HttpClient _httpClient;
+
+    // kept injected as a DI/test seam; not consumed in-tree
+    // ReSharper disable once NotAccessedField.Local
     private readonly PluginLoader _pluginLoader;
 
     private readonly PluginManager _pluginManager;
@@ -128,13 +131,13 @@ public sealed class PluginRegistryService
         return PluginInstallState.Installed;
     }
 
-    public async Task InstallPluginAsync(
+    private async Task InstallPluginAsync(
         RegistryPlugin registryPlugin,
         IProgress<double>? progress = null,
         CancellationToken ct = default
     )
     {
-        var pluginDir = Path.Combine(TypeWhisperEnvironment.PluginsPath, registryPlugin.Id);
+        var pluginDir = Path.Join(TypeWhisperEnvironment.PluginsPath, registryPlugin.Id);
 
         if (_pluginManager.GetPlugin(registryPlugin.Id) is not null)
         {
@@ -148,16 +151,17 @@ public sealed class PluginRegistryService
 
         Directory.CreateDirectory(pluginDir);
 
+        var tempZip = Path.GetTempFileName();
         try
         {
-            var tempZip = Path.GetTempFileName();
-            try
+            // Scope the download streams so the temp file is closed before we
+            // extract from it; the surrounding finally deletes tempZip on every
+            // exit path (download, extract, or load failure included).
+            using (var response = await _httpClient.GetAsync(
+                       registryPlugin.DownloadUrl,
+                       HttpCompletionOption.ResponseHeadersRead,
+                       ct))
             {
-                using var response = await _httpClient.GetAsync(
-                    registryPlugin.DownloadUrl,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    ct
-                );
                 response.EnsureSuccessStatusCode();
 
                 var totalBytes = response.Content.Headers.ContentLength ?? registryPlugin.Size;
@@ -174,18 +178,9 @@ public sealed class PluginRegistryService
                     progress?.Report(totalBytes > 0 ? (double)bytesRead / totalBytes : 0);
                 }
             }
-            catch
-            {
-                if (File.Exists(tempZip))
-                {
-                    File.Delete(tempZip);
-                }
 
-                throw;
-            }
-
+            // ReSharper disable once MethodHasAsyncOverloadWithCancellation -- synchronous extraction is intentional; the async overload would change cancellation semantics (partial extract on cancel) for a small local plugin zip
             ZipFile.ExtractToDirectory(tempZip, pluginDir, true);
-            File.Delete(tempZip);
 
             await _pluginManager.LoadPluginFromDirectoryAsync(pluginDir, true);
 
@@ -199,24 +194,44 @@ public sealed class PluginRegistryService
                 $"[PluginRegistry] Failed to install {registryPlugin.Id}: {ex.Message}"
             );
 
-            if (Directory.Exists(pluginDir))
+            if (!Directory.Exists(pluginDir))
             {
-                try
-                {
-                    Directory.Delete(pluginDir, true);
-                }
-                catch { }
+                throw;
+            }
+
+            try
+            {
+                Directory.Delete(pluginDir, true);
+            }
+            catch
+            {
+                // Best-effort cleanup of the partial install directory; the original failure is rethrown below.
             }
 
             throw;
         }
+        finally
+        {
+            if (File.Exists(tempZip))
+            {
+                try
+                {
+                    File.Delete(tempZip);
+                }
+                catch
+                {
+                    // Best-effort temp cleanup; nothing else depends on it.
+                }
+            }
+        }
     }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (plugin uninstall entry point); not currently called in-tree
     public async Task UninstallPluginAsync(string pluginId)
     {
         await _pluginManager.UnloadPluginAsync(pluginId);
 
-        var pluginDir = Path.Combine(TypeWhisperEnvironment.PluginsPath, pluginId);
+        var pluginDir = Path.Join(TypeWhisperEnvironment.PluginsPath, pluginId);
         if (Directory.Exists(pluginDir))
         {
             try
@@ -237,6 +252,7 @@ public sealed class PluginRegistryService
     ///     Checks for plugin updates, throttled to one network probe per 24 h to avoid hammering
     ///     the registry endpoint on repeated launches.
     /// </summary>
+    // ReSharper disable once UnusedMember.Global  public API surface (throttled plugin update check); not currently called in-tree
     public async Task CheckForUpdatesAsync(CancellationToken ct = default)
     {
         if (DateTime.UtcNow - _lastUpdateCheck < s_updateCheckInterval)
@@ -274,32 +290,43 @@ public sealed class PluginRegistryService
             "[PluginRegistry] First run detected, auto-installing Linux-compatible registry plugins..."
         );
 
+        // Only mark first-run bootstrap complete once everything actually
+        // installed. A failed fetch (e.g. offline) or a failed plugin install
+        // must leave the flag clear so the next launch retries.
+        var anyFailed = false;
         try
         {
             var registry = await FetchRegistryAsync(ct);
             foreach (var plugin in registry)
             {
-                if (GetInstallState(plugin) == PluginInstallState.NotInstalled)
+                if (GetInstallState(plugin) != PluginInstallState.NotInstalled)
                 {
-                    try
-                    {
-                        await InstallPluginAsync(plugin, ct: ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        Trace.WriteLine(
-                            $"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}"
-                        );
-                    }
+                    continue;
+                }
+
+                try
+                {
+                    await InstallPluginAsync(plugin, ct: ct);
+                }
+                catch (Exception ex)
+                {
+                    anyFailed = true;
+                    Trace.WriteLine(
+                        $"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}"
+                    );
                 }
             }
         }
         catch (Exception ex)
         {
+            anyFailed = true;
             Trace.WriteLine($"[PluginRegistry] First run auto-install failed: {ex.Message}");
         }
 
-        _settings.Save(_settings.Current with { PluginFirstRunCompleted = true });
+        if (!anyFailed)
+        {
+            _settings.Save(_settings.Current with { PluginFirstRunCompleted = true });
+        }
     }
 
     private static Version GetHostVersion()

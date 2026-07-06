@@ -7,10 +7,14 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     File-backed <see cref="ISnippetService" />: persists snippets as JSON and expands their
+///     triggers (with date/time/clipboard placeholders) within transcribed text.
+/// </summary>
 public sealed partial class SnippetService : ISnippetService
 {
     private readonly string _filePath;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private List<Snippet> _cache = [];
     private bool _cacheLoaded;
 
@@ -69,7 +73,7 @@ public sealed partial class SnippetService : ISnippetService
     public void UpdateSnippet(Snippet snippet)
     {
         EnsureCacheLoaded();
-        var changed = false;
+        bool changed;
         lock (_gate)
         {
             var idx = _cache.FindIndex(s => s.Id == snippet.Id);
@@ -92,7 +96,7 @@ public sealed partial class SnippetService : ISnippetService
     public void DeleteSnippet(string id)
     {
         EnsureCacheLoaded();
-        var changed = false;
+        bool changed;
         lock (_gate)
         {
             var idx = _cache.FindIndex(s => s.Id == id);
@@ -191,6 +195,7 @@ public sealed partial class SnippetService : ISnippetService
         var count = 0;
         lock (_gate)
         {
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
             foreach (var snippet in imported)
             {
                 if (_cache.Any(existing => SnippetIdentityEquals(existing, snippet)))
@@ -226,12 +231,7 @@ public sealed partial class SnippetService : ISnippetService
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(profileId))
-        {
-            return false;
-        }
-
-        return snippet.ProfileIds.Contains(profileId, StringComparer.OrdinalIgnoreCase);
+        return !string.IsNullOrWhiteSpace(profileId) && snippet.ProfileIds.Contains(profileId, StringComparer.OrdinalIgnoreCase);
     }
 
     private static string BuildTriggerPattern(Snippet snippet)
@@ -239,7 +239,7 @@ public sealed partial class SnippetService : ISnippetService
         var escaped = Regex.Escape(snippet.Trigger);
         return snippet.TriggerMode == SnippetTriggerMode.ExactPhrase
             ? @"^\s*" + escaped + @"[.!?]?\s*$"
-            : escaped + @"[.!?]?";
+            : escaped + "[.!?]?";
     }
 
     private static bool SnippetIdentityEquals(Snippet left, Snippet right)
@@ -293,23 +293,7 @@ public sealed partial class SnippetService : ISnippetService
     [GeneratedRegex(@"\{(date|time|datetime|clipboard)(?::([^}]+))?\}")]
     private static partial Regex PlaceholderRegex();
 
-    private void IncrementUsageCount(string id)
-    {
-        lock (_gate)
-        {
-            var idx = _cache.FindIndex(s => s.Id == id);
-            if (idx >= 0)
-            {
-                _cache[idx] = _cache[idx] with
-                {
-                    UsageCount = _cache[idx].UsageCount + 1, LastUsedAt = DateTime.UtcNow
-                };
-                SaveToDisk();
-            }
-        }
-    }
-
-    private void IncrementUsageCounts(IReadOnlyDictionary<string, int> increments)
+    private void IncrementUsageCounts(Dictionary<string, int> increments)
     {
         if (increments.Count == 0)
         {

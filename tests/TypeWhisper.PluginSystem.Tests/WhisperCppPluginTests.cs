@@ -1,6 +1,4 @@
 extern alias SherpaOnnx;
-using System.Net;
-using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
@@ -18,7 +16,7 @@ using SherpaCuda = SherpaOnnx::TypeWhisper.Plugins.Shared.Cuda;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class WhisperCppPluginTests
+public partial class WhisperCppPluginTests
 {
     [Fact]
     public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
@@ -150,7 +148,7 @@ public class WhisperCppPluginTests
     }
 
     // The csproj pins Whisper.net / Whisper.net.Runtime, and the on-demand CUDA build
-    // is the whisper.net.runtime.cuda.linux nupkg at WhisperCudaRuntimeInstaller.
+    // is the whisper.net.runtime.cuda.linux nu pkg at WhisperCudaRuntimeInstaller.
     // RuntimeVersion. whisper.cpp's native ABI isn't stable across releases, so if
     // these drift the downloaded CUDA runtime fails to load against the managed
     // binding. Fail the build the moment they diverge, as the csproj comment promises.
@@ -159,12 +157,8 @@ public class WhisperCppPluginTests
     {
         var csproj = File.ReadAllText(WhisperCppCsprojPath());
 
-        var managed = Regex.Match(
-            csproj,
-            """<PackageReference\s+Include="Whisper\.net"\s+Version="([^"]+)"\s*/>""");
-        var runtime = Regex.Match(
-            csproj,
-            """<PackageReference\s+Include="Whisper\.net\.Runtime"\s+Version="([^"]+)"\s*/>""");
+        var managed = WhisperNetVersionRegex().Match(csproj);
+        var runtime = WhisperNetRuntimeVersionRegex().Match(csproj);
 
         Assert.True(managed.Success, "Could not find the Whisper.net <PackageReference> in the csproj.");
         Assert.True(runtime.Success, "Could not find the Whisper.net.Runtime <PackageReference> in the csproj.");
@@ -173,7 +167,13 @@ public class WhisperCppPluginTests
         Assert.Equal(WhisperCudaRuntimeInstaller.RuntimeVersion, runtime.Groups[1].Value);
     }
 
-    // CI-portable state-machine test: a CUDA load whose backend is switched to CPU mid
+    [GeneratedRegex("""<PackageReference\s+Include="Whisper\.net"\s+Version="([^"]+)"\s*/>""")]
+    private static partial Regex WhisperNetVersionRegex();
+
+    [GeneratedRegex("""<PackageReference\s+Include="Whisper\.net\.Runtime"\s+Version="([^"]+)"\s*/>""")]
+    private static partial Regex WhisperNetRuntimeVersionRegex();
+
+    // CI-portable state-machine test: a CUDA load whose backend is switched to CPU mid-
     // provision must abort rather than pin the process to a backend the user no longer
     // wants. The injected provisioner blocks inside EnsureReadyAsync so the test can flip
     // the backend before the post-provision re-check runs. No native load is reached.
@@ -241,7 +241,7 @@ public class WhisperCppPluginTests
         File.WriteAllText(Path.Join(modelsDir, fileName), "dummy");
     }
 
-    // A provisioner that blocks inside EnsureReadyAsync until released, signalling when it
+    // A provisioner that blocks inside EnsureReadyAsync until released, signaling when it
     // has started so a test can deterministically interleave a backend switch.
     private sealed class BlockingProvisioner : CudaRuntimeProvisioner
     {
@@ -281,12 +281,9 @@ public class WhisperCppPluginTests
 
     private sealed class TempAssetDir : IDisposable
     {
-        public TempAssetDir() =>
-            Path = System.IO.Path.Join(
-                System.IO.Path.GetTempPath(),
-                "tw-whisper-asset-" + Guid.NewGuid().ToString("N"));
-
-        public string Path { get; }
+        public string Path { get; } = System.IO.Path.Join(
+            System.IO.Path.GetTempPath(),
+            "tw-whisper-asset-" + Guid.NewGuid().ToString("N"));
 
         public void Dispose()
         {
@@ -315,7 +312,7 @@ public class WhisperCppPluginTests
     }
 }
 
-public class SherpaOnnxPluginTests
+public partial class SherpaOnnxPluginTests
 {
     [Fact]
     public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
@@ -341,7 +338,7 @@ public class SherpaOnnxPluginTests
     public async Task SetAccelerationPreference_NvidiaCuda_TracksPreferenceAndShowsPending()
     {
         var plugin = new SherpaOnnxPlugin();
-        var host = CreateHost(out _);
+        var host = CreateHost();
         await plugin.ActivateAsync(host);
 
         plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
@@ -461,9 +458,7 @@ public class SherpaOnnxPluginTests
     {
         var csproj = File.ReadAllText(SherpaOnnxCsprojPath());
 
-        var managed = Regex.Match(
-            csproj,
-            """<PackageReference\s+Include="org\.k2fsa\.sherpa\.onnx"\s+Version="([^"]+)"\s*/>""");
+        var managed = SherpaOnnxVersionRegex().Match(csproj);
 
         Assert.True(
             managed.Success,
@@ -482,6 +477,9 @@ public class SherpaOnnxPluginTests
             SherpaCudaRuntimeInstaller.DownloadUrl);
     }
 
+    [GeneratedRegex("""<PackageReference\s+Include="org\.k2fsa\.sherpa\.onnx"\s+Version="([^"]+)"\s*/>""")]
+    private static partial Regex SherpaOnnxVersionRegex();
+
     // Resolve the plugin csproj relative to THIS test file (mirrors WhisperCppCsprojPath).
     private static string SherpaOnnxCsprojPath([CallerFilePath] string thisFile = "")
     {
@@ -493,21 +491,15 @@ public class SherpaOnnxPluginTests
                 "TypeWhisper.Plugin.SherpaOnnx.csproj"));
     }
 
-    private static IPluginHostServices CreateHost(
-        out List<(PluginLogLevel level, string message)> logEntries)
+    private static IPluginHostServices CreateHost()
     {
-        var entries = new List<(PluginLogLevel, string)>();
-        logEntries = entries;
-
         var host = new Mock<IPluginHostServices>();
         host.Setup(h => h.PluginDataDirectory).Returns(Path.GetTempPath());
-        host.Setup(h => h.Log(It.IsAny<PluginLogLevel>(), It.IsAny<string>()))
-            .Callback<PluginLogLevel, string>((lvl, msg) => entries.Add((lvl, msg)));
         return host.Object;
     }
 
     // CI-portable state-machine test mirroring the whisper one: a CUDA load whose backend
-    // is switched to CPU mid provision must abort. The injected provisioner blocks inside
+    // is switched to CPU mid-provision must abort. The injected provisioner blocks inside
     // EnsureReadyAsync; once the backend is switched to CPU the wiring guard skips
     // ConfigureCudaRuntime entirely (the installer's RuntimeDirectory also points at a
     // non-existent temp dir as a further safeguard against any dlopen). The abort fires on
@@ -557,7 +549,7 @@ public class SherpaOnnxPluginTests
         Directory.CreateDirectory(dir);
         foreach (var f in new[]
                  {
-                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt",
+                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"
                  })
             File.WriteAllText(Path.Join(dir, f), "dummy");
     }
@@ -600,12 +592,9 @@ public class SherpaOnnxPluginTests
 
     private sealed class TempAssetDir : IDisposable
     {
-        public TempAssetDir() =>
-            Path = System.IO.Path.Join(
-                System.IO.Path.GetTempPath(),
-                "tw-sherpa-asset-" + Guid.NewGuid().ToString("N"));
-
-        public string Path { get; }
+        public string Path { get; } = System.IO.Path.Join(
+            System.IO.Path.GetTempPath(),
+            "tw-sherpa-asset-" + Guid.NewGuid().ToString("N"));
 
         public void Dispose()
         {

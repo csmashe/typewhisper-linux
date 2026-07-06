@@ -1,8 +1,11 @@
-using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Net.Http.Headers;
 
+// This helper is file-linked into multiple plugin assemblies and the Core.Tests
+// project. Its namespace must stay the canonical TypeWhisper.Plugins.Shared.Net that
+// every consumer imports; matching any single link location (e.g. the Core.Tests
+// link) would break the plugin builds. So the file-location check is a false positive.
+// ReSharper disable once CheckNamespace
 namespace TypeWhisper.Plugins.Shared.Net;
 
 /// <summary>
@@ -17,13 +20,13 @@ namespace TypeWhisper.Plugins.Shared.Net;
 ///                 <b>Range-based resume</b> — a dropped connection re-requests with
 ///                 <c>Range: bytes=N-</c> and appends to the surviving partial instead
 ///                 of restarting from zero. Only safe with a full-file integrity gate,
-///                 so resume requires <paramref name="verifyComplete" /> (see below).
+///                 so resume requires <c>verifyComplete</c> (see below).
 ///             </description>
 ///         </item>
 ///         <item>
 ///             <description>
 ///                 <b>Idle-read watchdog</b> — each <c>ReadAsync</c> is bounded by a
-///                 short <paramref name="idleTimeout" />, so a half-open socket aborts
+///                 short <c>idleTimeout</c>, so a half-open socket aborts
 ///                 in seconds (<see cref="DownloadStalledException" />) instead of
 ///                 hanging on the coarse <see cref="HttpClient.Timeout" /> ceiling.
 ///             </description>
@@ -71,6 +74,7 @@ internal static class ResilientDownloader
         HttpClient client,
         string url,
         string destinationPath,
+        // ReSharper disable once UnusedParameter.Global
         long? approxTotalBytes,
         TimeSpan idleTimeout,
         bool allowResume,
@@ -146,7 +150,7 @@ internal static class ResilientDownloader
                 else
                 {
                     // 200: either we sent no Range, or the server ignored it / the
-                    // object rotated and it is re-sending the whole body. Truncate and
+                    // object rotated, and it is re-sending the whole body. Truncate and
                     // restart from zero so we never interleave two different objects.
                     startOffset = 0;
                     mode = FileMode.Create;
@@ -200,7 +204,7 @@ internal static class ResilientDownloader
 
                 // Only a server-declared total gates here (approxTotalBytes never does); a
                 // missing total falls through to verifyComplete rather than a false incomplete.
-                if (declaredTotal.HasValue && onDisk < declaredTotal.Value)
+                if (onDisk < declaredTotal)
                     throw new DownloadIncompleteException(
                         $"Download incomplete: wrote {onDisk} of {declaredTotal.Value} "
                             + "declared bytes before the stream ended.");
@@ -210,7 +214,7 @@ internal static class ResilientDownloader
         }
         catch
         {
-            // Transient / idle / network / length failure. With resume we KEEP the
+            // Transient / idle / network / length failure. With resume, we KEEP the
             // partial so the next attempt picks up where this one stopped; without
             // resume a kept partial is useless, so drop it (truncate-restart parity).
             if (!allowResume)

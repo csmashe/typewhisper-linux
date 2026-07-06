@@ -3,15 +3,15 @@ using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class PluginLocalizationTests : IDisposable
+public sealed class PluginLocalizationTests : IDisposable
 {
     private readonly string _locDir;
     private readonly string _pluginDir;
 
     public PluginLocalizationTests()
     {
-        _pluginDir = Path.Combine(Path.GetTempPath(), $"tw-loc-test-{Guid.NewGuid():N}");
-        _locDir = Path.Combine(_pluginDir, "Localization");
+        _pluginDir = Path.Join(Path.GetTempPath(), $"tw-loc-test-{Guid.NewGuid():N}");
+        _locDir = Path.Join(_pluginDir, "Localization");
         Directory.CreateDirectory(_locDir);
     }
 
@@ -30,7 +30,7 @@ public class PluginLocalizationTests : IDisposable
     [Fact]
     public void GetString_ReturnsKeyWhenNoLocalizationFolder()
     {
-        var emptyDir = Path.Combine(Path.GetTempPath(), $"tw-loc-empty-{Guid.NewGuid():N}");
+        var emptyDir = Path.Join(Path.GetTempPath(), $"tw-loc-empty-{Guid.NewGuid():N}");
         Directory.CreateDirectory(emptyDir);
 
         try
@@ -134,7 +134,7 @@ public class PluginLocalizationTests : IDisposable
     [Fact]
     public void GetString_MalformedJson_SkipsFile()
     {
-        File.WriteAllText(Path.Combine(_locDir, "bad.json"), "{ not valid json }}}");
+        File.WriteAllText(Path.Join(_locDir, "bad.json"), "{ not valid json }}}");
         WriteLocale("en", new Dictionary<string, string> { ["ok"] = "OK" });
 
         var loc = new PluginLocalization(_pluginDir, "en");
@@ -147,6 +147,6 @@ public class PluginLocalizationTests : IDisposable
     private void WriteLocale(string lang, Dictionary<string, string> strings)
     {
         var json = JsonSerializer.Serialize(strings);
-        File.WriteAllText(Path.Combine(_locDir, $"{lang}.json"), json);
+        File.WriteAllText(Path.Join(_locDir, $"{lang}.json"), json);
     }
 }

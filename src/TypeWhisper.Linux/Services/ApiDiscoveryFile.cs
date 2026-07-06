@@ -24,25 +24,28 @@ public sealed class ApiDiscoveryFile
     private static readonly JsonSerializerOptions s_jsonOptions =
         new() { WriteIndented = true };
 
-    public static string DirectoryPath
+    private static string DirectoryPath
     {
         get
         {
             var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
             if (string.IsNullOrWhiteSpace(configHome))
             {
-                configHome = Path.Combine(
+                configHome = Path.Join(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     ".config"
                 );
             }
 
-            return Path.Combine(configHome, "typewhisper");
+            return Path.Join(configHome, "typewhisper");
         }
     }
 
-    public static string FilePath => Path.Combine(DirectoryPath, FileName);
+    private static string FilePath => Path.Join(DirectoryPath, FileName);
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void Write(int port, string token)
     {
         try
@@ -100,6 +103,9 @@ public sealed class ApiDiscoveryFile
         }
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void Delete()
     {
         try

@@ -9,6 +9,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 public interface IDeShortcutWriter
 {
     /// <summary>Stable token used in IDs and logs ("gnome", "kde", "hyprland", "sway").</summary>
+    // ReSharper disable once UnusedMember.Global  interface contract member, part of the IDeShortcutWriter surface
     string DesktopId { get; }
 
     /// <summary>Human-readable name shown next to the "Set up automatically" button.</summary>
@@ -27,6 +28,7 @@ public interface IDeShortcutWriter
     ///     (gsettings-daemon), Hyprland (<c>hyprctl</c>), and Sway (<c>swaymsg reload</c>)
     ///     apply live and report false. The checklist uses this to caveat "registered."
     /// </summary>
+    // ReSharper disable once UnusedMember.Global  interface contract member, part of the IDeShortcutWriter surface
     bool RequiresSessionRestartToApply { get; }
 
     /// <summary>
@@ -50,6 +52,7 @@ public interface IDeShortcutWriter
     ///     trigger or partial write reads as NOT installed. Compares stored trigger and command against
     ///     what <see cref="WriteAsync" /> would produce. Never mutates; returns false on any error.
     /// </summary>
+    // ReSharper disable once UnusedMember.Global  interface contract member, part of the IDeShortcutWriter surface
     Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct);
 
     /// <summary>
@@ -101,6 +104,7 @@ public sealed record DeShortcutSpec(
 public sealed record DeShortcutWriteResult(
     bool Success,
     string? UserMessage,
+    // ReSharper disable once NotAccessedPositionalProperty.Global  carried in the result record's data shape (files changed, surfaced to callers/diagnostics)
     IReadOnlyList<string> FilesChanged,
     string? Warning = null
 );

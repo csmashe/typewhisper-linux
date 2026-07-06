@@ -92,13 +92,15 @@ public sealed class PluginLoader
                 try
                 {
                     var plugin = LoadPlugin(pluginDir);
-                    if (plugin is not null)
+                    if (plugin is null)
                     {
-                        loaded.Add(plugin);
-                        Trace.WriteLine(
-                            $"[PluginLoader] Loaded plugin: {plugin.Manifest.Id} v{plugin.Manifest.Version} from {pluginDir}"
-                        );
+                        continue;
                     }
+
+                    loaded.Add(plugin);
+                    Trace.WriteLine(
+                        $"[PluginLoader] Loaded plugin: {plugin.Manifest.Id} v{plugin.Manifest.Version} from {pluginDir}"
+                    );
                 }
                 catch (Exception ex)
                 {
@@ -115,7 +117,7 @@ public sealed class PluginLoader
 
     internal LoadedPlugin? LoadPlugin(string pluginDir)
     {
-        var manifestPath = Path.Combine(pluginDir, "manifest.json");
+        var manifestPath = Path.Join(pluginDir, "manifest.json");
         if (!File.Exists(manifestPath))
         {
             Trace.WriteLine($"[PluginLoader] No manifest.json in {pluginDir}, skipping");
@@ -136,7 +138,7 @@ public sealed class PluginLoader
             return null;
         }
 
-        var assemblyPath = Path.Combine(pluginDir, manifest.AssemblyName);
+        var assemblyPath = Path.Join(pluginDir, manifest.AssemblyName);
         if (!File.Exists(assemblyPath))
         {
             _lastLoadFailures.Add(
@@ -195,6 +197,9 @@ public sealed class PluginLoader
             return null;
         }
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement — the following
+        // `instance is IPluginDataLocationAware` / `IPluginLocalizationAware` checks are
+        // independent (a plugin may implement both); a type-switch would skip later matches.
         if (instance is null)
         {
             _lastLoadFailures.Add(
@@ -212,10 +217,11 @@ public sealed class PluginLoader
 
         // Plugins that need a stable writable directory (models, caches) declare
         // IPluginDataLocationAware and receive the path before ActivateAsync.
+        // ReSharper disable once SuspiciousTypeConversion.Global -- the plugin instance is loaded from an external assembly (AssemblyLoadContext) that implements this capability interface; the cross-assembly implementer is not visible in-solution.
         if (instance is IPluginDataLocationAware dataLocationAware)
         {
             dataLocationAware.SetDataDirectory(
-                Path.Combine(TypeWhisperEnvironment.PluginDataPath, manifest.Id)
+                Path.Join(TypeWhisperEnvironment.PluginDataPath, manifest.Id)
             );
         }
 
@@ -224,6 +230,7 @@ public sealed class PluginLoader
         // activation. The settings page queries metadata (labels, validation) for
         // every discovered plugin, including disabled ones that are never
         // activated, so localization must not depend on _host being set.
+        // ReSharper disable once SuspiciousTypeConversion.Global -- the plugin instance is loaded from an external assembly (AssemblyLoadContext) that implements this capability interface; the cross-assembly implementer is not visible in-solution.
         if (instance is IPluginLocalizationAware localizationAware)
         {
             localizationAware.SetLocalization(new PluginLocalization(pluginDir));

@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="VocabularyBoostingService" />: fuzzy rewriting of recognized text toward stored dictionary terms.</summary>
 public class VocabularyBoostingServiceTests
 {
     [Fact]
@@ -226,8 +227,11 @@ public class VocabularyBoostingServiceTests
             Entries = entries.ToArray();
         }
 
-        public IReadOnlyList<DictionaryEntry> Entries { get; private set; }
-        public event Action? EntriesChanged;
+        public IReadOnlyList<DictionaryEntry> Entries { get; }
+
+        // Interface requires the event; this fake never raises it (the SUT only reads
+        // Entries once at construction), so no-op accessors satisfy it without CS0067.
+        public event Action? EntriesChanged { add { } remove { } }
 
         public void AddEntry(DictionaryEntry entry)
         {
@@ -279,10 +283,53 @@ public class VocabularyBoostingServiceTests
             throw new NotSupportedException();
         }
 
-        public void SetEntries(params DictionaryEntry[] entries)
+        public void ApplyIndustryPreset(string presetId)
         {
-            Entries = entries;
-            EntriesChanged?.Invoke();
+            throw new NotSupportedException();
+        }
+
+        public void SetTerms(IEnumerable<string> terms, bool replaceExisting)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void RemoveAllTerms()
+        {
+            throw new NotSupportedException();
+        }
+
+        public bool DeleteTerm(string term)
+        {
+            throw new NotSupportedException();
+        }
+
+        public IReadOnlyList<DictionaryCorrection> GetCorrections()
+        {
+            throw new NotSupportedException();
+        }
+
+        public DictionaryCorrection UpsertCorrection(
+            string original,
+            string replacement,
+            bool caseSensitive
+        )
+        {
+            throw new NotSupportedException();
+        }
+
+        public bool DeleteCorrection(string original)
+        {
+            throw new NotSupportedException();
+        }
+
+        public string ExportToCsv()
+        {
+            throw new NotSupportedException();
+        }
+
+        public int ImportFromCsv(string csv)
+        {
+            throw new NotSupportedException();
         }
     }
 }

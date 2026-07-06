@@ -12,32 +12,38 @@ public sealed class SessionAudioFileService
 {
     private const string DictationFilePattern = "dictation-*.wav";
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public string SaveDictationCapture(byte[] wav)
     {
         Directory.CreateDirectory(TypeWhisperEnvironment.AudioPath);
         var fileName = $"dictation-{Guid.NewGuid():N}.wav";
-        var path = Path.Combine(TypeWhisperEnvironment.AudioPath, fileName);
+        var path = Path.Join(TypeWhisperEnvironment.AudioPath, fileName);
         File.WriteAllBytes(path, wav);
         return path;
     }
 
-    public string? GetAudioPath(string? audioFileName)
+    private static string? GetAudioPath(string? audioFileName)
     {
         if (string.IsNullOrWhiteSpace(audioFileName))
         {
             return null;
         }
 
-        var path = Path.Combine(TypeWhisperEnvironment.AudioPath, audioFileName);
+        var path = Path.Join(TypeWhisperEnvironment.AudioPath, audioFileName);
         return File.Exists(path) ? path : null;
     }
 
+    // kept instance: member of a DI/test seam type
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public bool HasAudio(string? audioFileName)
     {
         return GetAudioPath(audioFileName) is not null;
     }
 
-    public void DeleteSessionCaptures()
+    public static void DeleteSessionCaptures()
     {
         try
         {

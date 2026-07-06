@@ -2,6 +2,10 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Maps a <see cref="ProfileStylePreset" /> to the concrete <see cref="ProfileStyleSettings" />
+///     (cleanup level and formatting toggles) it represents.
+/// </summary>
 public static class ProfileStylePresetService
 {
     public static ProfileStyleSettings Resolve(ProfileStylePreset preset)

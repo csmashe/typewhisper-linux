@@ -1,3 +1,6 @@
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 using System.Runtime.CompilerServices;
 using TypeWhisper.PluginSDK.Models;
 
@@ -6,6 +9,7 @@ namespace TypeWhisper.PluginSDK;
 /// <summary>
 ///     Plugin that provides LLM chat-completion capabilities (e.g. for translation, course correction).
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public interface ILlmProviderPlugin : ITypeWhisperPlugin
 {
     /// <summary>Provider name shown in the UI (e.g. "OpenAI", "Groq").</summary>

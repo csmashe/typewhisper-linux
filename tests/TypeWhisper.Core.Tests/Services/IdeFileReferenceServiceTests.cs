@@ -2,10 +2,9 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Verifies <see cref="IdeFileReferenceService" /> turns spoken file names into references (and @-mentions) without touching normal text.</summary>
 public sealed class IdeFileReferenceServiceTests
 {
-    private readonly IdeFileReferenceService _sut = new();
-
     [Theory]
     [InlineData("index dot ts", "index.ts")]
     [InlineData("app settings dot json", "app_settings.json")]
@@ -14,7 +13,7 @@ public sealed class IdeFileReferenceServiceTests
     [InlineData("my script name", "my_script_name")]
     public void ToFileReference_ConvertsSpokenNames(string input, string expected)
     {
-        var result = _sut.ToFileReference(input);
+        var result = IdeFileReferenceService.ToFileReference(input);
 
         Assert.Equal(expected, result);
     }
@@ -22,7 +21,7 @@ public sealed class IdeFileReferenceServiceTests
     [Fact]
     public void ToAtReference_PrefixesFileReferenceForAiChats()
     {
-        var result = _sut.ToAtReference("index dot ts");
+        var result = IdeFileReferenceService.ToAtReference("index dot ts");
 
         Assert.Equal("@index.ts", result);
     }
@@ -37,7 +36,7 @@ public sealed class IdeFileReferenceServiceTests
         string expected
     )
     {
-        var result = _sut.TryFormatReferenceCommand(input);
+        var result = new IdeFileReferenceService().TryFormatReferenceCommand(input);
 
         Assert.Equal(expected, result);
     }
@@ -51,7 +50,7 @@ public sealed class IdeFileReferenceServiceTests
     [InlineData("reference the spec for details")]
     public void TryFormatReferenceCommand_LeavesNormalDeveloperTextAlone(string input)
     {
-        var result = _sut.TryFormatReferenceCommand(input);
+        var result = new IdeFileReferenceService().TryFormatReferenceCommand(input);
 
         Assert.Null(result);
     }

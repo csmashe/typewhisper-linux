@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace TypeWhisper.Linux.Services;
 
-internal static class LinuxDictationFinalTextPolicy
+internal static partial class LinuxDictationFinalTextPolicy
 {
     // Adjacent-repeat thresholds: a candidate phrase must be at least this many
     // words and this many normalized characters before it is collapsed. Short
@@ -16,8 +16,8 @@ internal static class LinuxDictationFinalTextPolicy
     // pathological transcript can never spin indefinitely.
     private const int MaximumRepeatReductionPasses = 8;
 
-    private static readonly Regex AutomaticEllipsisRegex =
-        new(@"\s*(?:\.{3,}|…)\s*", RegexOptions.CultureInvariant);
+    [GeneratedRegex(@"\s*(?:\.{3,}|…)\s*", RegexOptions.CultureInvariant)]
+    private static partial Regex AutomaticEllipsisRegex();
 
     public static string SelectRawText(string? finalText)
     {
@@ -33,7 +33,7 @@ internal static class LinuxDictationFinalTextPolicy
     {
         return string.IsNullOrWhiteSpace(text)
             ? ""
-            : AutomaticEllipsisRegex.Replace(text, " ").Trim();
+            : AutomaticEllipsisRegex().Replace(text, " ").Trim();
     }
 
     private static string ReduceAdjacentRepeatedPhrases(string text)
@@ -47,12 +47,8 @@ internal static class LinuxDictationFinalTextPolicy
         for (var pass = 0; pass < MaximumRepeatReductionPasses; pass++)
         {
             var tokens = TokenizeWords(reduced);
-            if (tokens.Count < MinimumRepeatedPhraseWords * 2)
-            {
-                return reduced.Trim();
-            }
-
-            if (!TryFindAdjacentRepeatedPhrase(reduced, tokens, out var removalStart, out var removalEnd))
+            if (tokens.Count < MinimumRepeatedPhraseWords * 2
+                || !TryFindAdjacentRepeatedPhrase(reduced, tokens, out var removalStart, out var removalEnd))
             {
                 return reduced.Trim();
             }

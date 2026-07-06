@@ -16,6 +16,9 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class ProfilesSectionViewModel : ObservableObject
 {
     private readonly IActiveWindowService _activeWindow;
@@ -216,13 +219,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
     // URL rules always work on X11; on Wayland they need browser accessibility configured.
     // Keep the section visible when the profile already has saved patterns to avoid data loss.
     public bool IsUrlPatternsSectionVisible =>
-        !_browserSetup.IsApplicable()
-        || _browserSetup.IsCurrentlyConfigured().IsFullyConfigured
+        !BrowserAccessibilitySetupHelper.IsApplicable()
+        || BrowserAccessibilitySetupHelper.IsCurrentlyConfigured().IsFullyConfigured
         || UrlPatternChips.Count > 0;
 
     /// <summary>
     ///     True when the edited profile has no app matchers and no URL patterns.
-    ///     <see cref="ProfileService.MatchProfile" />'s Global tier then picks it up for any window
+    ///     <see cref="IProfileService.MatchProfile" />'s Global tier then picks it up for any window
     ///     no other profile matches, making it the de-facto fallback. A profile with a hotkey is
     ///     hotkey-only (excluded from the Global tier) and is NOT a fallback.
     /// </summary>
@@ -777,9 +780,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         _contextWindow = new ProfilesContextWindow(this);
         if (
             Application.Current?.ApplicationLifetime
-                is IClassicDesktopStyleApplicationLifetime desktop
-            && desktop.MainWindow is { } owner
-        )
+            is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
         {
             _contextWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner;
             _contextWindow.Show(owner);
@@ -892,12 +893,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
         else
         {
-            _lastExternalProcessName = processName ?? "-";
+            _lastExternalProcessName = processName;
             _lastExternalWindowTitle = title ?? "-";
             _lastExternalUrl = url ?? "-";
         }
 
-        CurrentProcessName = processName ?? "-";
+        CurrentProcessName = processName;
         CurrentWindowTitle = title ?? "-";
         CurrentUrl = url ?? "-";
 
@@ -979,7 +980,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private void RefreshBrowserAccessibilityStatus()
     {
         // AT-SPI browser setup is Wayland-only (X11 uses xdotool + xclip Ctrl+L).
-        if (!_browserSetup.IsApplicable())
+        if (!BrowserAccessibilitySetupHelper.IsApplicable())
         {
             BrowserAccessibilityStatusMessage = null;
             CanEnableBrowserAccessibility = false;
@@ -987,8 +988,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        var status = _browserSetup.IsCurrentlyConfigured();
-        var hasAnyInstall = _browserSetup.HasInstalledChanges();
+        var status = BrowserAccessibilitySetupHelper.IsCurrentlyConfigured();
+        var hasAnyInstall = BrowserAccessibilitySetupHelper.HasInstalledChanges();
 
         if (status.IsFullyConfigured)
         {
@@ -1017,7 +1018,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [RelayCommand]
     private async Task RevertBrowserAccessibility()
     {
-        var actions = _browserSetup.DescribeRevertActions();
+        var actions = BrowserAccessibilitySetupHelper.DescribeRevertActions();
         if (actions.Count == 0)
         {
             RefreshBrowserAccessibilityStatus();
@@ -1043,7 +1044,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        var result = await _browserSetup.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
+        var result = await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
         BrowserAccessibilityStatusMessage = result.Success
             ? Loc.Instance.GetString("Profiles.BrowserRevertSuccess", result.Message)
             : $"{result.Message} {result.Detail}";

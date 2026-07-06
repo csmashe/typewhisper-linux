@@ -2,6 +2,7 @@ using System.Diagnostics;
 
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 
+// ReSharper disable once UnusedType.Global -- public utility retained for the input-group access path; referenced from InputDeviceAccessCheck docs, not yet wired into a caller.
 /// <summary>
 ///     Best-effort check of whether the current user belongs to the
 ///     <c>input</c> group on Linux. Used to surface the "add yourself to the
@@ -13,6 +14,7 @@ public static class InputGroupCheck
 {
     private const string InputGroupName = "input";
 
+    // ReSharper disable once UnusedMember.Global  public API surface (input-group membership probe referenced by InputDeviceAccessCheck); not currently called in-tree
     public static bool? CurrentUserInInputGroup()
     {
         var inputGid = ReadInputGid();
@@ -22,12 +24,8 @@ public static class InputGroupCheck
         }
 
         var groups = ReadCurrentGroups();
-        if (groups is null)
-        {
-            return null;
-        }
 
-        return groups.Contains(inputGid.Value);
+        return groups?.Contains(inputGid.Value);
     }
 
     private static int? ReadInputGid()
@@ -106,7 +104,7 @@ public static class InputGroupCheck
         return null;
     }
 
-    private static IEnumerable<string> TokenizeWhitespace(ReadOnlySpan<char> span)
+    private static List<string> TokenizeWhitespace(ReadOnlySpan<char> span)
     {
         var result = new List<string>();
         var i = 0;

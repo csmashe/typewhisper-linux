@@ -40,6 +40,8 @@ public sealed class PromptProcessingService
         }
 
         var systemPrompt = action.SystemPrompt;
+        // ReSharper disable once InvertIf — conditionally augments systemPrompt; not a guard,
+        // and inverting would duplicate the large trailing ProcessAsync call.
         if (_settings.Current.MemoryEnabled)
         {
             var context = await _memory.GetContextAsync(inputText, ct);
@@ -102,6 +104,7 @@ public sealed class PromptProcessingService
             ct
         );
 
+        // ReSharper disable once RedundantWithCancellation -- provider is a plugin; it may implement IAsyncEnumerable manually and observe only the GetAsyncEnumerator token, so forwarding ct here is not redundant across the plugin boundary.
         await foreach (var delta in source.WithCancellation(ct))
         {
             yield return delta;
@@ -176,7 +179,7 @@ public sealed class PromptProcessingService
                 continue;
             }
 
-            var firstModel = provider.SupportedModels.FirstOrDefault();
+            var firstModel = provider.SupportedModels.Count > 0 ? provider.SupportedModels[0] : null;
             if (firstModel is not null)
             {
                 return (provider, firstModel.Id);

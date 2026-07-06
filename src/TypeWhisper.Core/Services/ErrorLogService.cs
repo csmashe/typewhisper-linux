@@ -7,8 +7,14 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     File-backed <see cref="IErrorLogService" />: keeps a capped, newest-first ring buffer of
+///     error entries persisted as JSON, and exports them with app/environment metadata for bug reports.
+/// </summary>
 public sealed class ErrorLogService : IErrorLogService
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     private const int MaxEntries = 200;
     private readonly List<ErrorLogEntry> _entries = [];
     private readonly Lock _lock = new();
@@ -17,7 +23,7 @@ public sealed class ErrorLogService : IErrorLogService
 
     public ErrorLogService(string dataDirectory)
     {
-        _logFilePath = Path.Combine(dataDirectory, "error-log.json");
+        _logFilePath = Path.Join(dataDirectory, "error-log.json");
         LoadFromDisk();
     }
 
@@ -34,7 +40,7 @@ public sealed class ErrorLogService : IErrorLogService
 
     public event Action? EntriesChanged;
 
-    public void AddEntry(string message, string category = "general")
+    public void AddEntry(string message, string category = ErrorCategory.General)
     {
         var entry = ErrorLogEntry.Create(message, category);
 
@@ -93,7 +99,7 @@ public sealed class ErrorLogService : IErrorLogService
             })
         };
 
-        return JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
+        return JsonSerializer.Serialize(report, s_jsonOptions);
     }
 
     private void LoadFromDisk()
@@ -107,19 +113,21 @@ public sealed class ErrorLogService : IErrorLogService
 
             var json = File.ReadAllText(_logFilePath);
             var entries = JsonSerializer.Deserialize<List<ErrorLogEntry>>(json);
-            if (entries is not null)
+            if (entries is null)
             {
-                // Trim on load: an older build or hand-edited file may exceed MaxEntries.
-                if (entries.Count > MaxEntries)
-                {
-                    entries = entries.GetRange(0, MaxEntries);
-                }
+                return;
+            }
 
-                lock (_lock)
-                {
-                    _entries.Clear();
-                    _entries.AddRange(entries);
-                }
+            // Trim on load: an older build or hand-edited file may exceed MaxEntries.
+            if (entries.Count > MaxEntries)
+            {
+                entries = entries.GetRange(0, MaxEntries);
+            }
+
+            lock (_lock)
+            {
+                _entries.Clear();
+                _entries.AddRange(entries);
             }
         }
         catch
@@ -134,10 +142,7 @@ public sealed class ErrorLogService : IErrorLogService
         // the in-memory list; two concurrent writers could otherwise interleave.
         try
         {
-            var json = JsonSerializer.Serialize(
-                _entries,
-                new JsonSerializerOptions { WriteIndented = true }
-            );
+            var json = JsonSerializer.Serialize(_entries, s_jsonOptions);
 
             var dir = Path.GetDirectoryName(_logFilePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -161,13 +166,15 @@ public sealed class ErrorLogService : IErrorLogService
             }
             catch
             {
-                if (File.Exists(tempPath))
+                if (!File.Exists(tempPath))
                 {
-                    try { File.Delete(tempPath); }
-                    catch
-                    {
-                        /* best effort */
-                    }
+                    throw;
+                }
+
+                try { File.Delete(tempPath); }
+                catch
+                {
+                    /* best effort */
                 }
 
                 throw;

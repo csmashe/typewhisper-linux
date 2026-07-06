@@ -6,7 +6,7 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace TypeWhisper.Plugin.SupertonicTts;
 
-internal sealed class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
+internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
 {
     private readonly SupertonicTextProcessor _textProcessor;
     private readonly InferenceSession _durationPredictor;
@@ -18,19 +18,19 @@ internal sealed class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
 
     public SupertonicOnnxSynthesizer(string assetRoot)
     {
-        var onnxDir = Path.Combine(assetRoot, "onnx");
+        var onnxDir = Path.Join(assetRoot, "onnx");
         var options = new SessionOptions
         {
             IntraOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2),
             InterOpNumThreads = 1,
         };
 
-        _config = SupertonicConfig.Load(Path.Combine(onnxDir, "tts.json"));
-        _textProcessor = new SupertonicTextProcessor(Path.Combine(onnxDir, "unicode_indexer.json"));
-        _durationPredictor = new InferenceSession(Path.Combine(onnxDir, "duration_predictor.onnx"), options);
-        _textEncoder = new InferenceSession(Path.Combine(onnxDir, "text_encoder.onnx"), options);
-        _vectorEstimator = new InferenceSession(Path.Combine(onnxDir, "vector_estimator.onnx"), options);
-        _vocoder = new InferenceSession(Path.Combine(onnxDir, "vocoder.onnx"), options);
+        _config = SupertonicConfig.Load(Path.Join(onnxDir, "tts.json"));
+        _textProcessor = new SupertonicTextProcessor(Path.Join(onnxDir, "unicode_indexer.json"));
+        _durationPredictor = new InferenceSession(Path.Join(onnxDir, "duration_predictor.onnx"), options);
+        _textEncoder = new InferenceSession(Path.Join(onnxDir, "text_encoder.onnx"), options);
+        _vectorEstimator = new InferenceSession(Path.Join(onnxDir, "vector_estimator.onnx"), options);
+        _vocoder = new InferenceSession(Path.Join(onnxDir, "vocoder.onnx"), options);
     }
 
     public SupertonicSynthesisResult Synthesize(SupertonicSynthesisRequest request, CancellationToken ct)
@@ -164,10 +164,13 @@ internal sealed class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
         return mask;
     }
 
-    private static IReadOnlyList<string> ChunkText(string text, int maxLength)
+    [GeneratedRegex(@"\n\s*\n+")]
+    private static partial Regex ParagraphSplitRegex();
+
+    private static List<string> ChunkText(string text, int maxLength)
     {
         var chunks = new List<string>();
-        foreach (var paragraph in Regex.Split(text.Trim(), @"\n\s*\n+").Where(p => !string.IsNullOrWhiteSpace(p)))
+        foreach (var paragraph in ParagraphSplitRegex().Split(text.Trim()).Where(p => !string.IsNullOrWhiteSpace(p)))
         {
             var remaining = paragraph.Trim();
             while (remaining.Length > maxLength)

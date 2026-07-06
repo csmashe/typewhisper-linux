@@ -12,7 +12,7 @@ public sealed class LocalModelStorageService
     // Large on-disk assets each local-model plugin keeps under its PluginData folder.
     // Small per-plugin settings.json stays in AppData and is intentionally not migrated,
     // so an unplugged custom-storage drive can never lose plugin configuration.
-    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> PluginAssetEntries =
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> s_pluginAssetEntries =
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
         {
             ["com.typewhisper.whisper-cpp"] = ["Models"],
@@ -32,40 +32,28 @@ public sealed class LocalModelStorageService
     private readonly ISettingsService _settings;
     private readonly Action? _unloadActiveModels;
 
-    /// <summary>
-    /// Initializes a new instance of the LocalModelStorageService class.
-    /// </summary>
     public LocalModelStorageService(ISettingsService settings, Action? unloadActiveModels = null)
     {
         _settings = settings;
         _unloadActiveModels = unloadActiveModels;
     }
 
-    /// <summary>
-    /// Gets the currently resolved local model storage path.
-    /// </summary>
     public string ResolvedModelStoragePath =>
         LocalModelStoragePaths.ResolveModelStoragePath(_settings.Current);
 
     /// <summary>
-    /// Gets the default local model storage path.
-    /// </summary>
-    public static string DefaultModelStoragePath => LocalModelStoragePaths.DefaultModelStoragePath;
-
-    /// <summary>
     /// Resolves and validates the active local model storage path.
     /// </summary>
-    public static string ResolveAvailableModelStoragePath(AppSettings settings)
+    private static void ResolveAvailableModelStoragePath(AppSettings settings)
     {
         var root = LocalModelStoragePaths.ResolveModelStoragePath(settings);
         if (AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is null)
         {
             Directory.CreateDirectory(root);
-            return root;
+            return;
         }
 
         EnsureExistingWritableCustomRoot(root);
-        return root;
     }
 
     /// <summary>
@@ -205,7 +193,7 @@ public sealed class LocalModelStorageService
     {
         var pluginDataFolderName = SafeRelativeName(LocalModelStoragePaths.PluginDataFolderName, nameof(LocalModelStoragePaths.PluginDataFolderName));
 
-        foreach (var (pluginId, entries) in PluginAssetEntries)
+        foreach (var (pluginId, entries) in s_pluginAssetEntries)
         {
             ct.ThrowIfCancellationRequested();
             var pluginFolderName = SafeLeafName(pluginId, nameof(pluginId));

@@ -14,7 +14,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
     public PromptsSectionViewModelTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisper.Linux.PromptVmTests_" + Guid.NewGuid().ToString("N")
         );
@@ -39,7 +39,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     [Fact]
     public void SaveAction_PersistsProviderOverrideAndTargetAction()
     {
-        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
@@ -59,7 +59,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     [Fact]
     public void SaveAction_PersistsHotkeyAndManualOnlyForNewAction()
     {
-        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
@@ -79,7 +79,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     [Fact]
     public void SaveAction_PersistsHotkeyAndManualOnlyForExistingAction()
     {
-        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
         prompts.AddAction(
             new PromptAction
             {
@@ -105,7 +105,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     [Fact]
     public void OnSelectedActionChanged_PopulatesHotkeyAndManualOnlyFromAction()
     {
-        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
         prompts.AddAction(
             new PromptAction
             {
@@ -129,7 +129,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     [Fact]
     public void SaveAction_BlankHotkeyKeyPersistsAsNull()
     {
-        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
@@ -147,7 +147,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     [Fact]
     public void SelectedEditProvider_UpdatesProviderOverride()
     {
-        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
         var provider = new FakeLlmProviderPlugin(
             "com.typewhisper.openai",
             "OpenAI",
@@ -177,7 +177,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     [Fact]
     public void SelectedEditProvider_IgnoresTransientSelectionChangesDuringProviderRefresh()
     {
-        var prompts = new PromptActionService(Path.Combine(_tempDir, "prompt-actions.json"));
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
         var provider = new FakeLlmProviderPlugin(
             "com.typewhisper.openai",
             "OpenAI",

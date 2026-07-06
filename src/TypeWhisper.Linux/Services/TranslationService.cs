@@ -20,7 +20,6 @@ public sealed class TranslationService : ITranslationService, IDisposable
     private readonly SemaphoreSlim _downloadSemaphore = new(1, 1);
     private readonly HttpClient _httpClient = new();
     private readonly Dictionary<string, LoadedTranslationModel> _loadedModels = new();
-    private readonly HashSet<string> _loadingModels = [];
 
     private readonly PluginManager _pluginManager;
     private bool _disposed;
@@ -51,21 +50,6 @@ public sealed class TranslationService : ITranslationService, IDisposable
         _disposed = true;
     }
 
-    public bool IsModelReady(string sourceLang, string targetLang)
-    {
-        if (GetConfiguredTranslationProvider() is not null)
-        {
-            return true;
-        }
-
-        return _loadedModels.ContainsKey(ModelKey(sourceLang, targetLang));
-    }
-
-    public bool IsModelLoading(string sourceLang, string targetLang)
-    {
-        return _loadingModels.Contains(ModelKey(sourceLang, targetLang));
-    }
-
     public async Task<string> TranslateAsync(
         string text,
         string sourceLang,
@@ -79,14 +63,14 @@ public sealed class TranslationService : ITranslationService, IDisposable
         }
 
         var llmProvider = GetConfiguredTranslationProvider();
-        if (llmProvider is not null)
+        if (llmProvider is null)
         {
-            var model = llmProvider.SupportedModels.First().Id;
-            var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
-            return await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
+            return await TranslateLocalAsync(text, sourceLang, targetLang, ct);
         }
 
-        return await TranslateLocalAsync(text, sourceLang, targetLang, ct);
+        var model = llmProvider.SupportedModels[0].Id;
+        var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
+        return await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
     }
 
     private ILlmProviderPlugin? GetConfiguredTranslationProvider()
@@ -161,29 +145,21 @@ public sealed class TranslationService : ITranslationService, IDisposable
                 return existing;
             }
 
-            _loadingModels.Add(key);
-
             var modelInfo =
                 TranslationModelInfo.FindModel(sourceLang, targetLang)
                 ?? throw new NotSupportedException(
                     $"No translation model for {sourceLang} -> {targetLang}."
                 );
 
-            var modelDir = Path.Combine(TypeWhisperEnvironment.ModelsPath, modelInfo.SubDirectory);
+            var modelDir = Path.Join(TypeWhisperEnvironment.ModelsPath, modelInfo.SubDirectory);
             Directory.CreateDirectory(modelDir);
 
             await DownloadMissingFilesAsync(modelInfo, modelDir, ct);
 
             var loaded = LoadModel(modelDir);
             _loadedModels[key] = loaded;
-            _loadingModels.Remove(key);
 
             return loaded;
-        }
-        catch
-        {
-            _loadingModels.Remove(key);
-            throw;
         }
         finally
         {
@@ -199,7 +175,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
     {
         foreach (var file in modelInfo.Files)
         {
-            var filePath = Path.Combine(modelDir, file.FileName);
+            var filePath = Path.Join(modelDir, file.FileName);
             if (File.Exists(filePath))
             {
                 continue;
@@ -236,9 +212,9 @@ public sealed class TranslationService : ITranslationService, IDisposable
     private static LoadedTranslationModel LoadModel(string modelDir)
     {
         RegisterOnnxRuntimeResolver();
-        var config = MarianConfig.Load(Path.Combine(modelDir, "config.json"));
+        var config = MarianConfig.Load(Path.Join(modelDir, "config.json"));
         var tokenizer = MarianTokenizer.Load(
-            Path.Combine(modelDir, "tokenizer.json"),
+            Path.Join(modelDir, "tokenizer.json"),
             config.EosTokenId
         );
 
@@ -250,11 +226,11 @@ public sealed class TranslationService : ITranslationService, IDisposable
         };
 
         var encoder = new InferenceSession(
-            Path.Combine(modelDir, "encoder_model_quantized.onnx"),
+            Path.Join(modelDir, "encoder_model_quantized.onnx"),
             sessionOptions
         );
         var decoder = new InferenceSession(
-            Path.Combine(modelDir, "decoder_model_quantized.onnx"),
+            Path.Join(modelDir, "decoder_model_quantized.onnx"),
             sessionOptions
         );
 
@@ -286,7 +262,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         ]);
 
         var encoderHidden =
-            encoderResults.First().Value as DenseTensor<float>
+            encoderResults[0].Value as DenseTensor<float>
             ?? throw new InvalidOperationException("Encoder output is not a float tensor.");
 
         var maxTokens = Math.Min(model.Config.MaxLength, 200);
@@ -309,7 +285,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
             using var decoderResults = model.Decoder.Run(decoderInputs);
             var logits =
-                decoderResults.First().Value as DenseTensor<float>
+                decoderResults[0].Value as DenseTensor<float>
                 ?? throw new InvalidOperationException("Decoder output is not a float tensor.");
 
             var vocabSize = logits.Dimensions[2];
@@ -320,11 +296,13 @@ public sealed class TranslationService : ITranslationService, IDisposable
             for (var i = 0; i < vocabSize; i++)
             {
                 var candidate = logits.Buffer.Span[lastTokenOffset + i];
-                if (candidate > bestValue)
+                if (candidate <= bestValue)
                 {
-                    bestValue = candidate;
-                    bestId = i;
+                    continue;
                 }
+
+                bestValue = candidate;
+                bestId = i;
             }
 
             if (bestId == model.Config.EosTokenId)
@@ -354,7 +332,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         // Linux when published single-file/self-contained, so resolve manually.
         NativeLibrary.SetDllImportResolver(
             typeof(InferenceSession).Assembly,
-            (libraryName, assembly, searchPath) =>
+            (libraryName, _, _) =>
             {
                 if (!libraryName.Contains("onnxruntime", StringComparison.OrdinalIgnoreCase))
                 {
@@ -367,7 +345,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
                     _ => "linux-x64"
                 };
 
-                var candidate = Path.Combine(
+                var candidate = Path.Join(
                     AppContext.BaseDirectory,
                     "runtimes",
                     rid,

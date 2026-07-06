@@ -448,7 +448,7 @@ public sealed class WhisperCppPlugin
                 return;
             }
 
-            var tempPath = Path.Combine(
+            var tempPath = Path.Join(
                 modelDirectory,
                 $"{Path.GetFileName(modelPath)}.{Guid.NewGuid():N}.tmp"
             );
@@ -984,7 +984,7 @@ public sealed class WhisperCppPlugin
     // doesn't look hung, without flooding the log) AND forwards a fraction mapped into
     // [start, end] of the overall provisioning bar to the host's progress reporter, so
     // the UI can show a real download bar instead of a static spinner.
-    private IProgress<double> ProvisionProgress(
+    private Progress<double> ProvisionProgress(
         string label,
         IProgress<double>? forward,
         double start,

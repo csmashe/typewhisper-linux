@@ -6,7 +6,7 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class AppInsertionStrategyRowTests
 {
-    private static readonly InsertionStrategyOption[] Options =
+    private static readonly InsertionStrategyOption[] s_options =
     [
         new(TextInsertionStrategy.Auto, "Auto"),
         new(TextInsertionStrategy.ClipboardPaste, "Clipboard paste"),
@@ -21,13 +21,12 @@ public sealed class AppInsertionStrategyRowTests
         var sut = new AppInsertionStrategyRow(
             "kitty",
             TextInsertionStrategy.Auto,
-            Options,
+            s_options,
             () => changeCount++
-        );
-
-        sut.SelectedStrategyOption = Options.First(option =>
-            option.Value == TextInsertionStrategy.DirectTyping
-        );
+        ) { SelectedStrategyOption = s_options.First(option =>
+                option.Value == TextInsertionStrategy.DirectTyping
+            )
+        };
 
         Assert.Equal(TextInsertionStrategy.DirectTyping, sut.Strategy);
         Assert.Equal(1, changeCount);
@@ -40,11 +39,9 @@ public sealed class AppInsertionStrategyRowTests
         var sut = new AppInsertionStrategyRow(
             "kitty",
             TextInsertionStrategy.Auto,
-            Options,
+            s_options,
             () => changeCount++
-        );
-
-        sut.ProcessName = "firefox";
+        ) { ProcessName = "firefox" };
 
         Assert.Equal("firefox", sut.ProcessName);
         Assert.Equal(1, changeCount);

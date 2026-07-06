@@ -134,12 +134,14 @@
                                                        TextWrapping="Wrap" />
                                         </StackPanel>
 
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                         <Button Grid.Column="2"
                                                 Content="{loc:Str Common.Edit}"
                                                 Command="{Binding $parent[ItemsControl].((vm:PromptsSectionViewModel)DataContext).EditActionCommand}"
                                                 CommandParameter="{Binding}"
                                                 VerticalAlignment="Center"
                                                 Padding="12,6" />
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                         <ToggleSwitch Grid.Column="3"
                                                       IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                       Command="{Binding $parent[ItemsControl].((vm:PromptsSectionViewModel)DataContext).ToggleEnabledCommand}"
@@ -166,6 +168,7 @@
                                Margin="0,0,0,10" />
 
                     <StackPanel Grid.Row="1"
+                                Grid.Column="0"
                                 Grid.ColumnSpan="2">
                         <TextBlock Text="{loc:Str Prompts.Name}"
                                    Margin="0,0,0,6" />
@@ -173,6 +176,7 @@
                     </StackPanel>
 
                     <StackPanel Grid.Row="2"
+                                Grid.Column="0"
                                 Grid.ColumnSpan="2"
                                 Margin="0,14,0,0">
                         <TextBlock Text="{loc:Str Prompts.SystemPrompt}"
@@ -184,6 +188,7 @@
                     </StackPanel>
 
                     <StackPanel Grid.Row="3"
+                                Grid.Column="0"
                                 Margin="0,14,0,0">
                         <TextBlock Text="{loc:Str Prompts.Provider}"
                                    Margin="0,0,0,6" />
@@ -215,6 +220,7 @@
                     </StackPanel>
 
                     <StackPanel Grid.Row="4"
+                                Grid.Column="0"
                                 Margin="0,14,0,0">
                         <TextBlock Text="{loc:Str Prompts.Hotkey}"
                                    Margin="0,0,0,6" />
@@ -233,6 +239,7 @@
                     </StackPanel>
 
                     <StackPanel Grid.Row="5"
+                                Grid.Column="0"
                                 Grid.ColumnSpan="2"
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right"

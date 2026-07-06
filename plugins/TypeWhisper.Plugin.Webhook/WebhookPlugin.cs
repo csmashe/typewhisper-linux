@@ -48,7 +48,7 @@ internal sealed class WebhookStore
 
     public WebhookStore(string dataDir)
     {
-        _configPath = Path.Combine(dataDir, "webhooks.json");
+        _configPath = Path.Join(dataDir, "webhooks.json");
     }
 
     /// <summary>

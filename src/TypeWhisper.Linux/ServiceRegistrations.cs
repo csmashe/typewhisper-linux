@@ -7,7 +7,6 @@ using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
-using TypeWhisper.Linux.Services.Hotkey.Portal;
 using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins;
@@ -35,23 +34,26 @@ internal static class ServiceRegistrations
         services.AddSingleton<IErrorLogService>(new ErrorLogService(dataPath));
         services.AddSingleton<IHistoryService>(
             new HistoryService(
-                Path.Combine(dataPath, "history.json"),
+                Path.Join(dataPath, "history.json"),
                 TypeWhisperEnvironment.AudioPath
             )
         );
         services.AddSingleton<RecentTranscriptionStore>();
         services.AddSingleton<IDictionaryService>(
-            new DictionaryService(Path.Combine(dataPath, "dictionary.json"))
+            new DictionaryService(Path.Join(dataPath, "dictionary.json"))
         );
         services.AddSingleton<IVocabularyBoostingService, VocabularyBoostingService>();
         services.AddSingleton<ISnippetService>(
-            new SnippetService(Path.Combine(dataPath, "snippets.json"))
+            new SnippetService(Path.Join(dataPath, "snippets.json"))
         );
         services.AddSingleton<IProfileService>(
-            new ProfileService(Path.Combine(dataPath, "profiles.json"))
+            new ProfileService(Path.Join(dataPath, "profiles.json"))
         );
-        services.AddSingleton<IPromptActionService>(
-            new PromptActionService(Path.Combine(dataPath, "prompt-actions.json"))
+        services.AddSingleton<IPromptActionService>(sp =>
+            new PromptActionService(
+                Path.Join(dataPath, "prompt-actions.json"),
+                sp.GetRequiredService<IErrorLogService>()
+            )
         );
         services.AddSingleton<CleanupService>();
         services.AddSingleton<CorrectionSuggestionService>();

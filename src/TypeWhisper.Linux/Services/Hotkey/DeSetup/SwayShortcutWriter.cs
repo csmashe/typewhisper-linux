@@ -19,12 +19,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
 
     public bool IsCurrentDesktop()
     {
-        if (DesktopDetector.DetectId() != "sway")
-        {
-            return false;
-        }
-
-        return DesktopDetector.BinaryExists("swaymsg");
+        return DesktopDetector.DetectId() == "sway" && DesktopDetector.BinaryExists("swaymsg");
     }
 
     public string PreviewLines(DeShortcutSpec spec)
@@ -79,7 +74,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not create {dir}: {ex.Message}",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -92,7 +87,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -107,16 +102,16 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not write {path}: {ex.Message}",
-                Array.Empty<string>()
+                []
             );
         }
 
         var reloaded = await ReloadAsync(ct).ConfigureAwait(false);
-        var message = "Sway shortcut installed in ~/.config/sway/config";
+        const string message = "Sway shortcut installed in ~/.config/sway/config";
         var warning = reloaded
             ? null
             : "Config written, but `swaymsg reload` failed. Reload Sway manually to pick up the binding.";
-        return new DeShortcutWriteResult(true, message, new[] { path }, warning);
+        return new DeShortcutWriteResult(true, message, [path], warning);
     }
 
     public async Task<DeShortcutWriteResult> RemoveAsync(string shortcutId, CancellationToken ct)
@@ -127,7 +122,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 true,
                 "No sway config to update.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -138,7 +133,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -147,7 +142,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 true,
                 "No Sway integration to remove.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -161,7 +156,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not write {path}: {ex.Message}",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -172,7 +167,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         return new DeShortcutWriteResult(
             true,
             "Sway managed block removed.",
-            new[] { path },
+            [path],
             warning
         );
     }
@@ -257,7 +252,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
 
         if (IsFunctionKey(key))
         {
-            return "F" + key.Substring(1);
+            return "F" + key[1..];
         }
 
         return key.ToLowerInvariant();
@@ -285,8 +280,8 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        var configHome = string.IsNullOrEmpty(xdg) ? Path.Combine(home, ".config") : xdg;
-        return Path.Combine(configHome, "sway", "config");
+        var configHome = string.IsNullOrEmpty(xdg) ? Path.Join(home, ".config") : xdg;
+        return Path.Join(configHome, "sway", "config");
     }
 
     private static async Task<bool> ReloadAsync(CancellationToken ct)
@@ -296,7 +291,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             return false;
         }
 
-        var (ok, _, _) = await RunAsync("swaymsg", new[] { "reload" }, ct).ConfigureAwait(false);
+        var (ok, _, _) = await RunAsync("swaymsg", ["reload"], ct).ConfigureAwait(false);
         return ok;
     }
 
@@ -327,12 +322,18 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
                 return (false, string.Empty, $"Could not start {fileName}");
             }
 
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-            var stderrTask = proc.StandardError.ReadToEndAsync();
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
             await proc.WaitForExitAsync(ct).ConfigureAwait(false);
             var stdout = await stdoutTask.ConfigureAwait(false);
             var stderr = await stderrTask.ConfigureAwait(false);
             return (proc.ExitCode == 0, stdout, stderr);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation must propagate to callers; only genuine Sway/process
+            // errors are flattened into the failure tuple below.
+            throw;
         }
         catch (Exception ex)
         {

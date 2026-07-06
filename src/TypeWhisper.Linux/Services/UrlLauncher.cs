@@ -8,6 +8,7 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public static class UrlLauncher
 {
+    // ReSharper disable once UnusedMethodReturnValue.Global -- returns whether the launch succeeded for callers that want it; current callers ignore it.
     public static bool Open(string? url)
     {
         if (string.IsNullOrWhiteSpace(url))

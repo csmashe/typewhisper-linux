@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="PostProcessingPipeline" />: step ordering, spoken normalization, translation gating, cancellation, and error resilience.</summary>
 public class PostProcessingPipelineTests
 {
     private readonly PostProcessingPipeline _sut = new();
@@ -174,9 +175,9 @@ public class PostProcessingPipelineTests
         var result = await _sut.ProcessAsync(" brb ", options);
 
         Assert.Equal("be right back", result.Text);
-        Assert.Contains(result.Steps, step => step.Name == "Cleanup" && step.Changed);
-        Assert.Contains(result.Steps, step => step.Name == "Snippets" && step.Changed);
-        Assert.Contains(result.Steps, step => step.Name == "Dictionary" && !step.Changed);
+        Assert.Contains(result.Steps, step => step is { Name: "Cleanup", Changed: true });
+        Assert.Contains(result.Steps, step => step is { Name: "Snippets", Changed: true });
+        Assert.Contains(result.Steps, step => step is { Name: "Dictionary", Changed: false });
     }
 
     [Fact]
@@ -221,7 +222,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
-            TranslationHandler = (text, src, tgt, _) => Task.FromResult($"[{tgt}] {text}"),
+            TranslationHandler = (text, _, tgt, _) => Task.FromResult($"[{tgt}] {text}"),
             TranslationTarget = "fr",
             DetectedLanguage = "en"
         };
@@ -257,7 +258,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
-            TranslationHandler = (text, src, tgt, _) => Task.FromResult($"[{tgt}] {text}"),
+            TranslationHandler = (text, _, tgt, _) => Task.FromResult($"[{tgt}] {text}"),
             TranslationTarget = "en",
             DetectedLanguage = "en"
         };
@@ -454,7 +455,7 @@ public class PostProcessingPipelineTests
         Assert.Equal("hello+DICT", result.Text);
         Assert.Contains(
             result.Steps,
-            step => !step.Succeeded && step.ErrorMessage == "Plugin failed"
+            step => step is { Succeeded: false, ErrorMessage: "Plugin failed" }
         );
     }
 

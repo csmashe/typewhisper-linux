@@ -4,7 +4,7 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 namespace TypeWhisper.Linux.Services;
 
-public sealed class SystemCommandAvailabilityService
+public sealed partial class SystemCommandAvailabilityService
 {
     private const int RtldNow = 2;
     private const int RtldGlobal = 0x100;
@@ -35,16 +35,12 @@ public sealed class SystemCommandAvailabilityService
         "/usr/local/cuda-12.0/targets/x86_64-linux/lib"
     ];
 
-    private static readonly object s_cudaPreloadLock = new();
+    private static readonly Lock s_cudaPreloadLock = new();
     private static readonly List<IntPtr> s_cudaPreloadHandles = [];
 
-    private LinuxCapabilitySnapshot _snapshot;
+    private LinuxCapabilitySnapshot _snapshot = BuildSnapshot();
 
-    public SystemCommandAvailabilityService()
-    {
-        _snapshot = BuildSnapshot();
-    }
-
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool IsWaylandSession
     {
         get
@@ -54,6 +50,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool IsX11Session
     {
         get
@@ -63,6 +60,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasXdotool
     {
         get
@@ -72,6 +70,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasWtype
     {
         get
@@ -81,21 +80,23 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasXclip
     {
         get
         {
             var s = _snapshot;
-            return s.ClipboardToolName == "xclip" && s.HasClipboardTool;
+            return s is { ClipboardToolName: "xclip", HasClipboardTool: true };
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasWlClipboard
     {
         get
         {
             var s = _snapshot;
-            return s.ClipboardToolName == "wl-clipboard" && s.HasClipboardTool;
+            return s is { ClipboardToolName: "wl-clipboard", HasClipboardTool: true };
         }
     }
 
@@ -135,6 +136,7 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool HasSpeechFeedback
     {
         get
@@ -177,6 +179,7 @@ public sealed class SystemCommandAvailabilityService
         return s;
     }
 
+    // ReSharper disable once UnusedMethodReturnValue.Global -- returns the rebuilt snapshot for callers that want it; the current caller ignores it.
     public LinuxCapabilitySnapshot RefreshSnapshot()
     {
         var snapshot = BuildSnapshot();
@@ -200,8 +203,8 @@ public sealed class SystemCommandAvailabilityService
             try
             {
                 if (
-                    File.Exists(Path.Combine(path, "libcudart.so.12"))
-                    && File.Exists(Path.Combine(path, "libcublas.so.12"))
+                    File.Exists(Path.Join(path, "libcudart.so.12"))
+                    && File.Exists(Path.Join(path, "libcublas.so.12"))
                 )
                 {
                     return path;
@@ -243,7 +246,7 @@ public sealed class SystemCommandAvailabilityService
 
             foreach (var library in new[] { "libcudart.so.12", "libcublas.so.12" })
             {
-                var path = Path.Combine(directory, library);
+                var path = Path.Join(directory, library);
                 var handle = dlopen(path, RtldNow | RtldGlobal);
                 if (handle == IntPtr.Zero)
                 {
@@ -314,10 +317,7 @@ public sealed class SystemCommandAvailabilityService
             var waitTask = process.WaitForExitAsync(cancellationToken);
             var timeoutTask = Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
             var completed = await Task.WhenAny(waitTask, timeoutTask);
-            if (cancellationToken.IsCancellationRequested)
-            {
-                throw new OperationCanceledException(cancellationToken);
-            }
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (!ReferenceEquals(completed, waitTask) && !process.HasExited)
             {
@@ -394,7 +394,7 @@ public sealed class SystemCommandAvailabilityService
         {
             try
             {
-                var candidate = Path.Combine(directory, commandName);
+                var candidate = Path.Join(directory, commandName);
                 if (File.Exists(candidate))
                 {
                     return true;
@@ -438,7 +438,7 @@ public sealed class SystemCommandAvailabilityService
         var runtimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         if (!string.IsNullOrWhiteSpace(runtimeDir))
         {
-            candidates.Add(Path.Combine(runtimeDir, ".ydotool_socket"));
+            candidates.Add(Path.Join(runtimeDir, ".ydotool_socket"));
         }
 
         candidates.Add("/tmp/.ydotool_socket");
@@ -449,6 +449,7 @@ public sealed class SystemCommandAvailabilityService
             candidates.Add($"/run/user/{uid}/.ydotool_socket");
         }
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- the explicit whitespace guard keeps socket-path resolution linear; the partial LINQ form only hoists this one guard while the try/catch + early-return stay in the body
         foreach (var candidate in candidates)
         {
             if (string.IsNullOrWhiteSpace(candidate))
@@ -479,7 +480,7 @@ public sealed class SystemCommandAvailabilityService
     /// </summary>
     public event EventHandler<LinuxCapabilitySnapshot>? SnapshotChanged;
 
-    private LinuxCapabilitySnapshot BuildSnapshot()
+    private static LinuxCapabilitySnapshot BuildSnapshot()
     {
         var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
         var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
@@ -540,7 +541,10 @@ public sealed class SystemCommandAvailabilityService
                 return null;
             }
 
-            var output = p.StandardOutput.ReadToEnd().Trim();
+            // Drain stdout asynchronously so a wedged child can't block past the
+            // timeout. ReadToEnd() blocks until stdout closes, which would defeat
+            // the WaitForExit(500) bound if `id` ever hung.
+            var outputTask = p.StandardOutput.ReadToEndAsync();
             if (!p.WaitForExit(500))
             {
                 try
@@ -555,6 +559,7 @@ public sealed class SystemCommandAvailabilityService
                 return null;
             }
 
+            var output = outputTask.GetAwaiter().GetResult().Trim();
             return string.IsNullOrWhiteSpace(output) ? null : output;
         }
         catch
@@ -575,12 +580,7 @@ public sealed class SystemCommandAvailabilityService
             return "espeak";
         }
 
-        if (IsCommandAvailable("spd-say"))
-        {
-            return "spd-say";
-        }
-
-        return null;
+        return IsCommandAvailable("spd-say") ? "spd-say" : null;
     }
 
     private static bool IsLibraryAvailable(string libraryName)
@@ -601,7 +601,7 @@ public sealed class SystemCommandAvailabilityService
         {
             try
             {
-                if (File.Exists(Path.Combine(directory, libraryName)))
+                if (File.Exists(Path.Join(directory, libraryName)))
                 {
                     return true;
                 }
@@ -632,7 +632,7 @@ public sealed class SystemCommandAvailabilityService
         {
             try
             {
-                if (File.Exists(Path.Combine(directory, libraryName)))
+                if (File.Exists(Path.Join(directory, libraryName)))
                 {
                     return true;
                 }
@@ -694,14 +694,19 @@ public sealed class SystemCommandAvailabilityService
         }
     }
 
-    [DllImport("libdl.so.2", CharSet = CharSet.Ansi)]
-    private static extern IntPtr dlopen(string fileName, int flags);
+    // Linux marshals "ANSI" strings as UTF-8, so StringMarshalling.Utf8 matches the prior CharSet.Ansi/LPStr behavior for ASCII library paths.
+    // ReSharper disable once InconsistentNaming -- native libdl function name; LibraryImport EntryPoint defaults to the method name.
+    [LibraryImport("libdl.so.2", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial IntPtr dlopen(string fileName, int flags);
 
-    [DllImport("libdl.so.2")]
-    private static extern IntPtr dlerror();
+    [LibraryImport("libdl.so.2")]
+    private static partial IntPtr dlerror();
 }
 
+// Success/Elapsed are carried in the benchmark result record's data shape (not currently read).
+// ReSharper disable NotAccessedPositionalProperty.Global
 public sealed record CudaBenchmarkResult(bool Success, string Message, TimeSpan? Elapsed);
+// ReSharper restore NotAccessedPositionalProperty.Global
 
 public sealed record LinuxCapabilitySnapshot(
     string SessionType,

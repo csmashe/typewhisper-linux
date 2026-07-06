@@ -140,7 +140,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
     public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
     public bool ShowSpokenFeedbackUnavailableReason => !CanUseSpokenFeedback;
 
-    private string SpokenFeedbackUnavailableReason =>
+    private static string SpokenFeedbackUnavailableReason =>
         Loc.Instance["Advanced.SpokenFeedbackUnavailable"];
 
     public string SpokenFeedbackHint =>
@@ -157,7 +157,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     public bool ShowMemoryUnavailableReason => !CanUseMemory;
 
-    private string MemoryUnavailableReason =>
+    private static string MemoryUnavailableReason =>
         Loc.Instance["Advanced.MemoryUnavailable"];
 
     public string MemoryHint =>

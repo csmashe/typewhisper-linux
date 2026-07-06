@@ -1,3 +1,6 @@
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 using System.Text.Json;
 
 namespace TypeWhisper.PluginSDK.Helpers;
@@ -5,6 +8,7 @@ namespace TypeWhisper.PluginSDK.Helpers;
 /// <summary>
 ///     Shared HTTP error handling for OpenAI-compatible API calls.
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public static class OpenAiApiHelper
 {
     /// <summary>
@@ -12,6 +16,8 @@ public static class OpenAiApiHelper
     ///     network failures, timeouts, and non-success HTTP status codes, converting the
     ///     raw error body into a human-readable message where possible.
     /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
     public static async Task<HttpResponseMessage> SendWithErrorHandlingAsync(
         HttpClient httpClient,
         HttpRequestMessage request,
@@ -32,7 +38,12 @@ public static class OpenAiApiHelper
             throw new InvalidOperationException("API request timed out.", ex);
         }
 
-        if (!response.IsSuccessStatusCode)
+        if (response.IsSuccessStatusCode)
+        {
+            return response;
+        }
+
+        using (response)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);
             var message = (int)response.StatusCode switch
@@ -44,14 +55,14 @@ public static class OpenAiApiHelper
             };
             throw new InvalidOperationException(message);
         }
-
-        return response;
     }
 
     /// <summary>
     ///     Extracts a human-readable error message from an OpenAI-style error JSON body.
     ///     Falls back to truncating the raw body if parsing fails.
     /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
     public static string ExtractErrorMessage(string errorBody)
     {
         try

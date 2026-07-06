@@ -80,7 +80,7 @@ public sealed class HttpApiService : IDisposable
 
     public string StatusText { get; private set; } = "Local API is disabled.";
 
-    public bool IsRunning => _listener?.IsListening == true;
+    private bool IsRunning => _listener?.IsListening == true;
 
     public void Dispose()
     {
@@ -95,12 +95,15 @@ public sealed class HttpApiService : IDisposable
         {
             _listenTask?.Wait(TimeSpan.FromSeconds(1));
         }
-        catch { }
+        catch
+        {
+            // Best-effort wait for the listener loop to drain during dispose.
+        }
 
         _disposed = true;
     }
 
-    public void Start(int port)
+    private void Start(int port)
     {
         if (IsRunning && _port == port)
         {
@@ -108,7 +111,7 @@ public sealed class HttpApiService : IDisposable
             return;
         }
 
-        if (port <= 0 || port > 65535)
+        if (port is <= 0 or > 65535)
         {
             Stop(false);
             SetStatus($"Local API failed to start: port must be 1–65535 (got {port}).");
@@ -141,8 +144,9 @@ public sealed class HttpApiService : IDisposable
         }
     }
 
-    public void Stop()
+    private void Stop()
     {
+        // ReSharper disable once IntroduceOptionalParameters.Local -- kept as explicit overloads; collapsing into an optional parameter would delete a member.
         Stop(true);
     }
 
@@ -273,8 +277,8 @@ public sealed class HttpApiService : IDisposable
                     response,
                     401,
                     Serialize(new { error = "Unauthorized" }),
-                    ct,
-                    allowedOrigin
+                    allowedOrigin,
+                    ct
                 );
                 return;
             }
@@ -286,8 +290,8 @@ public sealed class HttpApiService : IDisposable
                     response,
                     403,
                     Serialize(new { error = "Forbidden" }),
-                    ct,
-                    null
+                    null,
+                    ct
                 );
                 return;
             }
@@ -319,7 +323,7 @@ public sealed class HttpApiService : IDisposable
                 _ => (404, Serialize(new { error = "Not found" }))
             };
 
-            await WriteJsonAsync(response, statusCode, body, ct, allowedOrigin);
+            await WriteJsonAsync(response, statusCode, body, allowedOrigin, ct);
         }
         catch (HttpApiRequestException ex)
         {
@@ -327,8 +331,8 @@ public sealed class HttpApiService : IDisposable
                 response,
                 ex.StatusCode,
                 Serialize(new { error = ex.Message }),
-                ct,
-                GetAllowedOrigin(context.Request)
+                GetAllowedOrigin(context.Request),
+                ct
             );
         }
         catch (Exception ex)
@@ -341,8 +345,8 @@ public sealed class HttpApiService : IDisposable
                 response,
                 500,
                 Serialize(new { error = "Internal server error" }),
-                ct,
-                recoveredOrigin
+                recoveredOrigin,
+                ct
             );
         }
         finally
@@ -420,7 +424,7 @@ public sealed class HttpApiService : IDisposable
     {
         // ContentLength64 is -1 for chunked uploads; reject empty/over-limit known
         // lengths up front, let chunked requests through for LimitedReadStream to cap.
-        if (request.ContentLength64 == 0 || request.ContentLength64 > MaxTranscribeRequestBytes)
+        if (request.ContentLength64 is 0 or > MaxTranscribeRequestBytes)
         {
             return (413, Serialize(new { error = "Request body too large" }));
         }
@@ -432,7 +436,7 @@ public sealed class HttpApiService : IDisposable
         );
         var transcribeRequest = HttpApiRequestParser.ParseTranscribe(apiRequest);
 
-        var tempPath = Path.Combine(
+        var tempPath = Path.Join(
             Path.GetTempPath(),
             $"typewhisper-api-{Guid.NewGuid():N}.{SanitizeExtension(transcribeRequest.FileExtension)}"
         );
@@ -458,7 +462,10 @@ public sealed class HttpApiService : IDisposable
             {
                 File.Delete(tempPath);
             }
-            catch { }
+            catch
+            {
+                // Best-effort temp-file cleanup.
+            }
         }
     }
 
@@ -510,7 +517,8 @@ public sealed class HttpApiService : IDisposable
             : TranscriptionTask.Transcribe;
         var opts = new TranscriptionRunOptions(
             payload.Language,
-            payload.LanguageHints ?? Array.Empty<string>(),
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- LanguageHints is deserialized from JSON and can be null when the field is omitted
+            payload.LanguageHints ?? [],
             task,
             payload.TargetLanguage,
             string.IsNullOrWhiteSpace(payload.ResponseFormat) ? "json" : payload.ResponseFormat,
@@ -809,12 +817,9 @@ public sealed class HttpApiService : IDisposable
             );
         }
 
-        if (_dictation.IsSessionInFlight(sessionId))
-        {
-            return (200, Serialize(new { state = "in_progress" }));
-        }
-
-        return (200, Serialize(new { state = "not_found" }));
+        return _dictation.IsSessionInFlight(sessionId)
+            ? (200, Serialize(new { state = "in_progress" }))
+            : (200, Serialize(new { state = "not_found" }));
     }
 
     private async Task<(int, string)> HandleDictationStopAsync()
@@ -826,12 +831,9 @@ public sealed class HttpApiService : IDisposable
 
         await _dictation.StopAsync();
 
-        if (_dictation.IsRecording)
-        {
-            return (409, Serialize(new { error = "Failed to stop dictation" }));
-        }
-
-        return (200, Serialize(new { stopped = true }));
+        return _dictation.IsRecording
+            ? (409, Serialize(new { error = "Failed to stop dictation" }))
+            : (200, Serialize(new { stopped = true }));
     }
 
     private (int, string) HandleDictationStatus()
@@ -982,6 +984,7 @@ public sealed class HttpApiService : IDisposable
             return (400, Serialize(new { error = "Missing required field: original" }));
         }
 
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- Replacement is deserialized from JSON and can be null when the field is omitted
         if (payload.Replacement is null)
         {
             return (400, Serialize(new { error = "Missing required field: replacement" }));
@@ -1089,7 +1092,7 @@ public sealed class HttpApiService : IDisposable
             }
 
             var model = string.IsNullOrWhiteSpace(requestedModel)
-                ? engine.SelectedModelId ?? engine.TranscriptionModels.FirstOrDefault()?.Id
+                ? engine.SelectedModelId ?? (engine.TranscriptionModels.Count > 0 ? engine.TranscriptionModels[0] : null)?.Id
                 : requestedModel;
             if (
                 string.IsNullOrWhiteSpace(model)
@@ -1105,42 +1108,37 @@ public sealed class HttpApiService : IDisposable
             return ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model);
         }
 
-        if (!string.IsNullOrWhiteSpace(requestedModel))
+        if (string.IsNullOrWhiteSpace(requestedModel))
         {
-            // A bare model id is no longer globally unique: multiple engines/profiles
-            // can advertise the same id. Don't silently route to the first match —
-            // require the caller to disambiguate with an explicit engine.
-            var matches = _models
-                .PluginManager.TranscriptionEngines.Where(candidate =>
-                    candidate.TranscriptionModels.Any(model => model.Id == requestedModel)
-                )
-                .ToList();
-            if (matches.Count == 0)
-            {
-                throw new HttpApiRequestException(404, $"Unknown model: {requestedModel}");
-            }
-
-            if (matches.Count > 1)
-            {
-                throw new HttpApiRequestException(
-                    400,
-                    $"Ambiguous model '{requestedModel}': provided by multiple engines. "
-                        + "Specify the engine explicitly or use the full plugin-qualified model id."
-                );
-            }
-
-            return ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), requestedModel);
+            return _settings.Current.SelectedModelId;
         }
 
-        return _settings.Current.SelectedModelId;
+        // A bare model id is no longer globally unique: multiple engines/profiles
+        // can advertise the same id. Don't silently route to the first match —
+        // require the caller to disambiguate with an explicit engine.
+        var matches = _models
+            .PluginManager.TranscriptionEngines.Where(candidate =>
+                candidate.TranscriptionModels.Any(model => model.Id == requestedModel)
+            )
+            .ToList();
+        return matches.Count switch
+        {
+            0 => throw new HttpApiRequestException(404, $"Unknown model: {requestedModel}"),
+            > 1 => throw new HttpApiRequestException(
+                400,
+                $"Ambiguous model '{requestedModel}': provided by multiple engines. "
+                    + "Specify the engine explicitly or use the full plugin-qualified model id."
+            ),
+            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), requestedModel)
+        };
     }
 
     private static async Task WriteJsonAsync(
         HttpListenerResponse response,
         int statusCode,
         string body,
-        CancellationToken ct,
-        string? origin
+        string? origin,
+        CancellationToken ct
     )
     {
         response.StatusCode = statusCode;
@@ -1266,12 +1264,8 @@ public sealed class HttpApiService : IDisposable
     private bool IsValidOrigin(HttpListenerRequest request)
     {
         var origin = request.Headers["Origin"];
-        if (string.IsNullOrWhiteSpace(origin))
-        {
-            return true;
-        }
-
-        return string.Equals(origin, GetAllowedOrigin(request), StringComparison.OrdinalIgnoreCase);
+        return string.IsNullOrWhiteSpace(origin)
+            || string.Equals(origin, GetAllowedOrigin(request), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsAllowedLoopbackHost(string? host)

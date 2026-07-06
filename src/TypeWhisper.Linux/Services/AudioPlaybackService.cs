@@ -15,9 +15,9 @@ public sealed class AudioPlaybackService : IDisposable
     private const uint FramesPerBuffer = 512;
 
     private static int s_paInitCount;
-    private static readonly object s_paInitLock = new();
+    private static readonly Lock s_paInitLock = new();
 
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private int _position;
     private float[] _samples = [];
     private PaStream? _stream;
@@ -36,7 +36,8 @@ public sealed class AudioPlaybackService : IDisposable
         EnsurePortAudioTerminated();
     }
 
-    public bool CanPlay(string? audioFileName)
+    // ReSharper disable once UnusedMember.Global — public API (pre-flight playback check); not currently called in-tree.
+    public static bool CanPlay(string? audioFileName)
     {
         return ResolveAudioPath(audioFileName) is { } path && File.Exists(path);
     }
@@ -249,7 +250,7 @@ public sealed class AudioPlaybackService : IDisposable
         try
         {
             root = Path.GetFullPath(TypeWhisperEnvironment.AudioPath);
-            candidate = Path.GetFullPath(Path.Combine(root, audioFileName));
+            candidate = Path.GetFullPath(Path.Join(root, audioFileName));
         }
         catch
         {
@@ -297,28 +298,29 @@ public sealed class AudioPlaybackService : IDisposable
             var chunkId = new string(reader.ReadChars(4));
             var chunkSize = reader.ReadInt32();
 
-            if (chunkId == "fmt ")
+            switch (chunkId)
             {
-                audioFormat = reader.ReadInt16();
-                channels = reader.ReadInt16();
-                sampleRate = reader.ReadInt32();
-                _ = reader.ReadInt32();
-                _ = reader.ReadInt16();
-                bitsPerSample = reader.ReadInt16();
+                case "fmt ":
+                    audioFormat = reader.ReadInt16();
+                    channels = reader.ReadInt16();
+                    sampleRate = reader.ReadInt32();
+                    _ = reader.ReadInt32();
+                    _ = reader.ReadInt16();
+                    bitsPerSample = reader.ReadInt16();
 
-                var remaining = chunkSize - 16;
-                if (remaining > 0)
-                {
-                    reader.ReadBytes(remaining);
-                }
-            }
-            else if (chunkId == "data")
-            {
-                data = reader.ReadBytes(chunkSize);
-            }
-            else
-            {
-                reader.BaseStream.Seek(chunkSize, SeekOrigin.Current);
+                    var remaining = chunkSize - 16;
+                    if (remaining > 0)
+                    {
+                        reader.ReadBytes(remaining);
+                    }
+
+                    break;
+                case "data":
+                    data = reader.ReadBytes(chunkSize);
+                    break;
+                default:
+                    reader.BaseStream.Seek(chunkSize, SeekOrigin.Current);
+                    break;
             }
 
             // WAV spec: chunks are padded to even boundaries; skip the pad byte if odd.

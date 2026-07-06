@@ -5,7 +5,7 @@ namespace TypeWhisper.Core.Translation;
 public sealed record MarianConfig(
     int DecoderStartTokenId,
     int EosTokenId,
-    int VocabSize,
+    // ReSharper disable once NotAccessedPositionalProperty.Global
     int MaxLength
 )
 {
@@ -18,7 +18,6 @@ public sealed record MarianConfig(
         return new MarianConfig(
             root.GetProperty("decoder_start_token_id").GetInt32(),
             root.TryGetProperty("eos_token_id", out var eos) ? eos.GetInt32() : 0,
-            root.TryGetProperty("vocab_size", out var vocab) ? vocab.GetInt32() : 65536,
             root.TryGetProperty("max_length", out var maxLen) ? maxLen.GetInt32() : 512
         );
     }

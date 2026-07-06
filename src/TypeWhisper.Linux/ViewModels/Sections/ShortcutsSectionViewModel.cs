@@ -9,6 +9,9 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class ShortcutsSectionViewModel : ObservableObject
 {
     private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
@@ -18,10 +21,28 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     private readonly IReadOnlyList<IDeShortcutWriter> _writers;
 
     // Cached lazily: IsCurrentDesktop hits the filesystem (BinaryExists) so
-    // we don't want to rerun it for every UI-bound property.
-    private IDeShortcutWriter? _activeWriterCache;
-
+    // we don't want to rerun it for every UI-bound property. The resolved writer
+    // lives in the ActiveWriter property's backing `field`; this flag marks it computed.
     private bool _activeWriterCached;
+
+    // Cached keyboard-access probe result, populated off the UI thread by
+    // RefreshKeyboardAccessAsync. InputDeviceAccessCheck.HasKeyboardAccess() opens
+    // every /dev/input keyboard node and ioctls it — ~0.5s on a typical desktop — so
+    // it must never run during view render. null = not yet probed (treated as "has
+    // access" so the no-access banner/fallback don't flash before the probe returns).
+    private bool? _hasKeyboardAccess;
+
+    // Monotonic token so overlapping probes (the section can be reshown while a
+    // prior probe is still running) only let the newest one write back; an older
+    // probe that finishes late must not clobber the latest result.
+    private int _keyboardAccessRefreshVersion;
+
+    // While false, the compositor-bind fallback auto-tracks keyboard access: every
+    // probe re-applies ComputeCompositorBindsRelevant() so the disclosure stays in
+    // sync as access changes (e.g. granted by onboarding). An explicit Show/Hide
+    // toggle sets this true so the user's choice is no longer overridden; toggling
+    // the evdev setting re-arms auto-tracking (a deliberate disclosure reset).
+    private bool _compositorBindsUserControlled;
 
     [ObservableProperty]
     private string _copyLastTranscriptionHotkeyText = "";
@@ -60,7 +81,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // Test-friendly overload — production wiring passes the DI-registered
     // writer collection through the three-arg constructor.
     public ShortcutsSectionViewModel(HotkeyService hotkey, ISettingsService settings)
-        : this(hotkey, settings, Array.Empty<IDeShortcutWriter>())
+        : this(hotkey, settings, [])
     {
     }
 
@@ -81,8 +102,15 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         Mode = settings.Current.Mode;
         _waylandEvdevHotkeysEnabled = settings.Current.WaylandEvdevHotkeysEnabled;
         _compositorBindsExpanded = ComputeCompositorBindsRelevant();
+
+        // Keyboard access is probed on section activation (RefreshKeyboardAccess),
+        // not here: the probe is expensive (see RefreshKeyboardAccessAsync) and this
+        // VM is built eagerly at startup, before first-run onboarding can grant
+        // access — probing in the ctor would both stall startup and cache a stale
+        // pre-onboarding result.
     }
 
+    // ReSharper disable once UnusedMember.Global  public ViewModel property (recording-mode options for selection UI); not currently bound in-tree
     public IReadOnlyList<RecordingMode> Modes { get; } =
         [RecordingMode.Toggle, RecordingMode.PushToTalk, RecordingMode.Hybrid];
 
@@ -91,6 +119,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public string ActiveBackendDisplayName =>
         _hotkey.ActiveBackendDisplayName ?? "(not initialized)";
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string SessionType =>
         Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") ?? "unknown";
 
@@ -124,6 +154,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // node. Gating on actual access (not input-group membership) is correct now
     // that the uaccess rule grants access via a session ACL without the group —
     // a membership check would nag users who already have working access.
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public bool ShowKeyboardAccessBanner
     {
         get
@@ -133,16 +165,22 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 return false;
             }
 
-            return !InputDeviceAccessCheck.HasKeyboardAccess();
+            // Cached probe (RefreshKeyboardAccessAsync) — show the banner only once
+            // we've confirmed there's no access; stay hidden while the probe is pending.
+            return _hasKeyboardAccess == false;
         }
     }
 
     // The exact command the keyboard-access setup runs, offered as a copyable
     // fallback for users who'd rather not click through the one-prompt installer.
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string KeyboardAccessCommand => InputAccessSetupHelper.ManualInstallCommand();
 
     // Bare binary name relies on the Phase 4 single-instance IPC: a second
     // invocation toggles the existing instance instead of launching a new one.
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string CustomShortcutCommand => "typewhisper";
 
     public string CompositorBindsToggleLabel =>
@@ -165,11 +203,66 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return false;
         }
 
-        return !WaylandEvdevHotkeysEnabled || !InputDeviceAccessCheck.HasKeyboardAccess();
+        // evdev opted out → compositor binds are the route, no access probe needed.
+        if (!WaylandEvdevHotkeysEnabled)
+        {
+            return true;
+        }
+
+        // evdev on → relevant only once the cached probe confirms no keyboard access.
+        // While pending (null) stay collapsed; RefreshKeyboardAccessAsync re-runs this.
+        return _hasKeyboardAccess == false;
     }
 
+    // Called by the view each time the Shortcuts section is shown. Re-probes so the
+    // banner/fallback reflect access granted since construction — e.g. by first-run
+    // onboarding, which grants access via HotkeyService outside this VM. Fire-and-forget:
+    // the probe updates the bound properties on completion.
+    public void RefreshKeyboardAccess()
+    {
+        _ = RefreshKeyboardAccessAsync();
+    }
+
+    // Probe keyboard access off the UI thread, then refresh the access-dependent
+    // properties. InputDeviceAccessCheck.HasKeyboardAccess() opens every /dev/input
+    // keyboard node (~0.5s) — running it during the constructor or a binding getter
+    // froze the Shortcuts tab on open. No ConfigureAwait(false): the continuation
+    // touches bound properties and must resume on the UI thread.
+    private async Task RefreshKeyboardAccessAsync()
+    {
+        if (!IsWaylandSession())
+        {
+            return;
+        }
+
+        // Claim this probe's version before awaiting (runs on the UI thread, so the
+        // increment and the post-await check below never interleave with each other).
+        var version = ++_keyboardAccessRefreshVersion;
+        var hasAccess = await Task.Run(InputDeviceAccessCheck.HasKeyboardAccess);
+
+        // A newer probe superseded us while we awaited — drop this stale result.
+        if (version != _keyboardAccessRefreshVersion)
+        {
+            return;
+        }
+
+        _hasKeyboardAccess = hasAccess;
+        OnPropertyChanged(nameof(ShowKeyboardAccessBanner));
+
+        // Keep the fallback's auto-expand in sync with access until the user takes
+        // control with an explicit Show/Hide.
+        if (!_compositorBindsUserControlled)
+        {
+            CompositorBindsExpanded = ComputeCompositorBindsRelevant();
+        }
+    }
+
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public bool ShowPushToTalkSnippet => DesktopName is "Hyprland" or "Sway";
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PushToTalkPressSnippet =>
         DesktopName switch
         {
@@ -181,6 +274,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _ => ""
         };
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PushToTalkReleaseSnippet =>
         DesktopName switch
         {
@@ -189,6 +284,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _ => ""
         };
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PushToTalkSnippetHint =>
         DesktopName switch
         {
@@ -199,6 +296,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     // DesktopDetector normalizes edge cases like "ubuntu:GNOME".
     // "KDE Plasma" → "KDE" keeps legacy snippet-display keys intact.
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string DesktopName
     {
         get
@@ -208,6 +307,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
     }
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string DesktopInstructions =>
         DesktopName switch
         {
@@ -227,7 +328,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         {
             if (_activeWriterCached)
             {
-                return _activeWriterCache;
+                return field;
             }
 
             _activeWriterCached = true;
@@ -235,11 +336,13 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             {
                 try
                 {
-                    if (w.IsCurrentDesktop())
+                    if (!w.IsCurrentDesktop())
                     {
-                        _activeWriterCache = w;
-                        break;
+                        continue;
                     }
+
+                    field = w;
+                    break;
                 }
                 catch
                 {
@@ -247,7 +350,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 }
             }
 
-            return _activeWriterCache;
+            return field;
         }
     }
 
@@ -263,12 +366,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         get
         {
             var w = ActiveWriter;
-            if (w is null)
-            {
-                return string.Empty;
-            }
-
-            return w.PreviewLines(BuildSpec(w));
+            return w is null ? string.Empty : w.PreviewLines(BuildSpec(w));
         }
     }
 
@@ -439,6 +537,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     [RelayCommand]
     private void ToggleCompositorBinds()
     {
+        // The user has taken control of the disclosure — auto-tracking stops so a
+        // pending/late access probe never overwrites this choice.
+        _compositorBindsUserControlled = true;
         CompositorBindsExpanded = !CompositorBindsExpanded;
     }
 
@@ -556,6 +657,10 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         // Surface the compositor-bind fallback the moment evdev stops carrying the
         // hotkey (and re-collapse it once evdev is back), matching the rule that it
         // only auto-expands when it's the user's real route to a global hotkey.
+        // Toggling evdev is a deliberate disclosure reset, so re-arm auto-tracking;
+        // this assignment is the optimistic immediate value and the trailing
+        // RefreshKeyboardAccessAsync re-applies it with the real probe result.
+        _compositorBindsUserControlled = false;
         CompositorBindsExpanded = ComputeCompositorBindsRelevant();
 
         // Hot-swap immediately: a restart-only opt-out would be a consent gap
@@ -591,6 +696,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SupportsPressRelease));
         OnPropertyChanged(nameof(ScopeText));
         OnPropertyChanged(nameof(ShowCapabilityMismatch));
-        OnPropertyChanged(nameof(ShowKeyboardAccessBanner));
+
+        // Re-probe off the UI thread: a switch may follow the user granting access,
+        // which must clear the banner. RefreshKeyboardAccessAsync raises the change.
+        await RefreshKeyboardAccessAsync();
     }
 }

@@ -1,23 +1,22 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
-public sealed record VoiceCommandParseResult(
-    string Text,
-    bool AutoEnter = false,
-    bool CancelInsertion = false
-);
-
-public sealed class VoiceCommandParser
+/// <summary>
+///     Strips recognized trailing spoken commands ("press enter", "new line", "new paragraph",
+///     "cancel") from transcribed text, including stacked commands, and reports the resulting
+///     <see cref="VoiceCommandParseResult" />.
+/// </summary>
+public static partial class VoiceCommandParser
 {
-    private static readonly Regex PressEnterSuffix = BuildSuffixRegex("press enter");
-    private static readonly Regex NewParagraphSuffix = BuildSuffixRegex("new paragraph");
-    private static readonly Regex NewLineSuffix = BuildSuffixRegex("new line");
-    private static readonly Regex CancelSuffix = BuildSuffixRegex("cancel");
-    private static readonly Regex TrailingNoise = new(@"[\s,.;:!?]+$", RegexOptions.Compiled);
+    private static readonly Regex s_pressEnterSuffix = BuildSuffixRegex("press enter");
+    private static readonly Regex s_newParagraphSuffix = BuildSuffixRegex("new paragraph");
+    private static readonly Regex s_newLineSuffix = BuildSuffixRegex("new line");
+    private static readonly Regex s_cancelSuffix = BuildSuffixRegex("cancel");
 
-    public VoiceCommandParseResult Parse(string text)
+    public static VoiceCommandParseResult Parse(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -28,11 +27,11 @@ public sealed class VoiceCommandParser
         var trailingOutput = new StringBuilder();
         var autoEnter = false;
 
-        // Repeatedly strip recognised trailing commands so stacked commands like
+        // Repeatedly strip recognized trailing commands so stacked commands like
         // "hello new line press enter" are handled correctly.
         while (true)
         {
-            if (TryRemoveSuffix(current, CancelSuffix, out var withoutCancel))
+            if (TryRemoveSuffix(current, s_cancelSuffix, out var withoutCancel))
             {
                 var remaining = TrimTrailingNoise(withoutCancel);
                 if (
@@ -47,21 +46,21 @@ public sealed class VoiceCommandParser
                 continue;
             }
 
-            if (TryRemoveSuffix(current, PressEnterSuffix, out var withoutEnter))
+            if (TryRemoveSuffix(current, s_pressEnterSuffix, out var withoutEnter))
             {
                 autoEnter = true;
                 current = TrimTrailingNoise(withoutEnter);
                 continue;
             }
 
-            if (TryRemoveSuffix(current, NewParagraphSuffix, out var withoutParagraph))
+            if (TryRemoveSuffix(current, s_newParagraphSuffix, out var withoutParagraph))
             {
                 current = TrimTrailingNoise(withoutParagraph);
                 trailingOutput.Insert(0, "\n\n");
                 continue;
             }
 
-            if (TryRemoveSuffix(current, NewLineSuffix, out var withoutLine))
+            if (TryRemoveSuffix(current, s_newLineSuffix, out var withoutLine))
             {
                 current = TrimTrailingNoise(withoutLine);
                 trailingOutput.Insert(0, "\n");
@@ -97,6 +96,9 @@ public sealed class VoiceCommandParser
 
     private static string TrimTrailingNoise(string text)
     {
-        return TrailingNoise.Replace(text, "");
+        return TrailingNoiseRegex().Replace(text, "");
     }
+
+    [GeneratedRegex(@"[\s,.;:!?]+$")]
+    private static partial Regex TrailingNoiseRegex();
 }

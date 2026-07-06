@@ -18,7 +18,6 @@ public partial class HistorySectionViewModel : ObservableObject
     // Thousands of entries: rows are materialized in pages and appended on scroll.
     private const int PageSize = 40;
     private readonly AudioPlaybackService _audioPlayback;
-    private readonly CorrectionSuggestionService _correctionSuggestions;
     private readonly IDictionaryService _dictionary;
     private readonly List<TranscriptionRecord> _filtered = [];
     private readonly IHistoryService _history;
@@ -47,7 +46,6 @@ public partial class HistorySectionViewModel : ObservableObject
         IHistoryService history,
         IDictionaryService dictionary,
         ISettingsService settings,
-        CorrectionSuggestionService correctionSuggestions,
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback
     )
@@ -55,7 +53,6 @@ public partial class HistorySectionViewModel : ObservableObject
         _history = history;
         _dictionary = dictionary;
         _settings = settings;
-        _correctionSuggestions = correctionSuggestions;
         _sessionAudioFiles = sessionAudioFiles;
         _audioPlayback = audioPlayback;
 
@@ -119,7 +116,7 @@ public partial class HistorySectionViewModel : ObservableObject
         {
             _history.UpdateRecord(record.Record.Id, newText);
 
-            var suggestions = _correctionSuggestions.GenerateSuggestions(originalText, newText);
+            var suggestions = CorrectionSuggestionService.GenerateSuggestions(originalText, newText);
             if (_settings.Current.AutoAddDictionaryCorrections)
             {
                 LearnCorrections(
@@ -226,11 +223,13 @@ public partial class HistorySectionViewModel : ObservableObject
                 continue;
             }
 
-            if (entry.IsExpanded)
+            if (!entry.IsExpanded)
             {
-                entry.IsEditing = false;
-                entry.IsExpanded = false;
+                continue;
             }
+
+            entry.IsEditing = false;
+            entry.IsExpanded = false;
         }
     }
 
@@ -322,7 +321,11 @@ public partial class HistorySectionViewModel : ObservableObject
             );
         }
 
-        if (!string.IsNullOrWhiteSpace(SearchQuery))
+        if (string.IsNullOrWhiteSpace(SearchQuery))
+        {
+            return records.OrderByDescending(record => record.Timestamp);
+        }
+
         {
             var query = SearchQuery;
             records = records.Where(record =>
@@ -426,12 +429,8 @@ public partial class HistorySectionViewModel : ObservableObject
         }
 
         var lastMonday = thisMonday.AddDays(-7);
-        if (date >= lastMonday)
-        {
-            return Loc.Instance["History.GroupLastWeek"];
-        }
-
-        return timestamp.ToString("MMMM yyyy");
+        return date >= lastMonday ? Loc.Instance["History.GroupLastWeek"] 
+            : timestamp.ToString("MMMM yyyy");
     }
 }
 
@@ -574,21 +573,25 @@ public partial class HistoryRecordRow : ObservableObject
     private void SaveApprovedCorrections()
     {
         _owner.LearnCorrections(CorrectionSuggestions);
-        if (_owner.SetPendingCorrectionSuggestions(this, []))
+        if (!_owner.SetPendingCorrectionSuggestions(this, []))
         {
-            CorrectionSuggestions.Clear();
-            OnPropertyChanged(nameof(HasCorrectionSuggestions));
+            return;
         }
+
+        CorrectionSuggestions.Clear();
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
     }
 
     [RelayCommand]
     private void DismissCorrectionSuggestions()
     {
-        if (_owner.SetPendingCorrectionSuggestions(this, []))
+        if (!_owner.SetPendingCorrectionSuggestions(this, []))
         {
-            CorrectionSuggestions.Clear();
-            OnPropertyChanged(nameof(HasCorrectionSuggestions));
+            return;
         }
+
+        CorrectionSuggestions.Clear();
+        OnPropertyChanged(nameof(HasCorrectionSuggestions));
     }
 
     [RelayCommand]

@@ -1,3 +1,6 @@
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSDK;
@@ -5,6 +8,7 @@ namespace TypeWhisper.PluginSDK;
 /// <summary>
 ///     Plugin that provides audio transcription capabilities via a cloud or local engine.
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
 {
     /// <summary>Unique provider identifier (e.g. "openai", "groq").</summary>
@@ -40,9 +44,9 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
 
     /// <summary>
     ///     Whether this engine downloads and preloads its own CUDA runtime on demand
-    ///     during <see cref="LoadModelAsync" />, and falls back to CPU itself
+    ///     during <see cref="LoadModelAsync(string, CancellationToken)" />, and falls back to CPU itself
     ///     (surfacing the reason via <see cref="AccelerationStatus" />) when the GPU
-    ///     path can't be honoured. When <c>true</c>, the host must not reject an
+    ///     path can't be honored. When <c>true</c>, the host must not reject an
     ///     explicit <see cref="TranscriptionAccelerationBackend.NvidiaCuda" /> load
     ///     just because the CUDA runtime libraries aren't already installed on the
     ///     host — the plugin provisions them. Default: <c>false</c> (the engine relies
@@ -71,7 +75,9 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     ///     host surfaces the message. Default: no-op (engines that rely on a
     ///     host-provided runtime have nothing to fetch).
     /// </summary>
+    // ReSharper disable UnusedParameter.Global
     Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+        // ReSharper restore UnusedParameter.Global
     {
         return Task.CompletedTask;
     }
@@ -87,6 +93,7 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     ///     throws rather than silently report a clear that never happened (which would
     ///     leave a corrupt cache in place and defeat the host's failure aggregation).
     /// </summary>
+    // ReSharper disable once UnusedParameter.Global
     Task ClearCudaRuntimeAsync(CancellationToken ct)
     {
         if (ProvisionsCudaRuntimeOnDemand)
@@ -101,6 +108,7 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     }
 
     /// <summary>Acceleration preference last requested by the host. Default: Auto.</summary>
+    // ReSharper disable once UnusedMember.Global
     TranscriptionAccelerationPreference AccelerationPreference =>
         TranscriptionAccelerationPreference.Auto;
 
@@ -112,6 +120,8 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     void SelectModel(string modelId);
 
     /// <summary>Configures the preferred compute backend. Common values: "cpu", "cuda".</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
     Task ConfigureComputeBackendAsync(string backend)
     {
         return Task.CompletedTask;
@@ -125,21 +135,26 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
 
     /// <summary>Transcribes WAV audio data and returns the result.</summary>
     Task<PluginTranscriptionResult> TranscribeAsync(
+        // ReSharper disable UnusedParameter.Global
         byte[] wavAudio,
         string? language,
         bool translate,
         string? prompt,
         CancellationToken ct
+        // ReSharper restore UnusedParameter.Global
     );
 
     /// <summary>Whether the given model's files are downloaded and ready to use.</summary>
+    // ReSharper disable once UnusedParameter.Global
     bool IsModelDownloaded(string modelId)
     {
         return true;
     }
 
     /// <summary>Downloads model files for the given model ID, reporting progress 0.0–1.0.</summary>
+    // ReSharper disable UnusedParameter.Global
     Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+        // ReSharper restore UnusedParameter.Global
     {
         return Task.CompletedTask;
     }
@@ -159,19 +174,23 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     ///     <see cref="LoadModelAsync(string, CancellationToken)" /> (no progress), so
     ///     engines with nothing slow to provision need not override it.
     /// </summary>
+    // ReSharper disable once UnusedParameter.Global
     Task LoadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
     {
         return LoadModelAsync(modelId, ct);
     }
 
     /// <summary>Deletes downloaded model files for the given model ID.</summary>
+    // ReSharper disable UnusedParameter.Global
     Task DeleteModelAsync(string modelId, CancellationToken ct)
+        // ReSharper restore UnusedParameter.Global
     {
         return Task.CompletedTask;
     }
 
     /// <summary>Opens a real-time streaming session; the host feeds PCM16 audio into it.
     ///     Only called when <see cref="SupportsStreaming" /> is true.</summary>
+    // ReSharper disable once UnusedParameter.Global
     Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         throw new NotSupportedException();
@@ -184,15 +203,16 @@ public interface ITranscriptionEnginePlugin : ITypeWhisperPlugin
     }
 
     /// <summary>
-    ///     Transcribes audio with streaming progress updates via <paramref name="onProgress" />.
+    ///     Transcribes audio with streaming progress updates via <paramref name="onProgress" />,
+    ///     which receives partial transcription text and returns <c>false</c> to cancel.
     ///     Default delegates to <see cref="TranscribeAsync" />.
     /// </summary>
-    /// <param name="onProgress">Receives partial transcription text; return false to cancel.</param>
     Task<PluginTranscriptionResult> TranscribeStreamingAsync(
         byte[] wavAudio,
         string? language,
         bool translate,
         string? prompt,
+        // ReSharper disable once UnusedParameter.Global
         Func<string, bool> onProgress,
         CancellationToken ct
     )

@@ -105,7 +105,9 @@ public class StreamingTranscriptionTests
             "de",
             false,
             null,
+            // ReSharper disable UnusedParameter.Local
             partial => true,
+            // ReSharper restore UnusedParameter.Local
             CancellationToken.None
         );
 
@@ -174,8 +176,8 @@ public class StabilizeTextTests
     public void SuffixPrefixOverlap_DetectsShift()
     {
         // Confirmed = "A B C D", new starts with "B C D E" (suffix of confirmed)
-        var confirmed = "Alpha Beta Gamma Delta";
-        var newText = "Beta Gamma Delta Epsilon";
+        const string confirmed = "Alpha Beta Gamma Delta";
+        const string newText = "Beta Gamma Delta Epsilon";
         var result = StreamingTranscriptState.StabilizeText(confirmed, newText);
         // Should keep confirmed + append the new tail " Epsilon"
         Assert.Equal("Alpha Beta Gamma Delta Epsilon", result);

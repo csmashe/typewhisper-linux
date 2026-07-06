@@ -57,6 +57,7 @@ internal sealed class ControlSocketServer : IDisposable
     private long _lastStartTicks;
     private Socket? _listener;
 
+    // ReSharper disable once IntroduceOptionalParameters.Global -- kept as explicit overloads; collapsing into optional parameters would delete a member.
     public ControlSocketServer(DictationOrchestrator orchestrator)
         : this(orchestrator, null, null)
     {
@@ -75,7 +76,7 @@ internal sealed class ControlSocketServer : IDisposable
     }
 
     /// <summary>Absolute path of the socket file once <see cref="Start" /> succeeds.</summary>
-    public string SocketPath { get; }
+    private string SocketPath { get; }
 
     public void Dispose()
     {
@@ -138,18 +139,20 @@ internal sealed class ControlSocketServer : IDisposable
         // may have already taken it over before our Dispose reaches this point.
         try
         {
-            if (_bound && File.Exists(SocketPath))
+            if (!_bound || !File.Exists(SocketPath))
             {
-                if (NoLivePeer(SocketPath))
-                {
-                    File.Delete(SocketPath);
-                }
-                else
-                {
-                    Trace.WriteLine(
-                        $"[ControlSocketServer] Socket path {SocketPath} is held by another listener; leaving it in place."
-                    );
-                }
+                return;
+            }
+
+            if (NoLivePeer(SocketPath))
+            {
+                File.Delete(SocketPath);
+            }
+            else
+            {
+                Trace.WriteLine(
+                    $"[ControlSocketServer] Socket path {SocketPath} is held by another listener; leaving it in place."
+                );
             }
         }
         catch (Exception ex)
@@ -169,10 +172,7 @@ internal sealed class ControlSocketServer : IDisposable
     /// </summary>
     public void Start()
     {
-        if (_disposed != 0)
-        {
-            throw new ObjectDisposedException(nameof(ControlSocketServer));
-        }
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
         if (_listener is not null)
         {
@@ -247,11 +247,10 @@ internal sealed class ControlSocketServer : IDisposable
     {
         try
         {
-            using var stream = new NetworkStream(client, true);
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true)
-            {
-                AutoFlush = true, NewLine = "\n"
-            };
+            await using var stream = new NetworkStream(client, true);
+            await using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true);
+            writer.AutoFlush = true;
+            writer.NewLine = "\n";
 
             // Byte-by-byte read enforces the 4 KB cap before allocating; StreamReader
             // would buffer unboundedly for a runaway client.
@@ -332,12 +331,7 @@ internal sealed class ControlSocketServer : IDisposable
                 .ConfigureAwait(false);
             if (n <= 0)
             {
-                if (total == 0)
-                {
-                    return null;
-                }
-
-                return Encoding.UTF8.GetString(buf, 0, total);
+                return total == 0 ? null : Encoding.UTF8.GetString(buf, 0, total);
             }
 
             var nl = Array.IndexOf(buf, (byte)'\n', total, n);
@@ -351,6 +345,7 @@ internal sealed class ControlSocketServer : IDisposable
         return LineTooLongSentinel;
     }
 
+    // ReSharper disable once UnusedParameter.Local -- ct is threaded from the cancellation-aware client loop for signature consistency; the inner JSON dispatch has no cancellable I/O to forward it to
     private async Task HandleJsonRequestAsync(
         string line,
         StreamWriter writer,
@@ -399,9 +394,9 @@ internal sealed class ControlSocketServer : IDisposable
         {
             var response = req.Command switch
             {
-                JsonControlProtocol.CmdRecordStart => await HandleStartAsync(ct)
+                JsonControlProtocol.CmdRecordStart => await HandleStartAsync()
                     .ConfigureAwait(false),
-                JsonControlProtocol.CmdRecordStop => await HandleStopAsync(ct)
+                JsonControlProtocol.CmdRecordStop => await HandleStopAsync()
                     .ConfigureAwait(false),
                 JsonControlProtocol.CmdRecordToggle => await HandleToggleAsync()
                     .ConfigureAwait(false),
@@ -422,7 +417,7 @@ internal sealed class ControlSocketServer : IDisposable
         }
     }
 
-    private async Task<string> HandleStartAsync(CancellationToken ct)
+    private async Task<string> HandleStartAsync()
     {
         var prev = SnapshotState();
 
@@ -450,7 +445,7 @@ internal sealed class ControlSocketServer : IDisposable
         return JsonControlProtocol.SerializeAction(prev, SnapshotState());
     }
 
-    private async Task<string> HandleStopAsync(CancellationToken ct)
+    private async Task<string> HandleStopAsync()
     {
         var prev = SnapshotState();
 

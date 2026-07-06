@@ -1,29 +1,14 @@
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 namespace TypeWhisper.PluginSDK.Models;
-
-/// <summary>
-///     User preference for transcription compute acceleration.
-/// </summary>
-public enum TranscriptionAccelerationPreference
-{
-    Auto,
-    Cpu,
-    NvidiaCuda
-}
-
-/// <summary>
-///     A concrete compute backend a transcription engine can resolve to.
-/// </summary>
-public enum TranscriptionAccelerationBackend
-{
-    Cpu,
-    NvidiaCuda
-}
 
 /// <summary>
 ///     Reports the acceleration backend the engine actually loaded with, plus a
 ///     restart-required flag for when the pinned runtime no longer matches the
 ///     user's saved preference.
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public sealed record TranscriptionAccelerationStatus(
     TranscriptionAccelerationBackend ActiveBackend,
     string DisplayText,

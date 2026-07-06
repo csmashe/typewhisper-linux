@@ -1,6 +1,7 @@
 using Avalonia.Threading;
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.Views;
@@ -9,7 +10,6 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed class RecentTranscriptionsService
 {
-    private const int PaletteLimit = 12;
     private readonly ActiveWindowService _activeWindow;
     private readonly SystemCommandAvailabilityService _commands;
 

@@ -51,7 +51,7 @@ internal static class RecordCommand
             // Explicit kind check prevents GetBoolean() throwing on a non-boolean "ok" from a misbehaving server.
             return doc.RootElement.ValueKind == JsonValueKind.Object
                    && doc.RootElement.TryGetProperty("ok", out var ok)
-                   && (ok.ValueKind == JsonValueKind.True || ok.ValueKind == JsonValueKind.False)
+                   && ok.ValueKind is JsonValueKind.True or JsonValueKind.False
                    && ok.GetBoolean();
         }
         catch (JsonException)

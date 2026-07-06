@@ -3,6 +3,9 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Renders timestamped <see cref="TranscriptionSegment" />s as SRT or WebVTT subtitle text.
+/// </summary>
 public static class SubtitleExporter
 {
     public static string ToSrt(IReadOnlyList<TranscriptionSegment> segments)
@@ -28,9 +31,8 @@ public static class SubtitleExporter
         sb.AppendLine("WEBVTT");
         sb.AppendLine();
 
-        for (var i = 0; i < segments.Count; i++)
+        foreach (var seg in segments)
         {
-            var seg = segments[i];
             sb.Append(FormatVttTime(seg.Start));
             sb.Append(" --> ");
             sb.AppendLine(FormatVttTime(seg.End));

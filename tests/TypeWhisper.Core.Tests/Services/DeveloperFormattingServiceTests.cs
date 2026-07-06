@@ -2,10 +2,9 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Verifies <see cref="DeveloperFormattingService" /> converts spoken code symbols/casing while leaving ordinary prose alone.</summary>
 public sealed class DeveloperFormattingServiceTests
 {
-    private readonly DeveloperFormattingService _sut = new();
-
     [Theory]
     [InlineData("git checkout dash dash force", "git checkout --force")]
     [InlineData("cat file pipe grep error", "cat file|grep error")]
@@ -22,7 +21,7 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("double quote hello double quote", "\"hello\"")]
     public void Format_ReplacesSpokenSymbols(string input, string expected)
     {
-        var result = _sut.Format(input);
+        var result = DeveloperFormattingService.Format(input);
 
         Assert.Equal(expected, result);
     }
@@ -33,7 +32,7 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("kebab case user name", "user-name")]
     public void Format_AppliesCasingCommands(string input, string expected)
     {
-        var result = _sut.Format(input);
+        var result = DeveloperFormattingService.Format(input);
 
         Assert.Equal(expected, result);
     }
@@ -45,7 +44,7 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("Hello, world. How are you?")]
     public void Format_DoesNotCollapseCommonProse(string input)
     {
-        var result = _sut.Format(input);
+        var result = DeveloperFormattingService.Format(input);
 
         Assert.Equal(input, result);
     }

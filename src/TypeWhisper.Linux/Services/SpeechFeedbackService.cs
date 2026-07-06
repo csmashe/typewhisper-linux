@@ -9,12 +9,13 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed record TtsProviderOption(string Id, string DisplayName);
 
+// ReSharper disable once NotAccessedPositionalProperty.Global  LocaleIdentifier carried in the voice-option record's data shape
 public sealed record TtsVoiceOption(string Id, string DisplayName, string? LocaleIdentifier = null);
 
 public sealed class SpeechFeedbackService : IDisposable
 {
     public const string DefaultVoiceOptionId = "__typewhisper_default_voice__";
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly PluginManager _pluginManager;
 
     private readonly ISettingsService _settings;
@@ -48,9 +49,9 @@ public sealed class SpeechFeedbackService : IDisposable
     }
 
     public bool IsAvailable => ResolveSpeakProvider().IsConfigured;
-    public string? BackendName => ResolveSpeakProvider().ProviderDisplayName;
+    public string BackendName => ResolveSpeakProvider().ProviderDisplayName;
 
-    public bool IsSpeaking
+    private bool IsSpeaking
     {
         get
         {
@@ -129,7 +130,7 @@ public sealed class SpeechFeedbackService : IDisposable
                || string.Equals(voiceId, DefaultVoiceOptionId, StringComparison.Ordinal);
     }
 
-    public void Speak(string text, string? language = null)
+    private void Speak(string text, string? language = null)
     {
         SpeakCore(new TtsSpeakRequest(text, language), true);
     }
@@ -147,6 +148,7 @@ public sealed class SpeechFeedbackService : IDisposable
         );
     }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (manual TTS read-back entry point); not currently called in-tree
     public void ReadBack(string text, string? language = null)
     {
         if (IsSpeaking)
@@ -180,7 +182,7 @@ public sealed class SpeechFeedbackService : IDisposable
         Speak(Loc.Instance.GetString("Speech.Error", reason));
     }
 
-    public void Stop()
+    private void Stop()
     {
         CancellationTokenSource? cts;
         ITtsPlaybackSession? session;
@@ -198,7 +200,10 @@ public sealed class SpeechFeedbackService : IDisposable
         {
             cts?.Cancel();
         }
-        catch { }
+        catch
+        {
+            // Best-effort cancellation; the source is disposed in the finally below.
+        }
         finally
         {
             cts?.Dispose();
@@ -208,7 +213,10 @@ public sealed class SpeechFeedbackService : IDisposable
         {
             session?.Stop();
         }
-        catch { }
+        catch
+        {
+            // Best-effort stop of the speech session.
+        }
     }
 
     public event EventHandler? ProvidersChanged;
@@ -287,7 +295,7 @@ public sealed class SpeechFeedbackService : IDisposable
         long version
     )
     {
-        ITtsPlaybackSession? session = null;
+        ITtsPlaybackSession? session;
         try
         {
             var provider = ResolveSpeakProvider();

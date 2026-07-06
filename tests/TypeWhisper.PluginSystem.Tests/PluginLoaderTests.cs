@@ -4,14 +4,14 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class PluginLoaderTests : IDisposable
+public sealed class PluginLoaderTests : IDisposable
 {
     private readonly PluginLoader _loader = new();
     private readonly string _tempDir;
 
     public PluginLoaderTests()
     {
-        _tempDir = Path.Combine(
+        _tempDir = Path.Join(
             Path.GetTempPath(),
             "TypeWhisperTests_" + Guid.NewGuid().ToString("N")
         );
@@ -43,7 +43,7 @@ public class PluginLoaderTests : IDisposable
     [Fact]
     public void DiscoverAndLoad_NonExistentDirectory_ReturnsEmpty()
     {
-        var nonExistent = Path.Combine(_tempDir, "does_not_exist");
+        var nonExistent = Path.Join(_tempDir, "does_not_exist");
         var result = _loader.DiscoverAndLoad([nonExistent]);
         Assert.Empty(result);
     }
@@ -52,9 +52,9 @@ public class PluginLoaderTests : IDisposable
     public void DiscoverAndLoad_MultipleNonExistentDirectories_ReturnsEmpty()
     {
         var result = _loader.DiscoverAndLoad([
-            Path.Combine(_tempDir, "a"),
-            Path.Combine(_tempDir, "b"),
-            Path.Combine(_tempDir, "c")
+            Path.Join(_tempDir, "a"),
+            Path.Join(_tempDir, "b"),
+            Path.Join(_tempDir, "c")
         ]);
         Assert.Empty(result);
     }
@@ -62,7 +62,7 @@ public class PluginLoaderTests : IDisposable
     [Fact]
     public void DiscoverAndLoad_PluginDirWithoutManifest_ReturnsEmpty()
     {
-        var pluginDir = Path.Combine(_tempDir, "com.test.nomanifest");
+        var pluginDir = Path.Join(_tempDir, "com.test.nomanifest");
         Directory.CreateDirectory(pluginDir);
 
         var result = _loader.DiscoverAndLoad([_tempDir]);
@@ -72,9 +72,9 @@ public class PluginLoaderTests : IDisposable
     [Fact]
     public void DiscoverAndLoad_InvalidManifestJson_ReturnsEmpty()
     {
-        var pluginDir = Path.Combine(_tempDir, "com.test.badjson");
+        var pluginDir = Path.Join(_tempDir, "com.test.badjson");
         Directory.CreateDirectory(pluginDir);
-        File.WriteAllText(Path.Combine(pluginDir, "manifest.json"), "{ not valid json!!!");
+        File.WriteAllText(Path.Join(pluginDir, "manifest.json"), "{ not valid json!!!");
 
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);
@@ -83,7 +83,7 @@ public class PluginLoaderTests : IDisposable
     [Fact]
     public void DiscoverAndLoad_ManifestWithMissingAssembly_ReturnsEmpty()
     {
-        var pluginDir = Path.Combine(_tempDir, "com.test.noasm");
+        var pluginDir = Path.Join(_tempDir, "com.test.noasm");
         Directory.CreateDirectory(pluginDir);
 
         var manifest = new PluginManifest
@@ -96,7 +96,7 @@ public class PluginLoaderTests : IDisposable
         };
 
         File.WriteAllText(
-            Path.Combine(pluginDir, "manifest.json"),
+            Path.Join(pluginDir, "manifest.json"),
             JsonSerializer.Serialize(manifest)
         );
 
@@ -114,11 +114,11 @@ public class PluginLoaderTests : IDisposable
     [Fact]
     public void DiscoverAndLoad_MixedValidAndInvalidDirs_SkipsBadOnes()
     {
-        var badPluginDir = Path.Combine(_tempDir, "com.test.bad");
+        var badPluginDir = Path.Join(_tempDir, "com.test.bad");
         Directory.CreateDirectory(badPluginDir);
-        File.WriteAllText(Path.Combine(badPluginDir, "manifest.json"), "null");
+        File.WriteAllText(Path.Join(badPluginDir, "manifest.json"), "null");
 
-        var result = _loader.DiscoverAndLoad([_tempDir, Path.Combine(_tempDir, "nonexistent")]);
+        var result = _loader.DiscoverAndLoad([_tempDir, Path.Join(_tempDir, "nonexistent")]);
 
         Assert.Empty(result);
     }
@@ -126,9 +126,9 @@ public class PluginLoaderTests : IDisposable
     [Fact]
     public void DiscoverAndLoad_ManifestDeserializesToNull_ReturnsEmpty()
     {
-        var pluginDir = Path.Combine(_tempDir, "com.test.nullmanifest");
+        var pluginDir = Path.Join(_tempDir, "com.test.nullmanifest");
         Directory.CreateDirectory(pluginDir);
-        File.WriteAllText(Path.Combine(pluginDir, "manifest.json"), "null");
+        File.WriteAllText(Path.Join(pluginDir, "manifest.json"), "null");
 
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);

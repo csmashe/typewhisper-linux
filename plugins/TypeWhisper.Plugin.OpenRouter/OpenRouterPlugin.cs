@@ -147,7 +147,7 @@ public sealed class OpenRouterPlugin
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        var modelId = _selectedTranscriptionModelId ?? TranscriptionModels.First().Id;
+        var modelId = _selectedTranscriptionModelId ?? TranscriptionModels[0].Id;
         return await SendAudioTranscriptionAsync(modelId, wavAudio, NormalizeLanguage(language), ct);
     }
 
@@ -167,7 +167,7 @@ public sealed class OpenRouterPlugin
             throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            ? _selectedLlmModelId ?? SupportedModels[0].Id
             : model;
 
         return await SendChatCompletionAsync(modelId, systemPrompt, userText, ct);
@@ -189,7 +189,7 @@ public sealed class OpenRouterPlugin
             throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            ? _selectedLlmModelId ?? SupportedModels[0].Id
             : model;
 
         // OpenRouter's batch body emits the same chat.completion shape as the
@@ -271,7 +271,7 @@ public sealed class OpenRouterPlugin
     internal void SelectLlmModel(string modelId)
     {
         if (SupportedModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
-            modelId = SupportedModels.FirstOrDefault()?.Id ?? modelId;
+            modelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id ?? modelId;
 
         _selectedLlmModelId = modelId;
         _host?.SetSetting(SelectedLlmModelSettingName, modelId);
@@ -608,7 +608,7 @@ public sealed class OpenRouterPlugin
             return;
         }
 
-        _selectedTranscriptionModelId = available.First().Id;
+        _selectedTranscriptionModelId = available[0].Id;
         if (persist)
             _host?.SetSetting(SelectedTranscriptionModelSettingName, _selectedTranscriptionModelId);
     }
@@ -633,7 +633,7 @@ public sealed class OpenRouterPlugin
         if (string.IsNullOrWhiteSpace(_selectedLlmModelId)
             || string.Equals(_selectedLlmModelId, LegacyFallbackDefaultLlmModelId, StringComparison.OrdinalIgnoreCase))
         {
-            _selectedLlmModelId = available.First().Id;
+            _selectedLlmModelId = available[0].Id;
             _hasUserSelectedLlmModel = false;
             if (persist)
             {
@@ -666,7 +666,7 @@ public sealed class OpenRouterPlugin
         if (available.Any(model => string.Equals(model.Id, _selectedLlmModelId, StringComparison.Ordinal)))
             return;
 
-        _selectedLlmModelId = available.First().Id;
+        _selectedLlmModelId = available[0].Id;
         if (persist)
             _host?.SetSetting(SelectedLlmModelSettingName, _selectedLlmModelId);
     }

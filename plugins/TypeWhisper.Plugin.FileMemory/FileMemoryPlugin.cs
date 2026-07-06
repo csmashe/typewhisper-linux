@@ -21,7 +21,7 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _filePath = Path.Combine(host.PluginDataDirectory, "memories.json");
+        _filePath = Path.Join(host.PluginDataDirectory, "memories.json");
         _host.Log(PluginLogLevel.Info, "Activated");
         return Task.CompletedTask;
     }

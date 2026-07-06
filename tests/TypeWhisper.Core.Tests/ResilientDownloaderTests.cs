@@ -1,21 +1,23 @@
-using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using TypeWhisper.Plugins.Shared.Net;
 
+// ReSharper disable PropertyCanBeMadeInitOnly.Local
+
 namespace TypeWhisper.Core.Tests;
 
-// Exercises the shared resumable/idle-watchdog downloader. The type is file-linked into
-// this project (see the .csproj), so it compiles as a single, unambiguous copy whose
-// internal surface is visible here without InternalsVisibleTo.
+/// <summary>
+///     Exercises the shared resumable/idle-watchdog downloader. The type is file-linked into
+///     this project (see the .csproj), so it compiles as a single, unambiguous copy whose
+///     internal surface is visible here without InternalsVisibleTo.
+/// </summary>
 public sealed class ResilientDownloaderTests
 {
     private const string Url = "https://example.test/artifact.bin";
-    private static readonly TimeSpan LongIdle = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan s_longIdle = TimeSpan.FromSeconds(30);
 
     // Deterministic, position-dependent bytes so an interleaved/misaligned resume would
-    // change the content and fail the verify.
+    // change the content and fail to verify.
     private static byte[] MakeBody(int length = 5000)
     {
         var body = new byte[length];
@@ -53,8 +55,8 @@ public sealed class ResilientDownloaderTests
 
             await ResilientDownloader.DownloadToFileAsync(
                 client, Url, dest,
-                approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: default);
+                approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: CancellationToken.None);
 
             Assert.True(File.Exists(dest));
             Assert.Equal(body, await File.ReadAllBytesAsync(dest));
@@ -81,8 +83,8 @@ public sealed class ResilientDownloaderTests
 
             await ResilientDownloader.DownloadToFileAsync(
                 client, Url, dest,
-                approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: default);
+                approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: CancellationToken.None);
 
             Assert.Equal(body, await File.ReadAllBytesAsync(dest));
             Assert.False(File.Exists(dest + ".partial"));
@@ -109,8 +111,8 @@ public sealed class ResilientDownloaderTests
 
             await ResilientDownloader.DownloadToFileAsync(
                 client, Url, dest,
-                approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: default);
+                approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: CancellationToken.None);
 
             var written = await File.ReadAllBytesAsync(dest);
             Assert.Equal(body.Length, written.Length); // not n + body.Length
@@ -136,8 +138,8 @@ public sealed class ResilientDownloaderTests
 
             await ResilientDownloader.DownloadToFileAsync(
                 client, Url, dest,
-                approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: default);
+                approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: CancellationToken.None);
 
             Assert.Equal(body, await File.ReadAllBytesAsync(dest));
             Assert.Equal(2, handler.RequestCount);
@@ -166,8 +168,8 @@ public sealed class ResilientDownloaderTests
             await Assert.ThrowsAnyAsync<IOException>(() =>
                 ResilientDownloader.DownloadToFileAsync(
                     client, Url, dest,
-                    approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                    onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: default));
+                    approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                    onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: CancellationToken.None));
 
             Assert.True(File.Exists(dest + ".partial"));
             Assert.Equal(k, new FileInfo(dest + ".partial").Length);
@@ -176,8 +178,8 @@ public sealed class ResilientDownloaderTests
             handler.WrapStream = null;
             await ResilientDownloader.DownloadToFileAsync(
                 client, Url, dest,
-                approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: default);
+                approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: CancellationToken.None);
 
             Assert.Equal(body, await File.ReadAllBytesAsync(dest));
             Assert.False(File.Exists(dest + ".partial"));
@@ -207,7 +209,7 @@ public sealed class ResilientDownloaderTests
                     client, Url, dest,
                     approxTotalBytes: null, idleTimeout: TimeSpan.FromMilliseconds(50),
                     allowResume: true, onBytesOnDisk: null,
-                    verifyComplete: VerifyEquals(body), ct: default));
+                    verifyComplete: VerifyEquals(body), ct: CancellationToken.None));
 
             Assert.True(File.Exists(dest + ".partial"));
             Assert.Equal(k, new FileInfo(dest + ".partial").Length);
@@ -236,7 +238,7 @@ public sealed class ResilientDownloaderTests
             var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 ResilientDownloader.DownloadToFileAsync(
                     client, Url, dest,
-                    approxTotalBytes: null, idleTimeout: LongIdle, allowResume: false,
+                    approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: false,
                     onBytesOnDisk: null, verifyComplete: null, ct: cts.Token));
 
             Assert.IsNotType<DownloadStalledException>(ex);
@@ -264,8 +266,8 @@ public sealed class ResilientDownloaderTests
             await Assert.ThrowsAsync<DownloadIncompleteException>(() =>
                 ResilientDownloader.DownloadToFileAsync(
                     client, Url, dest,
-                    approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                    onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: default));
+                    approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                    onBytesOnDisk: null, verifyComplete: VerifyEquals(body), ct: CancellationToken.None));
 
             Assert.True(File.Exists(dest + ".partial"));
             Assert.Equal(k, new FileInfo(dest + ".partial").Length);
@@ -290,8 +292,8 @@ public sealed class ResilientDownloaderTests
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 ResilientDownloader.DownloadToFileAsync(
                     client, Url, dest,
-                    approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                    onBytesOnDisk: null, verifyComplete: alwaysFails, ct: default));
+                    approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                    onBytesOnDisk: null, verifyComplete: alwaysFails, ct: CancellationToken.None));
 
             Assert.False(File.Exists(dest + ".partial")); // corrupt → restart clean
             Assert.False(File.Exists(dest));
@@ -311,8 +313,8 @@ public sealed class ResilientDownloaderTests
             await Assert.ThrowsAsync<ArgumentException>(() =>
                 ResilientDownloader.DownloadToFileAsync(
                     client, Url, dest,
-                    approxTotalBytes: null, idleTimeout: LongIdle, allowResume: true,
-                    onBytesOnDisk: null, verifyComplete: null, ct: default));
+                    approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: true,
+                    onBytesOnDisk: null, verifyComplete: null, ct: CancellationToken.None));
         }
         finally { Directory.Delete(dir, recursive: true); }
     }
@@ -335,8 +337,8 @@ public sealed class ResilientDownloaderTests
             await Assert.ThrowsAnyAsync<IOException>(() =>
                 ResilientDownloader.DownloadToFileAsync(
                     client, Url, dest,
-                    approxTotalBytes: null, idleTimeout: LongIdle, allowResume: false,
-                    onBytesOnDisk: null, verifyComplete: null, ct: default));
+                    approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: false,
+                    onBytesOnDisk: null, verifyComplete: null, ct: CancellationToken.None));
 
             // No resume → the (uniquely named) partial is dropped on failure.
             Assert.Empty(Directory.GetFiles(dir, "*.partial"));
@@ -359,8 +361,8 @@ public sealed class ResilientDownloaderTests
 
             Task Download() => ResilientDownloader.DownloadToFileAsync(
                 client, Url, dest,
-                approxTotalBytes: null, idleTimeout: LongIdle, allowResume: false,
-                onBytesOnDisk: null, verifyComplete: null, ct: default);
+                approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: false,
+                onBytesOnDisk: null, verifyComplete: null, ct: CancellationToken.None);
 
             await Task.WhenAll(Download(), Download(), Download());
 
@@ -384,7 +386,7 @@ public sealed class ResilientDownloaderTests
 
         // The concurrent test (12) drives one handler from several SendAsync calls at
         // once, so guard the shared bookkeeping to keep it deterministic.
-        private readonly object _sync = new();
+        private readonly Lock _sync = new();
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
@@ -421,7 +423,7 @@ public sealed class ResilientDownloaderTests
                 status = HttpStatusCode.OK;
             }
 
-            Stream stream = WrapStream is not null
+            var stream = WrapStream is not null
                 ? WrapStream(slice)
                 : new MemoryStream(slice, writable: false);
             var content = new StreamContent(stream);
@@ -454,6 +456,7 @@ public sealed class ResilientDownloaderTests
                 return n;
             }
 
+            // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault
             switch (kind)
             {
                 case FaultKind.Drop:

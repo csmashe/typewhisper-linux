@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -14,6 +15,11 @@ public partial class ShortcutsSection : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        // Re-probe keyboard access whenever this section is shown, so the no-access
+        // banner / compositor fallback reflect access granted since the (eagerly
+        // constructed) view model was built — e.g. via first-run onboarding.
+        AttachedToVisualTree += (_, _) =>
+            (DataContext as ShortcutsSectionViewModel)?.RefreshKeyboardAccess();
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -26,6 +32,8 @@ public partial class ShortcutsSection : UserControl
             _wired = null;
         }
 
+        // ReSharper disable once InvertIf — pattern variable `vm` is used in the block;
+        // inverting would orphan the binding.
         if (DataContext is ShortcutsSectionViewModel vm)
         {
             vm.CopyCustomShortcutRequested += OnCopyCustomShortcutRequested;
@@ -33,6 +41,7 @@ public partial class ShortcutsSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnCopyCustomShortcutRequested(object? sender, string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -41,9 +50,18 @@ public partial class ShortcutsSection : UserControl
         }
 
         var topLevel = TopLevel.GetTopLevel(this);
-        if (topLevel?.Clipboard is not null)
+        if (topLevel?.Clipboard is null)
+        {
+            return;
+        }
+
+        try
         {
             await topLevel.Clipboard.SetTextAsync(text);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[ShortcutsSection] Copy to clipboard failed: {ex.Message}");
         }
     }
 }

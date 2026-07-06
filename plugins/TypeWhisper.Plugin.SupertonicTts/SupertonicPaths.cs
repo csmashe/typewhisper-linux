@@ -9,5 +9,5 @@ internal static class SupertonicPaths
     public const string SourceFileName = "SOURCE.txt";
 
     public static string VoiceStylePath(string assetRoot, string voiceId) =>
-        Path.Combine(assetRoot, "voice_styles", $"{voiceId}.json");
+        Path.Join(assetRoot, "voice_styles", $"{voiceId}.json");
 }

@@ -2,6 +2,8 @@ using Avalonia.Threading;
 using PortAudioSharp;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using PaStream = PortAudioSharp.Stream;
 
 namespace TypeWhisper.Linux.Services;
@@ -19,14 +21,14 @@ public sealed class AudioRecordingService : IDisposable
     private const float AgcTargetRms = 0.1f;
     private const float AgcMaxGain = 20f;
     private const float AgcMinGain = 1f;
-    public const float SpeechEnergyThreshold = 0.01f;
+    private const float SpeechEnergyThreshold = 0.01f;
     private static readonly TimeSpan s_stopDrainDuration = TimeSpan.FromMilliseconds(120);
 
     private static int s_paInitCount;
-    private static readonly object s_paInitLock = new();
+    private static readonly Lock s_paInitLock = new();
 
     private readonly List<float[]> _sampleChunks = [];
-    private readonly object _sampleLock = new();
+    private readonly Lock _sampleLock = new();
     private float _currentRmsLevel;
     private int _disposed;
     private int _isPreviewing;
@@ -39,14 +41,22 @@ public sealed class AudioRecordingService : IDisposable
     private Action<float[]>? _liveFrameSink;
     private int _sampleCount;
     private PaStream? _stream;
+    private readonly IErrorLogService? _errorLog;
     internal int CaptureSampleRate { get; private set; } = SampleRate;
 
     // PortAudio is initialized lazily via EnsurePortAudioInitialized, so
     // constructing this service doesn't load the native library and the
     // buffer-processing path can be unit-tested without portaudio.
 
+    // errorLog is optional so the buffer-processing path can still be unit-tested
+    // with a bare `new AudioRecordingService()`; DI supplies the real instance.
+    public AudioRecordingService(IErrorLogService? errorLog = null)
+    {
+        _errorLog = errorLog;
+    }
+
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
-    public bool IsPreviewing => Volatile.Read(ref _isPreviewing) == 1;
+    private bool IsPreviewing => Volatile.Read(ref _isPreviewing) == 1;
     public float CurrentRmsLevel => Volatile.Read(ref _currentRmsLevel);
     public bool HasSpeechEnergy => CurrentRmsLevel >= SpeechEnergyThreshold;
 
@@ -72,21 +82,10 @@ public sealed class AudioRecordingService : IDisposable
         StopAndDisposeInputStream();
         UpdateLevel(0f);
 
-        lock (s_paInitLock)
-        {
-            if (s_paInitCount > 0)
-            {
-                s_paInitCount = 0;
-                try
-                {
-                    PortAudio.Terminate();
-                }
-                catch { }
-            }
-        }
+        TerminatePortAudioIfInitialized();
     }
 
-    public IReadOnlyList<AudioInputDevice> GetInputDevices()
+    public static IReadOnlyList<AudioInputDevice> GetInputDevices()
     {
         EnsurePortAudioInitialized();
         var result = new List<AudioInputDevice>();
@@ -133,9 +132,27 @@ public sealed class AudioRecordingService : IDisposable
             // CreateInputStream. Resetting early would tag samples at the wrong rate.
         }
 
-        if (!EnsureInputStreamStarted())
+        try
         {
-            return;
+            if (!EnsureInputStreamStarted())
+            {
+                _errorLog?.AddEntry(
+                    "Recording could not start: no usable microphone was found. "
+                    + "Check that an input device is connected and selected in Recorder settings.",
+                    ErrorCategory.Recording
+                );
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Surface a stuck-at-silent dictation: the user pressed the hotkey but no
+            // input stream could be opened (device busy, all sample rates rejected, …).
+            _errorLog?.AddEntry(
+                $"Recording could not start: the microphone could not be opened ({ex.Message}).",
+                ErrorCategory.Recording
+            );
+            throw;
         }
 
         Trace.WriteLine(
@@ -219,6 +236,10 @@ public sealed class AudioRecordingService : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
+            _errorLog?.AddEntry(
+                $"Microphone preview could not start: {ex.Message}",
+                ErrorCategory.Recording
+            );
             Volatile.Write(ref _isPreviewing, 0);
             if (!IsRecording)
             {
@@ -245,6 +266,9 @@ public sealed class AudioRecordingService : IDisposable
         UpdateLevel(0f);
     }
 
+    // kept instance: invoked on the injected _audio service by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
     {
         var devices = GetInputDevices();
@@ -258,6 +282,8 @@ public sealed class AudioRecordingService : IDisposable
             }
         }
 
+        // ReSharper disable once InvertIf — fall-through tail is a coalesce/ternary expression
+        // that inverting this block would duplicate.
         if (preferredIndex.HasValue)
         {
             var byIndex = devices.FirstOrDefault(d => d.Index == preferredIndex.Value);
@@ -267,7 +293,7 @@ public sealed class AudioRecordingService : IDisposable
             }
         }
 
-        return devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
+        return devices.FirstOrDefault(d => d.IsDefault) ?? (devices.Count > 0 ? devices[0] : null);
     }
 
     // Per-chunk AGC for "whisper mode": boosts quiet speech for noise-gated
@@ -309,6 +335,8 @@ public sealed class AudioRecordingService : IDisposable
         }
 
         double sumSquares = 0;
+        // ReSharper disable once LoopCanBeConvertedToQuery -- hot RMS path; the explicit loop avoids LINQ iterator/delegate overhead per audio frame.
+        // ReSharper disable once ForCanBeConvertedToForeach -- hot RMS path; keep the explicit indexed loop deliberately, consistent with the query suppression above.
         for (var i = 0; i < samples.Length; i++)
         {
             sumSquares += samples[i] * samples[i];
@@ -400,32 +428,36 @@ public sealed class AudioRecordingService : IDisposable
         var processedBuffer = ApplyWhisperModeGain(buffer, copySamples && WhisperModeEnabled);
         UpdateLevel(ComputeRmsLevel(processedBuffer));
 
-        if (copySamples)
+        if (!copySamples)
         {
-            lock (_sampleLock)
-            {
-                _sampleChunks.Add(processedBuffer);
-                _sampleCount += processedBuffer.Length;
-            }
+            return StreamCallbackResult.Continue;
+        }
 
-            var sink = _liveFrameSink;
-            if (sink is not null)
-            {
-                try
-                {
-                    sink(processedBuffer);
-                }
-                catch (Exception ex)
-                {
-                    // Deliberate catch-all: crashing the PortAudio realtime thread
-                    // is worse. CAS detach avoids clobbering a newer sink installed
-                    // by a concurrent stop/start.
-                    Trace.WriteLine(
-                        $"[AudioRecordingService] LiveFrameSink threw, detaching: {ex.Message}"
-                    );
-                    Interlocked.CompareExchange(ref _liveFrameSink, null, sink);
-                }
-            }
+        lock (_sampleLock)
+        {
+            _sampleChunks.Add(processedBuffer);
+            _sampleCount += processedBuffer.Length;
+        }
+
+        var sink = _liveFrameSink;
+        if (sink is null)
+        {
+            return StreamCallbackResult.Continue;
+        }
+
+        try
+        {
+            sink(processedBuffer);
+        }
+        catch (Exception ex)
+        {
+            // Deliberate catch-all: crashing the PortAudio realtime thread
+            // is worse. CAS detach avoids clobbering a newer sink installed
+            // by a concurrent stop/start.
+            Trace.WriteLine(
+                $"[AudioRecordingService] LiveFrameSink threw, detaching: {ex.Message}"
+            );
+            Interlocked.CompareExchange(ref _liveFrameSink, null, sink);
         }
 
         return StreamCallbackResult.Continue;
@@ -482,13 +514,13 @@ public sealed class AudioRecordingService : IDisposable
     private int? ResolveSelectedDeviceIndex()
     {
         var deviceIndex = SelectedDeviceIndex ?? PortAudio.DefaultInputDevice;
-        if (deviceIndex == PortAudio.NoDevice)
+        if (deviceIndex != PortAudio.NoDevice)
         {
-            Trace.WriteLine("[AudioRecordingService] No default input device.");
-            return null;
+            return deviceIndex;
         }
 
-        return deviceIndex;
+        Trace.WriteLine("[AudioRecordingService] No default input device.");
+        return null;
     }
 
     private bool EnsureInputStreamStarted()
@@ -601,7 +633,7 @@ public sealed class AudioRecordingService : IDisposable
         );
     }
 
-    private static IReadOnlyList<int> CandidateSampleRates(double defaultSampleRate)
+    private static List<int> CandidateSampleRates(double defaultSampleRate)
     {
         // Try the device's native rate first to avoid PortAudio internal resampling;
         // fall through common rates in descending order. Captured audio is always
@@ -671,7 +703,7 @@ public sealed class AudioRecordingService : IDisposable
         const short bitsPerSample = 16;
         const short channels = 1;
         var byteRate = sampleRate * channels * bitsPerSample / 8;
-        var blockAlign = channels * bitsPerSample / 8;
+        const int blockAlign = channels * bitsPerSample / 8;
         var dataSize = sampleCount * 2;
 
         using var ms = new MemoryStream();
@@ -702,10 +734,36 @@ public sealed class AudioRecordingService : IDisposable
     {
         lock (s_paInitLock)
         {
-            if (s_paInitCount == 0)
+            if (s_paInitCount != 0)
             {
-                PortAudio.Initialize();
-                s_paInitCount = 1;
+                return;
+            }
+
+            PortAudio.Initialize();
+            s_paInitCount = 1;
+        }
+    }
+
+    // Teardown counterpart to EnsurePortAudioInitialized. Kept static so the
+    // process-global init counter is only ever mutated by the static lifetime
+    // helpers, never written directly from an instance's Dispose.
+    private static void TerminatePortAudioIfInitialized()
+    {
+        lock (s_paInitLock)
+        {
+            if (s_paInitCount <= 0)
+            {
+                return;
+            }
+
+            s_paInitCount = 0;
+            try
+            {
+                PortAudio.Terminate();
+            }
+            catch
+            {
+                // PortAudio teardown is best-effort; ignore if it was never fully initialized.
             }
         }
     }

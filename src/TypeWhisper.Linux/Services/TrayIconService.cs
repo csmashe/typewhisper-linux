@@ -62,6 +62,8 @@ public sealed class TrayIconService : IDisposable
             };
             _trayIcon.Clicked += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
 
+            // ReSharper disable once InvertIf — pattern variable `app` is used in the block;
+            // inverting would put it out of scope.
             if (Application.Current is { } app)
             {
                 _trayIcons = [_trayIcon];
@@ -76,12 +78,10 @@ public sealed class TrayIconService : IDisposable
         }
     }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (dynamic tray tooltip update); not currently called in-tree
     public void UpdateTooltip(string text)
     {
-        if (_trayIcon is not null)
-        {
-            _trayIcon.ToolTipText = text;
-        }
+        _trayIcon?.ToolTipText = text;
     }
 
     /// <summary>
@@ -129,8 +129,8 @@ public sealed class TrayIconService : IDisposable
         // 32x32 PNG is preferred; most SNI hosts downscale cleanly from there.
         // Fall back to the .ico if the PNG is missing.
         var baseDir = AppContext.BaseDirectory;
-        var png = Path.Combine(baseDir, "Resources", "typewhisper-32.png");
-        var ico = Path.Combine(baseDir, "Resources", "typewhisper.ico");
+        var png = Path.Join(baseDir, "Resources", "typewhisper-32.png");
+        var ico = Path.Join(baseDir, "Resources", "typewhisper.ico");
 
         try
         {

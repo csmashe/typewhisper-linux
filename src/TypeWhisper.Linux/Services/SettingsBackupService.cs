@@ -4,6 +4,7 @@ using TypeWhisper.Core;
 
 namespace TypeWhisper.Linux.Services;
 
+// ReSharper disable once NotAccessedPositionalProperty.Global  UncompressedBytes carried in the backup result record's data shape
 public sealed record SettingsBackupResult(int FileCount, long UncompressedBytes);
 
 public sealed class SettingsBackupService
@@ -20,6 +21,8 @@ public sealed class SettingsBackupService
     private static readonly string[] s_backupDirectoryRoots = ["Data", "PluginData"];
 
     private static readonly string[] s_restoreDirectoryRoots = ["Data", "PluginData", "Plugins"];
+
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
     private readonly string _basePath;
 
@@ -68,23 +71,18 @@ public sealed class SettingsBackupService
             var manifestEntry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
             using (var writer = new StreamWriter(manifestEntry.Open()))
             {
-                writer.Write(
-                    JsonSerializer.Serialize(
-                        manifest,
-                        new JsonSerializerOptions { WriteIndented = true }
-                    )
-                );
+                writer.Write(JsonSerializer.Serialize(manifest, s_jsonOptions));
             }
 
             foreach (var relativeFile in s_rootFiles)
             {
-                var path = Path.Combine(_basePath, relativeFile);
+                var path = Path.Join(_basePath, relativeFile);
                 AddFileIfExists(archive, path, relativeFile, ref fileCount, ref bytes);
             }
 
             foreach (var root in s_backupDirectoryRoots)
             {
-                var rootPath = Path.Combine(_basePath, root);
+                var rootPath = Path.Join(_basePath, root);
                 if (!Directory.Exists(rootPath))
                 {
                     continue;
@@ -120,7 +118,7 @@ public sealed class SettingsBackupService
 
         // Extract into a temp dir first; only copy into _basePath after all
         // entries are validated, so a corrupt archive can't leave a mixed state.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"typewhisper-restore-{Guid.NewGuid():N}");
+        var tempDir = Path.Join(Path.GetTempPath(), $"typewhisper-restore-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
 
         try
@@ -135,7 +133,7 @@ public sealed class SettingsBackupService
             {
                 if (
                     entry.FullName.Length == 0
-                    || entry.FullName.EndsWith("/", StringComparison.Ordinal)
+                    || entry.FullName.EndsWith('/')
                 )
                 {
                     continue;
@@ -162,26 +160,26 @@ public sealed class SettingsBackupService
 
             foreach (var relativeFile in s_rootFiles)
             {
-                var restoredPath = Path.Combine(tempDir, relativeFile);
+                var restoredPath = Path.Join(tempDir, relativeFile);
                 if (!File.Exists(restoredPath))
                 {
                     continue;
                 }
 
-                var targetPath = Path.Combine(_basePath, relativeFile);
+                var targetPath = Path.Join(_basePath, relativeFile);
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
                 File.Copy(restoredPath, targetPath, true);
             }
 
             foreach (var root in s_restoreDirectoryRoots)
             {
-                var restoredRoot = Path.Combine(tempDir, root);
+                var restoredRoot = Path.Join(tempDir, root);
                 if (!Directory.Exists(restoredRoot))
                 {
                     continue;
                 }
 
-                var targetRoot = Path.Combine(_basePath, root);
+                var targetRoot = Path.Join(_basePath, root);
                 Directory.CreateDirectory(targetRoot);
 
                 foreach (
@@ -193,7 +191,7 @@ public sealed class SettingsBackupService
                 )
                 {
                     var relativePath = Path.GetRelativePath(restoredRoot, restoredFile);
-                    var targetPath = Path.Combine(targetRoot, relativePath);
+                    var targetPath = Path.Join(targetRoot, relativePath);
                     Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
                     File.Copy(restoredFile, targetPath, true);
                 }
@@ -247,7 +245,7 @@ public sealed class SettingsBackupService
         {
             if (
                 entry.FullName.Length == 0
-                || entry.FullName.EndsWith("/", StringComparison.Ordinal)
+                || entry.FullName.EndsWith('/')
             )
             {
                 continue;
@@ -305,17 +303,9 @@ public sealed class SettingsBackupService
         var fullRoot = Path.GetFullPath(rootPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var destination = Path.GetFullPath(Path.Join(fullRoot, normalized));
-        if (
-            !destination.StartsWith(
-                fullRoot + Path.DirectorySeparatorChar,
-                StringComparison.Ordinal
-            )
-        )
-        {
-            throw new InvalidDataException($"Backup contains an unsafe path: {entryName}");
-        }
-
-        return destination;
+        return !destination.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            ? throw new InvalidDataException($"Backup contains an unsafe path: {entryName}")
+            : destination;
     }
 
     private static string NormalizeEntryName(string path)

@@ -290,7 +290,7 @@ public sealed class OpenAiPlugin
     )
     {
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            ? _selectedLlmModelId ?? SupportedModels[0].Id
             : model;
 
         if (_authMode == OpenAiAuthMode.ChatGpt)
@@ -342,7 +342,7 @@ public sealed class OpenAiPlugin
     )
     {
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            ? _selectedLlmModelId ?? SupportedModels[0].Id
             : model;
 
         // Self-gated per the C7 per-provider toggle. Also bulk-yield the
@@ -643,7 +643,7 @@ public sealed class OpenAiPlugin
     internal void SelectLlmModel(string modelId)
     {
         if (SupportedModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
-            modelId = SupportedModels.FirstOrDefault()?.Id ?? modelId;
+            modelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id ?? modelId;
 
         _selectedLlmModelId = modelId;
         _host?.SetSetting(SelectedLlmModelSettingName, modelId);
@@ -691,7 +691,7 @@ public sealed class OpenAiPlugin
 
     internal async Task ImportExistingLoginAsync(string? authFilePath = null)
     {
-        authFilePath ??= Path.Combine(
+        authFilePath ??= Path.Join(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".codex",
             "auth.json");
@@ -895,7 +895,7 @@ public sealed class OpenAiPlugin
         if (_selectedLlmModelId is null
             || available.All(model => !string.Equals(model.Id, _selectedLlmModelId, StringComparison.Ordinal)))
         {
-            _selectedLlmModelId = available.First().Id;
+            _selectedLlmModelId = available[0].Id;
         }
 
         // Persist even when the in-memory selection didn't change — this guards

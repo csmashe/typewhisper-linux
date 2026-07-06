@@ -44,7 +44,13 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
     private IPluginHostServices? _host;
     private string _selectedVoiceId = DefaultVoiceId;
     private bool _licenseAccepted;
+
+    // Progress<T> posts its callbacks asynchronously, so a late download tick can
+    // race the post-download clear. The lock + done-latch make the clear authoritative:
+    // once CompleteActivity runs, late progress reports are dropped.
+    private readonly object _activityLock = new();
     private double? _settingsProgress;
+    private bool _settingsActivityDone;
     private bool _disposed;
 
     public SupertonicTtsPlugin()
@@ -278,16 +284,19 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
         try
         {
+            lock (_activityLock)
+                _settingsActivityDone = false;
+
             ReportActivity(L("Settings.Downloading"), 0.0);
             var progress = new Progress<double>(value =>
                 ReportActivity(L("Settings.Downloading"), Math.Clamp(value, 0.0, 1.0)));
             await DownloadAssetsAsync(progress, ct);
-            ReportActivity(null, null);
+            CompleteActivity();
             return new PluginSettingsValidationResult(true, L("Settings.DownloadComplete"));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            ReportActivity(null, null);
+            CompleteActivity();
             return new PluginSettingsValidationResult(false, L("Settings.DownloadCancelled"));
         }
         catch (Exception ex) when (ex is HttpRequestException
@@ -298,7 +307,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
             or InvalidOperationException
             or OperationCanceledException)
         {
-            ReportActivity(null, null);
+            CompleteActivity();
             _host?.Log(PluginLogLevel.Warning, $"Supertonic asset download failed: {ex.Message}");
             return new PluginSettingsValidationResult(false, L("Settings.Error", ex.Message));
         }
@@ -445,8 +454,30 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
     private void ReportActivity(string? message, double? progress)
     {
-        _settingsProgress = progress;
+        lock (_activityLock)
+        {
+            // Drop late Progress<T> callbacks that arrive after the activity has
+            // completed — they must not resurrect a value we already cleared.
+            // A clear (null progress) is always allowed through.
+            if (_settingsActivityDone && progress is not null)
+                return;
+            _settingsProgress = progress;
+        }
+
         SettingsActivityChanged?.Invoke(message);
+    }
+
+    // Marks the settings activity finished and clears progress so subsequent
+    // late progress callbacks are ignored (see ReportActivity).
+    private void CompleteActivity()
+    {
+        lock (_activityLock)
+        {
+            _settingsActivityDone = true;
+            _settingsProgress = null;
+        }
+
+        SettingsActivityChanged?.Invoke(null);
     }
 
     private string L(string key) => Loc?.GetString(key) ?? key;

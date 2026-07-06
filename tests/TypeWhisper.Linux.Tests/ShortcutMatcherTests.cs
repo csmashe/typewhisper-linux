@@ -56,15 +56,14 @@ public sealed class ShortcutMatcherTests
             ModifierMask.None,
             RecordingMode.Toggle,
             false,
-            new[]
-            {
+            [
                 new PromptActionHotkey(
                     "alpha",
                     KeyCode.VcSpace,
                     ModifierMask.LeftCtrl | ModifierMask.LeftShift
                 )
-            },
-            Array.Empty<ProfileHotkey>()
+            ],
+            []
         );
 
         var kind = ShortcutMatcher.Match(
@@ -213,8 +212,8 @@ public sealed class ShortcutMatcherTests
             ModifierMask.None,
             RecordingMode.Toggle,
             false,
-            Array.Empty<PromptActionHotkey>(),
-            new[] { new ProfileHotkey(profileId, key, mods, behavior) }
+            [],
+            [new ProfileHotkey(profileId, key, mods, behavior)]
         );
     }
 

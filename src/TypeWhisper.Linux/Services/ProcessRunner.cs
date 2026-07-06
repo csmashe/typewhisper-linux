@@ -42,12 +42,15 @@ public interface IProcessRunner
     ///     Run <paramref name="fileName" /> with <paramref name="args" /> (passed as
     ///     a real argv — no shell, no quoting), capturing stdout and stderr.
     /// </summary>
+    /// <param name="fileName">Executable to run, resolved via PATH (no shell).</param>
+    /// <param name="args">Arguments passed as a real argv — no shell, no quoting.</param>
     /// <param name="environment">Extra variables merged onto the inherited environment.</param>
     /// <param name="standardInput">When non-null, written to the process's stdin, which is then closed.</param>
     /// <param name="timeout">
     ///     When set, the process tree is killed if it outlives the window and the result is flagged
     ///     <see cref="ProcessRunResult.TimedOut" />.
     /// </param>
+    /// <param name="ct">Cancels the run; the process tree is killed on cancellation.</param>
     Task<ProcessRunResult> RunAsync(
         string fileName,
         IReadOnlyList<string> args,

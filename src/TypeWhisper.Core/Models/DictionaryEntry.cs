@@ -1,5 +1,11 @@
 namespace TypeWhisper.Core.Models;
 
+/// <summary>
+///     A single user-dictionary item: either a vocabulary <c>Term</c> that biases
+///     recognition or a find-and-replace <c>Correction</c>, distinguished by
+///     <see cref="EntryType" />. Tracks enablement, priority, source, and usage
+///     stats.
+/// </summary>
 public sealed record DictionaryEntry
 {
     public required string Id { get; init; }
@@ -18,22 +24,9 @@ public sealed record DictionaryEntry
 
     public int TimesCorrected { get; init; }
     public int Priority { get; init; }
+    // ReSharper disable once UnusedMember.Global
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? LastUsedAt { get; init; }
     public DateTime? LastCorrectedAt { get; init; }
     public DictionaryEntrySource Source { get; init; } = DictionaryEntrySource.Manual;
-}
-
-public enum DictionaryEntryType
-{
-    Term,
-    Correction
-}
-
-public enum DictionaryEntrySource
-{
-    Manual,
-    Import,
-    CorrectionSuggestion,
-    AutoLearned
 }

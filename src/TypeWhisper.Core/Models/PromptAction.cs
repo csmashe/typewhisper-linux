@@ -1,5 +1,12 @@
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
+/// <summary>
+///     A configurable LLM action — a named system prompt plus optional
+///     provider/model/plugin routing — that the user can run against transcribed
+///     or selected text. Ships as presets (<see cref="IsPreset" />) and as
+///     user-authored actions.
+/// </summary>
 public sealed record PromptAction
 {
     public required string Id { get; init; }
@@ -14,6 +21,7 @@ public sealed record PromptAction
     public string? TargetActionPluginId { get; init; }
     public string? HotkeyKey { get; init; }
     public bool IsManualOnly { get; init; }
+    // ReSharper disable once UnusedMember.Global
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
 }

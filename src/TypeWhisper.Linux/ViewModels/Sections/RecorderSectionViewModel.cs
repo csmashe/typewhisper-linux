@@ -107,7 +107,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         _timer?.Dispose();
         _timer = null;
 
-        var wav = _audio.StopRecording();
+        var wav = await _audio.StopRecordingAsync();
         IsRecording = false;
         OnPropertyChanged(nameof(RecordButtonText));
         AudioLevel = 0;
@@ -121,7 +121,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         }
 
         var fileName = $"recording-{DateTime.Now:yyyy-MM-dd-HHmmss}.wav";
-        var filePath = Path.Combine(TypeWhisperEnvironment.AudioPath, fileName);
+        var filePath = Path.Join(TypeWhisperEnvironment.AudioPath, fileName);
         await File.WriteAllBytesAsync(filePath, wav);
 
         StatusText = Loc.Instance["Recorder.StatusSavedTranscribing"];
@@ -149,6 +149,7 @@ public partial class RecorderSectionViewModel : ObservableObject
                 // dictation isn't blocked by the file I/O that follows.
                 // The using-statement above will call DisposeAsync again on
                 // exit, but the lease is idempotent so the double-dispose is safe.
+                // ReSharper disable once DisposeOnUsingVariable -- intentional early release of the model lock before the file I/O below.
                 await lease.DisposeAsync();
             }
 

@@ -92,9 +92,9 @@ public sealed class HotkeyServiceTests
         var backendA = new TestShortcutBackend();
         var backendB = new TestShortcutBackend();
         var queue = new Queue<IGlobalShortcutBackend>(
-            new IGlobalShortcutBackend[] { backendA, backendB }
+            [backendA, backendB]
         );
-        var selector = new BackendSelector(() => queue.Dequeue());
+        var selector = new BackendSelector(queue.Dequeue);
         using var hotkey = new HotkeyService(selector);
         hotkey.Initialize();
         await backendA.WaitUntilSettledAsync();
@@ -157,7 +157,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        var kept = Assert.Single(snapshot.PromptActionHotkeys);
         Assert.Equal("keeper", kept.ActionId);
     }
 
@@ -186,7 +186,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        var kept = Assert.Single(snapshot.PromptActionHotkeys);
         Assert.Equal("first", kept.ActionId);
     }
 
@@ -221,7 +221,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        var kept = Assert.Single(snapshot.PromptActionHotkeys);
         Assert.Equal("modifier-only", kept.ActionId);
     }
 
@@ -243,7 +243,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        var entry = Assert.Single(snapshot!.PromptActionHotkeys);
+        var entry = Assert.Single(snapshot.PromptActionHotkeys);
         Assert.Equal("new", entry.ActionId);
         Assert.Equal(KeyCode.VcT, entry.Key);
     }
@@ -299,7 +299,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        Assert.Equal(2, snapshot!.PromptActionHotkeys.Count);
+        Assert.Equal(2, snapshot.PromptActionHotkeys.Count);
     }
 
     [Fact]
@@ -426,7 +426,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        var kept = Assert.Single(snapshot!.ProfileHotkeys);
+        var kept = Assert.Single(snapshot.ProfileHotkeys);
         Assert.Equal("keeper", kept.ProfileId);
     }
 
@@ -462,7 +462,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        var kept = Assert.Single(snapshot!.ProfileHotkeys);
+        var kept = Assert.Single(snapshot.ProfileHotkeys);
         Assert.Equal("keeper", kept.ProfileId);
     }
 
@@ -492,7 +492,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        var kept = Assert.Single(snapshot!.ProfileHotkeys);
+        var kept = Assert.Single(snapshot.ProfileHotkeys);
         Assert.Equal("first", kept.ProfileId);
     }
 
@@ -590,7 +590,7 @@ public sealed class HotkeyServiceTests
 
         var lastSeen = backend.LastSet;
         Assert.NotNull(lastSeen);
-        Assert.Equal(KeyCode.VcF3, lastSeen!.DictationKey);
+        Assert.Equal(KeyCode.VcF3, lastSeen.DictationKey);
     }
 
     [Theory]
@@ -624,7 +624,7 @@ public sealed class HotkeyServiceTests
         Assert.True(parsed);
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        Assert.Equal(expectedKey, snapshot!.DictationKey);
+        Assert.Equal(expectedKey, snapshot.DictationKey);
         Assert.Equal(ModifierMask.None, snapshot.DictationModifiers);
     }
 
@@ -684,7 +684,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        Assert.Equal(KeyCode.VcRightAlt, snapshot!.DictationKey);
+        Assert.Equal(KeyCode.VcRightAlt, snapshot.DictationKey);
         Assert.Equal(KeyCode.VcLeftAlt, snapshot.PromptPaletteKey);
     }
 
@@ -761,7 +761,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        Assert.Equal(KeyCode.VcF9, snapshot!.DictationKey);
+        Assert.Equal(KeyCode.VcF9, snapshot.DictationKey);
         Assert.Equal(ModifierMask.LeftShift, snapshot.DictationModifiers);
         Assert.Equal(KeyCode.VcLeftControl, snapshot.PromptPaletteKey);
     }
@@ -813,7 +813,7 @@ public sealed class HotkeyServiceTests
 
         var snapshot = backend.LastSet;
         Assert.NotNull(snapshot);
-        var kept = Assert.Single(snapshot!.PromptActionHotkeys);
+        var kept = Assert.Single(snapshot.PromptActionHotkeys);
         Assert.Equal("keeper", kept.ActionId);
     }
 
@@ -822,7 +822,7 @@ public sealed class HotkeyServiceTests
         private readonly TaskCompletionSource _gate = new();
         private int _pending;
 
-        public GlobalShortcutRegistrationResult NextResult { get; set; } =
+        public GlobalShortcutRegistrationResult NextResult { get; init; } =
             new(
                 true,
                 "test",
@@ -896,7 +896,7 @@ public sealed class HotkeyServiceTests
         public event EventHandler<string>? PromptActionRequested;
 
         public event EventHandler<string>? ProfileDictationToggleRequested;
-        public event EventHandler<string>? ProfileDictationStartRequested;
+        public event EventHandler<string>? ProfileDictationStartRequested { add { } remove { } }
 
         public event EventHandler? ProfileDictationStopRequested
         {
@@ -920,11 +920,6 @@ public sealed class HotkeyServiceTests
         public void RaiseProfileDictationToggle(string profileId)
         {
             ProfileDictationToggleRequested?.Invoke(this, profileId);
-        }
-
-        public void RaiseProfileDictationStart(string profileId)
-        {
-            ProfileDictationStartRequested?.Invoke(this, profileId);
         }
 
         public void RaiseProfileTextProcessing(string profileId)

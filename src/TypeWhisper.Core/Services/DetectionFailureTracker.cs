@@ -1,7 +1,12 @@
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Counts consecutive active-window detection failures, logs each one, and raises
+///     <see cref="OnFailure" /> — escalating to a persistent banner once failures pass a threshold.
+/// </summary>
 public sealed class DetectionFailureTracker : IDetectionFailureTracker
 {
     // Show the persistent "window detection unavailable" banner after this many consecutive failures.
@@ -9,24 +14,13 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
     private const int BannerThreshold = 10;
 
     private readonly IErrorLogService _errorLog;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private int _consecutiveFailures;
     private string? _lastFailureReason;
 
     public DetectionFailureTracker(IErrorLogService errorLog)
     {
         _errorLog = errorLog;
-    }
-
-    public int ConsecutiveFailures
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _consecutiveFailures;
-            }
-        }
     }
 
     public bool ShouldShowPersistentBanner
@@ -66,23 +60,22 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
     {
         var augmented = AugmentReason(compositor, reason);
 
-        int failures;
         bool shouldShowBanner;
         lock (_lock)
         {
             _consecutiveFailures++;
             _lastFailureReason = augmented;
-            failures = _consecutiveFailures;
-            shouldShowBanner = failures >= BannerThreshold;
+            shouldShowBanner = _consecutiveFailures >= BannerThreshold;
         }
 
         _errorLog.AddEntry(
-            $"Window detection failed on {compositor}: {augmented}"
+            $"Window detection failed on {compositor}: {augmented}",
+            ErrorCategory.Detection
         );
 
         OnFailure?.Invoke(
             this,
-            new DetectionFailureEvent(failures, compositor, augmented, shouldShowBanner)
+            new DetectionFailureEvent(augmented, shouldShowBanner)
         );
     }
 

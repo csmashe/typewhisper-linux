@@ -3,6 +3,11 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Deterministic transcript cleanup: strips fillers and edge noise, applies spoken
+///     punctuation/backtrack/list formatting and sentence casing. Higher cleanup levels
+///     (Medium/High) supply the LLM system prompt used by the provider-backed pass.
+/// </summary>
 public sealed partial class CleanupService
 {
     public const string MediumSystemPrompt =
@@ -11,6 +16,27 @@ public sealed partial class CleanupService
     public const string HighSystemPrompt =
         "Rewrite as concise polished prose while preserving meaning, facts, tone, and terminology. Do not add new information. Return only the rewritten text.";
 
+    // Common filler/connective words that shouldn't seed a single-word bullet list. Cached once
+    // (OrdinalIgnoreCase) because IsConservativeSingleWordBulletList probes it per candidate word.
+    private static readonly HashSet<string> s_bulletListStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a",
+        "an",
+        "and",
+        "for",
+        "need",
+        "of",
+        "or",
+        "the",
+        "things",
+        "to",
+        "we",
+        "with"
+    };
+
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public string Clean(string text, CleanupLevel level)
     {
         if (level == CleanupLevel.None || string.IsNullOrWhiteSpace(text))
@@ -30,6 +56,7 @@ public sealed partial class CleanupService
 
     public static string GetLlmSystemPrompt(CleanupLevel level)
     {
+        // ReSharper disable once SwitchExpressionHandlesSomeKnownEnumValuesWithExceptionInDefault
         return level switch
         {
             CleanupLevel.Medium => MediumSystemPrompt,
@@ -133,7 +160,7 @@ public sealed partial class CleanupService
             Math.Max(prefix.LastIndexOf('!'), prefix.LastIndexOf('\n'))
         );
         var phrase = prefix[(boundary + 1)..];
-        return WordRegex().Matches(phrase).Count;
+        return WordRegex().Count(phrase);
     }
 
     private static bool HasWordAfter(string text, int startIndex)
@@ -159,7 +186,7 @@ public sealed partial class CleanupService
         return items.Count < 2 ? null : string.Join('\n', items.Select(item => $"- {item}"));
     }
 
-    private static IReadOnlyList<string> SplitBulletItems(string body)
+    private static List<string> SplitBulletItems(string body)
     {
         var explicitItems = ExplicitBulletSeparatorRegex()
             .Split(body)
@@ -192,7 +219,7 @@ public sealed partial class CleanupService
         return IsConservativeSingleWordBulletList(words) ? words : [];
     }
 
-    private static bool IsConservativeSingleWordBulletList(IReadOnlyList<string> words)
+    private static bool IsConservativeSingleWordBulletList(List<string> words)
     {
         if (words.Count is < 2 or > 9)
         {
@@ -201,32 +228,13 @@ public sealed partial class CleanupService
 
         return words.All(word =>
             SingleWordListItemRegex().IsMatch(word)
-            && !BulletListStopWords().Contains(word, StringComparer.OrdinalIgnoreCase)
+            && !s_bulletListStopWords.Contains(word)
         );
     }
 
     private static string CleanListItem(string item)
     {
         return item.Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
-    }
-
-    private static IReadOnlySet<string> BulletListStopWords()
-    {
-        return new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "a",
-            "an",
-            "and",
-            "for",
-            "need",
-            "of",
-            "or",
-            "the",
-            "things",
-            "to",
-            "we",
-            "with"
-        };
     }
 
     private static string? TryFormatSpokenNumberedList(string text)
@@ -261,12 +269,8 @@ public sealed partial class CleanupService
             expected++;
         }
 
-        if (items.Count < 2)
-        {
-            return null;
-        }
-
-        return string.Join('\n', items.Select((item, index) => $"{index + 1}. {item}"));
+        return items.Count < 2 ? null 
+            : string.Join('\n', items.Select((item, index) => $"{index + 1}. {item}"));
     }
 
     private static int SpokenNumberToInt(string number)
@@ -323,7 +327,7 @@ public sealed partial class CleanupService
     [GeneratedRegex(@"\s+([,.;:!?])")]
     private static partial Regex WhitespaceBeforePunctuationRegex();
 
-    [GeneratedRegex(@",{2,}")]
+    [GeneratedRegex(",{2,}")]
     private static partial Regex DuplicateCommaRegex();
 
     [GeneratedRegex(@"^[\s,.;:!?]+")]
@@ -362,9 +366,9 @@ public sealed partial class CleanupService
     [GeneratedRegex(@"\s*[,;]\s*")]
     private static partial Regex BulletPunctuationSeparatorRegex();
 
-    [GeneratedRegex(@"^[A-Za-z][A-Za-z'-]*$")]
+    [GeneratedRegex("^[A-Za-z][A-Za-z'-]*$")]
     private static partial Regex SingleWordListItemRegex();
 
-    [GeneratedRegex(@"[A-Za-z][A-Za-z'-]*")]
+    [GeneratedRegex("[A-Za-z][A-Za-z'-]*")]
     private static partial Regex WordRegex();
 }

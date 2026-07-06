@@ -3,7 +3,8 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
-public class PromptActionServiceTests : IDisposable
+/// <summary>Covers <see cref="PromptActionService" />: persistence, preset seeding, enabled filtering/sorting, reordering, and change events.</summary>
+public sealed class PromptActionServiceTests : IDisposable
 {
     private readonly string _filePath;
     private readonly PromptActionService _sut;

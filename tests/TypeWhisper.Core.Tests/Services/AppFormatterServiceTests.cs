@@ -2,6 +2,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Verifies <see cref="AppFormatterService" /> emits plain text (no HTML) for email apps while still converting spoken bullets.</summary>
 public class AppFormatterServiceTests
 {
     [Fact]

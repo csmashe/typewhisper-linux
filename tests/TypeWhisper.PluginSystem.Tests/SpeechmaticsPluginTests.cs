@@ -8,11 +8,16 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class SpeechmaticsPluginTests
 {
+    private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
         var manifestPath = Path.GetFullPath(
-            Path.Combine(
+            Path.Join(
                 AppContext.BaseDirectory,
                 "..",
                 "..",
@@ -26,7 +31,7 @@ public class SpeechmaticsPluginTests
         );
         var manifest = JsonSerializer.Deserialize<PluginManifest>(
             File.ReadAllText(manifestPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+            s_manifestJsonOptions
         );
 
         var sut = new SpeechmaticsPlugin();
@@ -38,8 +43,7 @@ public class SpeechmaticsPluginTests
     [Fact]
     public async Task ActivateAsync_SetsIdentityAndSupportsStreaming()
     {
-        var host = new TestHost();
-        host.Secrets["api-key"] = "sm-key";
+        var host = new TestHost { Secrets = { ["api-key"] = "sm-key" } };
 
         var sut = new SpeechmaticsPlugin();
         await sut.ActivateAsync(host);
@@ -70,8 +74,7 @@ public class SpeechmaticsPluginTests
     {
         // Speechmatics has no auto-detect; the host collapses "auto" to null. Rather
         // than silently streaming as English, reject so the host falls back to batch.
-        var host = new TestHost();
-        host.Secrets["api-key"] = "sm-key";
+        var host = new TestHost { Secrets = { ["api-key"] = "sm-key" } };
         var sut = new SpeechmaticsPlugin();
         await sut.ActivateAsync(host);
 
@@ -211,7 +214,7 @@ public class SpeechmaticsPluginTests
 
     private sealed class TestHost : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
@@ -226,7 +229,7 @@ public class SpeechmaticsPluginTests
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            Task.FromResult(Secrets.GetValueOrDefault(key));
 
         public Task DeleteSecretAsync(string key)
         {
@@ -235,10 +238,10 @@ public class SpeechmaticsPluginTests
         }
 
         public T? GetSetting<T>(string key) =>
-            _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(JsonOptions) : default;
+            _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(s_jsonOptions) : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

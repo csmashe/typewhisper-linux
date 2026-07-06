@@ -6,6 +6,11 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     <see cref="IVocabularyBoostingService" /> that fuzzy-matches a sliding window of transcribed
+///     words against a normalized catalog of dictionary terms and replaces near-misses, rebuilding
+///     the catalog whenever the dictionary changes.
+/// </summary>
 public sealed class VocabularyBoostingService : IVocabularyBoostingService
 {
     private const int MaxWindowTokens = 4; // sliding window of up to 4 words checked against each term
@@ -13,7 +18,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
     private const double AmbiguityMargin = 0.08; // discard best candidate when the runner-up is within this score gap
 
     private readonly IDictionaryService _dictionary;
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private IReadOnlyList<NormalizedTerm> _terms = [];
 
     public VocabularyBoostingService(IDictionaryService dictionary)
@@ -81,16 +86,12 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
                     }
 
                     var byScore = right.Score.CompareTo(left.Score);
-                    if (byScore != 0)
-                    {
-                        return byScore;
-                    }
-
-                    return left.Start.CompareTo(right.Start);
+                    return byScore != 0 ? byScore : left.Start.CompareTo(right.Start);
                 }
             );
 
             var accepted = new List<Replacement>(Math.Min(MaxReplacements, proposals.Count));
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
             foreach (var proposal in proposals)
             {
                 if (accepted.Count >= MaxReplacements)
@@ -131,8 +132,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
         {
             var terms = _dictionary
                 .Entries.Where(entry =>
-                    entry.IsEnabled
-                    && entry.EntryType == DictionaryEntryType.Term
+                    entry is { IsEnabled: true, EntryType: DictionaryEntryType.Term }
                     && !string.IsNullOrWhiteSpace(entry.Original)
                 )
                 .SelectMany(CreateNormalizedTerms)
@@ -195,6 +195,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
                 }
 
                 var scoredCandidates = new List<ScoredCandidate>();
+                // ReSharper disable once LoopCanBeConvertedToQuery
                 foreach (var term in terms)
                 {
                     if (!IsCompatibleWindow(term, normalizedWindow, windowLength))
@@ -207,7 +208,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
                         continue;
                     }
 
-                    var score = Score(term, normalizedWindow, windowLength);
+                    var score = ComputeScore(term, normalizedWindow, windowLength);
                     if (score is null)
                     {
                         continue;
@@ -238,12 +239,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
                         var byLength = right.Term.Normalized.Length.CompareTo(
                             left.Term.Normalized.Length
                         );
-                        if (byLength != 0)
-                        {
-                            return byLength;
-                        }
-
-                        return left.Term.IsPack.CompareTo(right.Term.IsPack);
+                        return byLength != 0 ? byLength : left.Term.IsPack.CompareTo(right.Term.IsPack);
                     }
                 );
 
@@ -298,7 +294,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
         return lengthDifference <= maxAllowedDifference;
     }
 
-    private static double? Score(NormalizedTerm term, string normalizedWindow, int windowTokenCount)
+    private static double? ComputeScore(NormalizedTerm term, string normalizedWindow, int windowTokenCount)
     {
         var maxLength = Math.Max(term.Normalized.Length, normalizedWindow.Length);
         if (maxLength == 0)
@@ -336,7 +332,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
             }
         }
 
-        // Boost when anchoring characters and token count agree; penalise large length gaps
+        // Boost when anchoring characters and token count agree; penalize large length gaps
         var score = charSimilarity;
         if (sameFirst)
         {
@@ -482,6 +478,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
         var builder = new StringBuilder(decomposed.Length);
         var pendingSpace = false;
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
         foreach (var ch in decomposed)
         {
             var category = CharUnicodeInfo.GetUnicodeCategory(ch);
@@ -574,12 +571,12 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
 
     private static char? GetFirstAlphaNumeric(string text)
     {
-        return text.FirstOrDefault(char.IsLetterOrDigit) is var ch && ch != default ? ch : null;
+        return text.FirstOrDefault(char.IsLetterOrDigit) is var ch && ch != 0 ? ch : null;
     }
 
     private static char? GetLastAlphaNumeric(string text)
     {
-        return text.LastOrDefault(char.IsLetterOrDigit) is var ch && ch != default ? ch : null;
+        return text.LastOrDefault(char.IsLetterOrDigit) is var ch && ch != 0 ? ch : null;
     }
 
     private static int LevenshteinDistance(string source, string target)

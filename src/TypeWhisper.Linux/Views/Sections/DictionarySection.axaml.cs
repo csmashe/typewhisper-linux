@@ -14,6 +14,7 @@ public partial class DictionarySection : UserControl
         InitializeComponent();
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnExport(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not DictionarySectionViewModel viewModel)
@@ -55,6 +56,7 @@ public partial class DictionarySection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnImport(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not DictionarySectionViewModel viewModel)
@@ -79,7 +81,7 @@ public partial class DictionarySection : UserControl
                 }
             );
 
-            var file = files.FirstOrDefault();
+            var file = files.Count > 0 ? files[0] : null;
             if (file is null)
             {
                 return;

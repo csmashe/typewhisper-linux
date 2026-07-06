@@ -23,12 +23,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     {
         // HYPRLAND_INSTANCE_SIGNATURE is only set inside a live session;
         // hyprctl must also be present for the runtime-bind step.
-        if (DesktopDetector.DetectId() != "hyprland")
-        {
-            return false;
-        }
-
-        return DesktopDetector.BinaryExists("hyprctl");
+        return DesktopDetector.DetectId() == "hyprland" && DesktopDetector.BinaryExists("hyprctl");
     }
 
     public string PreviewLines(DeShortcutSpec spec)
@@ -84,7 +79,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not create {dir}: {ex.Message}",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -97,7 +92,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Your hyprland.conf has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually (remove the stray sentinel lines) and try again.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -112,7 +107,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not write {path}: {ex.Message}",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -120,11 +115,11 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         // Non-fatal — the persistent config is already written.
         var liveOk = await ApplyLiveAsync(spec, ct).ConfigureAwait(false);
 
-        var message = "Hyprland shortcut installed in ~/.config/hypr/hyprland.conf";
+        const string message = "Hyprland shortcut installed in ~/.config/hypr/hyprland.conf";
         var warning = liveOk
             ? null
             : "Config written, but `hyprctl` could not apply the bind live. Run `hyprctl reload` (or restart Hyprland) to pick it up.";
-        return new DeShortcutWriteResult(true, message, new[] { path }, warning);
+        return new DeShortcutWriteResult(true, message, [path], warning);
     }
 
     public async Task<DeShortcutWriteResult> RemoveAsync(string shortcutId, CancellationToken ct)
@@ -135,7 +130,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 true,
                 "No hyprland.conf to update.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -146,7 +141,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Your hyprland.conf has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -155,7 +150,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 true,
                 "No Hyprland integration to remove.",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -169,7 +164,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 false,
                 $"Could not write {path}: {ex.Message}",
-                Array.Empty<string>()
+                []
             );
         }
 
@@ -178,7 +173,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         return new DeShortcutWriteResult(
             true,
             "Hyprland managed block removed. Run `hyprctl reload` (or restart Hyprland) to drop the live binding.",
-            new[] { path }
+            [path]
         );
     }
 
@@ -232,16 +227,18 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         }
 
         if (
-            !string.IsNullOrWhiteSpace(spec.OnCancelTrigger)
-            && !string.IsNullOrWhiteSpace(spec.OnCancelCommand)
+            string.IsNullOrWhiteSpace(spec.OnCancelTrigger)
+            || string.IsNullOrWhiteSpace(spec.OnCancelCommand)
         )
         {
-            var (cmods, ckey) = ToHyprlandBind(spec.OnCancelTrigger!);
-            yield return $"bind  = {cmods}, {ckey}, exec, {spec.OnCancelCommand}";
+            yield break;
         }
+
+        var (cmods, ckey) = ToHyprlandBind(spec.OnCancelTrigger!);
+        yield return $"bind  = {cmods}, {ckey}, exec, {spec.OnCancelCommand}";
     }
 
-    private async Task<bool> ApplyLiveAsync(DeShortcutSpec spec, CancellationToken ct)
+    private static async Task<bool> ApplyLiveAsync(DeShortcutSpec spec, CancellationToken ct)
     {
         if (!DesktopDetector.BinaryExists("hyprctl"))
         {
@@ -259,9 +256,9 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
                 continue;
             }
 
-            var keyword = trimmed.Substring(0, eq).Trim();
-            var value = trimmed.Substring(eq + 1).Trim();
-            var (ok, _, _) = await RunAsync("hyprctl", new[] { "keyword", keyword, value }, ct)
+            var keyword = trimmed[..eq].Trim();
+            var value = trimmed[(eq + 1)..].Trim();
+            var (ok, _, _) = await RunAsync("hyprctl", ["keyword", keyword, value], ct)
                 .ConfigureAwait(false);
             if (!ok)
             {
@@ -276,8 +273,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        var configHome = string.IsNullOrEmpty(xdg) ? Path.Combine(home, ".config") : xdg;
-        return Path.Combine(configHome, "hypr", "hyprland.conf");
+        var configHome = string.IsNullOrEmpty(xdg) ? Path.Join(home, ".config") : xdg;
+        return Path.Join(configHome, "hypr", "hyprland.conf");
     }
 
     private static async Task<(bool ok, string stdout, string stderr)> RunAsync(
@@ -307,12 +304,18 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
                 return (false, string.Empty, $"Could not start {fileName}");
             }
 
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-            var stderrTask = proc.StandardError.ReadToEndAsync();
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
             await proc.WaitForExitAsync(ct).ConfigureAwait(false);
             var stdout = await stdoutTask.ConfigureAwait(false);
             var stderr = await stderrTask.ConfigureAwait(false);
             return (proc.ExitCode == 0, stdout, stderr);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation must propagate to callers; only genuine process/apply
+            // errors are flattened into the failure tuple below.
+            throw;
         }
         catch (Exception ex)
         {

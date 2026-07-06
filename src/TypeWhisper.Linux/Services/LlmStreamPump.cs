@@ -13,7 +13,7 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 internal sealed class LlmStreamPump
 {
-    private static readonly TimeSpan DefaultFlushInterval = TimeSpan.FromMilliseconds(33);
+    private static readonly TimeSpan s_defaultFlushInterval = TimeSpan.FromMilliseconds(33);
     private readonly TimeSpan _flushInterval;
 
     private readonly Action<string> _onAccumulated;
@@ -24,7 +24,7 @@ internal sealed class LlmStreamPump
     public LlmStreamPump(Action<string> onAccumulated, TimeSpan? flushInterval = null)
     {
         _onAccumulated = onAccumulated;
-        _flushInterval = flushInterval ?? DefaultFlushInterval;
+        _flushInterval = flushInterval ?? s_defaultFlushInterval;
     }
 
     public bool Faulted { get; private set; }
@@ -63,11 +63,13 @@ internal sealed class LlmStreamPump
 
                 _sb.Append(delta);
 
-                if (stopwatch.Elapsed.TotalMilliseconds - lastFlushMs >= _flushInterval.TotalMilliseconds)
+                if (stopwatch.Elapsed.TotalMilliseconds - lastFlushMs < _flushInterval.TotalMilliseconds)
                 {
-                    Emit();
-                    lastFlushMs = stopwatch.Elapsed.TotalMilliseconds;
+                    continue;
                 }
+
+                Emit();
+                lastFlushMs = stopwatch.Elapsed.TotalMilliseconds;
             }
         }
         catch (OperationCanceledException)

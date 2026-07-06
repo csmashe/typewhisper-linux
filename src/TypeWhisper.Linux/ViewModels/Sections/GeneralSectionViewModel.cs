@@ -79,6 +79,8 @@ public partial class GeneralSectionViewModel : ObservableObject
     public IReadOnlyList<UiLanguageOption> UiLanguageChoices { get; } =
         Loc.Instance.AvailableUiLanguages;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public bool IsUiLanguageSupported => true;
 
     public UiLanguageOption? SelectedUiLanguageOption

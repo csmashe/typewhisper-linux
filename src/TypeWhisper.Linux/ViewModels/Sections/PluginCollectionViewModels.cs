@@ -34,9 +34,10 @@ public partial class PluginCollectionRow : ObservableObject
     public string? Description { get; }
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
     public string AddButtonLabel { get; }
-    public IReadOnlyList<PluginSettingDefinition> ItemFields { get; }
-    public string? ItemLabelFieldKey { get; }
+    private IReadOnlyList<PluginSettingDefinition> ItemFields { get; }
+    private string? ItemLabelFieldKey { get; }
     public ObservableCollection<PluginCollectionItemRow> Items { get; } = [];
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  parent back-reference retained in the row's object graph; not safely removable without changing the constructor contract
     public PluginRow OwnerRow { get; }
 
     [RelayCommand]
@@ -60,18 +61,12 @@ public partial class PluginCollectionRow : ObservableObject
                 kind = PluginSettingKind.Dropdown;
             }
 
-            if (kind == PluginSettingKind.Boolean)
+            seed[field.Key] = kind switch
             {
-                seed[field.Key] = "true";
-            }
-            else if (kind == PluginSettingKind.Dropdown && field.Options is { Count: > 0 })
-            {
-                seed[field.Key] = field.Options[0].Value;
-            }
-            else
-            {
-                seed[field.Key] = string.Empty;
-            }
+                PluginSettingKind.Boolean => "true",
+                PluginSettingKind.Dropdown when field.Options is { Count: > 0 } => field.Options[0].Value,
+                _ => string.Empty
+            };
         }
 
         var item = new PluginCollectionItemRow(
@@ -184,7 +179,11 @@ public class PluginCollectionItemRow : ObservableObject
             }
         }
 
-        if (!string.IsNullOrEmpty(itemLabelFieldKey))
+        if (string.IsNullOrEmpty(itemLabelFieldKey))
+        {
+            return;
+        }
+
         {
             _labelField = Fields.FirstOrDefault(f => f.Key == itemLabelFieldKey);
             if (_labelField is not null)
@@ -196,18 +195,16 @@ public class PluginCollectionItemRow : ObservableObject
 
     public ObservableCollection<PluginSettingFieldRow> Fields { get; } = [];
 
-    public PluginCollectionRow? OwnerCollection { get; set; }
+    public PluginCollectionRow? OwnerCollection { get; init; }
 
     public string HiddenId
     {
         get => Fields.FirstOrDefault(f => f.Key == "__id")?.Value ?? string.Empty;
+        // ReSharper disable once UnusedMember.Global  paired write accessor for the collection-item identity property (mirrors the __id field); not currently called in-tree
         set
         {
             var idField = Fields.FirstOrDefault(f => f.Key == "__id");
-            if (idField is not null)
-            {
-                idField.Value = value;
-            }
+            idField?.Value = value;
         }
     }
 

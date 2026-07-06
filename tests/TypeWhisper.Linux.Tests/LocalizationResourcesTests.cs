@@ -49,21 +49,24 @@ public sealed class LocalizationResourcesTests
         Assert.DoesNotContain(translation, kv => string.IsNullOrWhiteSpace(kv.Value));
     }
 
-    public static IEnumerable<object[]> NonCanonicalLanguages()
+    public static TheoryData<string> NonCanonicalLanguages()
     {
-        foreach (var file in Directory.EnumerateFiles(LocalizationDir(), "*.json"))
+        var data = new TheoryData<string>();
+        var languages = Directory
+            .EnumerateFiles(LocalizationDir(), "*.json")
+            .Select(file => Path.GetFileNameWithoutExtension(file))
+            .Where(lang => !string.Equals(lang, CanonicalLanguage, StringComparison.Ordinal));
+        foreach (var lang in languages)
         {
-            var lang = Path.GetFileNameWithoutExtension(file);
-            if (!string.Equals(lang, CanonicalLanguage, StringComparison.Ordinal))
-            {
-                yield return [lang];
-            }
+            data.Add(lang);
         }
+
+        return data;
     }
 
     private static Dictionary<string, string> Load(string lang)
     {
-        var path = Path.Combine(LocalizationDir(), $"{lang}.json");
+        var path = Path.Join(LocalizationDir(), $"{lang}.json");
         return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path), s_jsonOptions)!;
     }
 
@@ -73,7 +76,7 @@ public sealed class LocalizationResourcesTests
     {
         var testDir = Path.GetDirectoryName(thisFile)!;
         return Path.GetFullPath(
-            Path.Combine(testDir, "..", "..", "src", "TypeWhisper.Linux", "Resources", "Localization")
+            Path.Join(testDir, "..", "..", "src", "TypeWhisper.Linux", "Resources", "Localization")
         );
     }
 }

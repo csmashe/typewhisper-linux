@@ -1,12 +1,14 @@
 using System.Collections.Specialized;
 using System.Net;
 using System.Text;
-using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services;
 
 internal sealed record HttpApiRequest(
+    // ReSharper disable once NotAccessedPositionalProperty.Global  part of the parsed-request data shape (routing currently keys off QueryString/Body)
     string Method,
+    // ReSharper disable once NotAccessedPositionalProperty.Global  part of the parsed-request data shape (routing currently keys off QueryString/Body)
     string Path,
     NameValueCollection QueryString,
     IReadOnlyDictionary<string, string> Headers,
@@ -121,14 +123,14 @@ internal static class HttpApiRequestParser
         var contentType = Header(request.Headers, "content-type") ?? "";
         byte[] audioData;
         string fileExtension;
-        string? language = null;
+        string? language;
         var languageHints = new List<string>();
-        var task = TranscriptionTask.Transcribe;
-        string? targetLanguage = null;
+        TranscriptionTask task;
+        string? targetLanguage;
         string responseFormat;
-        string? prompt = null;
-        string? engine = null;
-        string? model = null;
+        string? prompt;
+        string? engine;
+        string? model;
 
         if (contentType.Contains("multipart/form-data", StringComparison.OrdinalIgnoreCase))
         {
@@ -219,10 +221,12 @@ internal static class HttpApiRequestParser
         );
     }
 
+    // ReSharper disable once MemberCanBePrivate.Global
+    // only used internally, but privatizing surfaces CA1859 (return-type) which can't be fixed without altering the signature
     public static IReadOnlyList<MultipartPart> ParseMultipart(byte[] body, string boundary)
     {
         var boundaryBytes = Encoding.UTF8.GetBytes("--" + boundary);
-        var doubleCrlf = Encoding.UTF8.GetBytes("\r\n\r\n");
+        var doubleCrlf = "\r\n\r\n"u8.ToArray();
         var parts = new List<MultipartPart>();
         var searchStart = 0;
 
@@ -309,7 +313,7 @@ internal static class HttpApiRequestParser
         return parts;
     }
 
-    internal static string? ExtractBoundary(string contentType)
+    private static string? ExtractBoundary(string contentType)
     {
         foreach (var part in contentType.Split(';', StringSplitOptions.TrimEntries))
         {
@@ -319,7 +323,7 @@ internal static class HttpApiRequestParser
             }
 
             var boundary = part["boundary=".Length..].Trim();
-            if (boundary.Length >= 2 && boundary[0] == '"' && boundary[^1] == '"')
+            if (boundary is ['"', _, ..] && boundary[^1] == '"')
             {
                 boundary = boundary[1..^1];
             }
@@ -382,7 +386,7 @@ internal static class HttpApiRequestParser
             }
 
             var parameterValue = part[(equals + 1)..].Trim();
-            if (parameterValue.Length >= 2 && parameterValue[0] == '"' && parameterValue[^1] == '"')
+            if (parameterValue is ['"', _, ..] && parameterValue[^1] == '"')
             {
                 parameterValue = parameterValue[1..^1];
             }
@@ -404,7 +408,7 @@ internal static class HttpApiRequestParser
 
     private static string? Header(IReadOnlyDictionary<string, string> headers, string name)
     {
-        return headers.TryGetValue(name, out var value) ? value : null;
+        return headers.GetValueOrDefault(name);
     }
 
     private static string? Field(IEnumerable<MultipartPart> parts, string name)
@@ -485,12 +489,7 @@ internal static class HttpApiRequestParser
             return "aac";
         }
 
-        if (lower.Contains("webm"))
-        {
-            return "webm";
-        }
-
-        return null;
+        return lower.Contains("webm") ? "webm" : null;
     }
 
     private static int IndexOf(byte[] haystack, byte[] needle, int startIndex)
@@ -503,6 +502,7 @@ internal static class HttpApiRequestParser
         for (var i = startIndex; i <= haystack.Length - needle.Length; i++)
         {
             var found = true;
+            // ReSharper disable once LoopCanBeConvertedToQuery -- naive byte-array substring match; the explicit loop is the intended hot-path form.
             for (var j = 0; j < needle.Length; j++)
             {
                 if (haystack[i + j] == needle[j])
@@ -525,14 +525,12 @@ internal static class HttpApiRequestParser
 
     private sealed class LimitedReadStream(Stream inner, long maxBytes) : Stream
     {
-        private readonly Stream _inner = inner;
-        private readonly long _maxBytes = maxBytes;
         private long _bytesRead;
 
-        public override bool CanRead => _inner.CanRead;
+        public override bool CanRead => inner.CanRead;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
-        public override long Length => _inner.Length;
+        public override long Length => inner.Length;
 
         public override long Position
         {
@@ -542,19 +540,19 @@ internal static class HttpApiRequestParser
 
         public override void Flush()
         {
-            _inner.Flush();
+            inner.Flush();
         }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            var read = _inner.Read(buffer, offset, count);
+            var read = inner.Read(buffer, offset, count);
             TrackBytes(read);
             return read;
         }
 
         public override int Read(Span<byte> buffer)
         {
-            var read = _inner.Read(buffer);
+            var read = inner.Read(buffer);
             TrackBytes(read);
             return read;
         }
@@ -564,14 +562,14 @@ internal static class HttpApiRequestParser
             CancellationToken cancellationToken = default
         )
         {
-            var read = await _inner.ReadAsync(buffer, cancellationToken);
+            var read = await inner.ReadAsync(buffer, cancellationToken);
             TrackBytes(read);
             return read;
         }
 
         public override int ReadByte()
         {
-            var value = _inner.ReadByte();
+            var value = inner.ReadByte();
             if (value >= 0)
             {
                 TrackBytes(1);
@@ -598,7 +596,7 @@ internal static class HttpApiRequestParser
         private void TrackBytes(int read)
         {
             _bytesRead += read;
-            if (_bytesRead > _maxBytes)
+            if (_bytesRead > maxBytes)
             {
                 throw new InvalidOperationException("Request body exceeded the configured limit.");
             }

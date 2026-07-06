@@ -10,13 +10,13 @@ internal static class BootTrace
     // about, not a history across launches. Stays null if the file can't be
     // opened, so failures here never block startup.
     private static StreamWriter? s_fileWriter;
-    private static readonly object s_lock = new();
+    private static readonly Lock s_lock = new();
 
     public static void Initialize()
     {
         try
         {
-            var path = Path.Combine(TypeWhisperEnvironment.LogsPath, "boot.log");
+            var path = Path.Join(TypeWhisperEnvironment.LogsPath, "boot.log");
             var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
             s_fileWriter = new StreamWriter(stream) { AutoFlush = true };
             s_fileWriter.WriteLine($"=== boot trace @ {DateTime.Now:O} ===");
@@ -31,14 +31,15 @@ internal static class BootTrace
     {
         var line = $"[Boot] +{Program.BootStopwatch.ElapsedMilliseconds,6}ms  {name}";
         Trace.WriteLine(line);
-        if (s_fileWriter is null)
+        var writer = s_fileWriter;
+        if (writer is null)
         {
             return;
         }
 
         lock (s_lock)
         {
-            s_fileWriter.WriteLine(line);
+            writer.WriteLine(line);
         }
     }
 }

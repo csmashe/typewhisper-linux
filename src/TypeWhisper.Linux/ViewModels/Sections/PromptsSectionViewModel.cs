@@ -83,9 +83,13 @@ public partial class PromptsSectionViewModel : ObservableObject
     public string Summary =>
         Loc.Instance.GetString("Prompts.Summary", ActionCount, EnabledActionCount);
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PromptsHint => Loc.Instance["Prompts.Hint"];
 
     public bool ShowProviderWarning => AvailableProviders.Count <= 1;
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ProviderWarningText => Loc.Instance["Prompts.ProviderWarning"];
     public bool ShowEmptyState => ActionCount == 0;
     public string EditorTitle =>
@@ -370,6 +374,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             // Build the resolved list first to determine whether the "Use default
             // provider" placeholder needs a fallback suffix.
             var resolvedOptions = new List<ProviderOption>();
+            // ReSharper disable once LoopCanBeConvertedToQuery
             foreach (
                 var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
             )
@@ -380,6 +385,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 // lookup would skip them. For normal plugins the selection ID is the
                 // plugin/manifest ID, so existing selections are unchanged.
                 var selectionId = provider.GetLlmSelectionId();
+                // ReSharper disable once LoopCanBeConvertedToQuery
                 foreach (var model in provider.SupportedModels)
                 {
                     resolvedOptions.Add(
@@ -450,7 +456,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             return baseLabel;
         }
 
-        var fallbackModel = fallback.SupportedModels.FirstOrDefault();
+        var fallbackModel = fallback.SupportedModels.Count > 0 ? fallback.SupportedModels[0] : null;
         var fallbackLabel = fallbackModel is null
             ? fallback.ProviderName
             : $"{fallback.ProviderName} / {fallbackModel.DisplayName}";

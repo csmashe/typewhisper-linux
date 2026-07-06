@@ -19,7 +19,7 @@ internal sealed class ShortcutDispatcher
     // still feels responsive when held.
     private const int PushToTalkThresholdMs = 600;
 
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
 
     // Profile dictation dedup, keyed by physical KeyCode at press time. Also records the
     // recording mode and timestamp so the release path can compute hold duration for
@@ -138,6 +138,7 @@ internal sealed class ShortcutDispatcher
             );
         }
 
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
         switch (match)
         {
             case ShortcutMatchKind.PromptAction:
@@ -148,12 +149,10 @@ internal sealed class ShortcutDispatcher
 
                 lock (_lock)
                 {
-                    if (_promptActionKeyDown.ContainsKey(key))
+                    if (!_promptActionKeyDown.TryAdd(key, promptActionId))
                     {
                         return;
                     }
-
-                    _promptActionKeyDown[key] = promptActionId;
                 }
 
                 RaisePromptAction(promptActionId);
@@ -168,12 +167,10 @@ internal sealed class ShortcutDispatcher
                 {
                     lock (_lock)
                     {
-                        if (_profileTextKeyDown.ContainsKey(key))
+                        if (!_profileTextKeyDown.TryAdd(key, profileId))
                         {
                             return;
                         }
-
-                        _profileTextKeyDown[key] = profileId;
                     }
 
                     RaiseProfile(
@@ -199,6 +196,7 @@ internal sealed class ShortcutDispatcher
                     _profileDictationKeyDown[key] = (profileId, set.Mode, DateTime.UtcNow);
                 }
 
+                // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
                 switch (set.Mode)
                 {
                     case RecordingMode.Toggle:
@@ -281,6 +279,7 @@ internal sealed class ShortcutDispatcher
                     return;
                 }
 
+                // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
                 switch (set.Mode)
                 {
                     case RecordingMode.Toggle:
@@ -350,6 +349,7 @@ internal sealed class ShortcutDispatcher
         {
             var profileHeldMs = (DateTime.UtcNow - profileHeld.DownAt).TotalMilliseconds;
             // Use press-time mode; a mid-hold mode switch must not fire a Stop the press never set up.
+            // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
             switch (profileHeld.Mode)
             {
                 case RecordingMode.PushToTalk:
@@ -392,6 +392,7 @@ internal sealed class ShortcutDispatcher
         }
 
         var heldMs = (DateTime.UtcNow - keyDownAt).TotalMilliseconds;
+        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
         switch (set.Mode)
         {
             case RecordingMode.PushToTalk:

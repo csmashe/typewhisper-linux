@@ -8,7 +8,7 @@ public sealed class CommandLineParserTests
     [Fact]
     public void Empty_args_is_bare_toggle()
     {
-        var action = CommandLineParser.Parse(Array.Empty<string>());
+        var action = CommandLineParser.Parse([]);
         Assert.Equal(CliActionKind.BareToggle, action.Kind);
         Assert.False(action.StartMinimized);
     }
@@ -19,21 +19,21 @@ public sealed class CommandLineParserTests
     [InlineData("--HELP")]
     public void Help_flag_short_circuits(string flag)
     {
-        var action = CommandLineParser.Parse(new[] { flag });
+        var action = CommandLineParser.Parse([flag]);
         Assert.Equal(CliActionKind.PrintHelp, action.Kind);
     }
 
     [Fact]
     public void Help_wins_even_when_combined_with_other_flags()
     {
-        var action = CommandLineParser.Parse(new[] { "--minimized", "--help" });
+        var action = CommandLineParser.Parse(["--minimized", "--help"]);
         Assert.Equal(CliActionKind.PrintHelp, action.Kind);
     }
 
     [Fact]
     public void Minimized_flag_launches_gui()
     {
-        var action = CommandLineParser.Parse(new[] { "--minimized" });
+        var action = CommandLineParser.Parse(["--minimized"]);
         Assert.Equal(CliActionKind.LaunchGui, action.Kind);
         Assert.True(action.StartMinimized);
     }
@@ -45,7 +45,7 @@ public sealed class CommandLineParserTests
     [InlineData("cancel")]
     public void Record_verbs_parse(string verb)
     {
-        var action = CommandLineParser.Parse(new[] { "record", verb });
+        var action = CommandLineParser.Parse(["record", verb]);
         Assert.Equal(CliActionKind.Record, action.Kind);
         Assert.Equal(verb, action.RecordVerb);
     }
@@ -53,7 +53,7 @@ public sealed class CommandLineParserTests
     [Fact]
     public void Record_verb_is_case_insensitive()
     {
-        var action = CommandLineParser.Parse(new[] { "RECORD", "START" });
+        var action = CommandLineParser.Parse(["RECORD", "START"]);
         Assert.Equal(CliActionKind.Record, action.Kind);
         Assert.Equal("start", action.RecordVerb);
     }
@@ -61,7 +61,7 @@ public sealed class CommandLineParserTests
     [Fact]
     public void Record_without_verb_is_invalid()
     {
-        var action = CommandLineParser.Parse(new[] { "record" });
+        var action = CommandLineParser.Parse(["record"]);
         Assert.Equal(CliActionKind.Invalid, action.Kind);
         Assert.NotNull(action.ErrorMessage);
     }
@@ -69,7 +69,7 @@ public sealed class CommandLineParserTests
     [Fact]
     public void Unknown_record_verb_is_invalid()
     {
-        var action = CommandLineParser.Parse(new[] { "record", "spin" });
+        var action = CommandLineParser.Parse(["record", "spin"]);
         Assert.Equal(CliActionKind.Invalid, action.Kind);
         Assert.Contains("spin", action.ErrorMessage);
     }
@@ -77,28 +77,28 @@ public sealed class CommandLineParserTests
     [Fact]
     public void Status_parses()
     {
-        var action = CommandLineParser.Parse(new[] { "status" });
+        var action = CommandLineParser.Parse(["status"]);
         Assert.Equal(CliActionKind.Status, action.Kind);
     }
 
     [Fact]
     public void Unknown_subcommand_is_invalid()
     {
-        var action = CommandLineParser.Parse(new[] { "nope" });
+        var action = CommandLineParser.Parse(["nope"]);
         Assert.Equal(CliActionKind.Invalid, action.Kind);
     }
 
     [Fact]
     public void Trailing_operand_after_status_is_invalid()
     {
-        var action = CommandLineParser.Parse(new[] { "status", "garbage" });
+        var action = CommandLineParser.Parse(["status", "garbage"]);
         Assert.Equal(CliActionKind.Invalid, action.Kind);
     }
 
     [Fact]
     public void Trailing_operand_after_record_verb_is_invalid()
     {
-        var action = CommandLineParser.Parse(new[] { "record", "start", "now" });
+        var action = CommandLineParser.Parse(["record", "start", "now"]);
         Assert.Equal(CliActionKind.Invalid, action.Kind);
     }
 
@@ -107,7 +107,7 @@ public sealed class CommandLineParserTests
     {
         // Flags after a subcommand are tolerated so wrapper scripts can
         // pass through known/unknown flags without breaking.
-        var action = CommandLineParser.Parse(new[] { "record", "start", "--quiet" });
+        var action = CommandLineParser.Parse(["record", "start", "--quiet"]);
         Assert.Equal(CliActionKind.Record, action.Kind);
         Assert.Equal("start", action.RecordVerb);
     }

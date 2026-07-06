@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
@@ -13,7 +14,7 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 ///     4. Score showing/visible entries for likely URL candidates; return the best match.
 ///     Total walk budget: 2.5 s (the orchestrator's deferred-URL timeout is 4 s).
 /// </summary>
-public sealed class AtSpiUrlExtractor
+public sealed partial class AtSpiUrlExtractor
 {
     private const string AtSpiRegistryBusName = "org.a11y.atspi.Registry";
     private const string AtSpiRootPath = "/org/a11y/atspi/accessible/root";
@@ -59,9 +60,10 @@ public sealed class AtSpiUrlExtractor
     // Diagnostic logging is off by default — flip to true to emit one line per unique
     // walk outcome to the Error Log. Kept as `static readonly` (not `const`) so the
     // compiler doesn't eliminate the LogOnce body as dead code.
+    // ReSharper disable once ConvertToConstant.Local — intentionally not const (see above).
     private static readonly bool s_diagnosticLoggingEnabled = false;
 
-    private readonly object _cacheLock = new();
+    private readonly Lock _cacheLock = new();
     private readonly IErrorLogService? _errorLog;
     private string? _cachedProcessName;
     private string? _cachedTitle;
@@ -115,28 +117,20 @@ public sealed class AtSpiUrlExtractor
 
         if (!s_isBusctlAvailable || !s_isGdbusAvailable)
         {
-            LogOnce(
-                processHint,
-                focusedTitle,
-                "AT-SPI URL walk skipped: busctl/gdbus not on PATH."
-            );
+            LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
             return null;
         }
 
         var address = GetAtSpiBusAddress();
         if (string.IsNullOrWhiteSpace(address))
         {
-            LogOnce(
-                processHint,
-                focusedTitle,
-                "AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus."
-            );
+            LogOnce("AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus.");
             return null;
         }
 
         using var cts = new CancellationTokenSource(s_walkBudget);
         var stats = new WalkStats();
-        var url = WalkForUrl(address, processHint, cts.Token, stats);
+        var url = WalkForUrl(address, processHint, stats, cts.Token);
 
         lock (_cacheLock)
         {
@@ -152,14 +146,12 @@ public sealed class AtSpiUrlExtractor
         }
 
         LogOnce(
-            processHint,
-            focusedTitle,
             BuildDiagnosticLine(processHint, focusedTitle, stats, url, cts.IsCancellationRequested)
         );
         return url;
     }
 
-    private void LogOnce(string processHint, string? title, string message)
+    private void LogOnce(string message)
     {
         if (!s_diagnosticLoggingEnabled)
         {
@@ -185,7 +177,7 @@ public sealed class AtSpiUrlExtractor
             _lastDiagnosticKey = message;
         }
 
-        _errorLog.AddEntry(message);
+        _errorLog.AddEntry(message, ErrorCategory.Detection);
     }
 
     private static string BuildDiagnosticLine(
@@ -245,8 +237,8 @@ public sealed class AtSpiUrlExtractor
     private static string? WalkForUrl(
         string address,
         string processHint,
-        CancellationToken ct,
-        WalkStats stats
+        WalkStats stats,
+        CancellationToken ct
     )
     {
         foreach (
@@ -282,7 +274,7 @@ public sealed class AtSpiUrlExtractor
 
             stats.WindowFound = true;
 
-            var url = FindLikelyBrowserUrlInSubtree(address, window.Value, ct, stats);
+            var url = FindLikelyBrowserUrlInSubtree(address, window.Value, stats, ct);
             if (url is not null)
             {
                 return url;
@@ -378,7 +370,7 @@ public sealed class AtSpiUrlExtractor
             var role = GetAccessibleRole(address, node);
             var states = GetAccessibleState(address, node);
             if (
-                (role == AtSpiRoleFrame || role == AtSpiRoleWindow)
+                role is AtSpiRoleFrame or AtSpiRoleWindow
                 && ActiveWindowService.HasState(states, AtSpiStateActive)
             )
             {
@@ -397,8 +389,8 @@ public sealed class AtSpiUrlExtractor
     private static string? FindLikelyBrowserUrlInSubtree(
         string address,
         AccessibleRef root,
-        CancellationToken ct,
-        WalkStats stats
+        WalkStats stats,
+        CancellationToken ct
     )
     {
         var queue = new Queue<(AccessibleRef Node, int Depth)>();
@@ -477,7 +469,7 @@ public sealed class AtSpiUrlExtractor
             return null;
         }
 
-        var match = Regex.Match(output, @"\('(?<value>.+)'\s*,?\)");
+        var match = TupleValueRegex().Match(output);
         return match.Success ? match.Groups["value"].Value : null;
     }
 
@@ -533,7 +525,7 @@ public sealed class AtSpiUrlExtractor
         return ParseFirstQuotedString(output);
     }
 
-    private static IReadOnlyList<AccessibleRef> GetAccessibleChildren(
+    private static List<AccessibleRef> GetAccessibleChildren(
         string address,
         AccessibleRef node
     )
@@ -560,7 +552,7 @@ public sealed class AtSpiUrlExtractor
         return children;
     }
 
-    private static IReadOnlyList<string> GetAccessibleInterfaces(string address, AccessibleRef node)
+    private static List<string> GetAccessibleInterfaces(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,
@@ -610,7 +602,7 @@ public sealed class AtSpiUrlExtractor
         }
 
         var ints = new List<uint>();
-        foreach (Match match in Regex.Matches(output, @"\b\d+\b"))
+        foreach (Match match in DigitRunRegex().Matches(output))
         {
             if (uint.TryParse(match.Value, out var value))
             {
@@ -796,8 +788,8 @@ public sealed class AtSpiUrlExtractor
 
     private static List<string> ParseQuotedStrings(string value)
     {
-        return Regex
-            .Matches(value, "\"((?:[^\"\\\\]|\\\\.)*)\"")
+        return QuotedStringRegex()
+            .Matches(value)
             .Select(match => Regex.Unescape(match.Groups[1].Value))
             .ToList();
     }
@@ -820,13 +812,25 @@ public sealed class AtSpiUrlExtractor
             return 0;
         }
 
-        var match = Regex.Matches(value, @"\b\d+\b").LastOrDefault();
+        var match = DigitRunRegex().Matches(value).LastOrDefault();
         return match is not null && int.TryParse(match.Value, out var result) ? result : 0;
     }
 
+    // Single-value gdbus tuple: ('value',).
+    [GeneratedRegex(@"\('(?<value>.+)'\s*,?\)")]
+    private static partial Regex TupleValueRegex();
+
+    // Runs of digits (used to pull integer tokens out of gdbus/atspi output).
+    [GeneratedRegex(@"\b\d+\b")]
+    private static partial Regex DigitRunRegex();
+
+    // Double-quoted string with backslash escapes; group 1 is the (still-escaped) body.
+    [GeneratedRegex("\"((?:[^\"\\\\]|\\\\.)*)\"")]
+    private static partial Regex QuotedStringRegex();
+
     private sealed class WalkStats
     {
-        public List<string> AppsSeen { get; } = new();
+        public List<string> AppsSeen { get; } = [];
         public string? MatchedApp { get; set; }
         public bool WindowFound { get; set; }
         public int NodesWalked { get; set; }

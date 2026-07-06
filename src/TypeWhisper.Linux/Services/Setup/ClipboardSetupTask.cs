@@ -50,7 +50,7 @@ public sealed class ClipboardSetupTask : ISetupTask
                 Loc.Instance.GetString("Setup.PackageNotInstalled", package),
                 Loc.Instance["Setup.ClipboardHint"],
                 Loc.Instance.GetString("Setup.InstallPackage", package),
-                _installer.BuildSudoCommand(new[] { package })
+                _installer.BuildSudoCommand([package])
             )
         );
     }
@@ -58,7 +58,7 @@ public sealed class ClipboardSetupTask : ISetupTask
     public async Task<SetupActionOutcome> RunActionAsync(CancellationToken ct)
     {
         var package = _commands.GetSnapshot().ClipboardToolName;
-        var outcome = await _installer.InstallAsync(new[] { package }, ct).ConfigureAwait(false);
+        var outcome = await _installer.InstallAsync([package], ct).ConfigureAwait(false);
         _commands.RefreshSnapshot();
         return outcome;
     }

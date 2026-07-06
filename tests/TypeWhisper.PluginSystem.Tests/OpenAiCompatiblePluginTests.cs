@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Plugin.OpenAiCompatible;
@@ -43,7 +42,7 @@ public sealed class OpenAiCompatiblePluginTests
         await foreach (var chunk in sut.ProcessStreamingAsync("sys", "user", "llama3", CancellationToken.None))
             chunks.Add(chunk);
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
         Assert.Equal("http://localhost:11434/v1/chat/completions", capturedRequest?.RequestUri?.ToString());
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
@@ -93,7 +92,7 @@ public sealed class OpenAiCompatiblePluginTests
             ["baseUrl"] = baseUrl,
             ["api-key"] = apiKey,
             ["selectedLlmModel"] = llmModel,
-            ["__id"] = id,
+            ["__id"] = id
         });
 
     [Fact]
@@ -187,7 +186,7 @@ public sealed class OpenAiCompatiblePluginTests
                 : """{"data":[{"id":"x1"}]}""";
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(models, Encoding.UTF8, "application/json"),
+                Content = new StringContent(models, Encoding.UTF8, "application/json")
             };
         });
         using var httpClient = new HttpClient(handler);
@@ -214,7 +213,10 @@ public sealed class OpenAiCompatiblePluginTests
         // server's model list changing after the profile was first saved.
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(modelsJson, Encoding.UTF8, "application/json"),
+            // Reading the reassigned-below modelsJson is the point (see comment above):
+            // each call returns the server's current model list.
+            // ReSharper disable once AccessToModifiedClosure
+            Content = new StringContent(modelsJson, Encoding.UTF8, "application/json")
         });
         using var httpClient = new HttpClient(handler);
         var sut = new OpenAiCompatiblePlugin(httpClient);
@@ -247,12 +249,12 @@ public sealed class OpenAiCompatiblePluginTests
             return path.EndsWith("/chat/completions", StringComparison.Ordinal)
                 ? new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
                 }
                 : new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        """{"data":[{"id":"m1"}]}""", Encoding.UTF8, "application/json"),
+                        """{"data":[{"id":"m1"}]}""", Encoding.UTF8, "application/json")
                 };
         });
         using var httpClient = new HttpClient(handler);
@@ -267,7 +269,7 @@ public sealed class OpenAiCompatiblePluginTests
         await foreach (var chunk in role.ProcessStreamingAsync("sys", "user", "m1", CancellationToken.None))
             chunks.Add(chunk);
 
-        Assert.Equal(new[] { "Hel", "lo" }, chunks);
+        Assert.Equal(["Hel", "lo"], chunks);
     }
 
     private sealed class CapturingHandler(Func<HttpRequestMessage, string?, HttpResponseMessage> responder)
@@ -285,13 +287,13 @@ public sealed class OpenAiCompatiblePluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
-        public Dictionary<string, string?> Secrets { get; } = [];
+        private Dictionary<string, string?> Secrets { get; } = [];
 
         public Task StoreSecretAsync(string key, string value)
         {
@@ -300,7 +302,7 @@ public sealed class OpenAiCompatiblePluginTests
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            Task.FromResult(Secrets.GetValueOrDefault(key));
 
         public Task DeleteSecretAsync(string key)
         {
@@ -309,10 +311,10 @@ public sealed class OpenAiCompatiblePluginTests
         }
 
         public T? GetSetting<T>(string key) =>
-            _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(JsonOptions) : default;
+            _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(s_jsonOptions) : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;
@@ -334,8 +336,8 @@ public sealed class OpenAiCompatiblePluginTests
 
     private sealed class TestPluginEventBus : IPluginEventBus
     {
-        public void Publish<T>(T pluginEvent) where T : TypeWhisper.PluginSDK.Models.PluginEvent { }
-        public IDisposable Subscribe<T>(Func<T, Task> handler) where T : TypeWhisper.PluginSDK.Models.PluginEvent =>
+        public void Publish<T>(T pluginEvent) where T : PluginEvent { }
+        public IDisposable Subscribe<T>(Func<T, Task> handler) where T : PluginEvent =>
             new NoOpDisposable();
     }
 

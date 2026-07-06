@@ -9,6 +9,12 @@ namespace TypeWhisper.Cli.Output;
 /// </summary>
 internal static class JsonFormatting
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
+    /// <summary>
+    ///     Returns the scalar value of property <paramref name="name" /> as a string,
+    ///     or <c>""</c> when the property is absent or not a string/number/bool.
+    /// </summary>
     public static string Prop(JsonElement el, string name)
     {
         if (!el.TryGetProperty(name, out var value))
@@ -26,15 +32,13 @@ internal static class JsonFormatting
         };
     }
 
+    /// <summary>Re-serializes <paramref name="json" /> indented, returning the input unchanged if it isn't valid JSON.</summary>
     public static string PrettyJson(string json)
     {
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return JsonSerializer.Serialize(
-                doc.RootElement,
-                new JsonSerializerOptions { WriteIndented = true }
-            );
+            return JsonSerializer.Serialize(doc.RootElement, s_jsonOptions);
         }
         catch
         {
@@ -42,6 +46,11 @@ internal static class JsonFormatting
         }
     }
 
+    /// <summary>
+    ///     Pulls the human-readable message out of the API's error envelope (either
+    ///     <c>{"error":{"message":…}}</c> or <c>{"error":"…"}</c>), falling back to
+    ///     the raw <paramref name="body" /> when no recognizable envelope is present.
+    /// </summary>
     public static string ExtractErrorMessage(string body)
     {
         try

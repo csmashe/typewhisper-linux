@@ -2,14 +2,13 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="CorrectionSuggestionService" />: which inserted-vs-corrected edits become suggestions and which are deliberately ignored.</summary>
 public sealed class CorrectionSuggestionServiceTests
 {
-    private readonly CorrectionSuggestionService _sut = new();
-
     [Fact]
     public void GenerateSuggestions_ReturnsPhraseCorrectionForSmallEdit()
     {
-        var result = _sut.GenerateSuggestions(
+        var result = CorrectionSuggestionService.GenerateSuggestions(
             "I deployed to kubernets today",
             "I deployed to Kubernetes today"
         );
@@ -23,7 +22,7 @@ public sealed class CorrectionSuggestionServiceTests
     [Fact]
     public void GenerateSuggestions_ReturnsMultiWordCorrection()
     {
-        var result = _sut.GenerateSuggestions(
+        var result = CorrectionSuggestionService.GenerateSuggestions(
             "open type whisper settings now",
             "open TypeWhisper settings now"
         );
@@ -36,7 +35,7 @@ public sealed class CorrectionSuggestionServiceTests
     [Fact]
     public void GenerateSuggestions_DoesNotSuggestLargeRewrite()
     {
-        var result = _sut.GenerateSuggestions(
+        var result = CorrectionSuggestionService.GenerateSuggestions(
             "this is a rough draft for tomorrow",
             "please send a concise status update instead"
         );
@@ -52,7 +51,7 @@ public sealed class CorrectionSuggestionServiceTests
         string corrected
     )
     {
-        var result = _sut.GenerateSuggestions(inserted, corrected);
+        var result = CorrectionSuggestionService.GenerateSuggestions(inserted, corrected);
 
         Assert.Empty(result);
     }
@@ -60,7 +59,7 @@ public sealed class CorrectionSuggestionServiceTests
     [Fact]
     public void GenerateSuggestions_DoesNotSuggestWhenOnlyPunctuationChanged()
     {
-        var result = _sut.GenerateSuggestions("hello world", "hello, world");
+        var result = CorrectionSuggestionService.GenerateSuggestions("hello world", "hello, world");
 
         Assert.Empty(result);
     }

@@ -7,15 +7,10 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public static class LocalModelStoragePaths
 {
-    /// <summary>
-    /// Gets the plugin asset folder name under custom model storage.
-    /// </summary>
+    /// <summary>Name of the plugin-asset subfolder created under a custom model-storage root.</summary>
     public const string PluginDataFolderName = "PluginData";
 
-    /// <summary>
-    /// Gets the default local model storage path.
-    /// </summary>
-    public static string DefaultModelStoragePath => TypeWhisperEnvironment.ModelsPath;
+    private static string DefaultModelStoragePath => TypeWhisperEnvironment.ModelsPath;
 
     /// <summary>
     /// Resolves the active local model storage path.
@@ -28,7 +23,7 @@ public static class LocalModelStoragePaths
     /// <summary>
     /// Resolves the active plugin asset directory for large model and runtime files.
     /// </summary>
-    public static string ResolvePluginAssetDirectory(AppSettings? settings, string pluginId)
+    public static string ResolvePluginAssetDirectory(AppSettings? settings, string? pluginId)
     {
         // Reject (rather than silently strip) path separators: stripping would map
         // distinct IDs like "com/test/id" and "id" onto the same directory and risk

@@ -4,6 +4,9 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObject
 {
     [ObservableProperty]
@@ -80,6 +83,9 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
     /// </summary>
     public void RefreshLocalizedText()
     {
+        // Loading/Transcribing/Error carry transient progress or raw
+        // exception text and are intentionally left untouched (see summary).
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
         switch (Status)
         {
             case FileTranscriptionQueueItemStatus.Unsupported:

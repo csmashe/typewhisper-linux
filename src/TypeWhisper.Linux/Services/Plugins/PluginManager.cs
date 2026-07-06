@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services.Plugins;
@@ -15,7 +16,7 @@ public sealed class PluginManager : IDisposable
 {
     // Fresh-install defaults: offline transcription engines only, so dictation works
     // out of the box without a key. Cloud providers default off until opted in.
-    private static readonly HashSet<string> DefaultEnabledPluginIds = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> s_defaultEnabledPluginIds = new(StringComparer.Ordinal)
     {
         "com.typewhisper.whisper-cpp", // offline transcription (recommended default)
         "com.typewhisper.sherpa-onnx" // offline transcription
@@ -28,10 +29,11 @@ public sealed class PluginManager : IDisposable
     private readonly List<LoadedPlugin> _allPlugins = [];
     private readonly Dictionary<string, PluginHostServices> _hostServices = [];
     private readonly PluginLoader _loader;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly IProfileService _profiles;
     private readonly string[] _searchDirectories;
     private readonly ISettingsService _settings;
+    private readonly IErrorLogService? _errorLog;
     private List<IActionPlugin> _actionPlugins = [];
 
     // Debounce guard for on-demand model re-polls (triggered when a dropdown opens).
@@ -48,7 +50,8 @@ public sealed class PluginManager : IDisposable
         PluginEventBus eventBus,
         IActiveWindowService activeWindow,
         IProfileService profiles,
-        ISettingsService settings
+        ISettingsService settings,
+        IErrorLogService? errorLog = null
     )
         : this(
             loader,
@@ -56,7 +59,8 @@ public sealed class PluginManager : IDisposable
             activeWindow,
             profiles,
             settings,
-            [TypeWhisperEnvironment.PluginsPath]
+            [TypeWhisperEnvironment.PluginsPath],
+            errorLog
         )
     {
     }
@@ -67,7 +71,8 @@ public sealed class PluginManager : IDisposable
         IActiveWindowService activeWindow,
         IProfileService profiles,
         ISettingsService settings,
-        IEnumerable<string> searchDirectories
+        IEnumerable<string> searchDirectories,
+        IErrorLogService? errorLog = null
     )
     {
         _loader = loader;
@@ -76,6 +81,7 @@ public sealed class PluginManager : IDisposable
         _profiles = profiles;
         _settings = settings;
         _searchDirectories = searchDirectories.ToArray();
+        _errorLog = errorLog;
     }
 
     public IReadOnlyList<LoadedPlugin> AllPlugins
@@ -208,7 +214,7 @@ public sealed class PluginManager : IDisposable
         {
             return _allPlugins
                 .Where(p => _activatedPlugins.Contains(p.Manifest.Id) && p.Instance is T)
-                .Select(p => (T)p.Instance!)
+                .Select(p => (T)p.Instance)
                 .ToList();
         }
     }
@@ -225,6 +231,16 @@ public sealed class PluginManager : IDisposable
 
         Trace.WriteLine($"[PluginManager] Discovered {discovered.Count} plugin(s)");
 
+        // Surface plugins that were present but couldn't be loaded (bad manifest, missing
+        // assembly, constructor threw) — otherwise they silently disappear from the UI.
+        foreach (var failure in _loader.LastLoadFailures)
+        {
+            _errorLog?.AddEntry(
+                $"Plugin failed to load from '{failure.PluginDirectory}': {failure.Message}",
+                ErrorCategory.Plugin
+            );
+        }
+
         var enabledState = _settings.Current.PluginEnabledState;
 
         foreach (var plugin in discovered)
@@ -234,7 +250,7 @@ public sealed class PluginManager : IDisposable
             // manifest is unreliable across plugins, so we anchor on an explicit allowlist.
             var isEnabled = enabledState.TryGetValue(plugin.Manifest.Id, out var state)
                 ? state
-                : DefaultEnabledPluginIds.Contains(plugin.Manifest.Id) || plugin.Manifest.IsLocal;
+                : s_defaultEnabledPluginIds.Contains(plugin.Manifest.Id) || plugin.Manifest.IsLocal;
 
             if (isEnabled)
             {
@@ -465,6 +481,7 @@ public sealed class PluginManager : IDisposable
                 providers = _allPlugins
                     .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
                     .Select(p => p.Instance)
+                    // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
                     .OfType<IModelCatalogProvider>()
                     .ToList();
             }
@@ -517,7 +534,10 @@ public sealed class PluginManager : IDisposable
                 {
                     RebuildCapabilityIndices();
                     PluginStateChanged?.Invoke(this, EventArgs.Empty);
-                }
+                },
+                _errorLog,
+                ResolveErrorCategory(plugin),
+                plugin.Manifest.Name
             );
 
             await plugin.Instance.ActivateAsync(hostServices);
@@ -536,8 +556,31 @@ public sealed class PluginManager : IDisposable
             Trace.WriteLine(
                 $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
             );
+            _errorLog?.AddEntry(
+                $"Plugin '{plugin.Manifest.Name}' failed to activate: {ex.Message}",
+                ErrorCategory.Plugin
+            );
             return false;
         }
+    }
+
+    // Pick the error-log category for a plugin's host.Log(Error) calls. The manifest
+    // Category is the plugin's self-declared primary role, but most bundled plugins omit
+    // it — so fall back to the runtime capability interfaces (transcription engines log
+    // under Transcription, LLM providers under Prompt) before the generic Plugin bucket.
+    private static string ResolveErrorCategory(LoadedPlugin plugin)
+    {
+        return plugin.Manifest.Category?.Trim().ToLowerInvariant() switch
+        {
+            "transcription" => ErrorCategory.Transcription,
+            "llm" or "prompt" => ErrorCategory.Prompt,
+            _ => plugin.Instance switch
+            {
+                ITranscriptionEnginePlugin => ErrorCategory.Transcription,
+                ILlmProviderPlugin => ErrorCategory.Prompt,
+                _ => ErrorCategory.Plugin
+            }
+        };
     }
 
     private async Task<bool> DeactivatePluginAsync(LoadedPlugin plugin)
@@ -582,6 +625,7 @@ public sealed class PluginManager : IDisposable
                 .OfType<ILlmProviderPlugin>()
                 .Concat(
                     activePlugins
+                        // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
                         .OfType<IAdditionalLlmProvidersProvider>()
                         .SelectMany(SafeAdditionalLlmProviders)
                 )
@@ -592,6 +636,7 @@ public sealed class PluginManager : IDisposable
                 .OfType<ITranscriptionEnginePlugin>()
                 .Concat(
                     activePlugins
+                        // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
                         .OfType<IAdditionalTranscriptionEnginesProvider>()
                         .SelectMany(SafeAdditionalTranscriptionEngines)
                 )
@@ -623,6 +668,8 @@ public sealed class PluginManager : IDisposable
             // Drop null entries: the downstream GroupBy key selector calls an extension
             // method (GetLlmSelectionId) that dereferences the instance, so a null from a
             // misbehaving plugin would throw outside this try/catch and abort the rebuild.
+            // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- AdditionalLlmProviders comes from a third-party plugin whose nullable annotation may lie
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- defensive: a misbehaving plugin may yield null elements despite the non-null annotation
             return provider.AdditionalLlmProviders?.Where(p => p is not null).ToList() ?? [];
         }
         catch (Exception ex)
@@ -643,6 +690,8 @@ public sealed class PluginManager : IDisposable
             // Drop null entries: the downstream GroupBy key selector calls an extension
             // method (GetTranscriptionSelectionId) that dereferences the instance, so a
             // null from a misbehaving plugin would throw outside this try/catch.
+            // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- AdditionalTranscriptionEngines comes from a third-party plugin whose nullable annotation may lie
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- defensive: a misbehaving plugin may yield null elements despite the non-null annotation
             return provider.AdditionalTranscriptionEngines?.Where(e => e is not null).ToList() ?? [];
         }
         catch (Exception ex)

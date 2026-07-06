@@ -1,3 +1,6 @@
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
@@ -5,6 +8,7 @@ namespace TypeWhisper.PluginSDK;
 ///     (e.g. a list of custom prompts or word replacements). The host renders a generic
 ///     collection editor UI driven by the definitions returned here.
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public interface IPluginCollectionSettingsProvider
 {
     /// <summary>Returns metadata for each collection the plugin exposes.</summary>
@@ -12,8 +16,10 @@ public interface IPluginCollectionSettingsProvider
 
     /// <summary>Returns the current items for the given collection key.</summary>
     Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
+        // ReSharper disable UnusedParameter.Global
         string collectionKey,
         CancellationToken ct = default
+        // ReSharper restore UnusedParameter.Global
     );
 
     /// <summary>
@@ -22,9 +28,11 @@ public interface IPluginCollectionSettingsProvider
     ///     on failure <c>Message</c> explains why the items were rejected.
     /// </summary>
     Task<PluginSettingsValidationResult> SetItemsAsync(
+        // ReSharper disable UnusedParameter.Global
         string collectionKey,
         IReadOnlyList<PluginCollectionItem> items,
         CancellationToken ct = default
+        // ReSharper restore UnusedParameter.Global
     );
 }
 
@@ -37,6 +45,7 @@ public interface IPluginCollectionSettingsProvider
 /// <param name="ItemFields">Field definitions for each item row in the collection.</param>
 /// <param name="ItemLabelFieldKey">Key of the field used as the row label in the UI, or null.</param>
 /// <param name="AddButtonLabel">Custom label for the add-item button, or null for the default.</param>
+// ReSharper disable once UnusedType.Global
 public sealed record PluginCollectionDefinition(
     string Key,
     string Label,
@@ -47,4 +56,5 @@ public sealed record PluginCollectionDefinition(
 );
 
 /// <summary>A single item in a plugin collection, represented as a field-value map.</summary>
+// ReSharper disable once UnusedType.Global
 public sealed record PluginCollectionItem(IReadOnlyDictionary<string, string?> Values);

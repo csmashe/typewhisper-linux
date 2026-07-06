@@ -16,7 +16,7 @@ public sealed class EnumBoolConverter : IValueConverter
 {
     public static readonly EnumBoolConverter Instance = new();
 
-    public object? Convert(
+    public object Convert(
         object? value,
         Type targetType,
         object? parameter,
@@ -26,7 +26,7 @@ public sealed class EnumBoolConverter : IValueConverter
         return value is not null && parameter is not null && value.Equals(parameter);
     }
 
-    public object? ConvertBack(
+    public object ConvertBack(
         object? value,
         Type targetType,
         object? parameter,

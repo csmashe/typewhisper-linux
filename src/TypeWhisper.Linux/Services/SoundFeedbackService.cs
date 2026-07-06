@@ -11,27 +11,39 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class SoundFeedbackService
 {
-    private static readonly string SoundsDir =
+    private static readonly string s_soundsDir =
         Path.Join(AppContext.BaseDirectory, "Resources", "Sounds");
 
     // First available player on PATH: pw-play (PipeWire), paplay (PulseAudio), aplay (ALSA).
-    private static readonly string? Player = ResolvePlayer();
+    private static readonly string? s_player = ResolvePlayer();
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlayRecordingStarted()
     {
         Play("start.wav");
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlayRecordingStopped()
     {
         Play("stop.wav");
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlaySuccess()
     {
         Play("success.wav");
     }
 
+    // kept instance: injected as a DI/test seam by callers
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlayError()
     {
         Play("error.wav");
@@ -39,12 +51,12 @@ public sealed class SoundFeedbackService
 
     private static void Play(string fileName)
     {
-        if (Player is null)
+        if (s_player is null)
         {
             return;
         }
 
-        var path = Path.Join(SoundsDir, fileName);
+        var path = Path.Join(s_soundsDir, fileName);
         if (!File.Exists(path))
         {
             return;
@@ -52,7 +64,7 @@ public sealed class SoundFeedbackService
 
         try
         {
-            var startInfo = new ProcessStartInfo(Player)
+            var startInfo = new ProcessStartInfo(s_player)
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -93,9 +105,9 @@ public sealed class SoundFeedbackService
     private static string? ResolvePlayer()
     {
         // Same candidate order as SystemCommandAvailabilityService.HasAudioPlayer
-        // so Player is non-null exactly when HasAudioPlayer is true.
+        // so s_player is non-null exactly when HasAudioPlayer is true.
         return Array.Find(
-            new[] { "pw-play", "paplay", "aplay" },
+            ["pw-play", "paplay", "aplay"],
             SystemCommandAvailabilityService.IsCommandAvailable
         );
     }

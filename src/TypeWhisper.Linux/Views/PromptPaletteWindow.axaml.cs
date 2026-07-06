@@ -1,6 +1,5 @@
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Interactivity;
 using Avalonia.Threading;
 using TypeWhisper.Core.Models;
 
@@ -40,7 +39,7 @@ public partial class PromptPaletteWindow : Window
     }
 
     /// <summary>Shows a status message and locks the UI while the host runs the picked action.</summary>
-    public void ShowStatus(string text)
+    private void ShowStatus(string text)
     {
         StatusText.Text = text;
         StatusBorder.IsVisible = true;
@@ -50,7 +49,7 @@ public partial class PromptPaletteWindow : Window
 
     /// <summary>Locks the UI, shows a status line, and reveals the result area
     ///     for streamed tokens after an action is picked.</summary>
-    public void BeginRunning(string actionName)
+    private void BeginRunning(string actionName)
     {
         _running = true;
         ShowStatus($"Running '{actionName}'… (Esc to cancel)");
@@ -137,11 +136,13 @@ public partial class PromptPaletteWindow : Window
     {
         // The search box is disabled while running, so handle Escape at the window
         // level. Before a pick, the search box handles Escape and marks it handled.
-        if (_running && e.Key == Key.Escape)
+        if (!_running || e.Key != Key.Escape)
         {
-            e.Handled = true;
-            ClosePalette();
+            return;
         }
+
+        e.Handled = true;
+        ClosePalette();
     }
 
     private void SearchBox_OnTextChanged(object? sender, TextChangedEventArgs e)
@@ -151,6 +152,7 @@ public partial class PromptPaletteWindow : Window
 
     private void SearchBox_OnKeyDown(object? sender, KeyEventArgs e)
     {
+        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the navigation keys are handled; all other keys are intentionally ignored.
         switch (e.Key)
         {
             case Key.Down:
@@ -202,16 +204,6 @@ public partial class PromptPaletteWindow : Window
     }
 
     private void ActionListBox_OnDoubleTapped(object? sender, TappedEventArgs e)
-    {
-        Complete(ActionListBox.SelectedItem as PromptAction);
-    }
-
-    private void CancelButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        Complete(null);
-    }
-
-    private void RunButton_OnClick(object? sender, RoutedEventArgs e)
     {
         Complete(ActionListBox.SelectedItem as PromptAction);
     }

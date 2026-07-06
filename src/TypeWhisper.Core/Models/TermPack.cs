@@ -1,5 +1,10 @@
 namespace TypeWhisper.Core.Models;
 
+/// <summary>
+///     A named bundle of domain vocabulary (<paramref name="Terms" />) the user can
+///     enable to bias recognition toward that field. <see cref="AllPacks" /> is the
+///     built-in catalog; <see cref="FindById" /> looks one up case-insensitively.
+/// </summary>
 public sealed record TermPack(string Id, string Name, string Icon, string[] Terms)
 {
     public static readonly TermPack[] AllPacks =
@@ -426,55 +431,5 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
     public static TermPack? FindById(string id)
     {
         return AllPacks.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
-    }
-}
-
-public sealed record IndustryPreset(string Id, string Name, string Description, string? TermPackId)
-{
-    public static readonly IndustryPreset[] All =
-    [
-        new(
-            "general",
-            "General",
-            "No industry-specific vocabulary.",
-            null
-        ),
-        new(
-            "real-estate",
-            "Real Estate",
-            "Listings, escrow, financing, and walk-through terms.",
-            "real-estate"
-        ),
-        new(
-            "architecture",
-            "Architecture",
-            "Structural, façade, and design-document terms.",
-            "architecture"
-        ),
-        new(
-            "legal",
-            "Legal",
-            "Contract, compliance, and litigation terms.",
-            "legal"
-        )
-    ];
-
-    public static string[] MergeIntoEnabledPackIds(string[] enabledPackIds, string presetId)
-    {
-        var preset = All.FirstOrDefault(p =>
-            string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (preset?.TermPackId is not { } packId)
-        {
-            return enabledPackIds;
-        }
-
-        if (enabledPackIds.Any(id =>
-                string.Equals(id, packId, StringComparison.OrdinalIgnoreCase)))
-        {
-            return enabledPackIds;
-        }
-
-        return [.. enabledPackIds, packId];
     }
 }

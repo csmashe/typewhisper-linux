@@ -1,12 +1,17 @@
-using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Plugin.Soniox;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using SonioxSession = TypeWhisper.Plugin.Soniox.SonioxStreamingSession;
+
+// The CapturingHandler lambdas assert on the outgoing 'request' (method, URI,
+// headers) and return a canned response. ReSharper reads xUnit asserts as
+// precondition checks and concludes 'request' is only validated, never used —
+// but asserting on the request is exactly what these tests verify, so the
+// inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -37,8 +42,7 @@ public class SonioxPluginTests
     [Fact]
     public async Task ActivateAsync_RestoresApiKeyAndExposesAsyncModel()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
 
         var sut = new SonioxPlugin();
         await sut.ActivateAsync(host);
@@ -56,8 +60,7 @@ public class SonioxPluginTests
     [Fact]
     public async Task ActivateAsync_SetsIdentityAndSupportsStreaming()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
 
         var sut = new SonioxPlugin();
         await sut.ActivateAsync(host);
@@ -83,22 +86,22 @@ public class SonioxPluginTests
     [Fact]
     public void ParseTranscript_GroupsTokensIntoSubtitleSegments()
     {
-        var transcript = """
-        {
-          "text": "The quick brown fox jumps. Over the lazy dog.",
-          "tokens": [
-            { "text": "The",    "start_ms": 0,    "end_ms": 400 },
-            { "text": "quick",  "start_ms": 400,  "end_ms": 800 },
-            { "text": "brown",  "start_ms": 800,  "end_ms": 1200 },
-            { "text": "fox",    "start_ms": 1200, "end_ms": 1600 },
-            { "text": "jumps.", "start_ms": 1600, "end_ms": 2000 },
-            { "text": "Over",   "start_ms": 3000, "end_ms": 3400 },
-            { "text": "the",    "start_ms": 3400, "end_ms": 3800 },
-            { "text": "lazy",   "start_ms": 3800, "end_ms": 4200 },
-            { "text": "dog.",   "start_ms": 4200, "end_ms": 4600 }
-          ]
-        }
-        """;
+        const string transcript = """
+                                  {
+                                    "text": "The quick brown fox jumps. Over the lazy dog.",
+                                    "tokens": [
+                                      { "text": "The",    "start_ms": 0,    "end_ms": 400 },
+                                      { "text": "quick",  "start_ms": 400,  "end_ms": 800 },
+                                      { "text": "brown",  "start_ms": 800,  "end_ms": 1200 },
+                                      { "text": "fox",    "start_ms": 1200, "end_ms": 1600 },
+                                      { "text": "jumps.", "start_ms": 1600, "end_ms": 2000 },
+                                      { "text": "Over",   "start_ms": 3000, "end_ms": 3400 },
+                                      { "text": "the",    "start_ms": 3400, "end_ms": 3800 },
+                                      { "text": "lazy",   "start_ms": 3800, "end_ms": 4200 },
+                                      { "text": "dog.",   "start_ms": 4200, "end_ms": 4600 }
+                                    ]
+                                  }
+                                  """;
         using var details = JsonDocument.Parse("{}");
 
         var result = SonioxPlugin.ParseTranscript(transcript, details.RootElement, null);
@@ -113,16 +116,16 @@ public class SonioxPluginTests
     [Fact]
     public void ParseTranscript_DropsTokensWithNonPositiveDuration()
     {
-        var transcript = """
-        {
-          "text": "Hello there",
-          "tokens": [
-            { "text": "Hello", "start_ms": 0,    "end_ms": 500 },
-            { "text": "bad",   "start_ms": 1000, "end_ms": 1000 },
-            { "text": "there", "start_ms": 1100, "end_ms": 1600 }
-          ]
-        }
-        """;
+        const string transcript = """
+                                  {
+                                    "text": "Hello there",
+                                    "tokens": [
+                                      { "text": "Hello", "start_ms": 0,    "end_ms": 500 },
+                                      { "text": "bad",   "start_ms": 1000, "end_ms": 1000 },
+                                      { "text": "there", "start_ms": 1100, "end_ms": 1600 }
+                                    ]
+                                  }
+                                  """;
         using var details = JsonDocument.Parse("{}");
 
         var result = SonioxPlugin.ParseTranscript(transcript, details.RootElement, null);
@@ -328,8 +331,7 @@ public class SonioxPluginTests
     [Fact]
     public async Task SetApiKeyAsync_KeepsExistingConfigurationWhenDeleteSecretFails()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         var sut = new SonioxPlugin();
         await sut.ActivateAsync(host);
         host.DeleteSecretException = new InvalidOperationException("delete failed");
@@ -411,14 +413,11 @@ public class SonioxPluginTests
                     """);
             }
 
-            if (request.Method == HttpMethod.Delete)
-                return JsonResponse("""{}""");
-
-            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+            return request.Method == HttpMethod.Delete ? JsonResponse("{}") 
+                : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 3);
         await sut.ActivateAsync(host);
@@ -445,6 +444,10 @@ public class SonioxPluginTests
 
             if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/files")
             {
+                // The handler is wired before `sut` is constructed below, so capturing the
+                // mutable local is intentional: this clears the key mid-flow to prove the
+                // async transcription pipeline keeps using the key captured at start.
+                // ReSharper disable once AccessToModifiedClosure
                 await sut!.SetApiKeyAsync("");
                 return JsonResponse("""{ "id": "84c32fc6-4fb5-4e7a-b656-b5ec70493753" }""", HttpStatusCode.Created);
             }
@@ -458,14 +461,11 @@ public class SonioxPluginTests
             if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721/transcript")
                 return JsonResponse("""{ "text": "Hello", "tokens": [] }""");
 
-            if (request.Method == HttpMethod.Delete)
-                return JsonResponse("""{}""");
-
-            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+            return request.Method == HttpMethod.Delete ? JsonResponse("{}")
+                : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "initial-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "initial-key" } };
         using var httpClient = new HttpClient(handler);
         sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
@@ -481,14 +481,13 @@ public class SonioxPluginTests
     [Fact]
     public async Task TranscribeAsync_OmitsLanguageHintsForAuto()
     {
-        var handler = new SonioxFlowHandler((createBody) =>
+        var handler = new SonioxFlowHandler(createBody =>
         {
             using var doc = JsonDocument.Parse(createBody);
             Assert.False(doc.RootElement.TryGetProperty("language_hints", out _));
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
@@ -501,14 +500,13 @@ public class SonioxPluginTests
     [Fact]
     public async Task TranscribeAsync_OmitsLanguageHintsForWhitespacePaddedAuto()
     {
-        var handler = new SonioxFlowHandler((createBody) =>
+        var handler = new SonioxFlowHandler(createBody =>
         {
             using var doc = JsonDocument.Parse(createBody);
             Assert.False(doc.RootElement.TryGetProperty("language_hints", out _));
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
@@ -522,8 +520,7 @@ public class SonioxPluginTests
     [Fact]
     public async Task TranscribeAsync_RejectsTranslation()
     {
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         var sut = new SonioxPlugin();
         await sut.ActivateAsync(host);
 
@@ -559,14 +556,11 @@ public class SonioxPluginTests
                     """);
             }
 
-            if (request.Method == HttpMethod.Delete)
-                return JsonResponse("""{}""");
-
-            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}; body={Encoding.UTF8.GetString(body ?? [])}");
+            return request.Method == HttpMethod.Delete ? JsonResponse("{}") 
+                : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}; body={Encoding.UTF8.GetString(body ?? [])}");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
@@ -584,7 +578,7 @@ public class SonioxPluginTests
     [Fact]
     public async Task TranscribeAsync_HttpErrorIncludesSonioxDetails()
     {
-        var handler = new CapturingHandler((request, _) =>
+        var handler = new CapturingHandler((_, _) =>
             JsonResponse("""
                 {
                   "status_code": 401,
@@ -594,8 +588,7 @@ public class SonioxPluginTests
                 }
                 """, HttpStatusCode.Unauthorized));
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new SonioxPlugin(httpClient);
         await sut.ActivateAsync(host);
@@ -619,14 +612,10 @@ public class SonioxPluginTests
             if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/transcriptions")
                 return JsonResponse("""{ "id": "73d4357d-cad2-4338-a60d-ec6f2044f721", "status": "queued" }""", HttpStatusCode.Created);
 
-            if (request.Method == HttpMethod.Get)
-                return JsonResponse("""{ "status": "processing" }""");
-
-            return JsonResponse("""{}""");
+            return JsonResponse(request.Method == HttpMethod.Get ? """{ "status": "processing" }""" : "{}");
         });
 
-        var host = new TestPluginHostServices();
-        host.Secrets["api-key"] = "soniox-key";
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
@@ -679,10 +668,8 @@ public class SonioxPluginTests
             if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721/transcript")
                 return JsonResponse("""{ "text": "Hello", "tokens": [] }""");
 
-            if (request.Method == HttpMethod.Delete)
-                return JsonResponse("""{}""");
-
-            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+            return request.Method == HttpMethod.Delete ? JsonResponse("{}") 
+                : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
         }
     }
 
@@ -716,7 +703,7 @@ public class SonioxPluginTests
 
     private sealed class TestPluginHostServices : IPluginHostServices
     {
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
         };
@@ -737,7 +724,7 @@ public class SonioxPluginTests
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
-            Task.FromResult(Secrets.TryGetValue(key, out var value) ? value : null);
+            Task.FromResult(Secrets.GetValueOrDefault(key));
 
         public Task DeleteSecretAsync(string key)
         {
@@ -750,11 +737,11 @@ public class SonioxPluginTests
 
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value)
-                ? value.Deserialize<T>(JsonOptions)
+                ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
         public void SetSetting<T>(string key, T value) =>
-            _settings[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
+            _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

@@ -11,6 +11,7 @@ public partial class RecorderSection : UserControl
         InitializeComponent();
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnCopyTranscript(object? sender, RoutedEventArgs e)
     {
         if (

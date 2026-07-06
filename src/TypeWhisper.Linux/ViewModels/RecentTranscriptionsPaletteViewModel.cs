@@ -1,9 +1,12 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using System.Collections.ObjectModel;
-using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.ViewModels;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class RecentTranscriptionsPaletteViewModel : ObservableObject
 {
     private readonly IReadOnlyList<RecentTranscriptionPaletteItem> _allItems;
@@ -42,6 +45,7 @@ public partial class RecentTranscriptionsPaletteViewModel : ObservableObject
         SelectedItem = FilteredEntries[nextIndex];
     }
 
+    // ReSharper disable once UnusedMember.Global  public API surface (palette confirm-selection entry point alongside MoveSelection/Select); not currently called in-tree
     public void SelectCurrent()
     {
         Select(SelectedItem ?? FilteredEntries.FirstOrDefault());

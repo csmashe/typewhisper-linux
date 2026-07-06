@@ -171,12 +171,7 @@ public sealed class LlmCleanupServiceTests
             LastSystemPrompt = systemPrompt;
             LastUserText = userText;
 
-            if (ThrowOnProcess)
-            {
-                throw new InvalidOperationException("Provider failed.");
-            }
-
-            return Task.FromResult(_result);
+            return ThrowOnProcess ? throw new InvalidOperationException("Provider failed.") : Task.FromResult(_result);
         }
 
         public void Dispose() { }

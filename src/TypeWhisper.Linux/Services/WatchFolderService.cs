@@ -20,7 +20,7 @@ public sealed class WatchFolderService : IDisposable
     private readonly List<WatchFolderHistoryItem> _history = [];
     private readonly string _historyPath;
     private readonly ConcurrentQueue<string> _pendingFiles = [];
-    private readonly object _persistenceGate = new();
+    private readonly Lock _persistenceGate = new();
     private readonly HashSet<string> _processedFingerprints = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly string _processedFingerprintsPath;
@@ -29,7 +29,7 @@ public sealed class WatchFolderService : IDisposable
         StringComparer.OrdinalIgnoreCase
     );
 
-    private readonly object _stateGate = new();
+    private readonly Lock _stateGate = new();
     private CancellationTokenSource? _cts;
     private bool _disposed;
     private WatchFolderOptions? _options;
@@ -50,12 +50,13 @@ public sealed class WatchFolderService : IDisposable
     internal WatchFolderService(string dataPath)
     {
         Directory.CreateDirectory(dataPath);
-        _processedFingerprintsPath = Path.Combine(dataPath, "watch-folder-processed.json");
-        _historyPath = Path.Combine(dataPath, "watch-folder-history.json");
+        _processedFingerprintsPath = Path.Join(dataPath, "watch-folder-processed.json");
+        _historyPath = Path.Join(dataPath, "watch-folder-history.json");
         LoadProcessedFingerprints();
         LoadHistory();
     }
 
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  public service-state accessor exposing the active watch path (parallels CurrentlyProcessing/IsRunning)
     public string? WatchPath { get; private set; }
     public string? CurrentlyProcessing { get; private set; }
     public bool IsRunning => _watcher is not null;
@@ -163,6 +164,7 @@ public sealed class WatchFolderService : IDisposable
     }
 
     public event EventHandler? StateChanged;
+    // ReSharper disable once EventNeverSubscribedTo.Global -- public API; raised for each processed file for external/future subscribers.
     public event EventHandler<WatchFolderHistoryItem>? FileProcessed;
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)
@@ -333,7 +335,7 @@ public sealed class WatchFolderService : IDisposable
                 ResolveEngineName(result),
                 DateTime.Now
             );
-            var outputPath = Path.Combine(
+            var outputPath = Path.Join(
                 outputFolder,
                 Path.GetFileNameWithoutExtension(filePath) + "." + artifact.FileExtension
             );

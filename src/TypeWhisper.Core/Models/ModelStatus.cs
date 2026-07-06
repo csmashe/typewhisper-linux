@@ -1,18 +1,17 @@
+// ReSharper disable MemberCanBePrivate.Global
 namespace TypeWhisper.Core.Models;
 
-public enum ModelStatusType
-{
-    NotDownloaded,
-    Downloading,
-    Loading,
-    Ready,
-    Error
-}
-
+/// <summary>
+///     Snapshot of a model's lifecycle <see cref="Type" /> plus the extra detail
+///     that state carries — download <see cref="Progress" /> and throughput while
+///     downloading, or an <see cref="ErrorMessage" /> on failure. The static
+///     factories build the common states.
+/// </summary>
 public sealed record ModelStatus
 {
     public required ModelStatusType Type { get; init; }
     public double Progress { get; init; }
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
     public double? BytesPerSecond { get; init; }
     public string? ErrorMessage { get; init; }
 

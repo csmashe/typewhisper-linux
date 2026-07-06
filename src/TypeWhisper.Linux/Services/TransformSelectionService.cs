@@ -219,6 +219,7 @@ public sealed class TransformSelectionService
                     null,
                     cts.Token
                 );
+                // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Text comes from a plugin TranscribeAsync result; the non-null annotation is not guaranteed across plugin implementations
                 command = transcription.Text?.Trim();
             }
             finally
@@ -227,6 +228,7 @@ public sealed class TransformSelectionService
                 // LLM transform and text insertion below so a concurrent
                 // dictation isn't blocked by them. The scope-end dispose is a
                 // harmless idempotent no-op.
+                // ReSharper disable once DisposeOnUsingVariable -- intentional early dispose to release the model lock before the LLM transform; the scope-end dispose is idempotent
                 await leaseScope.DisposeAsync();
             }
 
@@ -264,27 +266,25 @@ public sealed class TransformSelectionService
                 session.WindowTitle
             );
 
-            if (insertion is InsertionResult.CopiedToClipboard)
+            switch (insertion)
             {
-                await ShowWarningAsync(
-                    "Transformed text copied. Paste manually to replace the selection."
-                );
-            }
-            else if (insertion is InsertionResult.MissingClipboardTool)
-            {
-                await ShowWarningAsync(ClipboardToolMissingMessage());
-            }
-            else if (insertion is InsertionResult.MissingPasteTool)
-            {
-                await ShowWarningAsync(_commands.GetSnapshot().PasteToolInstallHint);
-            }
-            else if (insertion is not InsertionResult.Pasted and not InsertionResult.Typed)
-            {
-                await ShowWarningAsync("Could not insert transformed text.");
-            }
-            else
-            {
-                ShowFeedback("Selection transformed.", false);
+                case InsertionResult.CopiedToClipboard:
+                    await ShowWarningAsync(
+                        "Transformed text copied. Paste manually to replace the selection."
+                    );
+                    break;
+                case InsertionResult.MissingClipboardTool:
+                    await ShowWarningAsync(ClipboardToolMissingMessage());
+                    break;
+                case InsertionResult.MissingPasteTool:
+                    await ShowWarningAsync(_commands.GetSnapshot().PasteToolInstallHint);
+                    break;
+                case not InsertionResult.Pasted and not InsertionResult.Typed:
+                    await ShowWarningAsync("Could not insert transformed text.");
+                    break;
+                default:
+                    ShowFeedback("Selection transformed.", false);
+                    break;
             }
         }
         catch (OperationCanceledException)

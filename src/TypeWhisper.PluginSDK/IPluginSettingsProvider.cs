@@ -1,3 +1,6 @@
+// Public plugin-SDK surface. The per-item `disable once` directives below mark members
+// ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
+// the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
@@ -6,6 +9,7 @@ namespace TypeWhisper.PluginSDK;
 ///     All setting values are stored and retrieved as plain strings; plugins are
 ///     responsible for parsing them into their native types.
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public interface IPluginSettingsProvider
 {
     /// <summary>Returns the list of settings this plugin exposes to the host UI.</summary>
@@ -21,6 +25,8 @@ public interface IPluginSettingsProvider
     ///     Validates the current settings (e.g. connectivity or key-format check).
     ///     Returns null to skip validation entirely.
     /// </summary>
+
+    // ReSharper disable once UnusedParameter.Global
     Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         return Task.FromResult<PluginSettingsValidationResult?>(null);
@@ -31,6 +37,7 @@ public interface IPluginSettingsProvider
 ///     Controls how the host renders a setting field.
 ///     <see cref="Auto" /> lets the host infer the kind from other definition properties.
 /// </summary>
+// ReSharper disable once UnusedType.Global
 public enum PluginSettingKind
 {
     Auto,
@@ -51,6 +58,7 @@ public enum PluginSettingKind
 /// <param name="Description">Optional description shown below the field.</param>
 /// <param name="Options">Allowed values for <see cref="PluginSettingKind.Dropdown" /> settings.</param>
 /// <param name="Kind">How the host should render this setting field.</param>
+// ReSharper disable once UnusedType.Global
 public sealed record PluginSettingDefinition(
     string Key,
     string Label,
@@ -62,7 +70,9 @@ public sealed record PluginSettingDefinition(
 );
 
 /// <summary>A selectable option for a dropdown setting.</summary>
+// ReSharper disable once UnusedType.Global
 public sealed record PluginSettingOption(string Value, string Label);
 
 /// <summary>Outcome of a plugin settings validation pass.</summary>
+// ReSharper disable once UnusedType.Global
 public sealed record PluginSettingsValidationResult(bool IsSuccess, string Message);

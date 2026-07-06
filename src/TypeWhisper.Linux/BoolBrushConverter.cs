@@ -12,7 +12,7 @@ public sealed class BoolBrushConverter : IValueConverter
 {
     public static readonly BoolBrushConverter Instance = new();
 
-    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         var boolValue = value is true;
         if (parameter is not string raw)
@@ -37,7 +37,7 @@ public sealed class BoolBrushConverter : IValueConverter
         return boolValue ? Brushes.White : Brushes.Transparent;
     }
 
-    public object? ConvertBack(
+    public object ConvertBack(
         object? value,
         Type targetType,
         object? parameter,

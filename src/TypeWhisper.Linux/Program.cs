@@ -38,6 +38,7 @@ public static class Program
         var action = CommandLineParser.Parse(args);
         StartMinimized = action.StartMinimized;
 
+        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault
         switch (action.Kind)
         {
             case CliActionKind.PrintHelp:
@@ -111,7 +112,7 @@ public static class Program
             return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
-            when (ex is SocketException sx && sx.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            when (ex is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse })
         {
             // Startup raced another instance to the bind; same outcome as a probe finding a live peer.
             Console.Error.WriteLine("TypeWhisper is already running.");
@@ -125,6 +126,8 @@ public static class Program
         }
     }
 
+    // Public so the Avalonia XAML previewer / design-time tooling can discover and invoke it reflectively.
+    // ReSharper disable once MemberCanBePrivate.Global
     public static AppBuilder BuildAvaloniaApp()
     {
         var builder = AppBuilder
@@ -141,7 +144,7 @@ public static class Program
                     // throws a per-frame SynchronizationLockException from GlxContext.RestoreContext.Dispose,
                     // but only after rendering — transparency works and the log noise is filtered by
                     // SuppressGlxRenderExceptionLogSink. EGL is the fallback if GLX init fails.
-                    RenderingMode = new[] { X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software }
+                    RenderingMode = [X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software]
                 }
             )
 #if DEBUG

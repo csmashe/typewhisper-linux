@@ -42,7 +42,7 @@ internal sealed class ScriptStore
     public ScriptStore(string dataDir)
     {
         _dataDir = dataDir;
-        _configPath = Path.Combine(dataDir, "scripts.json");
+        _configPath = Path.Join(dataDir, "scripts.json");
     }
 
     public List<ScriptEntry> Load()
@@ -74,7 +74,7 @@ internal sealed class ScriptStore
         var json = JsonSerializer.Serialize(entries.ToList(), s_jsonOptions);
 
         // Atomically replace the target so a crash mid-write can't truncate _configPath.
-        var tempPath = Path.Combine(_dataDir, $"{Guid.NewGuid():N}.tmp");
+        var tempPath = Path.Join(_dataDir, $"{Guid.NewGuid():N}.tmp");
         try
         {
             File.WriteAllText(tempPath, json);

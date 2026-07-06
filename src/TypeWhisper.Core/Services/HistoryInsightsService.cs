@@ -3,6 +3,10 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     Computes <see cref="HistoryInsights" /> — totals, averages, insertion-outcome counts, and
+///     top apps — from a set of transcription records for the dashboard.
+/// </summary>
 public sealed class HistoryInsightsService : IHistoryInsightsService
 {
     public HistoryInsights Build(IReadOnlyList<TranscriptionRecord> records, int topAppCount = 5)

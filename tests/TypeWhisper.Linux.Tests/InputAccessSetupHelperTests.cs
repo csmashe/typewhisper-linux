@@ -18,7 +18,7 @@ public sealed class InputAccessSetupHelperTests
     [Fact]
     public void RuleContent_carries_ownership_marker_and_keyboard_scoped_uaccess()
     {
-        var content = InputAccessSetupHelper.UdevRuleContent;
+        const string content = InputAccessSetupHelper.UdevRuleContent;
 
         Assert.StartsWith("# Installed by TypeWhisper", content.Split('\n')[0]);
         // Keyboard-scoped (not all input devices), uaccess primary, group fallback.
@@ -72,11 +72,10 @@ public sealed class InputAccessSetupHelperTests
 
         Assert.True(result.Success);
         // InstallAsync makes exactly one privileged call.
-        var call = Assert.Single(runner.Invocations);
-        Assert.Equal("pkexec", call.FileName);
-        Assert.Contains("/bin/sh", call.Args);
+        var (fileName, args, script, _) = Assert.Single(runner.Invocations);
+        Assert.Equal("pkexec", fileName);
+        Assert.Contains("/bin/sh", args);
         // The privileged script content goes over stdin.
-        var script = call.StandardInput;
         Assert.NotNull(script);
         Assert.Contains($"cat > {InputAccessSetupHelper.UdevRulePath} <<'EOF'", script);
         Assert.Contains("udevadm control --reload", script);
@@ -147,7 +146,7 @@ public sealed class InputAccessSetupHelperTests
     {
         using var env = new SysConfEnvironment();
         env.PutFakeBinaryOnPath("pkexec");
-        env.WriteRule(InputAccessSetupHelper.UdevRuleContent);
+        SysConfEnvironment.WriteRule(InputAccessSetupHelper.UdevRuleContent);
 
         var runner = new FakeProcessRunner();
         var helper = new InputAccessSetupHelper(runner);
@@ -169,7 +168,7 @@ public sealed class InputAccessSetupHelperTests
         using var env = new SysConfEnvironment();
         env.PutFakeBinaryOnPath("pkexec");
         // A rule a user / distro package wrote at our conventional path — no marker.
-        env.WriteRule("# Some other tool's rule\nSUBSYSTEM==\"input\", MODE=\"0660\"\n");
+        SysConfEnvironment.WriteRule("# Some other tool's rule\nSUBSYSTEM==\"input\", MODE=\"0660\"\n");
 
         var runner = new FakeProcessRunner();
         var helper = new InputAccessSetupHelper(runner);
@@ -233,7 +232,7 @@ public sealed class InputAccessSetupHelperTests
             File.WriteAllText(Path.Join(_pathDir, name), "#!/bin/sh\n");
         }
 
-        public void WriteRule(string content)
+        public static void WriteRule(string content)
         {
             var path = InputAccessSetupHelper.UdevRulePath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);

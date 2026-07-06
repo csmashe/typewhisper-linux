@@ -33,6 +33,7 @@
                     Content="{loc:Str Common.Cancel}"
                     IsVisible="False"
                     Click="CancelButton_OnClick" />
+            <!-- ReSharper disable once Xaml.StyleClassNotFound — 'accent' is a built-in Avalonia FluentTheme Button style class defined in the theme assembly, not visible to the analyzer -->
             <Button Content="{loc:Str Common.OK}"
                     x:Name="OkButton"
                     Classes="accent"

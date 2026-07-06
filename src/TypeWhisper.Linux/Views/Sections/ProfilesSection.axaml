@@ -113,6 +113,7 @@
                                         <Run Text="{Binding UrlPatterns.Count, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.UrlRulesCount}" />
                                     </TextBlock>
                                 </StackPanel>
+                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                 <ToggleSwitch Grid.Column="2"
                                               IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                               Command="{Binding $parent[ListBox].((vm:ProfilesSectionViewModel)DataContext).ToggleProfileEnabledCommand}"
@@ -214,6 +215,7 @@
                                                             Spacing="6">
                                                     <TextBlock Text="{Binding}"
                                                                FontSize="11" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                     <Button Content="×"
                                                             Classes="chip-remove"
                                                             Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveProcessNameChipCommand}"
@@ -256,6 +258,7 @@
                                                                 Spacing="6">
                                                         <TextBlock Text="{Binding}"
                                                                    FontSize="11" />
+                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                         <Button Content="×"
                                                                 Classes="chip-remove"
                                                                 Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveUrlPatternChipCommand}"

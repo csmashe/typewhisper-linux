@@ -14,11 +14,11 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed partial class RecordingNotificationService : IDisposable
 {
-    private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan s_callTimeout = TimeSpan.FromSeconds(3);
 
     private readonly DictationOrchestrator _dictation;
     private readonly bool _enabled;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly IProcessRunner _runner;
     private readonly ISettingsService _settings;
     private uint _activeId;
@@ -122,16 +122,15 @@ public sealed partial class RecordingNotificationService : IDisposable
             var result = await _runner
                 .RunAsync(
                     "gdbus",
-                    new[]
-                    {
+                    [
                         "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
                         "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify",
                         "TypeWhisper", replaceId.ToString(), ResolveIconPath(),
                         Loc.Instance["Appearance.NotificationRecordingTitle"], ResolveBody(), "[]", // actions
                         "{}", // hints
                         "0" // expire_timeout 0 → stay up until we close it
-                    },
-                    timeout: CallTimeout
+                    ],
+                    timeout: s_callTimeout
                 )
                 .ConfigureAwait(false);
 
@@ -199,13 +198,12 @@ public sealed partial class RecordingNotificationService : IDisposable
             await _runner
                 .RunAsync(
                     "gdbus",
-                    new[]
-                    {
+                    [
                         "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
                         "/org/freedesktop/Notifications", "--method",
                         "org.freedesktop.Notifications.CloseNotification", id.ToString()
-                    },
-                    timeout: CallTimeout
+                    ],
+                    timeout: s_callTimeout
                 )
                 .ConfigureAwait(false);
         }

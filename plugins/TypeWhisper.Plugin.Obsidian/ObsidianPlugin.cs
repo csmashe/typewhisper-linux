@@ -65,7 +65,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
             filenameTemplate = "{{date}} {{time}} Transcription";
 
         var now = DateTime.Now;
-        var targetDir = Path.Combine(vaultPath, subfolder);
+        var targetDir = Path.Join(vaultPath, subfolder);
         Directory.CreateDirectory(targetDir);
 
         string filePath;
@@ -75,7 +75,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         if (dailyNoteMode)
         {
             filename = $"{now:yyyy-MM-dd}.md";
-            filePath = Path.Combine(targetDir, filename);
+            filePath = Path.Join(targetDir, filename);
 
             var entry = BuildDailyNoteEntry(input, context, now);
 
@@ -92,7 +92,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         else
         {
             filename = BuildFilename(filenameTemplate, context, now) + ".md";
-            filePath = Path.Combine(targetDir, filename);
+            filePath = Path.Join(targetDir, filename);
             filePath = EnsureUniqueFilePath(filePath);
             filename = Path.GetFileName(filePath);
 
@@ -189,7 +189,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         string candidate;
         do
         {
-            candidate = Path.Combine(dir, $"{nameWithoutExt} {counter}{ext}");
+            candidate = Path.Join(dir, $"{nameWithoutExt} {counter}{ext}");
             counter++;
         } while (File.Exists(candidate));
 
@@ -247,17 +247,17 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         if (OperatingSystem.IsWindows())
         {
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            return Path.Combine(appData, "obsidian", "obsidian.json");
+            return Path.Join(appData, "obsidian", "obsidian.json");
         }
 
         var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         if (string.IsNullOrWhiteSpace(configHome))
         {
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            configHome = Path.Combine(home, ".config");
+            configHome = Path.Join(home, ".config");
         }
 
-        return Path.Combine(configHome, "obsidian", "obsidian.json");
+        return Path.Join(configHome, "obsidian", "obsidian.json");
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
@@ -367,7 +367,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
                 new PluginSettingsValidationResult(false, Loc.L("Settings.VaultPathNotFound", vaultPath))
             );
 
-        var obsidianDir = Path.Combine(vaultPath, ".obsidian");
+        var obsidianDir = Path.Join(vaultPath, ".obsidian");
         return Task.FromResult<PluginSettingsValidationResult?>(
             Directory.Exists(obsidianDir)
                 ? new PluginSettingsValidationResult(

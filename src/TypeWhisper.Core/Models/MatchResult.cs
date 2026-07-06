@@ -19,13 +19,3 @@ public sealed record MatchResult(
 {
     public static readonly MatchResult NoMatch = new(null, MatchKind.NoMatch, null, 0, false);
 }
-
-public enum MatchKind
-{
-    AppAndWebsite,
-    Website,
-    App,
-    Global,
-    ManualOverride,
-    NoMatch
-}

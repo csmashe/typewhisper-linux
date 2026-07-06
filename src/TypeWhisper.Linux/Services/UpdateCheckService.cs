@@ -19,6 +19,7 @@ public sealed record UpdateCheckResult
     public string? CurrentVersion { get; init; }
     public string? LatestVersion { get; init; }
     public string? ReleaseUrl { get; init; }
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  part of the UpdateCheckResult result-record data shape (set when a check faults; carried for callers/diagnostics)
     public string? Error { get; init; }
 
     public static UpdateCheckResult NotChecked { get; } = new();
@@ -252,11 +253,13 @@ public sealed class UpdateCheckService
                 continue;
             }
 
-            if (best is null || AppVersion.Compare(version, best) > 0)
+            if (best is not null && AppVersion.Compare(version, best) <= 0)
             {
-                best = version;
-                htmlUrl = release.HtmlUrl;
+                continue;
             }
+
+            best = version;
+            htmlUrl = release.HtmlUrl;
         }
 
         return best;
@@ -273,6 +276,10 @@ public sealed class UpdateCheckService
         return trimmed.StartsWith('v') || trimmed.StartsWith('V') ? trimmed[1..] : trimmed;
     }
 
+    // Populated by System.Text.Json deserialization (reflection); the init accessors are written
+    // by the deserializer, which ReSharper cannot see.
+    // ReSharper disable UnusedAutoPropertyAccessor.Local
+    // ReSharper disable once ClassNeverInstantiated.Local -- instantiated by System.Text.Json deserialization, which ReSharper cannot see.
     private sealed record GitHubRelease
     {
         [JsonPropertyName("tag_name")]
@@ -287,4 +294,5 @@ public sealed class UpdateCheckService
         [JsonPropertyName("draft")]
         public bool Draft { get; init; }
     }
+    // ReSharper restore UnusedAutoPropertyAccessor.Local
 }

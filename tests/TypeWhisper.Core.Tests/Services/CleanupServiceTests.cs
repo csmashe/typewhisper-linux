@@ -3,6 +3,7 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
 
+/// <summary>Covers <see cref="CleanupService" /> light cleanup (fillers, spoken punctuation/lists, backtrack corrections) and LLM prompt selection.</summary>
 public sealed class CleanupServiceTests
 {
     private readonly CleanupService _sut = new();
@@ -10,7 +11,7 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_None_ReturnsOriginalText()
     {
-        var text = "um hello   world";
+        const string text = "um hello   world";
 
         var result = _sut.Clean(text, CleanupLevel.None);
 

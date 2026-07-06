@@ -2,9 +2,13 @@ using System.Text.RegularExpressions;
 
 namespace TypeWhisper.Core.Services;
 
-public sealed partial class DeveloperFormattingService
+/// <summary>
+///     Converts spoken developer syntax into literal symbols (e.g. "open paren" → "(", "dash dash"
+///     → "--", "x dot ts") and applies camel/snake/kebab casing commands.
+/// </summary>
+public static partial class DeveloperFormattingService
 {
-    private static readonly (Regex Pattern, string Replacement)[] SymbolReplacements =
+    private static readonly (Regex Pattern, string Replacement)[] s_symbolReplacements =
     [
         (DashDashRegex(), "--"),
         (BackslashRegex(), "\\"),
@@ -31,7 +35,7 @@ public sealed partial class DeveloperFormattingService
         (EqualsRegex(), "=")
     ];
 
-    public string Format(string text)
+    public static string Format(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -45,7 +49,7 @@ public sealed partial class DeveloperFormattingService
         }
 
         var formatted = text;
-        foreach (var (pattern, replacement) in SymbolReplacements)
+        foreach (var (pattern, replacement) in s_symbolReplacements)
         {
             formatted = pattern.Replace(formatted, replacement);
         }
@@ -232,6 +236,6 @@ public sealed partial class DeveloperFormattingService
     [GeneratedRegex(@"^(?<mode>camel|snake|kebab)\s+case\s+(?<text>.+)$", RegexOptions.IgnoreCase)]
     private static partial Regex CasingCommandRegex();
 
-    [GeneratedRegex(@"[A-Za-z0-9]+")]
+    [GeneratedRegex("[A-Za-z0-9]+")]
     private static partial Regex WordRegex();
 }

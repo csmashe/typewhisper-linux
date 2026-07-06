@@ -188,7 +188,7 @@ public sealed class XaiPlugin
             throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            ? _selectedLlmModelId ?? SupportedModels[0].Id
             : model;
         var client = new XaiResponsesClient(_httpClient, BaseUrl, _apiKey!);
         return await client.ProcessAsync(systemPrompt, userText, modelId, ct);
@@ -210,7 +210,7 @@ public sealed class XaiPlugin
             throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels.First().Id
+            ? _selectedLlmModelId ?? SupportedModels[0].Id
             : model;
         var client = new XaiResponsesClient(_httpClient, BaseUrl, _apiKey!);
         var source = client.ProcessStreamingAsync(systemPrompt, userText, modelId, ct);
@@ -326,7 +326,7 @@ public sealed class XaiPlugin
     internal void SelectLlmModel(string modelId)
     {
         if (SupportedModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
-            modelId = SupportedModels.FirstOrDefault()?.Id ?? modelId;
+            modelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id ?? modelId;
 
         _selectedLlmModelId = modelId;
         _host?.SetSetting(SelectedLlmModelSettingName, modelId);
@@ -557,7 +557,7 @@ public sealed class XaiPlugin
         if (_selectedLlmModelId is null
             || available.All(model => !string.Equals(model.Id, _selectedLlmModelId, StringComparison.Ordinal)))
         {
-            _selectedLlmModelId = available.First().Id;
+            _selectedLlmModelId = available[0].Id;
             if (persist)
                 _host?.SetSetting(SelectedLlmModelSettingName, _selectedLlmModelId);
         }
@@ -572,7 +572,7 @@ public sealed class XaiPlugin
         if (_selectedVoiceId is null
             || available.All(voice => !string.Equals(voice.Id, _selectedVoiceId, StringComparison.Ordinal)))
         {
-            _selectedVoiceId = available.First().Id;
+            _selectedVoiceId = available[0].Id;
             if (persist)
                 _host?.SetSetting(SelectedVoiceSettingName, _selectedVoiceId);
         }

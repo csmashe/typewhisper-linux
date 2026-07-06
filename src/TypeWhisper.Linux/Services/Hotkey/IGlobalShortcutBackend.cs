@@ -18,13 +18,17 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     /// </summary>
     bool IsGlobalScope { get; }
 
+    // ReSharper disable once UnusedMemberInSuper.Global -- interface contract member; callers invoke IsAvailable on concrete backends (e.g. BackendSelector probes portal.IsAvailable())
     bool IsAvailable();
 
     Task<GlobalShortcutRegistrationResult> RegisterAsync(
         GlobalShortcutSet shortcuts,
+        // ReSharper disable once UnusedParameter.Global -- CancellationToken mandated by the async interface contract; some backends complete synchronously and don't observe it
         CancellationToken ct
     );
 
+    // ReSharper disable once UnusedMember.Global  interface contract member, part of the IGlobalShortcutBackend surface (implemented by every backend)
+    // ReSharper disable once UnusedParameter.Global -- CancellationToken mandated by the async interface contract; backends complete synchronously and don't observe it
     Task UnregisterAsync(CancellationToken ct);
 
     event EventHandler? DictationToggleRequested;

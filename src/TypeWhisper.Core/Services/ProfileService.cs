@@ -4,8 +4,14 @@ using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
 
+/// <summary>
+///     File-backed <see cref="IProfileService" />: persists dictation profiles as JSON and resolves
+///     which profile matches the active window by app name, URL pattern, or global fallback.
+/// </summary>
 public sealed class ProfileService : IProfileService
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     private readonly string _filePath;
     private List<Profile> _cache = [];
     private bool _cacheLoaded;
@@ -127,7 +133,7 @@ public sealed class ProfileService : IProfileService
             if (url is not null && profile.UrlPatterns.Count > 0)
             {
                 urlMatchPattern = profile.UrlPatterns.FirstOrDefault(pattern =>
-                    host is not null && MatchesUrlPattern(host, url, pattern)
+                    host is not null && MatchesUrlPattern(host, pattern)
                 );
             }
 
@@ -213,24 +219,28 @@ public sealed class ProfileService : IProfileService
                 return uri.Host;
             }
         }
-        catch { }
+        catch
+        {
+            // Malformed URL → treat as having no host.
+        }
 
         return null;
     }
 
-    private static bool MatchesUrlPattern(string host, string url, string pattern)
+    private static bool MatchesUrlPattern(string host, string pattern)
     {
-        if (pattern.StartsWith("*."))
+        if (!pattern.StartsWith("*."))
         {
-            // *.example.com matches sub.example.com AND example.com (bare apex)
-            var suffix = pattern[1..]; // includes the leading dot, e.g. ".example.com"
-            return host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
-                   || host.Equals(pattern[2..], StringComparison.OrdinalIgnoreCase);
+            return host.Equals(pattern, StringComparison.OrdinalIgnoreCase)
+                   || host.EndsWith("." + pattern, StringComparison.OrdinalIgnoreCase);
         }
 
+        // *.example.com matches sub.example.com AND example.com (bare apex)
+        var suffix = pattern[1..]; // includes the leading dot, e.g. ".example.com"
+        return host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+               || host.Equals(pattern[2..], StringComparison.OrdinalIgnoreCase);
+
         // Plain pattern (e.g. "example.com") also matches any subdomain
-        return host.Equals(pattern, StringComparison.OrdinalIgnoreCase)
-               || host.EndsWith("." + pattern, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void SortList(List<Profile> profiles)
@@ -275,10 +285,7 @@ public sealed class ProfileService : IProfileService
                 Directory.CreateDirectory(dir);
             }
 
-            var json = JsonSerializer.Serialize(
-                profiles,
-                new JsonSerializerOptions { WriteIndented = true }
-            );
+            var json = JsonSerializer.Serialize(profiles, s_jsonOptions);
 
             tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(tempPath, json);
@@ -297,7 +304,7 @@ public sealed class ProfileService : IProfileService
         finally
         {
             // Surface persistence failures: swallowing them left _cache mutated
-            // and ProfilesChanged firing as if the write had succeeded.
+            // and ProfilesChanged firing as if to write had succeeded.
             if (tempPath is not null)
             {
                 try
@@ -307,7 +314,10 @@ public sealed class ProfileService : IProfileService
                         File.Delete(tempPath);
                     }
                 }
-                catch { }
+                catch
+                {
+                    // Best-effort temp-file cleanup.
+                }
             }
         }
     }

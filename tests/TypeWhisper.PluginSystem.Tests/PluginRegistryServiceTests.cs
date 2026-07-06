@@ -8,7 +8,7 @@ using TypeWhisper.Linux.Services.Plugins;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class PluginRegistryServiceTests : IDisposable
+public sealed class PluginRegistryServiceTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly PluginEventBus _eventBus = new();
@@ -198,7 +198,7 @@ public class PluginRegistryServiceTests : IDisposable
         await service.FirstRunAutoInstallAsync();
 
         Assert.NotNull(savedSettings);
-        Assert.True(savedSettings!.PluginFirstRunCompleted);
+        Assert.True(savedSettings.PluginFirstRunCompleted);
     }
 
     [Fact]

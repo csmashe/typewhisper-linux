@@ -130,6 +130,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     public bool CanImportFiles => _audioFiles.IsImporterAvailable;
     public bool ShowImporterUnavailableReason => !CanImportFiles;
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ImporterUnavailableReason =>
         Loc.Instance["FileTranscription.ImporterUnavailableReason"];
 
@@ -171,7 +173,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         return SelectedItem?.ResultText ?? ResultText;
     }
 
-    public string BuildExportText(FileTranscriptionQueueItemViewModel item)
+    public static string BuildExportText(FileTranscriptionQueueItemViewModel item)
     {
         return item.ResultText;
     }
@@ -184,7 +186,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             : Path.GetFileNameWithoutExtension(filePath);
     }
 
-    public string? BuildSubtitleExport(FileTranscriptionQueueItemViewModel item, string extension)
+    public static string? BuildSubtitleExport(FileTranscriptionQueueItemViewModel item, string extension)
     {
         if (item.RawResult?.Segments is not { Count: > 0 } segments)
         {

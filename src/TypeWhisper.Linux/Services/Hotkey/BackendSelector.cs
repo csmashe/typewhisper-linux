@@ -43,6 +43,7 @@ public sealed class BackendSelector
         return _factory();
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of the throwaway portal probe instance; XdgPortalGlobalShortcutsBackend.DisposeAsync is a self-contained async ValueTask and awaiting it inside the synchronous factory is unnecessary.")]
     private static Func<IGlobalShortcutBackend> DefaultFactory(ISettingsService? settings)
     {
         return () =>

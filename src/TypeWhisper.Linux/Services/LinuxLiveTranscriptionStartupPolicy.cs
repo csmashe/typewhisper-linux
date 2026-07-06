@@ -19,12 +19,7 @@ internal static class LinuxLiveTranscriptionStartupPolicy
         AppSettings settings,
         ITranscriptionEnginePlugin? plugin)
     {
-        if (!settings.LiveTranscriptionEnabled)
-        {
-            return LiveTranscriptionMode.None;
-        }
-
-        if (plugin is null)
+        if (!settings.LiveTranscriptionEnabled || plugin is null)
         {
             return LiveTranscriptionMode.None;
         }
@@ -44,11 +39,8 @@ internal static class LinuxLiveTranscriptionStartupPolicy
         }
 
         // Cloud providers re-upload the whole growing buffer on each poll — off unless opted in.
-        if (settings.OnlineAsrBatchLiveTranscriptionEnabled)
-        {
-            return LiveTranscriptionMode.Polling;
-        }
-
-        return LiveTranscriptionMode.None;
+        return settings.OnlineAsrBatchLiveTranscriptionEnabled
+            ? LiveTranscriptionMode.Polling
+            : LiveTranscriptionMode.None;
     }
 }
