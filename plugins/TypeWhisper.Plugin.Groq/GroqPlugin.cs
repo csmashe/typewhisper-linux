@@ -53,7 +53,7 @@ public sealed partial class GroqPlugin
 
     public string PluginId => "com.typewhisper.groq";
     public string PluginName => "Groq";
-    public string PluginVersion => "1.0.2";
+    public string PluginVersion => "1.0.3";
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

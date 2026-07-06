@@ -75,7 +75,7 @@ jobs:
           echo "PROJECT_NAME=$projectName" >> $env:GITHUB_ENV
           echo "Project: $projectName"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -122,6 +122,14 @@ jobs:
             Copy-Item -Path $locDir -Destination "$stagingDir/Localization" -Recurse
           }
 
+          # Copy plugin Scripts folder if present. Some local-model plugins need
+          # these runtime files (e.g. Python) after the ZIP is installed from the registry.
+          $scriptsDir = "plugins/$env:PROJECT_NAME/Scripts"
+          if (Test-Path $scriptsDir) {
+            Copy-Item -Path $scriptsDir -Destination "$stagingDir/Scripts" -Recurse
+            Write-Host "  Included plugin scripts"
+          }
+
           # Copy NuGet dependency DLLs (excluding SDK/framework assemblies)
           $excludeAssemblies = @('TypeWhisper.PluginSDK.dll')
           Get-ChildItem -Path $outputDir -Filter '*.dll' | Where-Object {
@@ -136,6 +144,12 @@ jobs:
           if (Test-Path $runtimesDir) {
             Copy-Item -Path $runtimesDir -Destination "$stagingDir/runtimes" -Recurse
             Write-Host "  Included native runtimes"
+          }
+
+          # Fail closed: if the plugin ships a Scripts/ dir but it didn't reach
+          # staging, abort rather than publish an incomplete package.
+          if ((Test-Path $scriptsDir) -and -not (Test-Path "$stagingDir/Scripts")) {
+            throw "Plugin scripts were not copied to staging: $scriptsDir"
           }
 
           # Create ZIP

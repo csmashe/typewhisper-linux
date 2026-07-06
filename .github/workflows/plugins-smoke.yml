@@ -25,7 +25,7 @@ jobs:
       scan_mode: ${{ steps.discover.outputs.scan_mode }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -118,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -177,7 +177,7 @@ jobs:
         plugin_path: ${{ fromJson(needs.discover-plugins.outputs.projects) }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
