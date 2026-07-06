@@ -435,7 +435,7 @@
   "Plugins.NoHostNeutralSettings": "Dieses Plugin stellt noch keine host-neutralen Einstellungen bereit.",
   "Plugins.NoValidationAvailable": "Keine Validierung verfügbar.",
   "Plugins.SettingsSaved": "Einstellungen gespeichert.",
-  "Plugins.SummaryFailed": " · {0} konnte nicht geladen werden",
+  "Plugins.SummaryFailed": " · {0} nicht geladen",
   "Plugins.SummaryLoaded": "{0} Plugin(s) geladen",
   "Plugins.TabDisabled": "Deaktiviert ({0})",
   "Plugins.TabEnabled": "Aktiv ({0})",
