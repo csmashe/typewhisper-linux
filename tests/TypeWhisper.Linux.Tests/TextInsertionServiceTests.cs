@@ -439,6 +439,74 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task CaptureSelectedTextAsync_returns_selection_and_restores_clipboard()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the selected text"
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("the selected text", captured);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_returns_empty_when_copy_leaves_clipboard_unchanged()
+    {
+        // No selection: Ctrl+C is a no-op, so the pre-existing clipboard content must NOT be
+        // mistaken for a selection. The stale clipboard is also restored.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "stale clipboard content",
+            SelectionText = null
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("", captured);
+        Assert.Equal("stale clipboard content", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_returns_empty_when_copy_fails()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            CopySucceeds = false
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("", captured);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_preserves_nontext_clipboard_when_no_selection()
+    {
+        // A null clipboard read models non-text data (image/file list). With nothing selected
+        // the probe must not prime a sentinel over it or clear it — the clipboard stays intact.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            SelectionText = null
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("", captured);
+        Assert.Null(platform.Clipboard);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_WaylandWithWtype_PasteCallsWtype()
     {
         var runner = new RecordingProcessRunner();
@@ -1139,6 +1207,11 @@ public sealed class TextInsertionServiceTests
         public bool EnterSent { get; private set; }
         public string? TypedText { get; private set; }
 
+        // When set, a Ctrl+C copy lands this text on the clipboard (models a real selection).
+        // When null, SendCopyAsync leaves the clipboard untouched (nothing selected / copy ignored).
+        public string? SelectionText { get; init; }
+        public bool CopySucceeds { get; init; } = true;
+
         public bool IsClipboardSetAvailable => ClipboardSetAvailable;
 
         public bool IsPasteAvailable => PasteAvailable;
@@ -1197,7 +1270,12 @@ public sealed class TextInsertionServiceTests
 
         public Task<bool> SendCopyAsync()
         {
-            return Task.FromResult(true);
+            if (CopySucceeds && SelectionText is not null)
+            {
+                Clipboard = SelectionText;
+            }
+
+            return Task.FromResult(CopySucceeds);
         }
 
         public Task<bool> SendEnterAsync()
