@@ -19,3 +19,23 @@ query-filters:
       id: cs/catch-of-all-exceptions
   - exclude:
       id: cs/empty-catch-block
+  # Compiled-C# analysis extracts source-generator output (RegexGenerator,
+  # LibraryImportGenerator) under obj/. For compiled languages CodeQL analyzes
+  # all built code, and the paths-ignore globs above CANNOT exclude that
+  # generated code — so these low-value maintainability rules only ever fire on
+  # generated files here, never on hand-written source. Real-source quality is
+  # already enforced by Rider/ReSharper (jb inspectcode).
+  - exclude:
+      id: cs/useless-assignment-to-local
+  - exclude:
+      id: cs/useless-cast-to-self
+  - exclude:
+      id: cs/unused-label
+  - exclude:
+      id: cs/nested-if-statements
+  # P/Invoke is intrinsic to this native-interop Linux desktop app (evdev, X11,
+  # PortAudio, libnotify, gsettings, …). Flagging every unmanaged call is noise.
+  - exclude:
+      id: cs/unmanaged-code
+  - exclude:
+      id: cs/call-to-unmanaged-code

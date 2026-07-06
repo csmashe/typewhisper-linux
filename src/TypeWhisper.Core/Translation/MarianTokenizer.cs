@@ -149,7 +149,7 @@ public sealed class MarianTokenizer
                 }
 
                 var candidate = bestScore[start] + entry.Score;
-                if (!(candidate > bestScore[end]))
+                if (candidate <= bestScore[end])
                 {
                     continue;
                 }
