@@ -118,6 +118,10 @@ public record AppSettings
     public bool VocabularyBoostingEnabled { get; init; }
     public bool AutoAddDictionaryCorrections { get; init; }
 
+    // Silently learn corrections when you type over a dictated word in the target app
+    // (Wispr-Flow-style). Default off — opt-in, since it reads other apps' field text.
+    public bool TargetAppCorrectionLearningEnabled { get; init; }
+
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
     public string SelectedIndustryPresetId { get; init; } = "general";

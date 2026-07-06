@@ -67,6 +67,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly ISnippetService _snippets;
     private readonly SoundFeedbackService _soundFeedback;
     private readonly SpeechFeedbackService _speechFeedback;
+    private readonly TargetAppCorrectionLearningService _targetAppLearning;
     private readonly TextInsertionService _textInsertion;
 
     // The debounce check-and-write must be atomic: two threads (hook + IPC) can
@@ -138,6 +139,7 @@ public sealed class DictationOrchestrator : IDisposable
         RecentTranscriptionsService recentTranscriptions,
         IdeFileReferenceService ideFileReferences,
         SystemCommandAvailabilityService commands,
+        TargetAppCorrectionLearningService targetAppLearning,
         IDetectionFailureTracker failureTracker,
         IErrorLogService errorLog
     )
@@ -167,6 +169,7 @@ public sealed class DictationOrchestrator : IDisposable
         _recentTranscriptions = recentTranscriptions;
         _ideFileReferences = ideFileReferences;
         _commands = commands;
+        _targetAppLearning = targetAppLearning;
         _failureTracker = failureTracker;
         _errorLog = errorLog;
     }
@@ -315,6 +318,10 @@ public sealed class DictationOrchestrator : IDisposable
 
         // Lambdas (not method groups): StartAsync/ToggleAsync have optional parameters
         // that prevent zero-arg method-group conversion.
+        // Start the AT-SPI focus listener now (when enabled) so it has captured the
+        // target field's focus before the user dictates into it.
+        _targetAppLearning.Initialize();
+
         _toggleHandler = (_, _) => FireAndLog(() => ToggleAsync(), nameof(ToggleAsync));
         _startHandler = (_, _) => FireAndLog(() => StartAsync(), nameof(StartAsync));
         _stopHandler = (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
@@ -1639,6 +1646,18 @@ public sealed class DictationOrchestrator : IDisposable
                 );
             }
 
+            if (ShouldArmTargetAppLearning(insertion, actionPlugin, insertionText))
+            {
+                // Fire-and-forget: arm a bounded tracking window on the field that just
+                // received the text, so a follow-up type-over is learned silently. Mirrors
+                // the memory-extraction hook below — never blocks the dictation path.
+                // ReSharper disable once MethodSupportsCancellation -- background arm; not tied to the dictation token.
+                FireAndLog(
+                    () => _targetAppLearning.ArmAsync(insertionText),
+                    "target-app correction learning"
+                );
+            }
+
             var transcriptionId = Guid.NewGuid().ToString();
             var timestamp =
                 context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
@@ -1939,6 +1958,27 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         return result.Success ? InsertionResult.ActionHandled : InsertionResult.ActionFailed;
+    }
+
+    /// <summary>
+    ///     Gate for arming silent target-app correction learning: the feature is enabled,
+    ///     the text went into the field directly (typed or pasted — not a clipboard
+    ///     fallback), it was plain dictation output (no action plugin), and it is short
+    ///     enough to be a normal edit rather than a document dump. AT-SPI availability is
+    ///     checked inside <see cref="TargetAppCorrectionLearningService.ArmAsync" />.
+    /// </summary>
+    private bool ShouldArmTargetAppLearning(
+        InsertionResult insertion,
+        IActionPlugin? actionPlugin,
+        string insertionText
+    )
+    {
+        return TargetAppCorrectionLearningService.ShouldArm(
+            _settings.Current.TargetAppCorrectionLearningEnabled,
+            insertion,
+            actionPlugin is not null,
+            insertionText.Length
+        );
     }
 
     private static void FireAndLog(Func<Task> start, string label)

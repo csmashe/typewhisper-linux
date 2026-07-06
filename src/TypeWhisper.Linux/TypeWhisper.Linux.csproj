@@ -52,6 +52,10 @@
         <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.1"/>
         <PackageReference Include="PortAudioSharp2" Version="1.0.1"/>
         <PackageReference Include="SharpHook" Version="5.3.9"/>
+        <!-- Managed D-Bus client for the event-driven AT-SPI accessibility bus
+             (target-app correction learning). Low-level protocol binding: a
+             persistent connection with signal match rules, no per-read subprocess. -->
+        <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.2"/>
     </ItemGroup>
 
     <Target

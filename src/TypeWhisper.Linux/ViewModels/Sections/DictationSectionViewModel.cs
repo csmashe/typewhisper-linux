@@ -57,6 +57,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _autoAddDictionaryCorrections;
 
     [ObservableProperty]
+    private bool _targetAppCorrectionLearningEnabled;
+
+    [ObservableProperty]
     private bool _autoPaste;
 
     [ObservableProperty]
@@ -642,6 +645,7 @@ public partial class DictationSectionViewModel : ObservableObject
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
+        TargetAppCorrectionLearningEnabled = settings.TargetAppCorrectionLearningEnabled;
         LiveTranscriptionEnabled = settings.LiveTranscriptionEnabled;
         OnlineAsrBatchLiveTranscriptionEnabled = settings.OnlineAsrBatchLiveTranscriptionEnabled;
         LiveTranscriptionStreamingEnabled = settings.LiveTranscriptionStreamingEnabled;
@@ -1296,6 +1300,11 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnAutoAddDictionaryCorrectionsChanged(bool value)
     {
         _settings.Save(_settings.Current with { AutoAddDictionaryCorrections = value });
+    }
+
+    partial void OnTargetAppCorrectionLearningEnabledChanged(bool value)
+    {
+        _settings.Save(_settings.Current with { TargetAppCorrectionLearningEnabled = value });
     }
 
     partial void OnLiveTranscriptionEnabledChanged(bool value)

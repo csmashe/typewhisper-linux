@@ -170,6 +170,8 @@
   "Dictation.AutoCleanup": "Automatische Bereinigung",
   "Dictation.AutoLearnCorrections": "Genehmigte Verlaufskorrekturen automatisch lernen",
   "Dictation.AutoLearnCorrectionsHint": "Wenn Sie einen Verlaufseintrag bearbeiten, können eindeutige Phrasen-Vorschläge sofort gelernt werden.",
+  "Dictation.TargetAppCorrectionLearning": "Korrekturen aus anderen Apps lernen",
+  "Dictation.TargetAppCorrectionLearningHint": "Wenn Sie ein diktiertes Wort in einer anderen App überschreiben, um es zu korrigieren, lernt TypeWhisper die Korrektur stillschweigend und wendet sie auf zukünftige Diktate an. Liest das fokussierte Textfeld; standardmäßig deaktiviert.",
   "Dictation.AutoPaste": "Nach der Transkription automatisch einfügen",
   "Dictation.AutoStopOnSilence": "Bei Stille automatisch stoppen",
   "Dictation.CleanupHigh": "Hoch",

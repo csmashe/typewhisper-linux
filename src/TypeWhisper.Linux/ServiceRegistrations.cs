@@ -80,6 +80,12 @@ internal static class ServiceRegistrations
         services.AddSingleton<IActiveWindowProvider, GnomeShellActiveWindowProvider>();
         services.AddSingleton<IActiveWindowProvider, XdotoolActiveWindowProvider>();
         services.AddSingleton<AtSpiUrlExtractor>();
+        // Event-driven AT-SPI client + silent target-app correction learning
+        // (Wispr-Flow-style). The client holds one a11y-bus connection open; the
+        // learning service arms a tracking window after each qualifying insertion.
+        services.AddSingleton<AtSpiEventClient>();
+        services.AddSingleton<IAtSpiEventClient>(sp => sp.GetRequiredService<AtSpiEventClient>());
+        services.AddSingleton<TargetAppCorrectionLearningService>();
         services.AddSingleton<ActiveWindowService>();
         services.AddSingleton<IActiveWindowService>(sp =>
             sp.GetRequiredService<ActiveWindowService>()

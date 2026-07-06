@@ -1,0 +1,663 @@
+using System.Diagnostics;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
+
+namespace TypeWhisper.Linux.Services;
+
+/// <summary>
+///     Wispr-Flow-style silent correction learning from the target app. After a
+///     dictation inserts text, <see cref="ArmAsync" /> anchors a baseline read of the
+///     focused field and opens a bounded tracking window. If the user then types over a
+///     word to fix it and moves on (focus leaves the field, or a short idle after edits),
+///     the final field text is diffed against the baseline through
+///     <see cref="CorrectionSuggestionService" /> and any high-confidence result is
+///     silently persisted via <see cref="IDictionaryService.LearnCorrection" /> — no toast,
+///     no prompt. Learned entries are reviewable/removable in Settings → Dictionary.
+///     <para>
+///         The AT-SPI plumbing lives behind <see cref="IAtSpiEventClient" />, so the
+///         arm/commit orchestration is unit-testable with a fake.
+///     </para>
+/// </summary>
+public sealed class TargetAppCorrectionLearningService : IDisposable
+{
+    // Longest insertion we will arm on. Longer than a normal edit is likely a document
+    // dump the user won't hand-correct word-by-word, so tracking it wastes a read.
+    private const int MaxInsertionLength = 2048;
+
+    // Baseline/final reads are clamped to this; larger than the insertion gate because the
+    // field can hold pre-existing surrounding text around the dictated span.
+    private const int MaxTrackedTextLength = 8192;
+
+    // Defaults for the timing seams below. Kept as instance fields (not static readonly) so
+    // unit tests can shrink them via the internal constructor without waiting real seconds.
+
+    // How long we keep tracking a field after insertion before giving up (matches Wispr
+    // Flow's "during a dictation session" scoping and bounds resource/privacy exposure).
+    private static readonly TimeSpan s_defaultTrackingWindow = TimeSpan.FromSeconds(30);
+
+    // Commit this long after the last edit when focus hasn't left — covers the "fix a word
+    // and keep the cursor there" case without waiting for the full tracking window.
+    private static readonly TimeSpan s_defaultIdleCommitDelay = TimeSpan.FromSeconds(3);
+
+    // Backoff between baseline read retries while the injected text is still draining into
+    // the field (Wayland can return from the injection tool before the app has applied it).
+    private static readonly TimeSpan s_defaultBaselineRetryDelay = TimeSpan.FromMilliseconds(150);
+
+    private readonly IAtSpiEventClient _client;
+    private readonly IDictionaryService _dictionary;
+    private readonly IErrorLogService _errorLog;
+    private readonly Lock _gate = new();
+
+    // Serializes AT-SPI start/stop so a rapid enable→disable can't interleave. Not disposed:
+    // reconciles run fire-and-forget and could be mid-wait at shutdown; SemaphoreSlim needs no
+    // disposal unless its AvailableWaitHandle is used (it isn't).
+    // ReSharper disable once InconsistentNaming
+    private readonly SemaphoreSlim _listenGate = new(1, 1);
+    private readonly ISettingsService _settings;
+
+    private readonly TimeSpan _trackingWindow;
+    private readonly TimeSpan _idleCommitDelay;
+    private readonly TimeSpan _baselineRetryDelay;
+
+    private ArmedState? _armed;
+    private bool _disposed;
+    private Timer? _idleTimer;
+    private bool _initialized;
+    private bool _loggedSkip;
+    private bool _subscribed;
+    private Timer? _timeoutTimer;
+
+    // Test seam: the most recently scheduled background commit, so unit tests can await
+    // completion deterministically instead of polling. Null until the first commit runs.
+    // Commits are chained onto this task (see CommitInBackground) so awaiting it covers every
+    // scheduled commit, not just the last-started one.
+    internal Task? LastCommitTask { get; private set; }
+
+    // Test seam: the most recently scheduled start/stop reconcile. Reconciles serialize on
+    // _listenGate, so awaiting the last-assigned task guarantees all prior ones have finished.
+    internal Task? LastListenTask { get; private set; }
+
+    public TargetAppCorrectionLearningService(
+        IAtSpiEventClient client,
+        IDictionaryService dictionary,
+        ISettingsService settings,
+        IErrorLogService errorLog
+    )
+        : this(
+            client,
+            dictionary,
+            settings,
+            errorLog,
+            s_defaultTrackingWindow,
+            s_defaultIdleCommitDelay,
+            s_defaultBaselineRetryDelay
+        )
+    {
+    }
+
+    // Test-only overload: lets unit tests shrink the tracking/idle/retry timers to
+    // milliseconds so the arm → commit loop can be exercised deterministically.
+    internal TargetAppCorrectionLearningService(
+        IAtSpiEventClient client,
+        IDictionaryService dictionary,
+        ISettingsService settings,
+        IErrorLogService errorLog,
+        TimeSpan trackingWindow,
+        TimeSpan idleCommitDelay,
+        TimeSpan baselineRetryDelay
+    )
+    {
+        _client = client;
+        _dictionary = dictionary;
+        _settings = settings;
+        _errorLog = errorLog;
+        _trackingWindow = trackingWindow;
+        _idleCommitDelay = idleCommitDelay;
+        _baselineRetryDelay = baselineRetryDelay;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
+        _settings.SettingsChanged -= OnSettingsChanged;
+        if (_subscribed)
+        {
+            _client.FocusChanged -= OnFocusChanged;
+            _client.TextChanged -= OnTextChanged;
+        }
+
+        lock (_gate)
+        {
+            StopTimers();
+            _armed = null;
+        }
+    }
+
+    /// <summary>
+    ///     Wires up settings-change handling and, when the feature is already enabled,
+    ///     starts the AT-SPI listener early so it captures the focus of whatever field
+    ///     the user dictates into (focus is usually gained before dictation starts).
+    ///     Safe to call once from the orchestrator's initialization.
+    /// </summary>
+    public void Initialize()
+    {
+        if (_initialized || _disposed)
+        {
+            return;
+        }
+
+        _initialized = true;
+        _settings.SettingsChanged += OnSettingsChanged;
+        ReconcileListeningInBackground();
+    }
+
+    /// <summary>
+    ///     Called (fire-and-forget) right after a qualifying dictation insertion. Reads the
+    ///     current field text as a baseline and opens the tracking window. No-ops silently
+    ///     when the feature is disabled, AT-SPI is unavailable, the focused element is a
+    ///     password field, or its text can't be read.
+    /// </summary>
+    public async Task ArmAsync(string insertedText)
+    {
+        if (IsOptedOut())
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(insertedText))
+        {
+            return;
+        }
+
+        if (!await _client.EnsureStartedAsync().ConfigureAwait(false))
+        {
+            LogSkipOnce("AT-SPI unavailable; target-app correction learning inactive.");
+            return;
+        }
+
+        EnsureSubscribed();
+
+        var focused = _client.CurrentFocusedElement;
+        if (focused is not { IsValid: true } element)
+        {
+            Trace.WriteLine("[TargetAppLearning] No focused AT-SPI element to track; skipping.");
+            return;
+        }
+
+        // Re-check opt-out after EnsureStartedAsync: the user could have disabled the feature
+        // while it was connecting. Disable runs StopAsync on a separate gate and does not
+        // serialize with this fire-and-forget arm, so we must not do further accessibility
+        // reads after opt-out. (Re-checked again immediately before the text read below.)
+        if (IsOptedOut())
+        {
+            Disarm();
+            return;
+        }
+
+        // Fail closed: skip unless the element is positively a non-password role. A null
+        // (indeterminate) result means the role could not be read — never read text then.
+        if (await _client.IsPasswordFieldAsync(element).ConfigureAwait(false) != false)
+        {
+            Trace.WriteLine(
+                "[TargetAppLearning] Element is a password field or its role is unknown; skipping."
+            );
+            Disarm();
+            return;
+        }
+
+        // Confirm the field actually contains the text we just inserted before anchoring on
+        // it. On Wayland the app may still be draining injected keystrokes when the injection
+        // tool returns, so an immediate read can be truncated ("Hello wor" vs the final
+        // "Hello world") — anchoring on that would learn garbage like `wor -> world`. Compare
+        // with whitespace runs collapsed to single spaces and case-insensitively (tolerates
+        // autocapitalize). Retry a couple of times to let the field settle. This also guards
+        // against arming on the wrong field when focus moved mid-dictation; and a field longer
+        // than the MaxTrackedTextLength read clamp will honestly skip here (the edit past the
+        // clamp would be invisible to us anyway).
+        string? baseline = null;
+        var anchored = false;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(_baselineRetryDelay).ConfigureAwait(false);
+            }
+
+            // Re-check opt-out immediately before every text read: a disable during the
+            // password read or a retry delay must stop us reading the target app's text.
+            if (IsOptedOut())
+            {
+                Disarm();
+                return;
+            }
+
+            var read = await _client.TryReadTextAsync(element, MaxTrackedTextLength)
+                .ConfigureAwait(false);
+            if (read is null)
+            {
+                continue;
+            }
+
+            // Keep the most recent successful read as the candidate baseline.
+            baseline = read;
+            // Positive break reads clearer than a trailing `continue` at the loop tail, which
+            // would skip nothing since the loop re-iterates anyway. Keep found -> anchor -> break.
+            // ReSharper disable once InvertIf
+            if (ContainsCollapsed(read, insertedText))
+            {
+                anchored = true;
+                break;
+            }
+        }
+
+        if (!anchored || baseline is null)
+        {
+            Trace.WriteLine(
+                "[TargetAppLearning] Baseline could not be anchored to the inserted text; skipping."
+            );
+            Disarm();
+            return;
+        }
+
+        lock (_gate)
+        {
+            StopTimers();
+            _armed = new ArmedState(element, baseline);
+            _timeoutTimer = new Timer(
+                static state => ((TargetAppCorrectionLearningService)state!).OnTimeout(),
+                this,
+                _trackingWindow,
+                Timeout.InfiniteTimeSpan
+            );
+        }
+    }
+
+    // Whitespace-insensitive, case-insensitive containment: splits both strings on any
+    // whitespace and rejoins with single spaces so a baseline whose spacing differs from the
+    // injected text (tabs, doubled spaces, wrapped newlines) still anchors.
+    private static bool ContainsCollapsed(string haystack, string needle)
+    {
+        return CollapseWhitespace(haystack)
+            .Contains(CollapseWhitespace(needle), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CollapseWhitespace(string text)
+    {
+        return string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    // A learned pair must share at least this fraction of characters (1 - normalized edit
+    // distance) to count as a recognition/spelling fix rather than a change of intent.
+    private const double MinCorrectionSimilarity = 0.5;
+
+    // True when <paramref name="next" /> is <paramref name="previous" /> plus one or more
+    // appended words (the previous value followed by a word boundary). Distinguishes "the user
+    // kept typing new content" (widening — reject) from "the user refined the corrected word
+    // itself" (e.g. "Kubernete" -> "Kubernetes" — allowed, no whitespace at the seam).
+    private static bool IsWidening(string previous, string next)
+    {
+        return next.Length > previous.Length
+            && next.StartsWith(previous, StringComparison.Ordinal)
+            && char.IsWhiteSpace(next[previous.Length]);
+    }
+
+    private static bool IsLikelyRecognitionFix(string original, string replacement)
+    {
+        var a = CollapseWhitespace(original).ToLowerInvariant();
+        var b = CollapseWhitespace(replacement).ToLowerInvariant();
+        if (a.Length == 0 || b.Length == 0)
+        {
+            return false;
+        }
+
+        var similarity = 1.0 - (double)LevenshteinDistance(a, b) / Math.Max(a.Length, b.Length);
+        return similarity >= MinCorrectionSimilarity;
+    }
+
+    private static int LevenshteinDistance(string a, string b)
+    {
+        var previous = new int[b.Length + 1];
+        var current = new int[b.Length + 1];
+        for (var j = 0; j <= b.Length; j++)
+        {
+            previous[j] = j;
+        }
+
+        for (var i = 1; i <= a.Length; i++)
+        {
+            current[0] = i;
+            for (var j = 1; j <= b.Length; j++)
+            {
+                var cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                current[j] = Math.Min(
+                    Math.Min(current[j - 1] + 1, previous[j] + 1),
+                    previous[j - 1] + cost
+                );
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[b.Length];
+    }
+
+    /// <summary>
+    ///     Pure gate for whether a dictation insertion should arm target-app learning:
+    ///     the feature is on, the text went into the field directly (typed or pasted — not
+    ///     a clipboard fallback), it was plain dictation (no action plugin), and it is short
+    ///     enough to be a normal edit. Kept static and side-effect-free for unit testing.
+    /// </summary>
+    public static bool ShouldArm(
+        bool featureEnabled,
+        InsertionResult insertion,
+        bool hasActionPlugin,
+        int insertionLength
+    )
+    {
+        if (!featureEnabled || hasActionPlugin)
+        {
+            return false;
+        }
+
+        if (insertion is not (InsertionResult.Typed or InsertionResult.Pasted))
+        {
+            return false;
+        }
+
+        return insertionLength is > 0 and <= MaxInsertionLength;
+    }
+
+    // True when the feature has been turned off (or the service torn down). Used as the guard
+    // after every await in ArmAsync/CommitAsync so a mid-flight operation never reads target
+    // text after opt-out — disable runs on a separate gate and doesn't serialize with them.
+    private bool IsOptedOut()
+    {
+        return _disposed || !_settings.Current.TargetAppCorrectionLearningEnabled;
+    }
+
+    private void OnSettingsChanged(AppSettings settings)
+    {
+        ReconcileListeningInBackground();
+    }
+
+    private void ReconcileListeningInBackground()
+    {
+        LastListenTask = Task.Run(ReconcileListeningAsync);
+    }
+
+    // Drives the AT-SPI listener to match the current setting. Serialized on _listenGate and
+    // re-reading _settings.Current each time, so a rapid enable→disable can never leave a
+    // queued start reconnecting after the stop: whichever reconcile runs last observes the
+    // final setting and wins. On opt-out it disarms any tracking window and tears down the
+    // a11y-bus connection so the process stops receiving accessibility event traffic.
+    private async Task ReconcileListeningAsync()
+    {
+        await _listenGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!_disposed && _settings.Current.TargetAppCorrectionLearningEnabled)
+            {
+                if (await _client.EnsureStartedAsync().ConfigureAwait(false))
+                {
+                    EnsureSubscribed();
+                }
+                else
+                {
+                    LogSkipOnce("AT-SPI unavailable; target-app correction learning inactive.");
+                }
+            }
+            else
+            {
+                Disarm();
+                await _client.StopAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[TargetAppLearning] Listener reconcile failed: {ex.Message}");
+        }
+        finally
+        {
+            _listenGate.Release();
+        }
+    }
+
+    private void EnsureSubscribed()
+    {
+        lock (_gate)
+        {
+            if (_subscribed)
+            {
+                return;
+            }
+
+            _client.FocusChanged += OnFocusChanged;
+            _client.TextChanged += OnTextChanged;
+            _subscribed = true;
+        }
+    }
+
+    private void OnTextChanged(AtSpiElementRef element)
+    {
+        lock (_gate)
+        {
+            if (_armed is null || !_armed.Element.Equals(element))
+            {
+                return;
+            }
+
+            _armed.Edited = true;
+            _idleTimer ??= new Timer(
+                static state => ((TargetAppCorrectionLearningService)state!).OnIdle(),
+                this,
+                Timeout.InfiniteTimeSpan,
+                Timeout.InfiniteTimeSpan
+            );
+            _idleTimer.Change(_idleCommitDelay, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void OnFocusChanged(AtSpiElementRef element)
+    {
+        lock (_gate)
+        {
+            if (_armed is null || _armed.Element.Equals(element))
+            {
+                // Not tracking, or focus merely re-asserted on the same element.
+                return;
+            }
+        }
+
+        // Focus left the armed element: a FINAL commit — it learns the edit if there was one
+        // and otherwise cleanly disarms.
+        CommitInBackground(final: true);
+    }
+
+    private void OnIdle()
+    {
+        // Idle commits are NON-FINAL: we persist the current diff but stay armed on the same
+        // baseline so a later focus-out/timeout can re-diff and overwrite a partial edit the
+        // user was still typing when the idle timer fired (LearnCorrection overwrites the
+        // Replacement for an Original it already knows — the self-heal mechanism).
+        CommitInBackground(final: false);
+    }
+
+    private void OnTimeout()
+    {
+        // Timeout is a FINAL commit: learn any pending edit that never triggered a focus-out
+        // or idle commit and drop the state.
+        CommitInBackground(final: true);
+    }
+
+    private void CommitInBackground(bool final)
+    {
+        lock (_gate)
+        {
+            var state = _armed;
+            if (state is null || !state.Edited)
+            {
+                // Inverting to `if (!final) return;` would duplicate the return and split the
+                // cleanup; conditional-cleanup-then-return is clearer here.
+                // ReSharper disable once InvertIf
+                if (final)
+                {
+                    // Nothing to learn; drop the armed state and stop the timers.
+                    _armed = null;
+                    StopTimers();
+                }
+
+                return;
+            }
+
+            if (final)
+            {
+                // Final commits disarm and stop timers up front; the ArmedState snapshot is
+                // then touched only inside the serialized commit chain below.
+                _armed = null;
+                StopTimers();
+            }
+
+            // Serialize commits: a non-final idle commit can race a final focus-out commit,
+            // and both read the field and call LearnCorrection. Chaining onto LastCommitTask
+            // guarantees the previous commit finishes first, so awaiting LastCommitTask covers
+            // every scheduled commit.
+            LastCommitTask = (LastCommitTask ?? Task.CompletedTask)
+                .ContinueWith(_ => CommitAsync(state), TaskScheduler.Default)
+                .Unwrap();
+        }
+    }
+
+    private async Task CommitAsync(ArmedState state)
+    {
+        try
+        {
+            // A commit may have been queued before the user opted out; never read the field
+            // or learn once the feature is disabled (or the service is being torn down).
+            if (IsOptedOut())
+            {
+                return;
+            }
+
+            var finalText = await _client.TryReadTextAsync(state.Element, MaxTrackedTextLength)
+                .ConfigureAwait(false);
+            if (finalText is null || string.Equals(finalText, state.Baseline, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var suggestions = CorrectionSuggestionService.GenerateSuggestions(
+                state.Baseline,
+                finalText
+            );
+            foreach (var suggestion in suggestions)
+            {
+                // Silent auto-learn holds a higher bar than the review-first history flow: only
+                // persist when the replacement is a plausible recognition/spelling fix of the
+                // original. CorrectionSuggestionService only rejects majority rewrites once the
+                // total token count exceeds 3, so without this a short "call mom" -> "email dad"
+                // change of intent would be silently learned as a correction.
+                if (!IsLikelyRecognitionFix(suggestion.Original, suggestion.Replacement))
+                {
+                    Trace.WriteLine(
+                        $"[TargetAppLearning] Rejected low-similarity edit '{suggestion.Original}'"
+                        + $" -> '{suggestion.Replacement}' (likely a change of intent)."
+                    );
+                    continue;
+                }
+
+                if (state.LearnedByOriginal.TryGetValue(suggestion.Original, out var previous))
+                {
+                    // Identical to what we already learned this session — skip so a non-final
+                    // idle commit followed by an identical final commit doesn't inflate
+                    // TimesCorrected/UsageCount.
+                    if (string.Equals(previous, suggestion.Replacement, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    // The user kept typing words after the correction was already complete, so
+                    // the diff now appends them to the replacement (e.g. "Kubernetes" then
+                    // "Kubernetes now"). Keep the earlier, correct value rather than widen it.
+                    if (IsWidening(previous, suggestion.Replacement))
+                    {
+                        Trace.WriteLine(
+                            $"[TargetAppLearning] Ignoring widened replacement '{suggestion.Original}'"
+                            + $" -> '{suggestion.Replacement}' (keeping '{previous}')."
+                        );
+                        continue;
+                    }
+                }
+
+                _dictionary.LearnCorrection(suggestion.Original, suggestion.Replacement);
+                state.LearnedByOriginal[suggestion.Original] = suggestion.Replacement;
+                Trace.WriteLine(
+                    $"[TargetAppLearning] Learned '{suggestion.Original}' -> "
+                    + $"'{suggestion.Replacement}' from target-app edit."
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[TargetAppLearning] Commit failed: {ex.Message}");
+        }
+    }
+
+    private void Disarm()
+    {
+        _ = TakeArmed();
+    }
+
+    private ArmedState? TakeArmed()
+    {
+        lock (_gate)
+        {
+            var state = _armed;
+            _armed = null;
+            StopTimers();
+            return state;
+        }
+    }
+
+    // Caller must hold _gate.
+    private void StopTimers()
+    {
+        _idleTimer?.Dispose();
+        _idleTimer = null;
+        _timeoutTimer?.Dispose();
+        _timeoutTimer = null;
+    }
+
+    private void LogSkipOnce(string message)
+    {
+        Trace.WriteLine($"[TargetAppLearning] {message}");
+        if (_loggedSkip)
+        {
+            return;
+        }
+
+        _loggedSkip = true;
+        _errorLog.AddEntry(message, ErrorCategory.Detection);
+    }
+
+    private sealed class ArmedState(AtSpiElementRef element, string baseline)
+    {
+        public AtSpiElementRef Element { get; } = element;
+        public string Baseline { get; } = baseline;
+        public bool Edited { get; set; }
+
+        // The last replacement persisted for each original during this armed session. Lets a
+        // later commit refine an earlier partial (overwrite) while ignoring identical repeats
+        // (no count inflation) and widenings (trailing words the user kept typing). Touched
+        // only inside the serialized commit chain, so it needs no synchronization of its own.
+        public Dictionary<string, string> LearnedByOriginal { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+    }
+}
