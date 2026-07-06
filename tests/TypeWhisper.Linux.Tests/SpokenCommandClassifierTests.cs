@@ -102,4 +102,13 @@ public sealed class SpokenCommandClassifierTests
         Assert.Contains("write a poem", prompt);
         Assert.Contains("no saved actions", prompt);
     }
+
+    [Fact]
+    public void BuildPrompt_HandlesNullActions()
+    {
+        var prompt = SpokenCommandClassifier.BuildPrompt("write a poem", null);
+
+        Assert.Contains("write a poem", prompt);
+        Assert.Contains("no saved actions", prompt);
+    }
 }

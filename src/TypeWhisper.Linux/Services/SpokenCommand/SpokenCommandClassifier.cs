@@ -21,8 +21,9 @@ public static class SpokenCommandClassifier
     ///     <paramref name="command" />: edit vs create, and which of the user's
     ///     <paramref name="actions" /> (if any) fits.
     /// </summary>
-    public static string BuildPrompt(string command, IReadOnlyList<PromptAction> actions)
+    public static string BuildPrompt(string command, IReadOnlyList<PromptAction>? actions)
     {
+        actions ??= [];
         var actionLines = actions.Count == 0
             ? "(the user has no saved actions)"
             : string.Join(

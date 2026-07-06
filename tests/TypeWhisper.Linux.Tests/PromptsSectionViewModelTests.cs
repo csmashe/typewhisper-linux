@@ -1,4 +1,5 @@
 using System.Reflection;
+using Moq;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -203,6 +204,115 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         sut.SelectedEditProvider = null;
 
         Assert.Equal("plugin:com.typewhisper.openai:gpt-4.1-mini", sut.EditProviderOverride);
+    }
+
+    [Fact]
+    public void CommandSettings_HydrateFromSettingsWithoutPersisting()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { CommandModeEnabled = true, CommandKeyphrase = "Jarvis" }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+
+        Assert.True(sut.CommandModeEnabled);
+        Assert.Equal("Jarvis", sut.CommandKeyphrase);
+        // Hydration must not write the values it just read back to settings.
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
+    [Fact]
+    public void CommandSettings_HydrateBlankKeyphraseFallsBackToDefault()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { CommandKeyphrase = "   " }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+
+        Assert.Equal(AppSettings.DefaultCommandKeyphrase, sut.CommandKeyphrase);
+    }
+
+    [Fact]
+    public void CommandModeEnabled_TogglePersistsToSettings()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        {
+            CommandModeEnabled = true
+        };
+
+        Assert.True(sut.CommandModeEnabled);
+        Assert.True(settings.Object.Current.CommandModeEnabled);
+        settings.Verify(
+            service => service.Save(It.Is<AppSettings>(saved => saved.CommandModeEnabled)),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public void CommandKeyphrase_TrimmedValuePersistsNormalizedOnce()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        {
+            CommandKeyphrase = "  Jarvis  "
+        };
+
+        // The re-entrant normalization must land the trimmed value and persist it exactly once.
+        Assert.Equal("Jarvis", sut.CommandKeyphrase);
+        Assert.Equal("Jarvis", settings.Object.Current.CommandKeyphrase);
+        settings.Verify(
+            service => service.Save(It.Is<AppSettings>(saved => saved.CommandKeyphrase == "Jarvis")),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public void CommandKeyphrase_BlankValueFallsBackToDefaultAndPersists()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { CommandKeyphrase = "Jarvis" }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        {
+            CommandKeyphrase = "   "
+        };
+
+        Assert.Equal(AppSettings.DefaultCommandKeyphrase, sut.CommandKeyphrase);
+        Assert.Equal(AppSettings.DefaultCommandKeyphrase, settings.Object.Current.CommandKeyphrase);
+    }
+
+    [Fact]
+    public void CommandKeyphrase_UnchangedNormalizedValueHitsNoOpGuard()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { CommandKeyphrase = "Jarvis" }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        {
+            // Whitespace that normalizes back to the already-saved value: no persist.
+            CommandKeyphrase = "  Jarvis  "
+        };
+
+        Assert.Equal("Jarvis", sut.CommandKeyphrase);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
     }
 
     private static void SetPrivateField(object target, string fieldName, object value)
