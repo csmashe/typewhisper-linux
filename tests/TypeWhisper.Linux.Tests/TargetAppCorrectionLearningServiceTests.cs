@@ -421,6 +421,36 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Disable_BetweenArmAndCommit_DoesNotReadOrLearn()
+    {
+        // The tracking window is open (armed + edited) when the user disables the feature, but
+        // the listener reconcile has not disarmed yet (Initialize is not wired here, so flipping
+        // the setting does not run StopAsync/Disarm). The opt-out re-check in CommitAsync must
+        // bail before reading the field again or learning.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        var settings = new FakeSettingsService(
+            AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
+        );
+        using var service = CreateService(client, settings);
+
+        client.TextToReturn = "I deployed to kubernets today";
+        await service.ArmAsync("I deployed to kubernets today");
+        Assert.Equal(1, client.TextReadCalls); // baseline read only
+
+        // The user fixes the word (arming the edit), then disables before focus-out commits it.
+        client.TextToReturn = "I deployed to Kubernetes today";
+        client.RaiseText(s_field);
+        settings.Save(AppSettings.Default with { TargetAppCorrectionLearningEnabled = false });
+
+        // Focus-out schedules a final commit; the opt-out guard must stop it before the read.
+        client.RaiseFocus(s_otherField);
+        await AwaitCommit(service);
+
+        Assert.Equal(1, client.TextReadCalls); // no second read after opt-out
+        Assert.Empty(_dictionary.GetCorrections());
+    }
+
+    [Fact]
     public async Task Arm_WhenBusUnavailable_NoOps()
     {
         var client = new FakeAtSpiEventClient { Available = false, CurrentFocusedElement = s_field };

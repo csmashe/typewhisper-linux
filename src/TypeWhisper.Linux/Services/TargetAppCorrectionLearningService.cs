@@ -568,6 +568,15 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 return;
             }
 
+            // Re-check opt-out immediately before the text read: a disable between queueing this
+            // commit and running it must stop us reading the target app's text (mirrors ArmAsync,
+            // which re-checks before every read). Without this, disabling in that gap still lets
+            // one more accessibility read (and potentially a learn) slip through.
+            if (IsOptedOut())
+            {
+                return;
+            }
+
             var finalText = await _client.TryReadTextAsync(state.Element, MaxTrackedTextLength)
                 .ConfigureAwait(false);
             if (finalText is null || string.Equals(finalText, state.Baseline, StringComparison.Ordinal))
