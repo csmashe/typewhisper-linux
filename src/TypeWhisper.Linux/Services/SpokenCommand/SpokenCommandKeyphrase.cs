@@ -56,7 +56,8 @@ public static class SpokenCommandKeyphrase
 
         // STT can split a one-word keyphrase into a couple of fragments, so try folding
         // up to the keyphrase's own word count plus a small slack of leading tokens.
-        var maxTokens = Math.Min(tokens.Count, KeyphraseWordCount(keyphrase) + 2);
+        var keyphraseWordCount = KeyphraseWordCount(keyphrase);
+        var maxTokens = Math.Min(tokens.Count, keyphraseWordCount + 2);
         var accumulated = new StringBuilder();
         for (var count = 1; count <= maxTokens; count++)
         {
@@ -66,7 +67,16 @@ public static class SpokenCommandKeyphrase
                 continue;
             }
 
-            if (StringDistance.Levenshtein(accumulated.ToString(), normalizedKeyphrase) > maxDistance)
+            // Tighten the edit budget by one for every leading token folded beyond the
+            // keyphrase's own word count. Folding extra tokens concatenates whole English
+            // words together, which lands within the raw distance-2 tolerance far too
+            // easily ("Type this per …" -> "typethisper" is distance 1 from "typewhisper"),
+            // silently swallowing dictated text. Charging one edit per extra fold keeps the
+            // full tolerance for genuine keyphrase renderings (one token, or the exact
+            // two-token "type whisper" split) while requiring a near-exact concatenation
+            // before a 3+ word fold can ever match.
+            var allowedDistance = Math.Max(0, maxDistance - Math.Max(0, count - keyphraseWordCount));
+            if (StringDistance.Levenshtein(accumulated.ToString(), normalizedKeyphrase) > allowedDistance)
             {
                 continue;
             }

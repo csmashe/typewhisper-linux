@@ -16,6 +16,9 @@ public sealed class SpokenCommandKeyphraseTests
     [InlineData("TypeWhisper: write a note", "write a note")]
     [InlineData("TypeWhisper - fix the grammar", "fix the grammar")]
     [InlineData("  TypeWhisper   make this formal  ", "make this formal")]
+    // Close single-edit mishearings of the product name must still match.
+    [InlineData("typewisper translate this", "translate this")]
+    [InlineData("type whisker make it shorter", "make it shorter")]
     public void TryStrip_ExtractsCommandAfterKeyphrase(string rawText, string expectedCommand)
     {
         var stripped = SpokenCommandKeyphrase.TryStrip(rawText, Keyphrase, out var command);
@@ -61,11 +64,16 @@ public sealed class SpokenCommandKeyphraseTests
         Assert.Equal("draft an email", command);
     }
 
-    [Fact]
-    public void TryStrip_DoesNotFalseTriggerOnUnrelatedLeadingWords()
+    [Theory]
+    [InlineData("typing these words quickly")]
+    // Folds of 3+ ordinary English words that only reach the keyphrase via the raw
+    // distance-2 allowance must not silently swallow dictation.
+    [InlineData("Type this per the spec and send it")]
+    [InlineData("Type is per the docs")]
+    public void TryStrip_DoesNotFalseTriggerOnUnrelatedLeadingWords(string rawText)
     {
         var stripped = SpokenCommandKeyphrase.TryStrip(
-            "typing these words quickly",
+            rawText,
             Keyphrase,
             out var command
         );
