@@ -10,18 +10,18 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public static class WordDiff
 {
-    /// <summary>
-    ///     Aligns <paramref name="raw" /> against <paramref name="final" /> at the
-    ///     word level and returns the merged runs. Consecutive words with the same
-    ///     <see cref="DiffKind" /> are coalesced into a single segment (words joined
-    ///     by a single space). Returns an empty list when both inputs are blank.
-    /// </summary>
     // Guards the O(n*m) LCS table against exhausting memory on very long,
     // wholly-different transcripts. 2M cells ≈ 8 MB (int[,]); with the common
     // prefix/suffix trimmed first, only a wholesale rewrite of a ~1400+ word
     // dictation can exceed it, and that falls back to a coarse replacement diff.
     private const long MaxLcsCells = 2_000_000;
 
+    /// <summary>
+    ///     Aligns <paramref name="raw" /> against <paramref name="final" /> at the
+    ///     word level and returns the merged runs. Consecutive words with the same
+    ///     <see cref="DiffKind" /> are coalesced into a single segment (words joined
+    ///     by a single space). Returns an empty list when both inputs are blank.
+    /// </summary>
     public static IReadOnlyList<DiffSegment> Compute(string raw, string final)
     {
         var rawWords = Tokenize(raw);
