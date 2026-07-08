@@ -232,6 +232,84 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_RequiredTranslationFailure_RethrowsOriginalException()
+    {
+        var expected = new IOException("translation unavailable");
+        var options = new PipelineOptions
+        {
+            TranslationHandler = (_, _, _, _) => throw expected,
+            TranslationTarget = "fr",
+            DetectedLanguage = "en",
+            RequireTranslationSuccess = true
+        };
+
+        var ex = await Assert.ThrowsAsync<IOException>(() => _sut.ProcessAsync("hello", options));
+
+        // Bare `throw;` must preserve the original exception instance, not wrap or re-create it.
+        Assert.Same(expected, ex);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RequireTranslationSuccessWithoutHandler_Throws()
+    {
+        var options = new PipelineOptions { RequireTranslationSuccess = true, TranslationTarget = "fr" };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _sut.ProcessAsync("hello", options)
+        );
+        Assert.Equal("Required translation is not configured.", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TranslationFailureNotRequired_KeepsCurrentText()
+    {
+        var translationAttempted = false;
+        var options = new PipelineOptions
+        {
+            TranslationHandler = (_, _, _, _) =>
+            {
+                translationAttempted = true;
+                throw new IOException("translation unavailable");
+            },
+            TranslationTarget = "fr",
+            DetectedLanguage = "en"
+        };
+
+        var result = await _sut.ProcessAsync("hello", options);
+
+        // Prove the step actually ran and failed, then the failure was swallowed.
+        Assert.True(translationAttempted);
+        Assert.Equal("hello", result.Text);
+        var translationStep = Assert.Single(result.Steps, s => s.Name == PostProcessingStepNames.Translation);
+        Assert.False(translationStep.Succeeded);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RequireTranslationSuccess_DoesNotRethrowNonTranslationFailure()
+    {
+        var translated = false;
+        var options = new PipelineOptions
+        {
+            // A non-Translation step fails; RequireTranslationSuccess must not turn this into a rethrow.
+            CleanupHandler = (_, _) => throw new IOException("cleanup unavailable"),
+            TranslationHandler = (text, _, _, _) =>
+            {
+                translated = true;
+                return Task.FromResult($"[fr] {text}");
+            },
+            TranslationTarget = "fr",
+            DetectedLanguage = "en",
+            RequireTranslationSuccess = true
+        };
+
+        var result = await _sut.ProcessAsync("hello", options);
+
+        // Cleanup failure was swallowed; Translation still ran and succeeded on the current text.
+        Assert.True(translated);
+        Assert.Equal("[fr] hello", result.Text);
+    }
+
+    [Fact]
     public async Task ProcessAsync_Translation_UsesDetectedLanguageWhenEffectiveLanguageMatchesTarget()
     {
         string? sourceLanguage = null;
