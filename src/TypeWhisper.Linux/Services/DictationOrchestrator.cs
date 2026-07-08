@@ -2715,6 +2715,7 @@ public sealed class DictationOrchestrator : IDisposable
                     InsertionStatus = TextInsertionStatus.Typed,
                     CleanupLevelUsed = CleanupLevel.None,
                     PromptActionApplied = true,
+                    IsSpokenCommand = true,
                     LlmCalls = context.Capture?.Calls ?? []
                 }
             );

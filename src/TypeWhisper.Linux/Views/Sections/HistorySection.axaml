@@ -206,6 +206,12 @@
                                                                            VerticalAlignment="Top"
                                                                            Margin="8,0,0,0">
                                                                     <Border Classes="badge"
+                                                                            IsVisible="{Binding IsSpokenCommand}">
+                                                                        <TextBlock Text="{loc:Str History.CommandBadge}"
+                                                                                Foreground="#C9A8FF"
+                                                                                FontSize="11" />
+                                                                    </Border>
+                                                                    <Border Classes="badge"
                                                                             IsVisible="{Binding HasProfileName}">
                                                                         <TextBlock Text="{Binding Record.ProfileName}"
                                                                                 Foreground="#8FC0FF"

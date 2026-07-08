@@ -370,6 +370,7 @@
   "History.AllApps": "Todas las apps",
   "History.App": "App",
   "History.ClearAll": "Borrar todo",
+  "History.CommandBadge": "Comando",
   "History.EmptyState": "Aún no hay grabaciones.",
   "History.GroupLastWeek": "La semana pasada",
   "History.GroupThisWeek": "Esta semana",
