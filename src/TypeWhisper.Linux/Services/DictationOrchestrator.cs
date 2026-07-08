@@ -1972,7 +1972,7 @@ public sealed class DictationOrchestrator : IDisposable
             var canStreamDirectly = _settings.Current.AutoPaste
                 && (strategy is TextInsertionStrategy.DirectTyping
                     || (strategy is TextInsertionStrategy.Auto
-                        && _textInsertion.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)));
+                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)));
 
             if (!canStreamDirectly)
             {

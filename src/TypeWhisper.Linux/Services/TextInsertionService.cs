@@ -266,7 +266,7 @@ public sealed class TextInsertionService
     ///     insert would do, or whether it must defer to the content-aware one-shot path (clipboard
     ///     paste for GUI targets, ASCII-safety for unknown ones).
     /// </summary>
-    public bool AppPrefersDirectTyping(string? processName, string? windowTitle)
+    public static bool AppPrefersDirectTyping(string? processName, string? windowTitle)
     {
         return ShouldTypeDirectly(processName, windowTitle);
     }

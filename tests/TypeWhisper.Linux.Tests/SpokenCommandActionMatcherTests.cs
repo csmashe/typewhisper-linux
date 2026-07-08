@@ -77,4 +77,18 @@ public sealed class SpokenCommandActionMatcherTests
 
         Assert.Equal("email", matched!.Id);
     }
+
+    [Fact]
+    public void Match_MatchesSingleWordNameAfterLeadingFiller()
+    {
+        // A leading politeness filler ("please") must not hide an explicit single-word invocation.
+        var actions = new PromptAction[]
+        {
+            new() { Id = "email", Name = "Email", SystemPrompt = "..." }
+        };
+
+        var matched = SpokenCommandActionMatcher.Match("please email this to the team", actions);
+
+        Assert.Equal("email", matched!.Id);
+    }
 }

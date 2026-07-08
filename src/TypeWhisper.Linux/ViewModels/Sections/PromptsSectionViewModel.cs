@@ -83,6 +83,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             Dispatcher.UIThread.Post(() =>
             {
                 OnPropertyChanged(nameof(DefaultLlmProvider));
+                OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
                 HydrateCommandSettings(value);
             });
 

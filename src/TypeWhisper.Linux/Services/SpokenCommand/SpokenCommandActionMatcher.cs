@@ -52,9 +52,16 @@ public static class SpokenCommandActionMatcher
             // word ("draft an email to Bob") would hijack an "Email" action and force the edit branch.
             // Require a single-word name to lead the command, where a named invocation puts it; a
             // multi-word name needing every word present is already specific enough to match anywhere.
-            if (nameTokens.Count == 1 && !TokensSimilar(nameTokens[0], commandTokens[0]))
+            // Skip leading politeness fillers first so "please email this…" still reads as leading,
+            // mirroring SpokenCommandIntent.
+            if (nameTokens.Count == 1)
             {
-                allTokensPresent = false;
+                var lead = commandTokens
+                    .FirstOrDefault(token => !SpokenCommandText.LeadingFillers.Contains(token));
+                if (lead is null || !TokensSimilar(nameTokens[0], lead))
+                {
+                    allTokensPresent = false;
+                }
             }
 
             // Multi-word names only, so STT word-joins ("cleanup email") still match; a single short
@@ -86,13 +93,11 @@ public static class SpokenCommandActionMatcher
                || (a.Length >= 4 && b.Length >= 4 && StringDistance.Levenshtein(a, b) <= 1);
     }
 
+    // Shares the whitespace/alphanumeric split with SpokenCommandIntent, then applies this matcher's
+    // own lowercasing (via Normalize) so TokensSimilar can compare ordinally.
     private static List<string> Tokenize(string text)
     {
-        return text
-            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(Normalize)
-            .Where(token => token.Length > 0)
-            .ToList();
+        return SpokenCommandText.Tokenize(text).Select(Normalize).ToList();
     }
 
     // Lowercased, alphanumerics only — collapses "Clean up email" to "cleanupemail".

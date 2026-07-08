@@ -86,4 +86,38 @@ public sealed class WhisperHallucinationFilterTests
                 durationSeconds: 1.0,
                 noSpeechProbability: null));
     }
+
+    [Theory]
+    // Duration comparison is `> 2.5`, so exactly 2.5 is still "short enough" (hallucination), and
+    // anything above is treated as real speech.
+    [InlineData(2.5, true)]
+    [InlineData(2.5001, false)]
+    public void IsLikelyHallucination_HonorsDurationThresholdBoundary(
+        double durationSeconds,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            WhisperHallucinationFilter.IsLikelyHallucination(
+                "Thank you.",
+                durationSeconds,
+                noSpeechProbability: null));
+    }
+
+    [Theory]
+    // No-speech comparison is `< 0.3`, so exactly 0.3 still counts as a hallucination while just
+    // below it is trusted as confident speech.
+    [InlineData(0.3f, true)]
+    [InlineData(0.2999f, false)]
+    public void IsLikelyHallucination_HonorsNoSpeechProbabilityThresholdBoundary(
+        float noSpeechProbability,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            WhisperHallucinationFilter.IsLikelyHallucination(
+                "Thank you.",
+                durationSeconds: 1.0,
+                noSpeechProbability));
+    }
 }

@@ -53,13 +53,6 @@ public static class SpokenCommandIntent
         "write", "draft", "compose", "create", "generate"
     };
 
-    // Politeness/filler that can precede the real verb ("please write…", "can you fix…"); skipped
-    // when locating the leading creation OR transform verb so the filler doesn't hide it.
-    private static readonly HashSet<string> s_leadingFillers = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "please", "pls", "kindly", "just", "can", "could", "would", "you"
-    };
-
     public static bool RefersToSelection(string command)
     {
         if (string.IsNullOrWhiteSpace(command))
@@ -67,7 +60,7 @@ public static class SpokenCommandIntent
             return false;
         }
 
-        var tokens = Tokenize(command).ToList();
+        var tokens = SpokenCommandText.Tokenize(command).ToList();
         if (tokens.Count == 0)
         {
             return false;
@@ -82,7 +75,7 @@ public static class SpokenCommandIntent
 
         // Skip leading politeness/filler so "please fix grammar" / "can you make this formal" read the
         // same as the bare command, mirroring OpensWithCreationVerb.
-        var meaningful = tokens.SkipWhile(s_leadingFillers.Contains).ToList();
+        var meaningful = tokens.SkipWhile(SpokenCommandText.LeadingFillers.Contains).ToList();
         if (meaningful.Count == 0)
         {
             return false;
@@ -103,9 +96,9 @@ public static class SpokenCommandIntent
             return false;
         }
 
-        var tokens = Tokenize(command).ToList();
+        var tokens = SpokenCommandText.Tokenize(command).ToList();
         var index = 0;
-        while (index < tokens.Count && s_leadingFillers.Contains(tokens[index]))
+        while (index < tokens.Count && SpokenCommandText.LeadingFillers.Contains(tokens[index]))
         {
             index++;
         }
@@ -119,30 +112,13 @@ public static class SpokenCommandIntent
         var parts = phrase.Split(' ');
         for (var start = 0; start + parts.Length <= tokens.Count; start++)
         {
-            var matched = true;
-            for (var offset = 0; offset < parts.Length; offset++)
-            {
-                if (!string.Equals(tokens[start + offset], parts[offset], StringComparison.OrdinalIgnoreCase))
-                {
-                    matched = false;
-                    break;
-                }
-            }
-
-            if (matched)
+            if (tokens.Skip(start).Take(parts.Length)
+                .SequenceEqual(parts, StringComparer.OrdinalIgnoreCase))
             {
                 return true;
             }
         }
 
         return false;
-    }
-
-    private static IEnumerable<string> Tokenize(string text)
-    {
-        return text
-            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(token => new string(token.Where(char.IsLetterOrDigit).ToArray()))
-            .Where(token => token.Length > 0);
     }
 }
