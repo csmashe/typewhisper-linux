@@ -31,6 +31,14 @@ public sealed record TranscriptionRecord
     public bool PromptActionApplied { get; init; }
     public bool TranslationApplied { get; init; }
     public IReadOnlyList<CorrectionSuggestion> PendingCorrectionSuggestions { get; init; } = [];
+
+    /// <summary>
+    ///     Fine-grained provenance of each LLM call made while producing this
+    ///     entry (cleanup and/or prompt action). Empty for pre-feature records
+    ///     and for runs where provenance capture was disabled.
+    /// </summary>
+    public IReadOnlyList<LlmCallProvenance> LlmCalls { get; init; } = [];
+
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
     public int WordCount =>

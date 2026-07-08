@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -30,7 +31,8 @@ public sealed class PromptProcessingService
     public async Task<string> ProcessAsync(
         PromptAction action,
         string inputText,
-        CancellationToken ct,
+        LlmCallCapture? capture = null,
+        CancellationToken ct = default,
         bool wrapInput = true
     )
     {
@@ -41,6 +43,7 @@ public sealed class PromptProcessingService
         }
 
         var systemPrompt = action.SystemPrompt;
+        string? injectedMemoryContext = null;
         // ReSharper disable once InvertIf — conditionally augments systemPrompt; not a guard,
         // and inverting would duplicate the large trailing ProcessAsync call.
         if (_settings.Current.MemoryEnabled)
@@ -48,6 +51,7 @@ public sealed class PromptProcessingService
             var context = await _memory.GetContextAsync(inputText, ct);
             if (!string.IsNullOrWhiteSpace(context))
             {
+                injectedMemoryContext = context;
                 systemPrompt = $"""
                                 {systemPrompt}
 
@@ -57,12 +61,24 @@ public sealed class PromptProcessingService
             }
         }
 
-        return await provider.ProcessAsync(
-            systemPrompt,
-            wrapInput ? FormatPromptActionInput(inputText) : inputText,
+        var userPrompt = wrapInput ? FormatPromptActionInput(inputText) : inputText;
+        var provenance = RecordProvenance(
+            capture,
+            "PromptAction",
+            provider,
             modelId,
-            ct
+            systemPrompt,
+            userPrompt,
+            injectedMemoryContext
         );
+
+        var response = await provider.ProcessAsync(systemPrompt, userPrompt, modelId, ct);
+        if (provenance is not null)
+        {
+            provenance.ResponseReceived = response;
+        }
+
+        return response;
     }
 
     /// <summary>
@@ -73,8 +89,9 @@ public sealed class PromptProcessingService
     public async IAsyncEnumerable<string> ProcessStreamingAsync(
         PromptAction action,
         string inputText,
+        LlmCallCapture? capture = null,
         [EnumeratorCancellation]
-        CancellationToken ct,
+        CancellationToken ct = default,
         bool wrapInput = true
     )
     {
@@ -85,11 +102,13 @@ public sealed class PromptProcessingService
         }
 
         var systemPrompt = action.SystemPrompt;
+        string? injectedMemoryContext = null;
         if (_settings.Current.MemoryEnabled)
         {
             var context = await _memory.GetContextAsync(inputText, ct);
             if (!string.IsNullOrWhiteSpace(context))
             {
+                injectedMemoryContext = context;
                 systemPrompt = $"""
                                 {systemPrompt}
 
@@ -99,24 +118,48 @@ public sealed class PromptProcessingService
             }
         }
 
-        var source = provider.ProcessStreamingAsync(
-            systemPrompt,
-            wrapInput ? FormatPromptActionInput(inputText) : inputText,
+        var userPrompt = wrapInput ? FormatPromptActionInput(inputText) : inputText;
+        // Record before the stream yields so a mid-stream fault is still captured
+        // exactly once (the streaming→batch fallback passes a null capture).
+        var provenance = RecordProvenance(
+            capture,
+            "PromptAction",
+            provider,
             modelId,
-            ct
+            systemPrompt,
+            userPrompt,
+            injectedMemoryContext
         );
 
-        // ReSharper disable once RedundantWithCancellation -- provider is a plugin; it may implement IAsyncEnumerable manually and observe only the GetAsyncEnumerator token, so forwarding ct here is not redundant across the plugin boundary.
-        await foreach (var delta in source.WithCancellation(ct))
+        var source = provider.ProcessStreamingAsync(systemPrompt, userPrompt, modelId, ct);
+
+        // Accumulate the streamed reply so the Inspect panel can show the full
+        // response. A mid-stream fault or cancel still records whatever arrived
+        // (set in finally) alongside the already-recorded prompt.
+        var responseBuilder = provenance is null ? null : new StringBuilder();
+        try
         {
-            yield return delta;
+            // ReSharper disable once RedundantWithCancellation -- provider is a plugin; it may implement IAsyncEnumerable manually and observe only the GetAsyncEnumerator token, so forwarding ct here is not redundant across the plugin boundary.
+            await foreach (var delta in source.WithCancellation(ct))
+            {
+                responseBuilder?.Append(delta);
+                yield return delta;
+            }
+        }
+        finally
+        {
+            if (provenance is not null && responseBuilder is not null)
+            {
+                provenance.ResponseReceived = responseBuilder.ToString();
+            }
         }
     }
 
     public async Task<string> ProcessSystemPromptAsync(
         string systemPrompt,
         string inputText,
-        CancellationToken ct
+        LlmCallCapture? capture = null,
+        CancellationToken ct = default
     )
     {
         var (provider, modelId) = ResolveProvider(providerOverride: null);
@@ -125,12 +168,63 @@ public sealed class PromptProcessingService
             throw new InvalidOperationException("No enabled LLM provider is available.");
         }
 
-        return await provider.ProcessAsync(
-            systemPrompt,
-            FormatPromptActionInput(inputText),
+        var userPrompt = FormatPromptActionInput(inputText);
+        var provenance = RecordProvenance(
+            capture,
+            "Cleanup",
+            provider,
             modelId,
-            ct
+            systemPrompt,
+            userPrompt,
+            injectedMemoryContext: null
         );
+
+        var response = await provider.ProcessAsync(systemPrompt, userPrompt, modelId, ct);
+        if (provenance is not null)
+        {
+            provenance.ResponseReceived = response;
+        }
+
+        return response;
+    }
+
+    // Records one provenance entry describing exactly what is about to be sent to
+    // the provider and returns it so the caller can attach the response once the
+    // call completes (null when capture is disabled). RanLocally defaults to
+    // network (false) when the plugin can't be resolved from the selection id, so
+    // we never falsely claim on-device.
+    private LlmCallProvenance? RecordProvenance(
+        LlmCallCapture? capture,
+        string stage,
+        ILlmProviderPlugin provider,
+        string modelId,
+        string systemPrompt,
+        string userPrompt,
+        string? injectedMemoryContext
+    )
+    {
+        if (capture is null)
+        {
+            return null;
+        }
+
+        var providerId = provider.GetLlmSelectionId();
+        var plugin = _pluginManager.GetPlugin(providerId);
+        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+
+        var provenance = new LlmCallProvenance
+        {
+            Stage = stage,
+            SystemPromptSent = systemPrompt,
+            UserPromptSent = userPrompt,
+            ProviderName = provider.ProviderName,
+            ProviderId = providerId,
+            ModelId = modelId,
+            RanLocally = ranLocally,
+            InjectedMemoryContext = injectedMemoryContext
+        };
+        capture.Add(provenance);
+        return provenance;
     }
 
     // JSON-encodes the input under "dictated_text" and instructs the model to treat it

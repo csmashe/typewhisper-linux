@@ -2,6 +2,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
+             xmlns:local="using:TypeWhisper.Linux"
+             xmlns:models="using:TypeWhisper.Core.Models"
              x:Class="TypeWhisper.Linux.Views.Sections.HistorySection"
              x:DataType="vm:HistorySectionViewModel">
     <UserControl.Styles>
@@ -358,6 +360,10 @@
                                                                         Content="{loc:Str History.AddTerm}"
                                                                         Command="{Binding AddToDictionaryCommand}" />
                                                                 <Button Classes="link-button"
+                                                                        Content="{loc:Str History.Inspect.Toggle}"
+                                                                        Command="{Binding ToggleInspectorCommand}"
+                                                                        IsVisible="{Binding ShowInspectorToggle}" />
+                                                                <Button Classes="link-button"
                                                                         Content="{Binding PlaybackButtonText}"
                                                                         Command="{Binding TogglePlaybackCommand}"
                                                                         IsVisible="{Binding HasSessionAudio}" />
@@ -367,6 +373,123 @@
                                                                         Tag="{Binding}"
                                                                         Foreground="#F06A6A" />
                                                             </StackPanel>
+
+                                                            <Border Classes="suggestion-panel"
+                                                                    IsVisible="{Binding ShowInspector}">
+                                                                <StackPanel Spacing="10">
+                                                                    <TextBlock Text="{loc:Str History.Inspect.Title}"
+                                                                               FontSize="12"
+                                                                               FontWeight="SemiBold"
+                                                                               Foreground="#D8E6F7" />
+
+                                                                    <StackPanel Spacing="4"
+                                                                                IsVisible="{Binding ShowRawVsFinal}">
+                                                                        <TextBlock Classes="label">
+                                                                            <Run Text="{loc:Str History.Inspect.RawTranscript}" />
+                                                                            <Run Text="  →  " />
+                                                                            <Run Text="{loc:Str History.Inspect.FinalText}" />
+                                                                        </TextBlock>
+                                                                        <ItemsControl ItemsSource="{Binding RawVsFinalDiff}">
+                                                                            <ItemsControl.ItemsPanel>
+                                                                                <ItemsPanelTemplate>
+                                                                                    <WrapPanel />
+                                                                                </ItemsPanelTemplate>
+                                                                            </ItemsControl.ItemsPanel>
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="models:DiffSegment">
+                                                                                    <TextBlock Text="{Binding Text}"
+                                                                                               FontSize="13"
+                                                                                               Margin="0,0,5,2"
+                                                                                               Foreground="{Binding Kind, Converter={x:Static local:DiffKindBrushConverter.Instance}}"
+                                                                                               TextDecorations="{Binding Kind, Converter={x:Static local:DiffKindDecorationsConverter.Instance}}" />
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </StackPanel>
+
+                                                                    <ItemsControl ItemsSource="{Binding InspectorCalls}"
+                                                                                  IsVisible="{Binding HasLlmCalls}">
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate x:DataType="vm:LlmCallDisplay">
+                                                                                <Border Background="#0C141C"
+                                                                                        BorderBrush="#1F2E3D"
+                                                                                        BorderThickness="1"
+                                                                                        CornerRadius="6"
+                                                                                        Padding="10"
+                                                                                        Margin="0,4,0,0">
+                                                                                    <StackPanel Spacing="6">
+                                                                                        <Grid ColumnDefinitions="*,Auto">
+                                                                                            <TextBlock Text="{Binding StageLabel}"
+                                                                                                       FontSize="12"
+                                                                                                       FontWeight="SemiBold"
+                                                                                                       Foreground="#D8E6F7"
+                                                                                                       VerticalAlignment="Center" />
+                                                                                            <Border Grid.Column="1"
+                                                                                                    Classes="badge"
+                                                                                                    Background="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Background}"
+                                                                                                    BorderBrush="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Border}">
+                                                                                                <TextBlock Text="{Binding NetworkBadgeText}"
+                                                                                                           FontSize="11"
+                                                                                                           Foreground="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Foreground}" />
+                                                                                            </Border>
+                                                                                        </Grid>
+
+                                                                                        <TextBlock Text="{Binding ProviderModelLabel}"
+                                                                                                   FontSize="11"
+                                                                                                   Foreground="#8A9AAE" />
+
+                                                                                        <StackPanel Spacing="2"
+                                                                                                    IsVisible="{Binding HasSystemPrompt}">
+                                                                                            <TextBlock Text="{loc:Str History.Inspect.SystemPrompt}"
+                                                                                                       Classes="label" />
+                                                                                            <SelectableTextBlock Text="{Binding SystemPromptSent}"
+                                                                                                                 FontSize="12"
+                                                                                                                 TextWrapping="Wrap"
+                                                                                                                 Foreground="#C6D2E0" />
+                                                                                        </StackPanel>
+
+                                                                                        <StackPanel Spacing="2"
+                                                                                                    IsVisible="{Binding HasUserPrompt}">
+                                                                                            <TextBlock Text="{loc:Str History.Inspect.UserPrompt}"
+                                                                                                       Classes="label" />
+                                                                                            <SelectableTextBlock Text="{Binding UserPromptSent}"
+                                                                                                                 FontSize="12"
+                                                                                                                 TextWrapping="Wrap"
+                                                                                                                 Foreground="#C6D2E0" />
+                                                                                        </StackPanel>
+
+                                                                                        <StackPanel Spacing="2"
+                                                                                                    IsVisible="{Binding HasInjectedContext}">
+                                                                                            <TextBlock Text="{loc:Str History.Inspect.InjectedContext}"
+                                                                                                       Classes="label" />
+                                                                                            <SelectableTextBlock Text="{Binding InjectedMemoryContext}"
+                                                                                                                 FontSize="12"
+                                                                                                                 TextWrapping="Wrap"
+                                                                                                                 Foreground="#C6D2E0" />
+                                                                                        </StackPanel>
+
+                                                                                        <StackPanel Spacing="2"
+                                                                                                    IsVisible="{Binding HasResponse}">
+                                                                                            <TextBlock Text="{loc:Str History.Inspect.Response}"
+                                                                                                       Classes="label" />
+                                                                                            <SelectableTextBlock Text="{Binding ResponseReceived}"
+                                                                                                                 FontSize="12"
+                                                                                                                 TextWrapping="Wrap"
+                                                                                                                 Foreground="#9FD8B4" />
+                                                                                        </StackPanel>
+                                                                                    </StackPanel>
+                                                                                </Border>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+
+                                                                    <TextBlock Text="{Binding NoLlmCallsMessage}"
+                                                                               FontSize="12"
+                                                                               Foreground="#8A9AAE"
+                                                                               TextWrapping="Wrap"
+                                                                               IsVisible="{Binding !HasLlmCalls}" />
+                                                                </StackPanel>
+                                                            </Border>
                                                         </StackPanel>
                                                     </StackPanel>
                                                 </Border>
