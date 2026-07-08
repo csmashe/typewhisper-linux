@@ -659,9 +659,12 @@ public sealed class AudioRecordingService : IDisposable
     private int? ResolveSelectedDeviceIndex()
     {
         // In follow-default mode always re-resolve the current OS default from the
-        // enumerator (the enumerator refreshes PortAudio's device table first), and
-        // remember its stable id as the preferred device so a later default change
-        // can be detected. Also honors an explicit pin by index.
+        // enumerator and remember its stable id as the preferred device so a later
+        // default change can be detected. NOTE: the enumerator reads PortAudio's CACHED
+        // table (it only ensures init, it does not cycle the library), so callers that
+        // need the freshest default must refresh the table first — EnsureInputStreamStarted
+        // and CheckForDefaultDeviceChange both call RefreshPortAudioDeviceTable ahead of
+        // this. Also honors an explicit pin by index.
         if (FollowSystemDefault)
         {
             var devices = _deviceEnumerator.GetDevices();
@@ -719,6 +722,20 @@ public sealed class AudioRecordingService : IDisposable
             }
 
             EnsurePortAudioInitialized();
+
+            // In follow-default mode, cycle PortAudio's cached device table BEFORE
+            // resolving the device so recording starts on the CURRENT OS default rather
+            // than whatever default was captured at the last Pa_Initialize. Without this
+            // a default change that happened while the app was idle (no watcher event, or
+            // pactl unavailable) would leave a new recording bound to the STALE default.
+            // Safe here: we hold _streamLock and _stream is null (checked above) and
+            // IsRecording is still false (StartRecording/StartPreview flip it only AFTER
+            // this returns), so RefreshPortAudioDeviceTable does not skip and never
+            // re-inits under a live stream. In pinned mode the table is left untouched.
+            if (FollowSystemDefault)
+            {
+                RefreshPortAudioDeviceTable();
+            }
 
             var deviceIndex = ResolveSelectedDeviceIndex();
             if (deviceIndex is null)
@@ -976,8 +993,11 @@ public sealed class AudioRecordingService : IDisposable
             }
 
             // Refresh PortAudio's cached device table so the enumerator reports the NEW
-            // default. No-ops while a stream is live / recording (checked under the lock).
-            RefreshPortAudioDeviceTable();
+            // default. No-ops (returns false) while a stream is live / recording (checked
+            // under the lock) — in which case the table below is STALE and still reports
+            // the OLD default. We must not treat that stale reading as authoritative when
+            // deciding to clear a pending migration.
+            var deviceTableFresh = RefreshPortAudioDeviceTable();
 
             AudioInputDevice? preferred;
             try
@@ -1001,12 +1021,25 @@ public sealed class AudioRecordingService : IDisposable
 
             lock (_migrationLock)
             {
-                // Already on the preferred device — nothing to migrate; clear any stale defer.
+                // Already on the preferred device — nothing to migrate.
                 if (
                     string.Equals(_activeDeviceId, preferred.PersistentId, StringComparison.Ordinal)
                 )
                 {
-                    _preferredDeviceMigrationPending = false;
+                    // Only clear a pending defer when this reading is TRUSTWORTHY. If the
+                    // device-table refresh was skipped (a stream is live / recording), the
+                    // enumerator still reports the OLD default, which of course equals the
+                    // device we are recording on — so "already on default" here is an
+                    // artifact of the stale table, NOT proof the pending migration is moot.
+                    // Clearing it would silently drop a real deferred migration that
+                    // StopRecording is relying on replaying. Leave it set; the next check
+                    // (after recording stops, table refreshable) re-resolves the true
+                    // default and completes or clears the migration correctly.
+                    if (deviceTableFresh)
+                    {
+                        _preferredDeviceMigrationPending = false;
+                    }
+
                     return;
                 }
 
@@ -1081,12 +1114,21 @@ public sealed class AudioRecordingService : IDisposable
     // native stream handle and could crash the realtime callback. Callers must have
     // already ensured no recording is in flight; here we additionally bail if any
     // stream (e.g. a preview) is still open, deferring the refresh implicitly.
-    private void RefreshPortAudioDeviceTable()
+    //
+    // Returns TRUE when the caller can trust the device table to reflect the current OS
+    // default afterward — i.e. the table was cycled, OR PortAudio was not yet initialized
+    // (in which case the next enumeration initializes it and reads a fresh table). Returns
+    // FALSE ONLY when the refresh was SKIPPED because a stream is live / recording: the
+    // table is then STALE, so callers (see CheckForDefaultDeviceChange) must not treat a
+    // "still on the same default" reading as authoritative and must not clear a pending
+    // migration off it.
+    private bool RefreshPortAudioDeviceTable()
     {
-        // Never re-init the native library out from under a live stream.
+        // Never re-init the native library out from under a live stream. Skipped =>
+        // table is stale.
         if (_stream is not null || IsRecording)
         {
-            return;
+            return false;
         }
 
         lock (s_paInitLock)
@@ -1095,38 +1137,58 @@ public sealed class AudioRecordingService : IDisposable
             // have opened a stream between the outer check and acquiring the lock.
             if (_stream is not null || IsRecording)
             {
-                return;
+                return false;
             }
 
             if (s_paInitCount <= 0)
             {
-                // Not initialized yet; the next EnsurePortAudioInitialized will read
-                // a fresh table anyway, so there is nothing cached to refresh.
-                return;
+                // Not initialized yet; the next EnsurePortAudioInitialized (called by the
+                // enumerator) will read a fresh table anyway, so there is nothing cached
+                // to refresh and the resulting reading is NOT stale.
+                return true;
             }
 
             try
             {
                 PortAudio.Terminate();
+
+                // From here PortAudio is terminated: s_paInitCount must NOT stay positive
+                // unless a matching Initialize() succeeds, otherwise the next
+                // EnsurePortAudioInitialized() would see a positive count and skip the
+                // re-init, leaving the library terminated-but-"initialized" (unusable).
+                s_paInitCount = 0;
+
                 PortAudio.Initialize();
+                s_paInitCount = 1;
             }
             catch (Exception ex)
             {
-                // Best-effort refresh: if the cycle fails, leave the count as-is and
-                // fall back to the stale table. Try to restore a usable init state.
+                // Best-effort refresh: if the cycle fails, fall back to the stale table
+                // and try to restore a usable init state. s_paInitCount now reflects
+                // actual PortAudio state: 0 if Terminate() ran but Initialize() has not
+                // yet succeeded (so a later EnsurePortAudioInitialized() recovers), or
+                // still 1 if Terminate() itself threw before changing state.
                 Trace.WriteLine(
                     $"[AudioRecordingService] PortAudio device-table refresh failed: {ex.Message}"
                 );
                 try
                 {
                     PortAudio.Initialize();
+                    s_paInitCount = 1;
                 }
                 catch
                 {
-                    /* leave s_paInitCount as-is; a later EnsurePortAudioInitialized retries */
+                    // Leave s_paInitCount as set above (0 after a successful Terminate);
+                    // a later EnsurePortAudioInitialized() then retries the init.
                 }
             }
         }
+
+        // Reached only when the refresh was attempted (not skipped for a live stream):
+        // Terminate()+Initialize() cycled the table, so the reading is fresh. Even on the
+        // best-effort failure path the library was re-initialized against the current OS
+        // state, so the table is not stale in the sense that matters for migration.
+        return true;
     }
 
     // ======================= RUNTIME DEFAULT-DEVICE WATCHER =======================
@@ -1234,6 +1296,17 @@ public sealed class AudioRecordingService : IDisposable
     internal void SetRecordingForTest(bool recording)
     {
         Volatile.Write(ref _isRecording, recording ? 1 : 0);
+    }
+
+    // Seed the deferred-migration flag directly, so the "pending survives a stale/
+    // skipped device-table refresh" path in CheckForDefaultDeviceChange can be
+    // exercised without reconstructing a full defer→stale-recheck sequence. Test-only.
+    internal void SetMigrationPendingForTest(bool pending)
+    {
+        lock (_migrationLock)
+        {
+            _preferredDeviceMigrationPending = pending;
+        }
     }
 
     // Idempotent: initializes on first call only. GetInputDevices also calls

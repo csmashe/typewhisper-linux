@@ -106,6 +106,36 @@ public sealed class DefaultDeviceChangeDispatcherTests
         var ex = Record.Exception(() => time.Advance(Debounce));
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void StaleTimerCallback_QueuedBeforeALaterSignal_DoesNotFireEarly()
+    {
+        // Regression: a timer callback that was already dispatched for an EARLIER deadline
+        // can run after a later Signal() extended the deadline. It must be recognized as
+        // stale (its captured generation is no longer current) and skipped, so the burst
+        // still fires exactly once — for the NEWEST deadline — honoring the debounce.
+        var time = new DeferredFireTimeProvider();
+        var fired = 0;
+        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, Debounce, time);
+
+        // gen 1: arm the timer, then let its due time elapse so its callback is DISPATCHED
+        // (captured as pending) but not yet executed.
+        sut.Signal();
+        time.ElapseAndCapturePending();
+
+        // gen 2: a fresh Signal arrives before the gen-1 callback ran, pushing the deadline
+        // out. This arms a new timer for gen 2.
+        sut.Signal();
+
+        // The stale gen-1 callback now runs. It must NOT fire (gen 2 is the latest arming).
+        time.RunCapturedPending();
+        Assert.Equal(0, fired);
+
+        // gen 2's deadline elapses and its callback runs → exactly one fire for the burst.
+        time.ElapseAndCapturePending();
+        time.RunCapturedPending();
+        Assert.Equal(1, fired);
+    }
 }
 
 // Line classifier: which pactl-subscribe lines are relevant to a default-capture
@@ -227,6 +257,49 @@ public sealed class DefaultDeviceWatcherFallbackTests
         var ex = Record.Exception(() => sut.Start(() => { }));
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void PactlWatcher_Restarts_AfterReadLoopExitsOnEof()
+    {
+        // Regression: when the 'pactl subscribe' read loop hits EOF/error the watcher must
+        // clear its run state so a LATER Start() spawns a fresh subscription. Previously the
+        // subscription handle stayed set after the loop ended, so Start() saw "already
+        // running" and never restarted. Here each fake subscription returns one relevant
+        // line then EOF, ending the loop; Start() must be able to spin up a second one.
+        var starts = 0;
+        PactlSubscription Factory()
+        {
+            starts++;
+            // One relevant line then EOF (StringReader returns null after its content).
+            return PactlSubscription.ForTest(new StringReader("Event 'change' on server #0\n"));
+        }
+
+        using var sut = new PactlDefaultDeviceWatcher(
+            isPactlAvailable: () => true,
+            subscriptionFactory: Factory);
+
+        sut.Start(() => { });
+        // The first run's read loop hits EOF and self-tears-down: wait until it clears.
+        WaitUntil(() => !sut.IsRunningForTest);
+        Assert.Equal(1, starts);
+
+        // A second Start() must NOT be rejected as "already running" — it spawns a fresh
+        // subscription because the first run cleared its state on exit.
+        sut.Start(() => { });
+        WaitUntil(() => !sut.IsRunningForTest);
+        Assert.Equal(2, starts);
+    }
+
+    private static void WaitUntil(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(10);
+        }
+
+        Assert.True(condition(), "Condition was not met within the timeout.");
+    }
 }
 
 // Fake event source: no real pactl process. Records Start/Stop and lets a test
@@ -322,6 +395,98 @@ internal sealed class ManualTimeProvider : TimeProvider
         public void Dispose()
         {
             _dueTicks = null;
+            owner.Remove(this);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
+}
+
+// TimeProvider that models the real thread-pool race the debounce guard defends against:
+// a timer's due time can elapse and DISPATCH its callback (queue it) before the callback
+// actually runs, and a later Signal() (which disposes that timer and arms a new one) can
+// slip in between. ElapseAndCapturePending() captures the due timer's callback WITHOUT
+// running it (mirroring "dispatched but not yet executed"); RunCapturedPending() runs the
+// captured callbacks. A callback captured this way still runs even if its timer is later
+// disposed — exactly as a queued thread-pool work item would.
+internal sealed class DeferredFireTimeProvider : TimeProvider
+{
+    private readonly List<DeferredTimer> _timers = [];
+    private readonly List<Action> _pending = [];
+
+    // Mark every currently-armed timer as due and capture its callback for deferred
+    // execution, then disarm it (one-shot).
+    public void ElapseAndCapturePending()
+    {
+        foreach (var timer in _timers.ToArray())
+        {
+            timer.CaptureIfArmed(_pending);
+        }
+    }
+
+    // Run (and clear) all callbacks captured by ElapseAndCapturePending().
+    public void RunCapturedPending()
+    {
+        var toRun = _pending.ToArray();
+        _pending.Clear();
+        foreach (var run in toRun)
+        {
+            run();
+        }
+    }
+
+    public override ITimer CreateTimer(
+        TimerCallback callback,
+        object? state,
+        TimeSpan dueTime,
+        TimeSpan period
+    )
+    {
+        var timer = new DeferredTimer(this, callback, state);
+        _timers.Add(timer);
+        timer.Change(dueTime, period);
+        return timer;
+    }
+
+    private void Remove(DeferredTimer timer) => _timers.Remove(timer);
+
+    private sealed class DeferredTimer(
+        DeferredFireTimeProvider owner,
+        TimerCallback callback,
+        object? state
+    ) : ITimer
+    {
+        private bool _armed;
+
+        public bool Change(TimeSpan dueTime, TimeSpan period)
+        {
+            _armed = dueTime != Timeout.InfiniteTimeSpan;
+            return true;
+        }
+
+        // If armed, capture the callback into the pending list (dispatched, not run) and
+        // disarm. The captured Action still runs later even if this timer is disposed —
+        // modeling a work item that is already queued on the thread pool.
+        public void CaptureIfArmed(List<Action> pending)
+        {
+            if (!_armed)
+            {
+                return;
+            }
+
+            _armed = false;
+            pending.Add(() => callback(state));
+        }
+
+        public bool Dispose(WaitHandle notifyObject) => throw new NotSupportedException();
+
+        public void Dispose()
+        {
+            _armed = false;
             owner.Remove(this);
         }
 

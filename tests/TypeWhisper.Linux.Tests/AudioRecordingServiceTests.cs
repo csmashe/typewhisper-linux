@@ -363,6 +363,61 @@ public sealed class AudioRecordingServiceMigrationTests
     }
 
     [Fact]
+    public void CheckForDefaultDeviceChange_KeepsPendingMigration_WhenTableStaleWhileRecording()
+    {
+        // Regression: a deferred migration must NOT be lost to a stale device table.
+        // While a recording is in flight, RefreshPortAudioDeviceTable is skipped (it may
+        // not re-init PortAudio under a live stream), so the enumerator still reports the
+        // OLD default. If that old default equals the active device, the "already on
+        // default" branch must NOT clear a genuinely-pending migration — otherwise
+        // StopRecording would find nothing to replay and the swap would be dropped.
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "A", 1, isDefault: true),
+            new FakeDevice(1, "B", 1, isDefault: false));
+        using var sut = new AudioRecordingService(deviceEnumerator: devices)
+        {
+            FollowSystemDefault = true
+        };
+        sut.SetActiveDeviceIdForTest("A|1", 0);
+        sut.SetRecordingForTest(true);
+
+        // A migration to B was detected earlier and deferred; it is pending. The device
+        // table is now STALE (recording in flight) and still reports A as the default,
+        // matching the active device.
+        sut.SetMigrationPendingForTest(true);
+
+        sut.CheckForDefaultDeviceChange();
+
+        // The stale "already on A" reading must not clear the pending migration.
+        Assert.True(sut.MigrationPendingForTest);
+        Assert.Equal("A|1", sut.ActiveDeviceIdForTest);
+        Assert.Equal(0, sut.SelectedDeviceIndex);
+    }
+
+    [Fact]
+    public void CheckForDefaultDeviceChange_ClearsStalePending_WhenTrulyOnDefault_AndTableFresh()
+    {
+        // Contrast to the stale-table case: when NOT recording the table is refreshable
+        // (fresh), so an "already on the current default" reading IS authoritative and a
+        // leftover pending flag should be cleared — the migration really is moot.
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "A", 1, isDefault: true),
+            new FakeDevice(1, "B", 1, isDefault: false));
+        using var sut = new AudioRecordingService(deviceEnumerator: devices)
+        {
+            FollowSystemDefault = true
+        };
+        sut.SetActiveDeviceIdForTest("A|1", 0);
+        // Idle (not recording) → RefreshPortAudioDeviceTable reports a fresh table.
+        sut.SetMigrationPendingForTest(true);
+
+        sut.CheckForDefaultDeviceChange();
+
+        Assert.False(sut.MigrationPendingForTest);
+        Assert.Equal("A|1", sut.ActiveDeviceIdForTest);
+    }
+
+    [Fact]
     public void CheckForDefaultDeviceChange_MigratesOnStableId_DespiteIndexReorder()
     {
         // PipeWire re-indexes on reconnect: the same device ("B") reappears at a
