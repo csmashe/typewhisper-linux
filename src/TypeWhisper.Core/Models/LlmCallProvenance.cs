@@ -3,11 +3,12 @@ namespace TypeWhisper.Core.Models;
 
 /// <summary>
 ///     Fine-grained provenance of a single LLM call made while processing one
-///     dictation: the exact system + user prompt that were sent, the resolved
-///     provider/model, whether the call stayed on-device, and (for prompt
-///     actions) any memory context that was injected. Captured at the single
-///     chokepoint where the prompt is assembled and persisted onto the owning
-///     <see cref="TranscriptionRecord" /> so each run is auditable.
+///     dictation: the exact system + user prompt that were sent, the response
+///     that came back, the resolved provider/model, whether the call stayed
+///     on-device, and (for prompt actions) any memory context that was injected.
+///     Captured at the single chokepoint where the prompt is assembled and
+///     persisted onto the owning <see cref="TranscriptionRecord" /> so each run
+///     is auditable.
 /// </summary>
 public sealed record LlmCallProvenance
 {
@@ -19,6 +20,14 @@ public sealed record LlmCallProvenance
 
     /// <summary>Exactly what was sent as the user message (post FormatPromptActionInput).</summary>
     public required string UserPromptSent { get; init; }
+
+    /// <summary>
+    ///     The reply the provider returned for this call. Set after the call
+    ///     completes (settable, not init), so it is null until then and for
+    ///     records produced before this field existed. On a streamed call it holds
+    ///     the accumulated text (partial if the stream faulted mid-way).
+    /// </summary>
+    public string? ResponseReceived { get; set; }
 
     /// <summary>Human-readable provider name, e.g. "OpenAI".</summary>
     public string ProviderName { get; init; } = "";

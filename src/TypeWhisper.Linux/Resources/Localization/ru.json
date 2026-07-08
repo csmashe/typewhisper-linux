@@ -370,6 +370,7 @@
   "History.Inspect.InjectedContext": "Внедрённый контекст памяти",
   "History.Inspect.NoLlmCalls": "Для этого диктанта вызовы LLM не записаны.",
   "History.Inspect.RawTranscript": "Исходная расшифровка",
+  "History.Inspect.Response": "Ответ",
   "History.Inspect.SentToProvider": "Отправлено в {0}",
   "History.Inspect.StageCleanup": "Очистка",
   "History.Inspect.StageMemory": "Извлечение в память",

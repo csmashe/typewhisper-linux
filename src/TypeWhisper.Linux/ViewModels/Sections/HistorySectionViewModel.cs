@@ -720,8 +720,10 @@ public sealed class LlmCallDisplay
     public string SystemPromptSent => _call.SystemPromptSent;
     public string UserPromptSent => _call.UserPromptSent;
     public string? InjectedMemoryContext => _call.InjectedMemoryContext;
+    public string? ResponseReceived => _call.ResponseReceived;
 
     public bool HasSystemPrompt => !string.IsNullOrWhiteSpace(_call.SystemPromptSent);
     public bool HasUserPrompt => !string.IsNullOrWhiteSpace(_call.UserPromptSent);
     public bool HasInjectedContext => !string.IsNullOrWhiteSpace(_call.InjectedMemoryContext);
+    public bool HasResponse => !string.IsNullOrWhiteSpace(_call.ResponseReceived);
 }

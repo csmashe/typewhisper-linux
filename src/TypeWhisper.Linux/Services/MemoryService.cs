@@ -79,9 +79,14 @@ public sealed class MemoryService
             _lastExtraction = DateTime.UtcNow;
 
             // Record before the call so a mid-request fault is still captured.
-            RecordProvenance(capture, llm, model, text);
+            var provenance = RecordProvenance(capture, llm, model, text);
 
             var result = await llm.ProcessAsync(ExtractionPrompt, text, model, ct);
+            if (provenance is not null)
+            {
+                provenance.ResponseReceived = result;
+            }
+
             if (
                 string.IsNullOrWhiteSpace(result)
                 || result.Trim().Equals("NONE", StringComparison.OrdinalIgnoreCase)
@@ -109,9 +114,11 @@ public sealed class MemoryService
 
     // Mirrors PromptProcessingService.RecordProvenance: records the extraction
     // request so the history Inspect panel can show that memory extraction also
-    // sent the dictation text to an LLM. RanLocally defaults to network (false)
-    // when the plugin can't be resolved, so we never falsely claim on-device.
-    private void RecordProvenance(
+    // sent the dictation text to an LLM, and returns it so the caller can attach
+    // the response (null when capture is disabled). RanLocally defaults to network
+    // (false) when the plugin can't be resolved, so we never falsely claim
+    // on-device.
+    private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
         ILlmProviderPlugin provider,
         string modelId,
@@ -120,26 +127,26 @@ public sealed class MemoryService
     {
         if (capture is null)
         {
-            return;
+            return null;
         }
 
         var providerId = provider.GetLlmSelectionId();
         var plugin = _pluginManager.GetPlugin(providerId);
         var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
 
-        capture.Add(
-            new LlmCallProvenance
-            {
-                Stage = "Memory",
-                SystemPromptSent = ExtractionPrompt,
-                UserPromptSent = userPrompt,
-                ProviderName = provider.ProviderName,
-                ProviderId = providerId,
-                ModelId = modelId,
-                RanLocally = ranLocally,
-                InjectedMemoryContext = null
-            }
-        );
+        var provenance = new LlmCallProvenance
+        {
+            Stage = "Memory",
+            SystemPromptSent = ExtractionPrompt,
+            UserPromptSent = userPrompt,
+            ProviderName = provider.ProviderName,
+            ProviderId = providerId,
+            ModelId = modelId,
+            RanLocally = ranLocally,
+            InjectedMemoryContext = null
+        };
+        capture.Add(provenance);
+        return provenance;
     }
 
     public async Task<string?> GetContextAsync(string query, CancellationToken ct = default)

@@ -247,6 +247,10 @@ public sealed class PromptProcessingServiceTests : IDisposable
         Assert.Equal("model-a", call.ModelId);
         Assert.False(call.RanLocally);
         Assert.Null(call.InjectedMemoryContext);
+        Assert.Equal(
+            $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            call.ResponseReceived
+        );
     }
 
     [Fact]
@@ -333,6 +337,10 @@ public sealed class PromptProcessingServiceTests : IDisposable
         Assert.Equal("Clean this up", call.SystemPromptSent);
         Assert.Equal(PromptProcessingService.FormatPromptActionInput("hello"), call.UserPromptSent);
         Assert.Null(call.InjectedMemoryContext);
+        Assert.Equal(
+            $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            call.ResponseReceived
+        );
     }
 
     [Fact]
@@ -377,6 +385,40 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
         Assert.Single(capture.Calls);
         Assert.Equal("PromptAction", capture.Calls[0].Stage);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_WithCapture_RecordsAccumulatedResponse()
+    {
+        var provider = new FakeLlmProviderPlugin("com.test.default", "Default Provider", "model-a");
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.default:model-a" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var action = new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" };
+        var capture = new LlmCallCapture();
+
+        // Drain to completion so the finally block records the accumulated reply.
+        await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", capture, CancellationToken.None))
+        {
+            // Intentionally empty.
+        }
+
+        var call = Assert.Single(capture.Calls);
+        Assert.Equal(
+            $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            call.ResponseReceived
+        );
     }
 
     private static Mock<ISettingsService> CreateSettings(AppSettings current)

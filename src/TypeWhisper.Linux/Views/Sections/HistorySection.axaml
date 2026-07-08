@@ -467,6 +467,16 @@
                                                                                                                  TextWrapping="Wrap"
                                                                                                                  Foreground="#C6D2E0" />
                                                                                         </StackPanel>
+
+                                                                                        <StackPanel Spacing="2"
+                                                                                                    IsVisible="{Binding HasResponse}">
+                                                                                            <TextBlock Text="{loc:Str History.Inspect.Response}"
+                                                                                                       Classes="label" />
+                                                                                            <SelectableTextBlock Text="{Binding ResponseReceived}"
+                                                                                                                 FontSize="12"
+                                                                                                                 TextWrapping="Wrap"
+                                                                                                                 Foreground="#9FD8B4" />
+                                                                                        </StackPanel>
                                                                                     </StackPanel>
                                                                                 </Border>
                                                                             </DataTemplate>

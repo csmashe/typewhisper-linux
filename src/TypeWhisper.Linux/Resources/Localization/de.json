@@ -370,6 +370,7 @@
   "History.Inspect.InjectedContext": "Eingefügter Speicherkontext",
   "History.Inspect.NoLlmCalls": "Für dieses Diktat wurden keine LLM-Aufrufe aufgezeichnet.",
   "History.Inspect.RawTranscript": "Rohtranskript",
+  "History.Inspect.Response": "Antwort",
   "History.Inspect.SentToProvider": "Gesendet an {0}",
   "History.Inspect.StageCleanup": "Bereinigung",
   "History.Inspect.StageMemory": "Speicher-Extraktion",

@@ -370,6 +370,7 @@
   "History.Inspect.InjectedContext": "Contexto de memoria inyectado",
   "History.Inspect.NoLlmCalls": "No se registraron llamadas a LLM para este dictado.",
   "History.Inspect.RawTranscript": "Transcripción original",
+  "History.Inspect.Response": "Respuesta",
   "History.Inspect.SentToProvider": "Enviado a {0}",
   "History.Inspect.StageCleanup": "Limpieza",
   "History.Inspect.StageMemory": "Extracción de memoria",

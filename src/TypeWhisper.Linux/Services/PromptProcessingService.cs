@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -60,7 +61,7 @@ public sealed class PromptProcessingService
         }
 
         var userPrompt = FormatPromptActionInput(inputText);
-        RecordProvenance(
+        var provenance = RecordProvenance(
             capture,
             "PromptAction",
             provider,
@@ -70,7 +71,13 @@ public sealed class PromptProcessingService
             injectedMemoryContext
         );
 
-        return await provider.ProcessAsync(systemPrompt, userPrompt, modelId, ct);
+        var response = await provider.ProcessAsync(systemPrompt, userPrompt, modelId, ct);
+        if (provenance is not null)
+        {
+            provenance.ResponseReceived = response;
+        }
+
+        return response;
     }
 
     /// <summary>
@@ -112,7 +119,7 @@ public sealed class PromptProcessingService
         var userPrompt = FormatPromptActionInput(inputText);
         // Record before the stream yields so a mid-stream fault is still captured
         // exactly once (the streaming→batch fallback passes a null capture).
-        RecordProvenance(
+        var provenance = RecordProvenance(
             capture,
             "PromptAction",
             provider,
@@ -124,10 +131,25 @@ public sealed class PromptProcessingService
 
         var source = provider.ProcessStreamingAsync(systemPrompt, userPrompt, modelId, ct);
 
-        // ReSharper disable once RedundantWithCancellation -- provider is a plugin; it may implement IAsyncEnumerable manually and observe only the GetAsyncEnumerator token, so forwarding ct here is not redundant across the plugin boundary.
-        await foreach (var delta in source.WithCancellation(ct))
+        // Accumulate the streamed reply so the Inspect panel can show the full
+        // response. A mid-stream fault or cancel still records whatever arrived
+        // (set in finally) alongside the already-recorded prompt.
+        var responseBuilder = provenance is null ? null : new StringBuilder();
+        try
         {
-            yield return delta;
+            // ReSharper disable once RedundantWithCancellation -- provider is a plugin; it may implement IAsyncEnumerable manually and observe only the GetAsyncEnumerator token, so forwarding ct here is not redundant across the plugin boundary.
+            await foreach (var delta in source.WithCancellation(ct))
+            {
+                responseBuilder?.Append(delta);
+                yield return delta;
+            }
+        }
+        finally
+        {
+            if (provenance is not null && responseBuilder is not null)
+            {
+                provenance.ResponseReceived = responseBuilder.ToString();
+            }
         }
     }
 
@@ -145,7 +167,7 @@ public sealed class PromptProcessingService
         }
 
         var userPrompt = FormatPromptActionInput(inputText);
-        RecordProvenance(
+        var provenance = RecordProvenance(
             capture,
             "Cleanup",
             provider,
@@ -155,13 +177,21 @@ public sealed class PromptProcessingService
             injectedMemoryContext: null
         );
 
-        return await provider.ProcessAsync(systemPrompt, userPrompt, modelId, ct);
+        var response = await provider.ProcessAsync(systemPrompt, userPrompt, modelId, ct);
+        if (provenance is not null)
+        {
+            provenance.ResponseReceived = response;
+        }
+
+        return response;
     }
 
     // Records one provenance entry describing exactly what is about to be sent to
-    // the provider. RanLocally defaults to network (false) when the plugin can't
-    // be resolved from the selection id, so we never falsely claim on-device.
-    private void RecordProvenance(
+    // the provider and returns it so the caller can attach the response once the
+    // call completes (null when capture is disabled). RanLocally defaults to
+    // network (false) when the plugin can't be resolved from the selection id, so
+    // we never falsely claim on-device.
+    private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
         string stage,
         ILlmProviderPlugin provider,
@@ -173,26 +203,26 @@ public sealed class PromptProcessingService
     {
         if (capture is null)
         {
-            return;
+            return null;
         }
 
         var providerId = provider.GetLlmSelectionId();
         var plugin = _pluginManager.GetPlugin(providerId);
         var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
 
-        capture.Add(
-            new LlmCallProvenance
-            {
-                Stage = stage,
-                SystemPromptSent = systemPrompt,
-                UserPromptSent = userPrompt,
-                ProviderName = provider.ProviderName,
-                ProviderId = providerId,
-                ModelId = modelId,
-                RanLocally = ranLocally,
-                InjectedMemoryContext = injectedMemoryContext
-            }
-        );
+        var provenance = new LlmCallProvenance
+        {
+            Stage = stage,
+            SystemPromptSent = systemPrompt,
+            UserPromptSent = userPrompt,
+            ProviderName = provider.ProviderName,
+            ProviderId = providerId,
+            ModelId = modelId,
+            RanLocally = ranLocally,
+            InjectedMemoryContext = injectedMemoryContext
+        };
+        capture.Add(provenance);
+        return provenance;
     }
 
     // JSON-encodes the input under "dictated_text" and instructs the model to treat it

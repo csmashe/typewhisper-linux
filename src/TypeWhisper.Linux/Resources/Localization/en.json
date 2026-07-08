@@ -370,6 +370,7 @@
   "History.Inspect.InjectedContext": "Injected memory context",
   "History.Inspect.NoLlmCalls": "No LLM calls were recorded for this dictation.",
   "History.Inspect.RawTranscript": "Raw transcript",
+  "History.Inspect.Response": "Response",
   "History.Inspect.SentToProvider": "Sent to {0}",
   "History.Inspect.StageCleanup": "Cleanup",
   "History.Inspect.StageMemory": "Memory extraction",
