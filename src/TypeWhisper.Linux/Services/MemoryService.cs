@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 
@@ -37,7 +38,11 @@ public sealed class MemoryService
         _pluginManager = pluginManager;
     }
 
-    public async Task ExtractAndStoreAsync(string text, CancellationToken ct = default)
+    public async Task ExtractAndStoreAsync(
+        string text,
+        LlmCallCapture? capture = null,
+        CancellationToken ct = default
+    )
     {
         if (string.IsNullOrWhiteSpace(text) || text.Length < MinTextLength)
         {
@@ -73,6 +78,9 @@ public sealed class MemoryService
         {
             _lastExtraction = DateTime.UtcNow;
 
+            // Record before the call so a mid-request fault is still captured.
+            RecordProvenance(capture, llm, model, text);
+
             var result = await llm.ProcessAsync(ExtractionPrompt, text, model, ct);
             if (
                 string.IsNullOrWhiteSpace(result)
@@ -97,6 +105,41 @@ public sealed class MemoryService
         {
             Debug.WriteLine($"[MemoryService] extraction failed: {ex.Message}");
         }
+    }
+
+    // Mirrors PromptProcessingService.RecordProvenance: records the extraction
+    // request so the history Inspect panel can show that memory extraction also
+    // sent the dictation text to an LLM. RanLocally defaults to network (false)
+    // when the plugin can't be resolved, so we never falsely claim on-device.
+    private void RecordProvenance(
+        LlmCallCapture? capture,
+        ILlmProviderPlugin provider,
+        string modelId,
+        string userPrompt
+    )
+    {
+        if (capture is null)
+        {
+            return;
+        }
+
+        var providerId = provider.GetLlmSelectionId();
+        var plugin = _pluginManager.GetPlugin(providerId);
+        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+
+        capture.Add(
+            new LlmCallProvenance
+            {
+                Stage = "Memory",
+                SystemPromptSent = ExtractionPrompt,
+                UserPromptSent = userPrompt,
+                ProviderName = provider.ProviderName,
+                ProviderId = providerId,
+                ModelId = modelId,
+                RanLocally = ranLocally,
+                InjectedMemoryContext = null
+            }
+        );
     }
 
     public async Task<string?> GetContextAsync(string query, CancellationToken ct = default)

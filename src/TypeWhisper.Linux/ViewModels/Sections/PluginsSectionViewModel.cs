@@ -14,39 +14,6 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class PluginsSectionViewModel : ObservableObject
 {
-    private static readonly HashSet<string> s_knownLocalPluginIds =
-    [
-        "com.typewhisper.whisper-cpp",
-        "com.typewhisper.sherpa-onnx",
-        "com.typewhisper.file-memory",
-        "com.typewhisper.obsidian",
-        "com.typewhisper.script",
-        "com.typewhisper.webhook"
-    ];
-
-    private static readonly HashSet<string> s_knownCloudPluginIds =
-    [
-        "com.typewhisper.assemblyai",
-        "com.typewhisper.cerebras",
-        "com.typewhisper.claude",
-        "com.typewhisper.cloudflare-asr",
-        "com.typewhisper.cohere",
-        "com.typewhisper.deepgram",
-        "com.typewhisper.fireworks",
-        "com.typewhisper.gemini",
-        "com.typewhisper.gladia",
-        "com.typewhisper.google-cloud-stt",
-        "com.typewhisper.groq",
-        "com.typewhisper.linear",
-        "com.typewhisper.openai",
-        "com.typewhisper.openai-compatible",
-        "com.typewhisper.openrouter",
-        "com.typewhisper.qwen3-stt",
-        "com.typewhisper.soniox",
-        "com.typewhisper.speechmatics",
-        "com.typewhisper.voxtral"
-    ];
-
     private static readonly HashSet<string> s_transcriptionPluginIds =
     [
         "com.typewhisper.assemblyai",
@@ -380,36 +347,9 @@ public partial class PluginsSectionViewModel : ObservableObject
         return string.Equals(localized, key, StringComparison.Ordinal) ? fallback : localized;
     }
 
-    // Third-party plugins may not set IsLocal; fall back to known-ID lists then keyword heuristics.
-    private static bool InferIsLocal(PluginManifest manifest)
-    {
-        if (manifest.IsLocal)
-        {
-            return true;
-        }
-
-        var id = manifest.Id.Trim().ToLowerInvariant();
-        if (s_knownLocalPluginIds.Contains(id))
-        {
-            return true;
-        }
-
-        if (s_knownCloudPluginIds.Contains(id))
-        {
-            return false;
-        }
-
-        var combined = $"{manifest.Name} {manifest.Description}".ToLowerInvariant();
-        return combined.Contains("offline")
-               || combined.Contains("local")
-               || combined.Contains("on-device")
-               || combined.Contains("on device")
-               || combined.Contains("file-based")
-               || combined.Contains("file based")
-               || combined.Contains("obsidian")
-               || combined.Contains("shell script")
-               || combined.Contains("webhook");
-    }
+    // Local-vs-cloud inference is shared with the history Inspect provenance badges.
+    private static bool InferIsLocal(PluginManifest manifest) =>
+        PluginLocalityClassifier.IsLocal(manifest);
 
     // Manifest Category takes precedence; fall back to known-ID lists then keyword heuristics.
     private static string? InferCategory(PluginManifest manifest)

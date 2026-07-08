@@ -29,7 +29,15 @@ internal sealed record RecordingContext(
     string? StreamingModelId,
     string? StreamingLanguageHint,
     CancellationToken CancelToken
-);
+)
+{
+    /// <summary>
+    ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
+    ///     for this run (history saving or the provenance setting is off), so the
+    ///     pipeline records nothing and pays no cost.
+    /// </summary>
+    public LlmCallCapture? Capture { get; init; }
+}
 
 public sealed class DictationOrchestrator : IDisposable
 {
@@ -1189,6 +1197,15 @@ public sealed class DictationOrchestrator : IDisposable
     )
     {
         var cancelToken = context.CancelToken;
+
+        // Attach an LLM-provenance sink only when it will actually be persisted:
+        // capture piggybacks history storage, so both toggles must be on. Left
+        // null otherwise, so the prompt chokepoint records (and costs) nothing.
+        if (_settings.Current is { SaveToHistoryEnabled: true, CaptureLlmProvenance: true })
+        {
+            context = context with { Capture = new LlmCallCapture() };
+        }
+
         var effectiveModelId =
             context.Profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
 
@@ -1448,6 +1465,7 @@ public sealed class DictationOrchestrator : IDisposable
                                         ReportStatus(context, message);
                                         return Task.CompletedTask;
                                     },
+                                    context.Capture,
                                     token
                                 ),
                     SnippetExpander = text =>
@@ -1458,7 +1476,7 @@ public sealed class DictationOrchestrator : IDisposable
                     RequireLlmSuccess = promptAction is not null,
                     TranslationHandler = !string.IsNullOrWhiteSpace(translationTarget)
                         ? (text, source, target, token) =>
-                            _translation.TranslateAsync(text, source, target, token)
+                            _translation.TranslateAsync(text, source, target, context.Capture, token)
                         : null,
                     TranslationTarget = string.IsNullOrWhiteSpace(translationTarget)
                         ? null
@@ -1650,7 +1668,33 @@ public sealed class DictationOrchestrator : IDisposable
                 context.AppProcess
             );
 
-            // Write to history last so stats reflect the just-completed capture.
+            // Memory extraction is itself an LLM call. When provenance capture is
+            // active, run it (awaited) before writing history so its request is
+            // recorded on the entry; otherwise keep it fire-and-forget so the
+            // common path isn't delayed by the extraction round-trip.
+            if (_settings.Current.MemoryEnabled)
+            {
+                if (context.Capture is not null)
+                {
+                    try
+                    {
+                        await _memory.ExtractAndStoreAsync(finalText, context.Capture);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Extraction is best-effort; never let it fail the dictation.
+                        Trace.WriteLine($"[Dictation] memory extraction failed: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    // ReSharper disable once MethodSupportsCancellation -- fire-and-forget background memory extraction; intentionally not tied to a cancellation token.
+                    FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
+                }
+            }
+
+            // Write to history last so stats reflect the just-completed capture
+            // (and any memory-extraction provenance recorded above).
             if (_settings.Current.SaveToHistoryEnabled)
             {
                 AddHistoryRecord(
@@ -1668,12 +1712,6 @@ public sealed class DictationOrchestrator : IDisposable
                     engineProviderId,
                     engineModelId
                 );
-            }
-
-            if (_settings.Current.MemoryEnabled)
-            {
-                // ReSharper disable once MethodSupportsCancellation -- fire-and-forget background memory extraction; intentionally not tied to a cancellation token.
-                FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
             }
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
@@ -1749,13 +1787,16 @@ public sealed class DictationOrchestrator : IDisposable
             });
 
             var streamed = await pump.RunAsync(
-                _promptProcessing.ProcessStreamingAsync(promptAction, text, token),
+                _promptProcessing.ProcessStreamingAsync(promptAction, text, token, context.Capture),
                 token);
 
             // Streaming→batch fallback: retry with the batch path when the pump
             // faulted OR yielded nothing (proxy EOF, empty 200). ReceivedAnyChunk
             // distinguishes a legitimately empty single-chunk result from a silent
             // empty stream — the single chunk is already a completed ProcessAsync call.
+            // Pass a null capture on the fallback: the streaming attempt already
+            // recorded this call's provenance before yielding, so re-running the
+            // same prompt via batch must not add a duplicate entry.
             var result = pump.Faulted || !pump.ReceivedAnyChunk
                 ? await _promptProcessing.ProcessAsync(promptAction, text, token)
                 : streamed;
@@ -2073,7 +2114,8 @@ public sealed class DictationOrchestrator : IDisposable
                     TranslationApplied = WasPipelineStepChanged(
                         pipelineResult,
                         PostProcessingStepNames.Translation
-                    )
+                    ),
+                    LlmCalls = context.Capture?.Calls ?? []
                 }
             );
         }

@@ -2,6 +2,7 @@ using System.Runtime.Serialization;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using Xunit;
 
@@ -155,16 +156,140 @@ public sealed class HistorySectionViewModelTests : IDisposable
         );
 #pragma warning restore SYSLIB0050
 
-    private static TranscriptionRecord CreateRecord(string finalText)
+    private static TranscriptionRecord CreateRecord(
+        string finalText,
+        string? raw = null,
+        IReadOnlyList<LlmCallProvenance>? llmCalls = null
+    )
     {
         return new TranscriptionRecord
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = DateTime.UtcNow,
-            RawText = finalText,
+            RawText = raw ?? finalText,
             FinalText = finalText,
             DurationSeconds = 2.4,
-            AppProcessName = "test"
+            AppProcessName = "test",
+            LlmCalls = llmCalls ?? []
         };
+    }
+
+    private static LlmCallProvenance CreateCall(
+        string stage = "PromptAction",
+        string providerName = "OpenAI",
+        string modelId = "gpt-4",
+        bool ranLocally = false,
+        string? injectedContext = null
+    )
+    {
+        return new LlmCallProvenance
+        {
+            Stage = stage,
+            SystemPromptSent = "You are helpful.",
+            UserPromptSent = "process this",
+            ProviderName = providerName,
+            ProviderId = "com.test.provider",
+            ModelId = modelId,
+            RanLocally = ranLocally,
+            InjectedMemoryContext = injectedContext
+        };
+    }
+
+    [Fact]
+    public void InspectorCalls_ProjectsProvenanceWithLabels()
+    {
+        var history = CreateHistoryService();
+        var dictionary = CreateDictionaryService();
+        var record = CreateRecord(
+            "final text",
+            raw: "raw text",
+            llmCalls:
+            [
+                CreateCall(
+                    "Cleanup",
+                    injectedContext: "remembered fact"
+                )
+            ]
+        );
+        history.AddRecord(record);
+        var sut = CreateViewModel(history, dictionary);
+        var row = new HistoryRecordRow(record, sut);
+
+        Assert.True(row.HasLlmCalls);
+        var call = Assert.Single(row.InspectorCalls);
+        Assert.Equal(Loc.Instance["History.Inspect.StageCleanup"], call.StageLabel);
+        Assert.Equal("OpenAI · gpt-4", call.ProviderModelLabel);
+        Assert.Equal("You are helpful.", call.SystemPromptSent);
+        Assert.Equal("process this", call.UserPromptSent);
+        Assert.Equal("remembered fact", call.InjectedMemoryContext);
+        Assert.True(call.HasSystemPrompt);
+        Assert.True(call.HasUserPrompt);
+        Assert.True(call.HasInjectedContext);
+    }
+
+    [Fact]
+    public void NetworkBadge_ReflectsLocalVsCloudProvider()
+    {
+        var cloud = new LlmCallDisplay(CreateCall(ranLocally: false, providerName: "OpenAI"));
+        var local = new LlmCallDisplay(CreateCall(ranLocally: true, providerName: "Ollama"));
+
+        Assert.Equal(
+            Loc.Instance.GetString("History.Inspect.SentToProvider", "OpenAI"),
+            cloud.NetworkBadgeText
+        );
+        Assert.False(cloud.RanLocally);
+        Assert.Equal(Loc.Instance["History.Inspect.StayedLocal"], local.NetworkBadgeText);
+        Assert.True(local.RanLocally);
+    }
+
+    [Fact]
+    public void HasLlmCalls_FalseWhenEmpty_ShowRawVsFinalGating()
+    {
+        var history = CreateHistoryService();
+        var dictionary = CreateDictionaryService();
+
+        // No LLM calls, raw == final: no inspector content at all.
+        var plain = CreateRecord("same text");
+        // No LLM calls but raw != final: diff-only inspector content.
+        var diffOnly = CreateRecord("final text", raw: "raw text");
+        history.AddRecord(plain);
+        history.AddRecord(diffOnly);
+        var sut = CreateViewModel(history, dictionary);
+
+        var plainRow = new HistoryRecordRow(plain, sut);
+        Assert.False(plainRow.HasLlmCalls);
+        Assert.False(plainRow.ShowRawVsFinal);
+        Assert.False(plainRow.HasInspectorContent);
+
+        var diffRow = new HistoryRecordRow(diffOnly, sut);
+        Assert.False(diffRow.HasLlmCalls);
+        Assert.True(diffRow.ShowRawVsFinal);
+        Assert.True(diffRow.HasInspectorContent);
+    }
+
+    [Fact]
+    public void ShowInspectorToggle_RequiresExpandedAndContent()
+    {
+        var history = CreateHistoryService();
+        var dictionary = CreateDictionaryService();
+        var record = CreateRecord("final", raw: "raw", llmCalls: [CreateCall()]);
+        history.AddRecord(record);
+        var sut = CreateViewModel(history, dictionary);
+        var row = new HistoryRecordRow(record, sut);
+
+        // Collapsed: toggle hidden even though there is content.
+        Assert.False(row.ShowInspectorToggle);
+
+        row.IsExpanded = true;
+        Assert.True(row.ShowInspectorToggle);
+        Assert.False(row.ShowInspector);
+
+        row.ToggleInspectorCommand.Execute(null);
+        Assert.True(row.ShowInspector);
+
+        // Collapsing resets inspector visibility.
+        row.IsExpanded = false;
+        Assert.False(row.IsInspectorVisible);
+        Assert.False(row.ShowInspector);
     }
 }

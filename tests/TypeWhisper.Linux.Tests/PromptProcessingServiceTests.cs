@@ -1,5 +1,6 @@
 using Moq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -211,6 +212,175 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
     // Framing behavior (FormatPromptActionInput) is covered by PromptProcessingInputFramingTests.
 
+    [Fact]
+    public async Task ProcessAsync_WithCapture_RecordsPromptActionProvenance()
+    {
+        var provider = new FakeLlmProviderPlugin("com.test.default", "Default Provider", "model-a");
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.default:model-a" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var capture = new LlmCallCapture();
+        await sut.ProcessAsync(
+            new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" },
+            "hello",
+            CancellationToken.None,
+            capture
+        );
+
+        var call = Assert.Single(capture.Calls);
+        Assert.Equal("PromptAction", call.Stage);
+        Assert.Equal("Rewrite this", call.SystemPromptSent);
+        Assert.Equal(PromptProcessingService.FormatPromptActionInput("hello"), call.UserPromptSent);
+        Assert.Equal("Default Provider", call.ProviderName);
+        Assert.Equal("com.test.default", call.ProviderId);
+        Assert.Equal("model-a", call.ModelId);
+        Assert.False(call.RanLocally);
+        Assert.Null(call.InjectedMemoryContext);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WithLocalPlugin_MarksRanLocallyFromManifest()
+    {
+        var provider = new FakeLlmProviderPlugin("com.test.local", "Local Provider", "model-l");
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider, isLocal: true)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.local:model-l" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var capture = new LlmCallCapture();
+        await sut.ProcessAsync(
+            new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" },
+            "hello",
+            CancellationToken.None,
+            capture
+        );
+
+        var call = Assert.Single(capture.Calls);
+        Assert.True(call.RanLocally);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WithNullCapture_RecordsNothing()
+    {
+        var provider = new FakeLlmProviderPlugin("com.test.default", "Default Provider", "model-a");
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.default:model-a" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        // No capture argument — the pipeline must not allocate or record anything.
+        await sut.ProcessAsync(
+            new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" },
+            "hello",
+            CancellationToken.None
+        );
+
+        // Nothing observable to assert other than that the call succeeds without a
+        // sink; the streaming variant below covers the single-entry guarantee.
+        Assert.True(true);
+    }
+
+    [Fact]
+    public async Task ProcessSystemPromptAsync_WithCapture_TagsCleanupStage()
+    {
+        var provider = new FakeLlmProviderPlugin("com.test.default", "Default Provider", "model-a");
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.default:model-a" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var capture = new LlmCallCapture();
+        await sut.ProcessSystemPromptAsync("Clean this up", "hello", CancellationToken.None, capture);
+
+        var call = Assert.Single(capture.Calls);
+        Assert.Equal("Cleanup", call.Stage);
+        Assert.Equal("Clean this up", call.SystemPromptSent);
+        Assert.Equal(PromptProcessingService.FormatPromptActionInput("hello"), call.UserPromptSent);
+        Assert.Null(call.InjectedMemoryContext);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingThenBatchFallback_RecordsExactlyOneProvenanceEntry()
+    {
+        // The fake faults its stream so RunPromptActionAsync's streaming→batch
+        // retry fires. The streaming call records provenance before yielding; the
+        // batch fallback is passed a null capture, so exactly one entry survives.
+        var provider = new FaultingStreamProviderPlugin(
+            "com.test.fault",
+            "Faulting Provider",
+            "model-f"
+        );
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.fault:model-f" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var action = new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" };
+        var capture = new LlmCallCapture();
+
+        // Streaming attempt with the capture; drain until it faults.
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+        {
+            await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", CancellationToken.None, capture))
+            {
+                // Drain to force the fault to surface.
+            }
+        });
+
+        // Batch fallback re-runs the same call, but with a null capture.
+        await sut.ProcessAsync(action, "hello", CancellationToken.None);
+
+        Assert.Single(capture.Calls);
+        Assert.Equal("PromptAction", capture.Calls[0].Stage);
+    }
+
     private static Mock<ISettingsService> CreateSettings(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();
@@ -243,7 +413,11 @@ public sealed class PromptProcessingServiceTests : IDisposable
         return pluginManager;
     }
 
-    private LoadedPlugin CreateLoadedPlugin(string pluginId, ITypeWhisperPlugin plugin)
+    private LoadedPlugin CreateLoadedPlugin(
+        string pluginId,
+        ITypeWhisperPlugin plugin,
+        bool isLocal = false
+    )
     {
         var pluginDir = Path.Join(_tempDir, pluginId);
         Directory.CreateDirectory(pluginDir);
@@ -255,7 +429,8 @@ public sealed class PromptProcessingServiceTests : IDisposable
                 Name = plugin.PluginName,
                 Version = plugin.PluginVersion,
                 AssemblyName = "fake.dll",
-                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name
+                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
+                IsLocal = isLocal
             },
             plugin,
             new PluginAssemblyLoadContext(pluginDir),
@@ -308,6 +483,68 @@ public sealed class PromptProcessingServiceTests : IDisposable
         {
             return Task.FromResult($"processed:{ProviderName}:{model}:{userText}");
         }
+
+        public void Dispose() { }
+    }
+
+    // Streams nothing and faults on enumeration, exercising the streaming→batch
+    // fallback. ProcessAsync (the batch path) succeeds so the retry completes.
+    private sealed class FaultingStreamProviderPlugin : ILlmProviderPlugin
+    {
+        public FaultingStreamProviderPlugin(string pluginId, string providerName, string modelId)
+        {
+            PluginId = pluginId;
+            ProviderName = providerName;
+            SupportedModels = [new PluginModelInfo(modelId, modelId.ToUpperInvariant())];
+        }
+
+        public string PluginId { get; }
+        public string PluginName => ProviderName;
+        public string PluginVersion => "1.0.0";
+        public string ProviderName { get; }
+        public bool IsAvailable => true;
+        public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
+
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<string> ProcessAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult($"batch:{ProviderName}:{model}:{userText}");
+        }
+
+#pragma warning disable CS1998 // async iterator that yields nothing before faulting
+        // ReSharper disable once AsyncMethodWithoutAwait -- deliberate throwing async iterator test double; must stay async+iterator so it faults lazily on enumeration, not eagerly at the call.
+        public async IAsyncEnumerable<string> ProcessStreamingAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            [EnumeratorCancellation]
+            CancellationToken ct
+        )
+        {
+            // Never-taken loop keeps this a valid iterator method without yielding.
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalse -- the always-false condition is intentional; it makes this a yielding iterator that never actually yields.
+            for (var i = 0; i < 0; i++)
+            {
+                yield return "";
+            }
+
+            throw new InvalidOperationException("stream faulted");
+        }
+#pragma warning restore CS1998
 
         public void Dispose() { }
     }

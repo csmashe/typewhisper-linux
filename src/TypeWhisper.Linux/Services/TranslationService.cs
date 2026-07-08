@@ -54,6 +54,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         string text,
         string sourceLang,
         string targetLang,
+        LlmCallCapture? capture = null,
         CancellationToken ct = default
     )
     {
@@ -65,17 +66,54 @@ public sealed class TranslationService : ITranslationService, IDisposable
         var llmProvider = GetConfiguredTranslationProvider();
         if (llmProvider is null)
         {
+            // Local Marian ONNX inference never leaves the machine, so there is no
+            // provider call to record — the raw≠final diff already shows the change.
             return await TranslateLocalAsync(text, sourceLang, targetLang, ct);
         }
 
         var model = llmProvider.SupportedModels[0].Id;
         var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
+        RecordProvenance(capture, llmProvider, model, userText);
         return await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
     }
 
     private ILlmProviderPlugin? GetConfiguredTranslationProvider()
     {
         return _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
+    }
+
+    // Mirrors PromptProcessingService.RecordProvenance: records exactly what the
+    // translation call sends to the provider. RanLocally defaults to network (false)
+    // when the plugin can't be resolved, so we never falsely claim on-device.
+    private void RecordProvenance(
+        LlmCallCapture? capture,
+        ILlmProviderPlugin provider,
+        string modelId,
+        string userPrompt
+    )
+    {
+        if (capture is null)
+        {
+            return;
+        }
+
+        var providerId = provider.GetLlmSelectionId();
+        var plugin = _pluginManager.GetPlugin(providerId);
+        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+
+        capture.Add(
+            new LlmCallProvenance
+            {
+                Stage = "Translation",
+                SystemPromptSent = TranslationSystemPrompt,
+                UserPromptSent = userPrompt,
+                ProviderName = provider.ProviderName,
+                ProviderId = providerId,
+                ModelId = modelId,
+                RanLocally = ranLocally,
+                InjectedMemoryContext = null
+            }
+        );
     }
 
     private async Task<string> TranslateLocalAsync(

@@ -459,6 +459,9 @@ public partial class HistoryRecordRow : ObservableObject
     private bool _isExpanded;
 
     [ObservableProperty]
+    private bool _isInspectorVisible;
+
+    [ObservableProperty]
     private TranscriptionRecord _record;
 
     public HistoryRecordRow(TranscriptionRecord record, HistorySectionViewModel owner)
@@ -486,6 +489,22 @@ public partial class HistoryRecordRow : ObservableObject
 
     public bool HasCorrectionSuggestions =>
         IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
+
+    public bool HasLlmCalls => Record.LlmCalls.Count > 0;
+
+    public bool ShowRawVsFinal =>
+        !string.Equals(Record.RawText, Record.FinalText, StringComparison.Ordinal);
+
+    public bool HasInspectorContent => HasLlmCalls || ShowRawVsFinal;
+    public bool ShowInspectorToggle => IsExpanded && !IsEditing && HasInspectorContent;
+    public bool ShowInspector =>
+        IsExpanded && !IsEditing && IsInspectorVisible && HasInspectorContent;
+
+    public IReadOnlyList<DiffSegment> RawVsFinalDiff =>
+        WordDiff.Compute(Record.RawText, Record.FinalText);
+
+    public IReadOnlyList<LlmCallDisplay> InspectorCalls =>
+        Record.LlmCalls.Select(call => new LlmCallDisplay(call)).ToList();
 
     internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
     {
@@ -515,6 +534,7 @@ public partial class HistoryRecordRow : ObservableObject
         else
         {
             IsEditing = false;
+            IsInspectorVisible = false;
             CorrectionSuggestions.Clear();
         }
 
@@ -526,10 +546,21 @@ public partial class HistoryRecordRow : ObservableObject
         NotifyExpansionStateChanged();
     }
 
+    partial void OnIsInspectorVisibleChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowInspector));
+    }
+
     [RelayCommand]
     private void ToggleExpand()
     {
         IsExpanded = !IsExpanded;
+    }
+
+    [RelayCommand]
+    private void ToggleInspector()
+    {
+        IsInspectorVisible = !IsInspectorVisible;
     }
 
     [RelayCommand]
@@ -549,6 +580,11 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(HasProfileName));
         OnPropertyChanged(nameof(HasAppProcessName));
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        // Editing changes the final text, so raw≠final and the diff can change.
+        OnPropertyChanged(nameof(ShowRawVsFinal));
+        OnPropertyChanged(nameof(HasInspectorContent));
+        OnPropertyChanged(nameof(ShowInspectorToggle));
+        OnPropertyChanged(nameof(RawVsFinalDiff));
     }
 
     [RelayCommand]
@@ -607,6 +643,8 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowExpandedMeta));
         OnPropertyChanged(nameof(ShowExpandedActions));
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        OnPropertyChanged(nameof(ShowInspectorToggle));
+        OnPropertyChanged(nameof(ShowInspector));
     }
 }
 
@@ -630,4 +668,45 @@ public partial class CorrectionSuggestionRow : ObservableObject
 
     private double Confidence { get; }
     public string ConfidenceLabel => Confidence > 0 ? $"{Confidence:P0}" : "";
+}
+
+/// <summary>
+///     Read-only display projection of one <see cref="LlmCallProvenance" /> entry
+///     for the history Inspect panel: localized stage/badge labels plus the raw
+///     prompt text and per-block visibility flags.
+/// </summary>
+public sealed class LlmCallDisplay
+{
+    private readonly LlmCallProvenance _call;
+
+    public LlmCallDisplay(LlmCallProvenance call)
+    {
+        _call = call;
+    }
+
+    public string StageLabel =>
+        _call.Stage switch
+        {
+            "Cleanup" => Loc.Instance["History.Inspect.StageCleanup"],
+            "Translation" => Loc.Instance["History.Inspect.StageTranslation"],
+            "Memory" => Loc.Instance["History.Inspect.StageMemory"],
+            _ => Loc.Instance["History.Inspect.StagePromptAction"]
+        };
+
+    public string ProviderModelLabel => $"{_call.ProviderName} · {_call.ModelId}";
+
+    public bool RanLocally => _call.RanLocally;
+
+    public string NetworkBadgeText =>
+        _call.RanLocally
+            ? Loc.Instance["History.Inspect.StayedLocal"]
+            : Loc.Instance.GetString("History.Inspect.SentToProvider", _call.ProviderName);
+
+    public string SystemPromptSent => _call.SystemPromptSent;
+    public string UserPromptSent => _call.UserPromptSent;
+    public string? InjectedMemoryContext => _call.InjectedMemoryContext;
+
+    public bool HasSystemPrompt => !string.IsNullOrWhiteSpace(_call.SystemPromptSent);
+    public bool HasUserPrompt => !string.IsNullOrWhiteSpace(_call.UserPromptSent);
+    public bool HasInjectedContext => !string.IsNullOrWhiteSpace(_call.InjectedMemoryContext);
 }
