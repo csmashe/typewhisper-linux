@@ -303,7 +303,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
         }
 
         var lengthDifference = Math.Abs(term.Normalized.Length - normalizedWindow.Length);
-        var distance = LevenshteinDistance(term.Normalized, normalizedWindow);
+        var distance = StringDistance.Levenshtein(term.Normalized, normalizedWindow);
         var charSimilarity = 1d - (double)distance / maxLength;
         var sameFirst = term.FirstAlphaNumeric == GetFirstAlphaNumeric(normalizedWindow);
         var sameLast = term.LastAlphaNumeric == GetLastAlphaNumeric(normalizedWindow);
@@ -577,44 +577,6 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
     private static char? GetLastAlphaNumeric(string text)
     {
         return text.LastOrDefault(char.IsLetterOrDigit) is var ch && ch != 0 ? ch : null;
-    }
-
-    private static int LevenshteinDistance(string source, string target)
-    {
-        if (source.Length == 0)
-        {
-            return target.Length;
-        }
-
-        if (target.Length == 0)
-        {
-            return source.Length;
-        }
-
-        var previous = new int[target.Length + 1];
-        var current = new int[target.Length + 1];
-
-        for (var j = 0; j <= target.Length; j++)
-        {
-            previous[j] = j;
-        }
-
-        for (var i = 1; i <= source.Length; i++)
-        {
-            current[0] = i;
-            for (var j = 1; j <= target.Length; j++)
-            {
-                var substitutionCost = source[i - 1] == target[j - 1] ? 0 : 1;
-                current[j] = Math.Min(
-                    Math.Min(current[j - 1] + 1, previous[j] + 1),
-                    previous[j - 1] + substitutionCost
-                );
-            }
-
-            (previous, current) = (current, previous);
-        }
-
-        return previous[target.Length];
     }
 
     private sealed record NormalizedTerm(

@@ -439,6 +439,151 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task CaptureSelectedTextAsync_returns_selection_and_restores_clipboard()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the selected text"
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("the selected text", captured);
+        Assert.Equal("previous", platform.Clipboard);
+        // GUI targets copy with plain Ctrl+C.
+        Assert.False(platform.LastCopyUsedTerminalShortcut);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_uses_terminal_copy_shortcut_for_terminal_targets()
+    {
+        // Terminals map plain Ctrl+C to SIGINT, so the probe must use Ctrl+Shift+C there.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the selected text"
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync(targetIsTerminal: true);
+
+        Assert.Equal("the selected text", captured);
+        Assert.True(platform.LastCopyUsedTerminalShortcut);
+    }
+
+    [Theory]
+    [InlineData("ghostty")]
+    [InlineData("gnome-terminal-")]
+    [InlineData("konsole")]
+    [InlineData("xfce4-terminal")]
+    public void IsTerminalApp_detects_terminals(string process)
+    {
+        Assert.True(TextInsertionService.IsTerminalApp(process));
+    }
+
+    [Theory]
+    [InlineData("firefox")]
+    [InlineData("code")]
+    [InlineData(null)]
+    public void IsTerminalApp_rejects_non_terminals(string? process)
+    {
+        Assert.False(TextInsertionService.IsTerminalApp(process));
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_returns_empty_when_copy_leaves_clipboard_unchanged()
+    {
+        // No selection: Ctrl+C is a no-op, so the pre-existing clipboard content must NOT be
+        // mistaken for a selection. The stale clipboard is also restored.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "stale clipboard content",
+            SelectionText = null
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("", captured);
+        Assert.Equal("stale clipboard content", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_retries_copy_until_selection_lands()
+    {
+        // The first two synthesized copies are dropped (ydotool race); the third lands. The
+        // retry loop must ride that out rather than reporting nothing selected.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the selected text",
+            CopyLandsOnAttempt = 3
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("the selected text", captured);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(3, platform.CopyAttemptCount);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_returns_empty_when_copy_never_lands()
+    {
+        // With the ydotool key-delay making Ctrl+C reliable, a probe that never lands genuinely
+        // means nothing is selected — capture must report empty rather than reviving a stale
+        // PRIMARY selection (which had made a follow-up command act on a stale fragment).
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = null
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("", captured);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_returns_empty_when_copy_fails()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            CopySucceeds = false
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("", captured);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_preserves_nontext_clipboard_when_no_selection()
+    {
+        // A null clipboard read models non-text data (image/file list). With nothing selected
+        // the probe must not prime a sentinel over it or clear it — the clipboard stays intact.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            SelectionText = null
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("", captured);
+        Assert.Null(platform.Clipboard);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_WaylandWithWtype_PasteCallsWtype()
     {
         var runner = new RecordingProcessRunner();
@@ -595,7 +740,8 @@ public sealed class TextInsertionServiceTests
 
         Assert.False(platform.IsPasteAvailable);
         Assert.False(await platform.SendPasteAsync());
-        Assert.False(await platform.SendCopyAsync());
+        Assert.False(await platform.SendCopyAsync(false));
+        Assert.False(await platform.SendCopyAsync(true));
         Assert.False(await platform.SendEnterAsync());
         Assert.False(await platform.TypeTextAsync("anything"));
         Assert.False(await platform.ActivateWindowAsync("123"));
@@ -933,8 +1079,9 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(
             [
                 ["type", "--key-delay", "2", "--key-hold", "2", "--", "line one"],
-                // LEFTSHIFT(42)+ENTER(28) press/release pairs.
-                ["key", "42:1", "28:1", "28:0", "42:0"],
+                // LEFTSHIFT(42)+ENTER(28) press/release pairs, with an inter-event delay so the
+                // Shift modifier reliably registers before Enter.
+                ["key", "--key-delay", "25", "42:1", "28:1", "28:0", "42:0"],
                 ["type", "--key-delay", "2", "--key-hold", "2", "--", "line two"]
             ],
             runner.Calls.Select(c => c.Arguments).ToArray()
@@ -1139,6 +1286,11 @@ public sealed class TextInsertionServiceTests
         public bool EnterSent { get; private set; }
         public string? TypedText { get; private set; }
 
+        // When set, a Ctrl+C copy lands this text on the clipboard (models a real selection).
+        // When null, SendCopyAsync leaves the clipboard untouched (nothing selected / copy ignored).
+        public string? SelectionText { get; init; }
+        public bool CopySucceeds { get; init; } = true;
+
         public bool IsClipboardSetAvailable => ClipboardSetAvailable;
 
         public bool IsPasteAvailable => PasteAvailable;
@@ -1195,9 +1347,23 @@ public sealed class TextInsertionServiceTests
             return Task.FromResult(true);
         }
 
-        public Task<bool> SendCopyAsync()
+        // Models a compositor/app dropping the first N synthesized copies before one lands —
+        // the ydotool race the retry loop is meant to ride out. 0 = every attempt lands.
+        public int CopyLandsOnAttempt { get; init; }
+        public int CopyAttemptCount { get; private set; }
+
+        public bool LastCopyUsedTerminalShortcut { get; private set; }
+
+        public Task<bool> SendCopyAsync(bool useTerminalShortcut = false)
         {
-            return Task.FromResult(true);
+            LastCopyUsedTerminalShortcut = useTerminalShortcut;
+            CopyAttemptCount++;
+            if (CopySucceeds && SelectionText is not null && CopyAttemptCount >= CopyLandsOnAttempt)
+            {
+                Clipboard = SelectionText;
+            }
+
+            return Task.FromResult(CopySucceeds);
         }
 
         public Task<bool> SendEnterAsync()

@@ -11,6 +11,8 @@ public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
 
+    public const string DefaultCommandKeyphrase = "TypeWhisper";
+
     public const string LocalModelAccelerationAuto = "auto";
     public const string LocalModelAccelerationCpu = "cpu";
     public const string LocalModelAccelerationNvidiaCuda = "nvidia-cuda";
@@ -125,6 +127,16 @@ public record AppSettings
     // Prompt Palette
     public string PromptPaletteHotkey { get; init; } = "";
     public string? DefaultLlmProvider { get; init; }
+
+    // Spoken commands (keyphrase command mode). When enabled, a dictation that starts
+    // with CommandKeyphrase is handed to the LLM as an instruction instead of typed.
+    // Ships disabled; the keyphrase defaults to the product name.
+    public bool CommandModeEnabled { get; init; }
+    public string CommandKeyphrase { get; init; } = DefaultCommandKeyphrase;
+
+    // LLM for ad-hoc spoken commands ("plugin:<pluginId>:<modelId>", like DefaultLlmProvider);
+    // null falls back to the default. A matched saved prompt uses that prompt's own override.
+    public string? SpokenCommandLlmProvider { get; init; }
 
     // Plugin state
     public Dictionary<string, bool> PluginEnabledState { get; init; } = new();
