@@ -19,6 +19,11 @@ internal static class YdotoolBackend
     private const int VKey = 47;
     private const int EnterKey = 28;
 
+    // ydotool emits `key` events with no gap by default, so a modifier combo can fire the letter
+    // before the compositor registers the modifier as held and the app sees a bare key. An
+    // inter-event delay makes the modifier land reliably.
+    private const string KeyEventDelayMs = "25";
+
     /// <summary>Returns the env overlay (<c>YDOTOOL_SOCKET</c>) pointing the
     ///     client at the daemon socket; callers merge this into their own env.</summary>
     public static IReadOnlyDictionary<string, string>? BuildEnv(string? socketPath)
@@ -39,12 +44,12 @@ internal static class YdotoolBackend
     public static IReadOnlyList<string> PasteArgs()
     {
         // Raw evdev down/up pairs: code:1 = press, code:0 = release.
-        return ["key", $"{LeftCtrlKey}:1", $"{VKey}:1", $"{VKey}:0", $"{LeftCtrlKey}:0"];
+        return ["key", "--key-delay", KeyEventDelayMs, $"{LeftCtrlKey}:1", $"{VKey}:1", $"{VKey}:0", $"{LeftCtrlKey}:0"];
     }
 
     public static IReadOnlyList<string> CopyArgs()
     {
-        return ["key", $"{LeftCtrlKey}:1", $"{CKey}:1", $"{CKey}:0", $"{LeftCtrlKey}:0"];
+        return ["key", "--key-delay", KeyEventDelayMs, $"{LeftCtrlKey}:1", $"{CKey}:1", $"{CKey}:0", $"{LeftCtrlKey}:0"];
     }
 
     public static IReadOnlyList<string> EnterArgs()
@@ -61,7 +66,7 @@ internal static class YdotoolBackend
     /// </summary>
     public static IReadOnlyList<string> ShiftEnterArgs()
     {
-        return ["key", $"{LeftShiftKey}:1", $"{EnterKey}:1", $"{EnterKey}:0", $"{LeftShiftKey}:0"];
+        return ["key", "--key-delay", KeyEventDelayMs, $"{LeftShiftKey}:1", $"{EnterKey}:1", $"{EnterKey}:0", $"{LeftShiftKey}:0"];
     }
 
     /// <summary>

@@ -134,6 +134,10 @@ public record AppSettings
     public bool CommandModeEnabled { get; init; }
     public string CommandKeyphrase { get; init; } = DefaultCommandKeyphrase;
 
+    // LLM for ad-hoc spoken commands ("plugin:<pluginId>:<modelId>", like DefaultLlmProvider);
+    // null falls back to the default. A matched saved prompt uses that prompt's own override.
+    public string? SpokenCommandLlmProvider { get; init; }
+
     // Plugin state
     public Dictionary<string, bool> PluginEnabledState { get; init; } = new();
     public bool PluginFirstRunCompleted { get; init; }

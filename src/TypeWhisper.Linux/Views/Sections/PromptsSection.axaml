@@ -86,6 +86,23 @@
                                    FontSize="12"
                                    Foreground="#8A9AAE"
                                    TextWrapping="Wrap" />
+
+                        <TextBlock Text="{loc:Str Prompts.CommandModel}"
+                                   Margin="0,8,0,0" />
+                        <ComboBox ItemsSource="{Binding AvailableProviders}"
+                                  SelectedItem="{Binding SelectedSpokenCommandProvider}"
+                                  HorizontalAlignment="Stretch"
+                                  DropDownOpened="OnProviderDropDownOpened">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ProviderOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock Text="{loc:Str Prompts.CommandModelHelp}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
                     </StackPanel>
                 </StackPanel>
             </Border>

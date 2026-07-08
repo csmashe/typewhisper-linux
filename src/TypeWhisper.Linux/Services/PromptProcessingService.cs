@@ -30,7 +30,8 @@ public sealed class PromptProcessingService
     public async Task<string> ProcessAsync(
         PromptAction action,
         string inputText,
-        CancellationToken ct
+        CancellationToken ct,
+        bool wrapInput = true
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -58,7 +59,7 @@ public sealed class PromptProcessingService
 
         return await provider.ProcessAsync(
             systemPrompt,
-            FormatPromptActionInput(inputText),
+            wrapInput ? FormatPromptActionInput(inputText) : inputText,
             modelId,
             ct
         );
@@ -73,7 +74,8 @@ public sealed class PromptProcessingService
         PromptAction action,
         string inputText,
         [EnumeratorCancellation]
-        CancellationToken ct
+        CancellationToken ct,
+        bool wrapInput = true
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -99,7 +101,7 @@ public sealed class PromptProcessingService
 
         var source = provider.ProcessStreamingAsync(
             systemPrompt,
-            FormatPromptActionInput(inputText),
+            wrapInput ? FormatPromptActionInput(inputText) : inputText,
             modelId,
             ct
         );

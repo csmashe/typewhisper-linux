@@ -19,6 +19,9 @@ public sealed class SpokenCommandKeyphraseTests
     // Close single-edit mishearings of the product name must still match.
     [InlineData("typewisper translate this", "translate this")]
     [InlineData("type whisker make it shorter", "make it shorter")]
+    // A split-AND-fuzzed rendering: the two-token form must match as readily as the one-token
+    // "typewhisperer" already does (both are edit-distance 2 from "typewhisper").
+    [InlineData("type whisperer summarize this", "summarize this")]
     public void TryStrip_ExtractsCommandAfterKeyphrase(string rawText, string expectedCommand)
     {
         var stripped = SpokenCommandKeyphrase.TryStrip(rawText, Keyphrase, out var command);

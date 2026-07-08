@@ -473,6 +473,45 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task CaptureSelectedTextAsync_retries_copy_until_selection_lands()
+    {
+        // The first two synthesized copies are dropped (ydotool race); the third lands. The
+        // retry loop must ride that out rather than reporting nothing selected.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the selected text",
+            CopyLandsOnAttempt = 3
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("the selected text", captured);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(3, platform.CopyAttemptCount);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_returns_empty_when_copy_never_lands()
+    {
+        // With the ydotool key-delay making Ctrl+C reliable, a probe that never lands genuinely
+        // means nothing is selected — capture must report empty rather than reviving a stale
+        // PRIMARY selection (which had made a follow-up command act on a stale fragment).
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = null
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("", captured);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
     public async Task CaptureSelectedTextAsync_returns_empty_when_copy_fails()
     {
         var platform = new FakeTextInsertionPlatform
@@ -1001,8 +1040,9 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(
             [
                 ["type", "--key-delay", "2", "--key-hold", "2", "--", "line one"],
-                // LEFTSHIFT(42)+ENTER(28) press/release pairs.
-                ["key", "42:1", "28:1", "28:0", "42:0"],
+                // LEFTSHIFT(42)+ENTER(28) press/release pairs, with an inter-event delay so the
+                // Shift modifier reliably registers before Enter.
+                ["key", "--key-delay", "25", "42:1", "28:1", "28:0", "42:0"],
                 ["type", "--key-delay", "2", "--key-hold", "2", "--", "line two"]
             ],
             runner.Calls.Select(c => c.Arguments).ToArray()
@@ -1268,9 +1308,15 @@ public sealed class TextInsertionServiceTests
             return Task.FromResult(true);
         }
 
+        // Models a compositor/app dropping the first N synthesized copies before one lands —
+        // the ydotool race the retry loop is meant to ride out. 0 = every attempt lands.
+        public int CopyLandsOnAttempt { get; init; }
+        public int CopyAttemptCount { get; private set; }
+
         public Task<bool> SendCopyAsync()
         {
-            if (CopySucceeds && SelectionText is not null)
+            CopyAttemptCount++;
+            if (CopySucceeds && SelectionText is not null && CopyAttemptCount >= CopyLandsOnAttempt)
             {
                 Clipboard = SelectionText;
             }

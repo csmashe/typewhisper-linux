@@ -153,6 +153,36 @@ public partial class PromptsSectionViewModel : ObservableObject
     }
 
     /// <summary>
+    ///     Model used for spoken commands. Shares <see cref="AvailableProviders" />; the null "use
+    ///     default" option persists as no override, deferring to <see cref="DefaultLlmProvider" />.
+    /// </summary>
+    public ProviderOption? SelectedSpokenCommandProvider
+    {
+        get =>
+            AvailableProviders.FirstOrDefault(option =>
+                option.Value == _settings.Current.SpokenCommandLlmProvider)
+            ?? AvailableProviders.FirstOrDefault();
+        set
+        {
+            if (_isRefreshingProviders)
+            {
+                return;
+            }
+
+            if (string.Equals(
+                    _settings.Current.SpokenCommandLlmProvider,
+                    value?.Value,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _settings.Save(_settings.Current with { SpokenCommandLlmProvider = value?.Value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
     ///     Re-polls providers for their current model list so new server-side models
     ///     appear without a manual "Validate". The dropdown rebuilds via
     ///     <c>PluginStateChanged</c> once the fetch lands; debounce lives in
@@ -504,6 +534,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             ? selectedActionPlugin
             : null;
         OnPropertyChanged(nameof(SelectedEditProvider));
+        OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 

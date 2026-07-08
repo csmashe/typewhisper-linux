@@ -176,6 +176,45 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SelectedSpokenCommandProvider_PersistsToSettings()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var option = Assert.Single(
+            sut.AvailableProviders,
+            candidate => candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
+        );
+
+        sut.SelectedSpokenCommandProvider = option;
+
+        Assert.Equal(
+            "plugin:com.typewhisper.openai:gpt-4.1-mini",
+            settings.Object.Current.SpokenCommandLlmProvider
+        );
+        Assert.Equal(option, sut.SelectedSpokenCommandProvider);
+
+        // Selecting the "use default provider" placeholder clears the override.
+        var defaultOption = Assert.Single(sut.AvailableProviders, candidate => candidate.Value is null);
+        sut.SelectedSpokenCommandProvider = defaultOption;
+
+        Assert.Null(settings.Object.Current.SpokenCommandLlmProvider);
+    }
+
+    [Fact]
     public void SelectedEditProvider_IgnoresTransientSelectionChangesDuringProviderRefresh()
     {
         var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));

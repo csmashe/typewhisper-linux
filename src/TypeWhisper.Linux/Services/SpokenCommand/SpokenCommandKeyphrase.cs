@@ -67,15 +67,12 @@ public static class SpokenCommandKeyphrase
                 continue;
             }
 
-            // Tighten the edit budget by one for every leading token folded beyond the
-            // keyphrase's own word count. Folding extra tokens concatenates whole English
-            // words together, which lands within the raw distance-2 tolerance far too
-            // easily ("Type this per …" -> "typethisper" is distance 1 from "typewhisper"),
-            // silently swallowing dictated text. Charging one edit per extra fold keeps the
-            // full tolerance for genuine keyphrase renderings (one token, or the exact
-            // two-token "type whisper" split) while requiring a near-exact concatenation
-            // before a 3+ word fold can ever match.
-            var allowedDistance = Math.Max(0, maxDistance - Math.Max(0, count - keyphraseWordCount));
+            // Give the canonical one-extra-token split ("type whisperer") the full edit budget, but
+            // charge a rising penalty for folding 2+ extra tokens so unrelated dictated words
+            // ("Type this per …") can't concatenate their way into a match.
+            var extraFolds = Math.Max(0, count - keyphraseWordCount);
+            var foldPenalty = extraFolds <= 1 ? 0 : extraFolds;
+            var allowedDistance = Math.Max(0, maxDistance - foldPenalty);
             if (StringDistance.Levenshtein(accumulated.ToString(), normalizedKeyphrase) > allowedDistance)
             {
                 continue;
