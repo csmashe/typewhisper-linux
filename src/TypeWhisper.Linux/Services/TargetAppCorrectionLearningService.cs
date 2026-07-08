@@ -82,6 +82,8 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
 
     // Test seam: the most recently scheduled start/stop reconcile. Reconciles serialize on
     // _listenGate, so awaiting the last-assigned task guarantees all prior ones have finished.
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global -- getter is read by
+    // TargetAppCorrectionLearningServiceTests (cross-project usage the single-project scan can't see).
     internal Task? LastListenTask { get; private set; }
 
     public TargetAppCorrectionLearningService(

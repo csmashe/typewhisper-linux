@@ -405,6 +405,27 @@
 
                     <Border Grid.Row="6"
                             Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{loc:Str Dictation.TargetAppCorrectionLearning}"
+                                           Classes="row-label" />
+                                <TextBlock
+                                    Text="{loc:Str Dictation.TargetAppCorrectionLearningHint}"
+                                    FontSize="11"
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding TargetAppCorrectionLearningEnabled}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="7"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="8"
+                            Classes="row">
                         <Grid ColumnDefinitions="*,240">
                             <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
                                        Classes="row-label" />
@@ -421,10 +442,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="7"
+                    <Border Grid.Row="9"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="8"
+                    <Border Grid.Row="10"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="{loc:Str Common.WhisperMode}"
@@ -435,10 +456,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="9"
+                    <Border Grid.Row="11"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="10"
+                    <Border Grid.Row="12"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -457,10 +478,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="11"
+                    <Border Grid.Row="13"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="12"
+                    <Border Grid.Row="14"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="{loc:Str Dictation.TranscribeShortQuietClips}"
@@ -471,10 +492,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="13"
+                    <Border Grid.Row="15"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="14"
+                    <Border Grid.Row="16"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="{loc:Str Dictation.AutoStopOnSilence}"
@@ -485,10 +506,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="15"
+                    <Border Grid.Row="17"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="16"
+                    <Border Grid.Row="18"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="{loc:Str Dictation.SilenceTimeoutSeconds}"
@@ -500,10 +521,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="17"
+                    <Border Grid.Row="19"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="18"
+                    <Border Grid.Row="20"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -520,10 +541,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="19"
+                    <Border Grid.Row="21"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="20"
+                    <Border Grid.Row="22"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -541,10 +562,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="21"
+                    <Border Grid.Row="23"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="22"
+                    <Border Grid.Row="24"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -559,27 +580,6 @@
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding LiveTranscriptionStreamingEnabled}"
                                           IsEnabled="{Binding LiveTranscriptionEnabled}"
-                                          HorizontalAlignment="Right" />
-                        </Grid>
-                    </Border>
-
-                    <Border Grid.Row="23"
-                            Background="#18FFFFFF" />
-
-                    <Border Grid.Row="24"
-                            Classes="row">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="{loc:Str Dictation.TargetAppCorrectionLearning}"
-                                           Classes="row-label" />
-                                <TextBlock
-                                    Text="{loc:Str Dictation.TargetAppCorrectionLearningHint}"
-                                    FontSize="11"
-                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                            <ToggleSwitch Grid.Column="1"
-                                          IsChecked="{Binding TargetAppCorrectionLearningEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>

@@ -279,6 +279,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 },
                 s_readSignal,
                 HandleStateChanged,
+                ObserverFlags.None,
                 emitOnCapturedContext: false
             ).ConfigureAwait(false);
 
@@ -291,6 +292,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 },
                 s_readSignal,
                 HandleTextChanged,
+                ObserverFlags.None,
                 emitOnCapturedContext: false
             ).ConfigureAwait(false);
 
@@ -325,17 +327,16 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
-    private void HandleStateChanged(Notification<AtSpiSignal> notification)
+    private void HandleStateChanged(Exception? exception, AtSpiSignal signal, object? readerState, object? handlerState)
     {
-        // Only value notifications carry a signal. Completion notifications have no value
-        // (HasValue == false); their Exception must not be read for value notifications, so
-        // gate on HasValue rather than touching Exception here.
-        if (!notification.HasValue)
+        // Only successful reads carry a signal. On error/disconnect the observer is invoked
+        // with a non-null exception and a default value; skip those rather than acting on an
+        // empty AtSpiSignal.
+        if (exception is not null)
         {
             return;
         }
 
-        var signal = notification.Value;
         if (
             !string.Equals(signal.Detail, FocusedStateName, StringComparison.Ordinal)
             || signal.Detail1 != StateGained
@@ -367,14 +368,14 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
-    private void HandleTextChanged(Notification<AtSpiSignal> notification)
+    private void HandleTextChanged(Exception? exception, AtSpiSignal signal, object? readerState, object? handlerState)
     {
-        if (!notification.HasValue)
+        if (exception is not null)
         {
             return;
         }
 
-        var element = new AtSpiElementRef(notification.Value.Sender, notification.Value.Path);
+        var element = new AtSpiElementRef(signal.Sender, signal.Path);
         if (!element.IsValid)
         {
             return;

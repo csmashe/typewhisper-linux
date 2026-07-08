@@ -56,7 +56,14 @@ public sealed class TextInsertionService
 {
     private const int PasteAttemptCount = 3;
     private static readonly TimeSpan s_focusDelay = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan s_clipboardRestoreDelayDefault = TimeSpan.FromMilliseconds(200);
+
+    // After Ctrl+V we hold our text on the clipboard this long before restoring the user's
+    // previous content. On Wayland the target reads the clipboard asynchronously, so restoring
+    // too soon races the paste: the app reads back the restored (old) content and nothing lands.
+    // 200 ms was marginal for GTK apps and lost the race outright once accessibility is active
+    // (AT-SPI makes the app do extra per-event work, delaying its clipboard read) — e.g. the
+    // target-app correction-learning feature. 500 ms comfortably covers GTK4's async paste.
+    private static readonly TimeSpan s_clipboardRestoreDelayDefault = TimeSpan.FromMilliseconds(500);
 
     // KDE Plasma's Klipper races us when restoring the clipboard — the
     // ~600 ms delay matches what OpenWhispr landed after the same race.
