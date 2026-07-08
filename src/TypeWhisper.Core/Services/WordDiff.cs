@@ -35,42 +35,61 @@ public static class WordDiff
         // Trim the common prefix/suffix first (O(n)): cleanup usually changes only
         // a handful of words, so this collapses the LCS table to the differing
         // middle and keeps the allocation small in the common case.
+        var start = CommonPrefixLength(rawWords, finalWords);
+        var (rawEnd, finalEnd) = CommonSuffixBounds(rawWords, finalWords, start);
+
+        var ops = new List<DiffSegment>(rawWords.Length + finalWords.Length);
+        AppendRun(ops, rawWords, 0, start, DiffKind.Unchanged);
+        ops.AddRange(DiffMiddle(rawWords[start..rawEnd], finalWords[start..finalEnd]));
+        AppendRun(ops, rawWords, rawEnd, rawWords.Length, DiffKind.Unchanged);
+
+        return Coalesce(ops);
+    }
+
+    private static int CommonPrefixLength(string[] rawWords, string[] finalWords)
+    {
+        var max = Math.Min(rawWords.Length, finalWords.Length);
         var start = 0;
-        var maxPrefix = Math.Min(rawWords.Length, finalWords.Length);
-        while (start < maxPrefix
+        while (start < max
                && string.Equals(rawWords[start], finalWords[start], StringComparison.Ordinal))
         {
             start++;
         }
 
+        return start;
+    }
+
+    private static (int RawEnd, int FinalEnd) CommonSuffixBounds(
+        string[] rawWords,
+        string[] finalWords,
+        int start
+    )
+    {
         var rawEnd = rawWords.Length;
         var finalEnd = finalWords.Length;
         while (rawEnd > start
                && finalEnd > start
-               && string.Equals(
-                   rawWords[rawEnd - 1],
-                   finalWords[finalEnd - 1],
-                   StringComparison.Ordinal
-               ))
+               && string.Equals(rawWords[rawEnd - 1], finalWords[finalEnd - 1], StringComparison.Ordinal))
         {
             rawEnd--;
             finalEnd--;
         }
 
-        var ops = new List<DiffSegment>(rawWords.Length + finalWords.Length);
-        for (var i = 0; i < start; i++)
+        return (rawEnd, finalEnd);
+    }
+
+    private static void AppendRun(
+        List<DiffSegment> ops,
+        string[] words,
+        int from,
+        int to,
+        DiffKind kind
+    )
+    {
+        for (var i = from; i < to; i++)
         {
-            ops.Add(new DiffSegment(rawWords[i], DiffKind.Unchanged));
+            ops.Add(new DiffSegment(words[i], kind));
         }
-
-        ops.AddRange(DiffMiddle(rawWords[start..rawEnd], finalWords[start..finalEnd]));
-
-        for (var i = rawEnd; i < rawWords.Length; i++)
-        {
-            ops.Add(new DiffSegment(rawWords[i], DiffKind.Unchanged));
-        }
-
-        return Coalesce(ops);
     }
 
     // Word-level diff of the differing middle (common prefix/suffix already
@@ -78,29 +97,32 @@ public static class WordDiff
     // added" replacement instead of allocating the full LCS table.
     private static List<DiffSegment> DiffMiddle(string[] rawWords, string[] finalWords)
     {
-        var ops = new List<DiffSegment>();
         if (rawWords.Length == 0 && finalWords.Length == 0)
         {
-            return ops;
+            return [];
         }
 
         if ((long)rawWords.Length * finalWords.Length > MaxLcsCells)
         {
-            foreach (var word in rawWords)
-            {
-                ops.Add(new DiffSegment(word, DiffKind.Removed));
-            }
-
-            foreach (var word in finalWords)
-            {
-                ops.Add(new DiffSegment(word, DiffKind.Added));
-            }
-
-            return ops;
+            return CoarseReplacement(rawWords, finalWords);
         }
 
-        // Standard LCS DP table: lcs[i, j] = LCS length of the first i raw words
-        // and the first j final words.
+        var lcs = BuildLcsTable(rawWords, finalWords);
+        return Backtrack(lcs, rawWords, finalWords);
+    }
+
+    private static List<DiffSegment> CoarseReplacement(string[] rawWords, string[] finalWords)
+    {
+        var ops = new List<DiffSegment>(rawWords.Length + finalWords.Length);
+        AppendRun(ops, rawWords, 0, rawWords.Length, DiffKind.Removed);
+        AppendRun(ops, finalWords, 0, finalWords.Length, DiffKind.Added);
+        return ops;
+    }
+
+    // Standard LCS DP table: lcs[i, j] = LCS length of the first i raw words and
+    // the first j final words.
+    private static int[,] BuildLcsTable(string[] rawWords, string[] finalWords)
+    {
         var lcs = new int[rawWords.Length + 1, finalWords.Length + 1];
         for (var i = 1; i <= rawWords.Length; i++)
         {
@@ -112,9 +134,15 @@ public static class WordDiff
             }
         }
 
-        // Backtrack to a word-level op sequence (built in reverse). On ties we
-        // favor "Added" (advance the final side) so a substitution reads as the
-        // removed word struck through, immediately followed by its replacement.
+        return lcs;
+    }
+
+    // Backtrack the LCS table to a word-level op sequence (built in reverse). On
+    // ties we favor "Added" (advance the final side) so a substitution reads as
+    // the removed word struck through, immediately followed by its replacement.
+    private static List<DiffSegment> Backtrack(int[,] lcs, string[] rawWords, string[] finalWords)
+    {
+        var ops = new List<DiffSegment>();
         var ri = rawWords.Length;
         var fi = finalWords.Length;
         while (ri > 0 && fi > 0)

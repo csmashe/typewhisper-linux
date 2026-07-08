@@ -500,11 +500,26 @@ public partial class HistoryRecordRow : ObservableObject
     public bool ShowInspector =>
         IsExpanded && !IsEditing && IsInspectorVisible && HasInspectorContent;
 
+    // Cached: a virtualized list recycles containers and re-evaluates these
+    // bindings whenever a row scrolls back into view, so recomputing the LCS diff
+    // and projection every access would be wasteful. Invalidated in
+    // OnRecordChanged when the underlying record is reassigned (e.g. after edit).
+    private IReadOnlyList<DiffSegment>? _rawVsFinalDiffCache;
+    private IReadOnlyList<LlmCallDisplay>? _inspectorCallsCache;
+
     public IReadOnlyList<DiffSegment> RawVsFinalDiff =>
-        WordDiff.Compute(Record.RawText, Record.FinalText);
+        _rawVsFinalDiffCache ??= WordDiff.Compute(Record.RawText, Record.FinalText);
 
     public IReadOnlyList<LlmCallDisplay> InspectorCalls =>
-        Record.LlmCalls.Select(call => new LlmCallDisplay(call)).ToList();
+        _inspectorCallsCache ??= Record.LlmCalls.Select(call => new LlmCallDisplay(call)).ToList();
+
+    partial void OnRecordChanged(TranscriptionRecord value)
+    {
+        _rawVsFinalDiffCache = null;
+        _inspectorCallsCache = null;
+        OnPropertyChanged(nameof(RawVsFinalDiff));
+        OnPropertyChanged(nameof(InspectorCalls));
+    }
 
     internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
     {

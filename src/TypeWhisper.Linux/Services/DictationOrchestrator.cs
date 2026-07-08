@@ -1787,7 +1787,7 @@ public sealed class DictationOrchestrator : IDisposable
             });
 
             var streamed = await pump.RunAsync(
-                _promptProcessing.ProcessStreamingAsync(promptAction, text, token, context.Capture),
+                _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token),
                 token);
 
             // Streaming→batch fallback: retry with the batch path when the pump
@@ -1798,7 +1798,7 @@ public sealed class DictationOrchestrator : IDisposable
             // recorded this call's provenance before yielding, so re-running the
             // same prompt via batch must not add a duplicate entry.
             var result = pump.Faulted || !pump.ReceivedAnyChunk
-                ? await _promptProcessing.ProcessAsync(promptAction, text, token)
+                ? await _promptProcessing.ProcessAsync(promptAction, text, ct: token)
                 : streamed;
 
             _models.PluginManager.EventBus.Publish(

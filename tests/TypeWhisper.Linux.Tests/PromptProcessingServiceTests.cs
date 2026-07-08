@@ -65,7 +65,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
                 SystemPrompt = "Rewrite this"
             },
             "hello",
-            CancellationToken.None
+            ct: CancellationToken.None
         );
 
         Assert.Equal(
@@ -113,7 +113,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
                 ProviderOverride = "plugin:com.test.override:model-b"
             },
             "hello",
-            CancellationToken.None
+            ct: CancellationToken.None
         );
 
         Assert.Equal(
@@ -146,7 +146,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
                 SystemPrompt = "Rewrite this"
             },
             "hello",
-            CancellationToken.None
+            ct: CancellationToken.None
         );
 
         Assert.Equal(
@@ -176,7 +176,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         var action = new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" };
 
         var chunks = new List<string>();
-        await foreach (var chunk in sut.ProcessStreamingAsync(action, "hello", CancellationToken.None))
+        await foreach (var chunk in sut.ProcessStreamingAsync(action, "hello", ct: CancellationToken.None))
             chunks.Add(chunk);
 
         // The fake provider does not override ProcessStreamingAsync, so the SDK
@@ -203,7 +203,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
-            await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", CancellationToken.None))
+            await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", ct: CancellationToken.None))
             {
                 // Drain the stream to force enumeration so the throw surfaces.
             }
@@ -234,8 +234,8 @@ public sealed class PromptProcessingServiceTests : IDisposable
         await sut.ProcessAsync(
             new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" },
             "hello",
-            CancellationToken.None,
-            capture
+            capture,
+            CancellationToken.None
         );
 
         var call = Assert.Single(capture.Calls);
@@ -271,8 +271,8 @@ public sealed class PromptProcessingServiceTests : IDisposable
         await sut.ProcessAsync(
             new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" },
             "hello",
-            CancellationToken.None,
-            capture
+            capture,
+            CancellationToken.None
         );
 
         var call = Assert.Single(capture.Calls);
@@ -297,16 +297,14 @@ public sealed class PromptProcessingServiceTests : IDisposable
             new MemoryService(pluginManager)
         );
 
-        // No capture argument — the pipeline must not allocate or record anything.
+        // No capture argument — completing without throwing is the assertion here
+        // (nothing is recorded without a sink); the streaming variant below covers
+        // the single-entry guarantee.
         await sut.ProcessAsync(
             new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" },
             "hello",
-            CancellationToken.None
+            ct: CancellationToken.None
         );
-
-        // Nothing observable to assert other than that the call succeeds without a
-        // sink; the streaming variant below covers the single-entry guarantee.
-        Assert.True(true);
     }
 
     [Fact]
@@ -328,7 +326,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
 
         var capture = new LlmCallCapture();
-        await sut.ProcessSystemPromptAsync("Clean this up", "hello", CancellationToken.None, capture);
+        await sut.ProcessSystemPromptAsync("Clean this up", "hello", capture, CancellationToken.None);
 
         var call = Assert.Single(capture.Calls);
         Assert.Equal("Cleanup", call.Stage);
@@ -368,14 +366,14 @@ public sealed class PromptProcessingServiceTests : IDisposable
         // Streaming attempt with the capture; drain until it faults.
         await Assert.ThrowsAnyAsync<Exception>(async () =>
         {
-            await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", CancellationToken.None, capture))
+            await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", capture, CancellationToken.None))
             {
                 // Drain to force the fault to surface.
             }
         });
 
         // Batch fallback re-runs the same call, but with a null capture.
-        await sut.ProcessAsync(action, "hello", CancellationToken.None);
+        await sut.ProcessAsync(action, "hello", ct: CancellationToken.None);
 
         Assert.Single(capture.Calls);
         Assert.Equal("PromptAction", capture.Calls[0].Stage);

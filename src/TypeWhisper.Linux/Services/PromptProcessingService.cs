@@ -30,8 +30,8 @@ public sealed class PromptProcessingService
     public async Task<string> ProcessAsync(
         PromptAction action,
         string inputText,
-        CancellationToken ct,
-        LlmCallCapture? capture = null
+        LlmCallCapture? capture = null,
+        CancellationToken ct = default
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -81,9 +81,9 @@ public sealed class PromptProcessingService
     public async IAsyncEnumerable<string> ProcessStreamingAsync(
         PromptAction action,
         string inputText,
+        LlmCallCapture? capture = null,
         [EnumeratorCancellation]
-        CancellationToken ct,
-        LlmCallCapture? capture = null
+        CancellationToken ct = default
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -134,8 +134,8 @@ public sealed class PromptProcessingService
     public async Task<string> ProcessSystemPromptAsync(
         string systemPrompt,
         string inputText,
-        CancellationToken ct,
-        LlmCallCapture? capture = null
+        LlmCallCapture? capture = null,
+        CancellationToken ct = default
     )
     {
         var (provider, modelId) = ResolveProvider(providerOverride: null);

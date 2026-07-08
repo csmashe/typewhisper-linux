@@ -426,11 +426,11 @@
                                                                                                        VerticalAlignment="Center" />
                                                                                             <Border Grid.Column="1"
                                                                                                     Classes="badge"
-                                                                                                    Background="{Binding RanLocally, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#153A2A|False=#3A2E15'}"
-                                                                                                    BorderBrush="{Binding RanLocally, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1E5A3E|False=#5A4A1E'}">
+                                                                                                    Background="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Background}"
+                                                                                                    BorderBrush="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Border}">
                                                                                                 <TextBlock Text="{Binding NetworkBadgeText}"
                                                                                                            FontSize="11"
-                                                                                                           Foreground="{Binding RanLocally, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#5FD79A|False=#E0A030'}" />
+                                                                                                           Foreground="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Foreground}" />
                                                                                             </Border>
                                                                                         </Grid>
 

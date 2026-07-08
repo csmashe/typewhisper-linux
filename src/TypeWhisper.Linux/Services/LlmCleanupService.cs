@@ -67,8 +67,8 @@ public sealed class LlmCleanupService
             var cleaned = await _promptProcessing.ProcessSystemPromptAsync(
                 prompt,
                 lightText,
-                ct,
-                capture
+                capture,
+                ct
             );
             return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
         }

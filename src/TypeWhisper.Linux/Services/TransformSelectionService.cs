@@ -249,7 +249,7 @@ public sealed class TransformSelectionService
             var transformed = await _promptProcessing.ProcessSystemPromptAsync(
                 prompt,
                 session.SelectedText,
-                cts.Token
+                ct: cts.Token
             );
             if (string.IsNullOrWhiteSpace(transformed))
             {
