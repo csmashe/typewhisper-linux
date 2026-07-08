@@ -1883,11 +1883,12 @@ public sealed class DictationOrchestrator : IDisposable
             // faulted OR yielded nothing (proxy EOF, empty 200). ReceivedAnyChunk
             // distinguishes a legitimately empty single-chunk result from a silent
             // empty stream — the single chunk is already a completed ProcessAsync call.
-            // Pass a null capture on the fallback: the streaming attempt already
-            // recorded this call's provenance before yielding, so re-running the
-            // same prompt via batch must not add a duplicate entry.
+            // Pass the capture on the fallback: the batch retry is a distinct call whose
+            // response is the text actually used, so it must be recorded too — otherwise
+            // the saved provenance shows the faulted/empty streaming attempt while the
+            // history FinalText is the batch response.
             var result = pump.Faulted || !pump.ReceivedAnyChunk
-                ? await _promptProcessing.ProcessAsync(promptAction, text, ct: token)
+                ? await _promptProcessing.ProcessAsync(promptAction, text, context.Capture, token)
                 : streamed;
 
             _models.PluginManager.EventBus.Publish(
@@ -2354,10 +2355,13 @@ public sealed class DictationOrchestrator : IDisposable
         // callers replace the (empty or truncated) accumulated text with the batch result.
         async Task<bool> TryBatchFallbackAsync()
         {
-            // Null capture: the streaming attempt above already recorded this call's
-            // provenance before yielding, so re-running as a batch must not add a
-            // second entry (mirrors the prompt-action streaming→batch fallback).
-            var batch = await _promptProcessing.ProcessAsync(action, input, null, token, wrapInput)
+            // Pass the capture: this batch retry is a distinct LLM call whose response is
+            // what actually reaches the page and is saved as FinalText, so it must be
+            // recorded too. On this degraded path the Inspect panel then shows both the
+            // faulted/empty streaming attempt and the batch retry that produced the result,
+            // instead of a history entry whose recorded response doesn't match the inserted
+            // text (mirrors the prompt-action streaming→batch fallback).
+            var batch = await _promptProcessing.ProcessAsync(action, input, capture, token, wrapInput)
                 .ConfigureAwait(false);
             if (string.IsNullOrEmpty(batch))
             {
