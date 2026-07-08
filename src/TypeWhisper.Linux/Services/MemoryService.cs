@@ -82,10 +82,7 @@ public sealed class MemoryService
             var provenance = RecordProvenance(capture, llm, model, text);
 
             var result = await llm.ProcessAsync(ExtractionPrompt, text, model, ct);
-            if (provenance is not null)
-            {
-                provenance.ResponseReceived = result;
-            }
+            provenance?.ResponseReceived = result;
 
             if (
                 string.IsNullOrWhiteSpace(result)

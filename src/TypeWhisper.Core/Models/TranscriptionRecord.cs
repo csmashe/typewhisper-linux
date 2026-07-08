@@ -30,6 +30,13 @@ public sealed record TranscriptionRecord
     public bool DictionaryCorrectionApplied { get; init; }
     public bool PromptActionApplied { get; init; }
     public bool TranslationApplied { get; init; }
+
+    /// <summary>
+    ///     True when this entry came from a spoken command (keyphrase mode) rather
+    ///     than a plain dictation. Drives the "Command" badge in History; RawText is
+    ///     then the source the command acted on and FinalText the produced result.
+    /// </summary>
+    public bool IsSpokenCommand { get; init; }
     public IReadOnlyList<CorrectionSuggestion> PendingCorrectionSuggestions { get; init; } = [];
 
     /// <summary>

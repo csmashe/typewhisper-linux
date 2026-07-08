@@ -75,10 +75,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
         var provenance = RecordProvenance(capture, llmProvider, model, userText);
         var translated = await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
-        if (provenance is not null)
-        {
-            provenance.ResponseReceived = translated;
-        }
+        provenance?.ResponseReceived = translated;
 
         return translated;
     }

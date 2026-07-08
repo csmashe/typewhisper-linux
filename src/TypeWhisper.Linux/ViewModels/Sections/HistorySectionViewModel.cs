@@ -482,6 +482,7 @@ public partial class HistoryRecordRow : ObservableObject
     public string DurationLabel => $"{Record.DurationSeconds:F1}s";
     public bool HasProfileName => !string.IsNullOrWhiteSpace(Record.ProfileName);
     public bool HasAppProcessName => !string.IsNullOrWhiteSpace(Record.AppProcessName);
+    public bool IsSpokenCommand => Record.IsSpokenCommand;
     public bool HasLanguage => !string.IsNullOrWhiteSpace(Record.Language);
     public bool HasSessionAudio => _owner.HasSessionAudio(Record);
     public bool IsPlaying => _owner.IsPlaying(Record);

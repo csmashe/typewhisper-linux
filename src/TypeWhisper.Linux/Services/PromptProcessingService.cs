@@ -28,6 +28,14 @@ public sealed class PromptProcessingService
     public bool IsAnyProviderAvailable =>
         _pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
 
+    // CA1068: ct deliberately precedes the trailing optional `wrapInput` flag. This is the
+    // canonical signature reconciled during the 0.12.0 #41↔#44 integration and shared verbatim
+    // by ProcessStreamingAsync and every caller; reordering would break their positional args.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1068:CancellationToken parameters must come last",
+        Justification = "Canonical #41↔#44 signature; wrapInput is an optional trailing formatting flag."
+    )]
     public async Task<string> ProcessAsync(
         PromptAction action,
         string inputText,
@@ -73,10 +81,7 @@ public sealed class PromptProcessingService
         );
 
         var response = await provider.ProcessAsync(systemPrompt, userPrompt, modelId, ct);
-        if (provenance is not null)
-        {
-            provenance.ResponseReceived = response;
-        }
+        provenance?.ResponseReceived = response;
 
         return response;
     }
@@ -86,6 +91,11 @@ public sealed class PromptProcessingService
     ///     resolution, token-by-token output. The caller may fall back to
     ///     <see cref="ProcessAsync" /> on fault.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1068:CancellationToken parameters must come last",
+        Justification = "Canonical #41↔#44 signature; wrapInput is an optional trailing formatting flag."
+    )]
     public async IAsyncEnumerable<string> ProcessStreamingAsync(
         PromptAction action,
         string inputText,
@@ -180,10 +190,7 @@ public sealed class PromptProcessingService
         );
 
         var response = await provider.ProcessAsync(systemPrompt, userPrompt, modelId, ct);
-        if (provenance is not null)
-        {
-            provenance.ResponseReceived = response;
-        }
+        provenance?.ResponseReceived = response;
 
         return response;
     }
