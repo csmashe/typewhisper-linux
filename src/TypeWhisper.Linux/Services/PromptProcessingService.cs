@@ -32,7 +32,8 @@ public sealed class PromptProcessingService
         PromptAction action,
         string inputText,
         LlmCallCapture? capture = null,
-        CancellationToken ct = default
+        CancellationToken ct = default,
+        bool wrapInput = true
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -60,7 +61,7 @@ public sealed class PromptProcessingService
             }
         }
 
-        var userPrompt = FormatPromptActionInput(inputText);
+        var userPrompt = wrapInput ? FormatPromptActionInput(inputText) : inputText;
         var provenance = RecordProvenance(
             capture,
             "PromptAction",
@@ -90,7 +91,8 @@ public sealed class PromptProcessingService
         string inputText,
         LlmCallCapture? capture = null,
         [EnumeratorCancellation]
-        CancellationToken ct = default
+        CancellationToken ct = default,
+        bool wrapInput = true
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -116,7 +118,7 @@ public sealed class PromptProcessingService
             }
         }
 
-        var userPrompt = FormatPromptActionInput(inputText);
+        var userPrompt = wrapInput ? FormatPromptActionInput(inputText) : inputText;
         // Record before the stream yields so a mid-stream fault is still captured
         // exactly once (the streaming→batch fallback passes a null capture).
         var provenance = RecordProvenance(

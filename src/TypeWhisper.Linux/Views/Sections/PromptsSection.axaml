@@ -53,6 +53,60 @@
                 </Grid>
             </Border>
 
+            <Border Classes="panel"
+                    Padding="18,16">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="{loc:Str Prompts.CommandModeTitle}"
+                               FontSize="16"
+                               FontWeight="SemiBold" />
+
+                    <Grid ColumnDefinitions="*,Auto"
+                          ColumnSpacing="16">
+                        <StackPanel Grid.Column="0"
+                                    Spacing="4">
+                            <TextBlock Text="{loc:Str Prompts.CommandModeToggle}"
+                                       FontSize="13.5"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{loc:Str Prompts.CommandModeHint}"
+                                       FontSize="12"
+                                       Foreground="#8A9AAE"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1"
+                                      IsChecked="{Binding CommandModeEnabled}"
+                                      VerticalAlignment="Center" />
+                    </Grid>
+
+                    <StackPanel Spacing="6"
+                                IsEnabled="{Binding CommandModeEnabled}">
+                        <TextBlock Text="{loc:Str Prompts.CommandKeyphrase}" />
+                        <TextBox Text="{Binding CommandKeyphrase, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                 PlaceholderText="{loc:Str Prompts.CommandKeyphrasePlaceholder}" />
+                        <TextBlock Text="{loc:Str Prompts.CommandKeyphraseHelp}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+
+                        <TextBlock Text="{loc:Str Prompts.CommandModel}"
+                                   Margin="0,8,0,0" />
+                        <ComboBox ItemsSource="{Binding AvailableProviders}"
+                                  SelectedItem="{Binding SelectedSpokenCommandProvider}"
+                                  HorizontalAlignment="Stretch"
+                                  DropDownOpened="OnProviderDropDownOpened">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ProviderOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock Text="{loc:Str Prompts.CommandModelHelp}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
             <Border Background="#4D3B17"
                     BorderBrush="#6E5625"
                     BorderThickness="1"

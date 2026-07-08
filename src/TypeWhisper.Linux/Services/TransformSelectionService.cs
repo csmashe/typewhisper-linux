@@ -67,15 +67,17 @@ public sealed class TransformSelectionService
     internal static string BuildTransformPrompt(string selectedText, string command)
     {
         return $"""
-                You transform selected text based on a spoken command.
-                Return only the transformed text.
-                Preserve meaning unless the command asks otherwise.
-
-                Selected text:
-                {selectedText}
+                You edit the user's selected text according to their command below.
+                Actually apply the command — rewrite, shorten, lengthen, reformat, or restyle the text
+                as asked. Do NOT return the text unchanged unless the command explicitly asks you to.
+                Keep the original meaning and any essential facts unless the command says otherwise.
+                Output ONLY the edited text — no preamble, no quotes, no explanation, no markdown fences.
 
                 Command:
                 {command}
+
+                Selected text:
+                {selectedText}
                 """;
     }
 
