@@ -125,7 +125,20 @@ EOF
 cat > "$TARBALL_STAGE/install.sh" <<'EOF'
 #!/usr/bin/env bash
 # Install TypeWhisper from this tarball into the current user's profile.
-# No root required. Use --uninstall to remove.
+# No root required.
+#
+# Usage:
+#   ./install.sh                       Install (or update) TypeWhisper.
+#   ./install.sh --uninstall           Remove the app but KEEP all user data
+#                                      (recordings, history, backups, keys, settings).
+#   ./install.sh --uninstall --purge   Remove the app AND all user data.
+#
+# DATA SAFETY: this tarball layout installs the program INTO INSTALL_ROOT, the
+# same directory the running app later fills with the user's Audio/ (dictation +
+# recorder WAVs), Data/ (history DB), backups/, PluginData/ (plugin API keys) and
+# settings.json. An earlier uninstall ran `rm -rf "$INSTALL_ROOT"` and destroyed
+# all of that with no recovery. Uninstall now removes only the program payload
+# and preserves user data unless --purge is given. Non-interactive throughout.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -135,13 +148,83 @@ ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps"
 BIN_DIR="$HOME/.local/bin"
 
 if [ "${1:-}" = "--uninstall" ]; then
-  rm -rf "$INSTALL_ROOT" "$APPS_DIR/typewhisper.desktop" "$ICONS_DIR/typewhisper.png" "$BIN_DIR/typewhisper"
+  PURGE=0
+  case "${2:-}" in
+    "") ;;
+    --purge|--all) PURGE=1 ;;
+    *) echo "Unknown option: $2 (expected --purge/--all)" >&2; exit 2 ;;
+  esac
+
+  rm -f "$APPS_DIR/typewhisper.desktop" "$ICONS_DIR/typewhisper.png" "$BIN_DIR/typewhisper"
+
+  case "$INSTALL_ROOT" in
+    ""|"/"|"$HOME"|"$HOME/")
+      echo "Refusing to uninstall: INSTALL_ROOT ('$INSTALL_ROOT') is unsafe to remove." >&2
+      exit 1
+      ;;
+  esac
+
+  if [ "$PURGE" -eq 1 ]; then
+    rm -rf "$INSTALL_ROOT"
+    echo "TypeWhisper and all its user data have been uninstalled."
+    exit 0
+  fi
+
+  # Preserve user data, remove only the program payload. Everything the running
+  # app creates is on this KEEP list; anything else at the top level is payload
+  # shipped in the tarball (binary, *.dll, *.so, runtime configs,
+  # icon/desktop/installer) and is safe to delete.
+  # NOTE: Plugins/ is on the KEEP list. In this tarball layout BasePath ==
+  # INSTALL_ROOT, so PluginsPath == $INSTALL_ROOT/Plugins holds BOTH the shipped
+  # bundled plugins AND any marketplace/custom plugins the user installed at
+  # runtime. Deleting it here would destroy user-installed plugins (and their
+  # keys) on an ordinary uninstall — only --purge (rm -rf above) may remove it.
+  if [ -d "$INSTALL_ROOT" ]; then
+    KEEP=" Audio Data PluginData Plugins Logs Models Runtimes backups training settings.json settings.json.bak linux-preferences.json "
+    for entry in "$INSTALL_ROOT"/* "$INSTALL_ROOT"/.[!.]*; do
+      [ -e "$entry" ] || continue
+      name="$(basename "$entry")"
+      case "$KEEP" in
+        *" $name "*) continue ;;   # keep user data
+        *) rm -rf "$entry" ;;      # remove program payload
+      esac
+    done
+    # If nothing user-created is left, drop the now-empty install root too.
+    rmdir "$INSTALL_ROOT" 2>/dev/null || true
+  fi
+
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+  fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
+  fi
+
   echo "TypeWhisper uninstalled."
+  if [ -d "$INSTALL_ROOT" ]; then
+    echo "Your recordings, history, backups and settings were KEPT at:"
+    echo "  $INSTALL_ROOT"
+    echo "Re-run with '--uninstall --purge' to delete that data too."
+  fi
   exit 0
 fi
 
 mkdir -p "$INSTALL_ROOT" "$APPS_DIR" "$ICONS_DIR" "$BIN_DIR"
-rm -rf "$INSTALL_ROOT"/*
+# Update in place: clear only the previously-installed program payload, never the
+# user data the app writes into this same dir (Audio/, Data/, backups/, keys,
+# settings). The old `rm -rf "$INSTALL_ROOT"/*` destroyed all of that on reinstall.
+# Plugins/ is KEPT: it holds user-installed marketplace/custom plugins alongside
+# the bundled ones. The `cp -R "$HERE"/*` below merges the fresh bundled plugins
+# on top, refreshing them while leaving the user's installed plugins intact.
+KEEP=" Audio Data PluginData Plugins Logs Models Runtimes backups training settings.json settings.json.bak linux-preferences.json "
+for entry in "$INSTALL_ROOT"/* "$INSTALL_ROOT"/.[!.]*; do
+  [ -e "$entry" ] || continue
+  name="$(basename "$entry")"
+  case "$KEEP" in
+    *" $name "*) continue ;;
+    *) rm -rf "$entry" ;;
+  esac
+done
 cp -R "$HERE"/* "$INSTALL_ROOT/"
 chmod +x "$INSTALL_ROOT/typewhisper"
 cp "$HERE/typewhisper.png" "$ICONS_DIR/typewhisper.png"
