@@ -35,13 +35,54 @@ public sealed class AudioRecordingService : IDisposable
     private int _isRecording;
     private long _lastLevelPostedTicksUtc;
 
+    // Device enumeration seam. Production uses the PortAudio-backed enumerator;
+    // tests inject a fake so the follow-default selection policy and the
+    // migration-deferral state machine can be exercised without real hardware
+    // or a native PortAudio table. Instance-level (not static) so a test service
+    // is fully isolated; GetInputDevices() (the static view helper) uses the
+    // process-wide PortAudio enumerator.
+    private readonly IAudioDeviceEnumerator _deviceEnumerator;
+
+    // The stable id of the device the live/last-created capture stream is bound to.
+    // Migration compares this against the freshly-resolved OS default to decide
+    // whether a default change requires a swap.
+    private string? _activeDeviceId;
+
+    // Set when a default-device migration was requested while a recording was in
+    // flight; the swap is deferred (never tear down the live buffer) and applied
+    // on the next CheckForDefaultDeviceChange() once recording has stopped. Mirrors
+    // upstream's _preferredDeviceMigrationPending.
+    private bool _preferredDeviceMigrationPending;
+
+    private readonly Lock _migrationLock = new();
+
     // Per-frame tap fired from the PortAudio realtime thread when copySamples is true.
     // Must be allocation-free and non-blocking; sink borrows processedBuffer (no copy).
     // A throw detaches the sink via CAS so the same exception can't kill every frame.
     private Action<float[]>? _liveFrameSink;
     private int _sampleCount;
     private PaStream? _stream;
+
+    // Serializes every capture-stream lifecycle transition (open / stop+dispose /
+    // migrate) AND the PortAudio Terminate()+Initialize() device-table refresh, so a
+    // watcher-thread migration can never race a UI-thread StartRecording/StartPreview/
+    // StopRecording that is opening or disposing the native stream. Held only around
+    // the brief transition — never for the duration of a recording — so the
+    // never-interrupt-a-live-recording guarantee is preserved (migration still defers
+    // while IsRecording). Ordering: acquire _streamLock as the outermost lock; nested
+    // acquisition of s_paInitLock (inside RefreshPortAudioDeviceTable) is fine because
+    // the reverse order never occurs.
+    private readonly Lock _streamLock = new();
     private readonly IErrorLogService? _errorLog;
+
+    // Reactive trigger for CheckForDefaultDeviceChange: detects OS default capture
+    // changes at runtime (pactl subscribe) and, debounced, calls back here. Optional
+    // so the buffer/selection paths unit-test without it; when null (or when pactl is
+    // absent) the service degrades to lazy re-resolve at the next recording start.
+    // Started/stopped as FollowSystemDefault toggles; see StartOrStopDeviceWatcher.
+    private readonly IDefaultDeviceChangeWatcher? _deviceWatcher;
+    private int _watcherStarted;
+
     internal int CaptureSampleRate { get; private set; } = SampleRate;
 
     // PortAudio is initialized lazily via EnsurePortAudioInitialized, so
@@ -50,9 +91,19 @@ public sealed class AudioRecordingService : IDisposable
 
     // errorLog is optional so the buffer-processing path can still be unit-tested
     // with a bare `new AudioRecordingService()`; DI supplies the real instance.
-    public AudioRecordingService(IErrorLogService? errorLog = null)
+    // deviceEnumerator is optional so production/DI gets the PortAudio-backed
+    // enumerator by default while tests can inject a fake device table.
+    // deviceWatcher is optional so tests exercise the migration state machine
+    // without a real pactl process; DI supplies the pactl-backed watcher.
+    public AudioRecordingService(
+        IErrorLogService? errorLog = null,
+        IAudioDeviceEnumerator? deviceEnumerator = null,
+        IDefaultDeviceChangeWatcher? deviceWatcher = null
+    )
     {
         _errorLog = errorLog;
+        _deviceEnumerator = deviceEnumerator ?? PortAudioDeviceEnumerator.Shared;
+        _deviceWatcher = deviceWatcher;
     }
 
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
@@ -61,6 +112,29 @@ public sealed class AudioRecordingService : IDisposable
     public bool HasSpeechEnergy => CurrentRmsLevel >= SpeechEnergyThreshold;
 
     public int? SelectedDeviceIndex { get; set; }
+
+    /// <summary>
+    ///     When true the service captures from the current OS default input device
+    ///     and migrates to a new default when it changes (deferred while recording).
+    ///     When false the pinned <see cref="SelectedDeviceIndex" /> is used verbatim.
+    ///     App/ViewModel set this from the persisted "follow system default" sentinel.
+    ///     <para>
+    ///         Toggling this also starts/stops the runtime default-device watcher so the
+    ///         reactive migration trigger is only live while it is meaningful. The
+    ///         watcher gracefully no-ops when unavailable (e.g. pactl missing).
+    ///     </para>
+    /// </summary>
+    public bool FollowSystemDefault
+    {
+        get => _followSystemDefault;
+        set
+        {
+            _followSystemDefault = value;
+            StartOrStopDeviceWatcher();
+        }
+    }
+
+    private bool _followSystemDefault;
 
     public bool WhisperModeEnabled { get; set; }
 
@@ -79,6 +153,21 @@ public sealed class AudioRecordingService : IDisposable
 
         Volatile.Write(ref _isPreviewing, 0);
         Volatile.Write(ref _isRecording, 0);
+
+        // Stop the reactive default-device watcher first so no debounced callback can
+        // race a partially-disposed service (CheckForDefaultDeviceChange also guards on
+        // _disposed, but killing the child process here is the clean primary path).
+        try
+        {
+            _deviceWatcher?.Stop();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[AudioRecordingService] Default-device watcher stop failed on dispose: {ex.Message}"
+            );
+        }
+
         StopAndDisposeInputStream();
         UpdateLevel(0f);
 
@@ -87,33 +176,7 @@ public sealed class AudioRecordingService : IDisposable
 
     public static IReadOnlyList<AudioInputDevice> GetInputDevices()
     {
-        EnsurePortAudioInitialized();
-        var result = new List<AudioInputDevice>();
-        for (var i = 0; i < PortAudio.DeviceCount; i++)
-        {
-            try
-            {
-                var info = PortAudio.GetDeviceInfo(i);
-                if (info.maxInputChannels > 0)
-                {
-                    result.Add(
-                        new AudioInputDevice(
-                            i,
-                            info.name,
-                            info.maxInputChannels,
-                            i == PortAudio.DefaultInputDevice,
-                            GetStableDeviceId(info.name, info.maxInputChannels)
-                        )
-                    );
-                }
-            }
-            catch
-            {
-                /* ignore broken devices */
-            }
-        }
-
-        return result;
+        return PortAudioDeviceEnumerator.Shared.GetDevices();
     }
 
     public void StartRecording()
@@ -132,34 +195,40 @@ public sealed class AudioRecordingService : IDisposable
             // CreateInputStream. Resetting early would tag samples at the wrong rate.
         }
 
-        try
+        // Open the stream AND flip into the recording state atomically under _streamLock
+        // so a watcher-thread migration can never observe an open stream that is not yet
+        // marked as recording and dispose it out from under the imminent capture.
+        lock (_streamLock)
         {
-            if (!EnsureInputStreamStarted())
+            try
             {
+                if (!EnsureInputStreamStarted())
+                {
+                    _errorLog?.AddEntry(
+                        "Recording could not start: no usable microphone was found. "
+                        + "Check that an input device is connected and selected in Recorder settings.",
+                        ErrorCategory.Recording
+                    );
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Surface a stuck-at-silent dictation: the user pressed the hotkey but no
+                // input stream could be opened (device busy, all sample rates rejected, …).
                 _errorLog?.AddEntry(
-                    "Recording could not start: no usable microphone was found. "
-                    + "Check that an input device is connected and selected in Recorder settings.",
+                    $"Recording could not start: the microphone could not be opened ({ex.Message}).",
                     ErrorCategory.Recording
                 );
-                return;
+                throw;
             }
-        }
-        catch (Exception ex)
-        {
-            // Surface a stuck-at-silent dictation: the user pressed the hotkey but no
-            // input stream could be opened (device busy, all sample rates rejected, …).
-            _errorLog?.AddEntry(
-                $"Recording could not start: the microphone could not be opened ({ex.Message}).",
-                ErrorCategory.Recording
+
+            Trace.WriteLine(
+                $"[AudioRecordingService] Recording started: captureSampleRate={CaptureSampleRate} Hz, target={SampleRate} Hz."
             );
-            throw;
+
+            Volatile.Write(ref _isRecording, 1);
         }
-
-        Trace.WriteLine(
-            $"[AudioRecordingService] Recording started: captureSampleRate={CaptureSampleRate} Hz, target={SampleRate} Hz."
-        );
-
-        Volatile.Write(ref _isRecording, 1);
     }
 
     public byte[] StopRecording()
@@ -169,14 +238,36 @@ public sealed class AudioRecordingService : IDisposable
             return [];
         }
 
-        Volatile.Write(ref _isRecording, 0);
-
-        if (!IsPreviewing)
+        // Flip out of the recording state AND dispose the stream atomically under
+        // _streamLock so a watcher-thread migration can't observe IsRecording==false
+        // mid-teardown and dispose the same live capture stream concurrently.
+        lock (_streamLock)
         {
-            StopAndDisposeInputStream();
+            Volatile.Write(ref _isRecording, 0);
+
+            if (!IsPreviewing)
+            {
+                StopAndDisposeInputStream();
+            }
         }
 
-        return BuildWavFromRecordedAudio();
+        var wav = BuildWavFromRecordedAudio();
+
+        // A default-device change may have been deferred while this recording was
+        // in flight (see CheckForDefaultDeviceChange). The live buffer has now been
+        // finalized above, so it is safe to migrate. Re-check to complete the swap.
+        bool pending;
+        lock (_migrationLock)
+        {
+            pending = _preferredDeviceMigrationPending;
+        }
+
+        if (pending)
+        {
+            CheckForDefaultDeviceChange();
+        }
+
+        return wav;
     }
 
     public async Task<byte[]> StopRecordingAsync(CancellationToken cancellationToken = default)
@@ -223,30 +314,35 @@ public sealed class AudioRecordingService : IDisposable
             return false;
         }
 
-        try
+        // Open + flip into preview atomically under _streamLock (same rationale as
+        // StartRecording) so a migration can't dispose the freshly opened stream.
+        lock (_streamLock)
         {
-            if (!EnsureInputStreamStarted())
+            try
             {
+                if (!EnsureInputStreamStarted())
+                {
+                    return false;
+                }
+
+                Volatile.Write(ref _isPreviewing, 1);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
+                _errorLog?.AddEntry(
+                    $"Microphone preview could not start: {ex.Message}",
+                    ErrorCategory.Recording
+                );
+                Volatile.Write(ref _isPreviewing, 0);
+                if (!IsRecording)
+                {
+                    StopAndDisposeInputStream();
+                }
+
                 return false;
             }
-
-            Volatile.Write(ref _isPreviewing, 1);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
-            _errorLog?.AddEntry(
-                $"Microphone preview could not start: {ex.Message}",
-                ErrorCategory.Recording
-            );
-            Volatile.Write(ref _isPreviewing, 0);
-            if (!IsRecording)
-            {
-                StopAndDisposeInputStream();
-            }
-
-            return false;
         }
     }
 
@@ -257,21 +353,44 @@ public sealed class AudioRecordingService : IDisposable
             return;
         }
 
-        Volatile.Write(ref _isPreviewing, 0);
-        if (!IsRecording)
+        lock (_streamLock)
         {
-            StopAndDisposeInputStream();
+            Volatile.Write(ref _isPreviewing, 0);
+            if (!IsRecording)
+            {
+                StopAndDisposeInputStream();
+            }
         }
 
         UpdateLevel(0f);
     }
 
-    // kept instance: invoked on the injected _audio service by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
+    /// <summary>
+    ///     Resolve the microphone the service should capture from, given a saved
+    ///     selection. Resolution order:
+    ///     <list type="number">
+    ///         <item>
+    ///             The "follow system default" sentinel — always resolves to the
+    ///             current OS default (or first device if the default is unknown),
+    ///             so a user who once pinned a device can opt back into auto-follow.
+    ///         </item>
+    ///         <item>An explicit device matched by stable id.</item>
+    ///         <item>An explicit device matched by legacy index (id churn fallback).</item>
+    ///         <item>
+    ///             Automatic (nothing configured): the system default endpoint first,
+    ///             then the first available device.
+    ///         </item>
+    ///     </list>
+    /// </summary>
     public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
     {
-        var devices = GetInputDevices();
+        var devices = _deviceEnumerator.GetDevices();
+
+        // Follow-default sentinel: ignore any pinned index/id and take the current default.
+        if (IsFollowSystemDefault(preferredDeviceId))
+        {
+            return ResolveSystemDefault(devices);
+        }
 
         if (!string.IsNullOrWhiteSpace(preferredDeviceId))
         {
@@ -282,8 +401,6 @@ public sealed class AudioRecordingService : IDisposable
             }
         }
 
-        // ReSharper disable once InvertIf — fall-through tail is a coalesce/ternary expression
-        // that inverting this block would duplicate.
         if (preferredIndex.HasValue)
         {
             var byIndex = devices.FirstOrDefault(d => d.Index == preferredIndex.Value);
@@ -293,6 +410,34 @@ public sealed class AudioRecordingService : IDisposable
             }
         }
 
+        return ResolveSystemDefault(devices);
+    }
+
+    internal static bool IsFollowSystemDefault(string? deviceId) =>
+        string.Equals(
+            deviceId,
+            AppSettings.FollowSystemDefaultMicrophoneId,
+            StringComparison.Ordinal
+        );
+
+    /// <summary>
+    ///     Synthetic "Automatic (follow system default)" entry for the device
+    ///     dropdown. Its <see cref="AudioInputDevice.PersistentId" /> is the
+    ///     follow-default sentinel and its <see cref="AudioInputDevice.Index" /> is
+    ///     -1 (never a real PortAudio index). Selecting it persists the sentinel;
+    ///     capture then follows the current OS default.
+    /// </summary>
+    public static AudioInputDevice CreateFollowSystemDefaultOption(string displayName) =>
+        new(
+            -1,
+            displayName,
+            0,
+            false,
+            AppSettings.FollowSystemDefaultMicrophoneId
+        );
+
+    private static AudioInputDevice? ResolveSystemDefault(IReadOnlyList<AudioInputDevice> devices)
+    {
         return devices.FirstOrDefault(d => d.IsDefault) ?? (devices.Count > 0 ? devices[0] : null);
     }
 
@@ -513,9 +658,29 @@ public sealed class AudioRecordingService : IDisposable
 
     private int? ResolveSelectedDeviceIndex()
     {
+        // In follow-default mode always re-resolve the current OS default from the
+        // enumerator (the enumerator refreshes PortAudio's device table first), and
+        // remember its stable id as the preferred device so a later default change
+        // can be detected. Also honors an explicit pin by index.
+        if (FollowSystemDefault)
+        {
+            var devices = _deviceEnumerator.GetDevices();
+            var preferred = ResolveSystemDefault(devices);
+            if (preferred is not null)
+            {
+                _activeDeviceId = preferred.PersistentId;
+                return preferred.Index;
+            }
+        }
+        else if (SelectedDeviceIndex.HasValue)
+        {
+            _activeDeviceId = TryGetStableDeviceId(SelectedDeviceIndex.Value);
+        }
+
         var deviceIndex = SelectedDeviceIndex ?? PortAudio.DefaultInputDevice;
         if (deviceIndex != PortAudio.NoDevice)
         {
+            _activeDeviceId ??= TryGetStableDeviceId(deviceIndex);
             return deviceIndex;
         }
 
@@ -523,45 +688,80 @@ public sealed class AudioRecordingService : IDisposable
         return null;
     }
 
+    private static string? TryGetStableDeviceId(int deviceIndex)
+    {
+        try
+        {
+            if (deviceIndex < 0 || deviceIndex >= PortAudio.DeviceCount)
+            {
+                return null;
+            }
+
+            var info = PortAudio.GetDeviceInfo(deviceIndex);
+            return GetStableDeviceId(info.name, info.maxInputChannels);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private bool EnsureInputStreamStarted()
     {
-        if (_stream is not null)
+        // _streamLock serializes the native open against a concurrent watcher-thread
+        // device-table refresh / migration so PortAudio is never re-initialized while
+        // Pa_OpenStream/Pa_StartStream is running on this thread.
+        lock (_streamLock)
         {
+            if (_stream is not null)
+            {
+                return true;
+            }
+
+            EnsurePortAudioInitialized();
+
+            var deviceIndex = ResolveSelectedDeviceIndex();
+            if (deviceIndex is null)
+            {
+                return false;
+            }
+
+            // _captureSampleRate is committed only after Start() succeeds — the
+            // PaStream constructor accepts rates that the device rejects at start time.
+            _stream = CreateInputStream(deviceIndex.Value, InputAudioCallback);
             return true;
         }
-
-        EnsurePortAudioInitialized();
-
-        var deviceIndex = ResolveSelectedDeviceIndex();
-        if (deviceIndex is null)
-        {
-            return false;
-        }
-
-        // _captureSampleRate is committed only after Start() succeeds — the
-        // PaStream constructor accepts rates that the device rejects at start time.
-        _stream = CreateInputStream(deviceIndex.Value, InputAudioCallback);
-        return true;
     }
 
     private void StopAndDisposeInputStream()
     {
-        try
+        lock (_streamLock)
         {
-            _stream?.Stop();
-        }
-        catch
-        {
-            /* best effort */
-        }
+            try
+            {
+                _stream?.Stop();
+            }
+            catch
+            {
+                /* best effort */
+            }
 
-        _stream?.Dispose();
-        _stream = null;
+            _stream?.Dispose();
+            _stream = null;
+        }
     }
 
-    private static string GetStableDeviceId(string deviceName, int maxInputChannels)
+    internal static string GetStableDeviceId(string deviceName, int maxInputChannels)
     {
         return $"{deviceName}|{maxInputChannels}";
+    }
+
+    // Init wrapper for PortAudioDeviceEnumerator (which lives outside this class but
+    // must share the ref-counted global init). Keeps the s_paInitLock/s_paInitCount
+    // discipline in one place.
+    internal static void EnsurePortAudioInitializedForEnumerator()
+    {
+        EnsurePortAudioInitialized();
     }
 
     private PaStream CreateInputStream(int deviceIndex, PaStream.Callback callback)
@@ -727,6 +927,315 @@ public sealed class AudioRecordingService : IDisposable
         return ms.ToArray();
     }
 
+    /// <summary>
+    ///     Re-resolve the current OS default input device and, in follow-default
+    ///     mode, migrate the capture to it when it has changed. IN-FLIGHT-SAFE: the
+    ///     live capture stream is NEVER torn down while a recording is in progress —
+    ///     the migration is deferred (mirroring upstream's
+    ///     <c>_preferredDeviceMigrationPending</c>) and re-applied from
+    ///     <see cref="StopRecording" /> once the buffer has been finalized.
+    /// </summary>
+    /// <remarks>
+    ///     Migration decisions are made on the stable <c>PersistentId</c>
+    ///     ("name|channels"), not the PortAudio index, because PipeWire/PulseAudio
+    ///     reorder and re-index devices freely; only the name-derived id is stable
+    ///     across a reconnect.
+    ///     <para>
+    ///         This is the unit-testable decision entry point. At runtime it is TRIGGERED
+    ///         by the injected <see cref="IDefaultDeviceChangeWatcher" /> (a debounced
+    ///         `pactl subscribe` change on the server/source), which calls it from a
+    ///         background thread. It degrades safely when no watcher is present (or pactl
+    ///         is absent): nothing calls it, so behavior falls back to lazy re-resolve.
+    ///     </para>
+    ///     <para>
+    ///         THREAD-SAFETY: the whole refresh→resolve→migrate sequence runs under
+    ///         <c>_streamLock</c> so it can never race a UI-thread start/stop that is
+    ///         opening or disposing the native stream, and it bails (deferring) while a
+    ///         recording is in flight so a live capture is never interrupted.
+    ///     </para>
+    /// </remarks>
+    public void CheckForDefaultDeviceChange()
+    {
+        if (Volatile.Read(ref _disposed) == 1 || !FollowSystemDefault)
+        {
+            return;
+        }
+
+        // Hold _streamLock across the whole refresh→resolve→migrate sequence so a
+        // concurrent UI-thread StartRecording/StartPreview/StopRecording cannot open or
+        // dispose the native stream while this watcher-thread callback re-inits PortAudio
+        // and swaps the device. The lock is released well before any recording runs (the
+        // deferral path below bails while IsRecording), so a live recording is never
+        // blocked or interrupted. Re-check the guards under the lock in case the state
+        // changed between the outer early-out and acquiring it.
+        lock (_streamLock)
+        {
+            if (Volatile.Read(ref _disposed) == 1 || !FollowSystemDefault)
+            {
+                return;
+            }
+
+            // Refresh PortAudio's cached device table so the enumerator reports the NEW
+            // default. No-ops while a stream is live / recording (checked under the lock).
+            RefreshPortAudioDeviceTable();
+
+            AudioInputDevice? preferred;
+            try
+            {
+                preferred = ResolveSystemDefault(_deviceEnumerator.GetDevices());
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[AudioRecordingService] Default-device re-resolve failed, keeping current: {ex.Message}"
+                );
+                return;
+            }
+
+            if (preferred is null)
+            {
+                // No devices right now (all unplugged); keep whatever we have and retry
+                // on the next check rather than tearing down a possibly-live stream.
+                return;
+            }
+
+            lock (_migrationLock)
+            {
+                // Already on the preferred device — nothing to migrate; clear any stale defer.
+                if (
+                    string.Equals(_activeDeviceId, preferred.PersistentId, StringComparison.Ordinal)
+                )
+                {
+                    _preferredDeviceMigrationPending = false;
+                    return;
+                }
+
+                // Never tear down an in-flight recording to migrate. Defer and let
+                // StopRecording re-invoke this method once the buffer is finalized.
+                // Checked under _streamLock so it can't race a StartRecording that is
+                // mid-transition (about to flip _isRecording / assign _stream).
+                if (IsRecording)
+                {
+                    _preferredDeviceMigrationPending = true;
+                    Trace.WriteLine(
+                        "[AudioRecordingService] Default device changed while recording; migration deferred."
+                    );
+                    return;
+                }
+
+                _preferredDeviceMigrationPending = false;
+            }
+
+            MigrateActiveCaptureToDevice(preferred);
+        }
+    }
+
+    // Swap the live capture stream (preview only; recording is guaranteed stopped by
+    // the caller) to the preferred device. Safe to no-op if no stream is open — the
+    // next EnsureInputStreamStarted picks up the new default via ResolveSelectedDeviceIndex.
+    private void MigrateActiveCaptureToDevice(AudioInputDevice preferred)
+    {
+        var wasPreviewing = IsPreviewing;
+        SelectedDeviceIndex = preferred.Index;
+        _activeDeviceId = preferred.PersistentId;
+
+        if (_stream is null)
+        {
+            // No open stream (idle): the new default is applied lazily on the next
+            // StartRecording/StartPreview, so there is nothing to do now.
+            return;
+        }
+
+        // Tear down and reopen only when NOT recording (caller guarantees this).
+        StopAndDisposeInputStream();
+
+        if (!wasPreviewing)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!EnsureInputStreamStarted())
+            {
+                Trace.WriteLine(
+                    "[AudioRecordingService] Preview stream could not reopen on the new default device."
+                );
+                Volatile.Write(ref _isPreviewing, 0);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[AudioRecordingService] Failed to reopen preview on migrated device: {ex.Message}"
+            );
+            Volatile.Write(ref _isPreviewing, 0);
+            StopAndDisposeInputStream();
+        }
+    }
+
+    // Refresh PortAudio's device table (which is snapshotted at Pa_Initialize and
+    // does NOT observe OS default changes until re-initialized) by cycling
+    // Terminate()+Initialize() under the global init lock. CRITICAL: this is a
+    // no-op while a stream is live — re-initializing PortAudio would invalidate the
+    // native stream handle and could crash the realtime callback. Callers must have
+    // already ensured no recording is in flight; here we additionally bail if any
+    // stream (e.g. a preview) is still open, deferring the refresh implicitly.
+    private void RefreshPortAudioDeviceTable()
+    {
+        // Never re-init the native library out from under a live stream.
+        if (_stream is not null || IsRecording)
+        {
+            return;
+        }
+
+        lock (s_paInitLock)
+        {
+            // Re-check under the lock: a concurrent StartRecording/StartPreview may
+            // have opened a stream between the outer check and acquiring the lock.
+            if (_stream is not null || IsRecording)
+            {
+                return;
+            }
+
+            if (s_paInitCount <= 0)
+            {
+                // Not initialized yet; the next EnsurePortAudioInitialized will read
+                // a fresh table anyway, so there is nothing cached to refresh.
+                return;
+            }
+
+            try
+            {
+                PortAudio.Terminate();
+                PortAudio.Initialize();
+            }
+            catch (Exception ex)
+            {
+                // Best-effort refresh: if the cycle fails, leave the count as-is and
+                // fall back to the stale table. Try to restore a usable init state.
+                Trace.WriteLine(
+                    $"[AudioRecordingService] PortAudio device-table refresh failed: {ex.Message}"
+                );
+                try
+                {
+                    PortAudio.Initialize();
+                }
+                catch
+                {
+                    /* leave s_paInitCount as-is; a later EnsurePortAudioInitialized retries */
+                }
+            }
+        }
+    }
+
+    // ======================= RUNTIME DEFAULT-DEVICE WATCHER =======================
+    // The reactive trigger for CheckForDefaultDeviceChange is now wired: the injected
+    // IDefaultDeviceChangeWatcher (production: PactlDefaultDeviceWatcher, running
+    // `pactl subscribe`) detects OS default capture-device changes at runtime,
+    // debounces a burst into one re-resolve, and calls CheckForDefaultDeviceChange
+    // from a background thread (never the PortAudio realtime thread).
+    //
+    //   - The watcher is started only while FollowSystemDefault is active and stopped
+    //     when it is turned off (see the FollowSystemDefault setter / this method), so
+    //     no child process runs when the user has pinned a specific microphone.
+    //   - GRACEFUL FALLBACK: if pactl is unavailable (or _deviceWatcher is null in a
+    //     test), the watcher never starts and behavior degrades to the existing lazy
+    //     re-resolve at the next StartRecording/StartPreview. Starting is best-effort
+    //     and never throws.
+    //   - The watcher NEVER tears down a live _stream: it only calls
+    //     CheckForDefaultDeviceChange, which already defers migration while recording
+    //     (and RefreshPortAudioDeviceTable no-ops while a stream is open), so the
+    //     mid-recording safety is preserved.
+    //
+    // Start/stop is idempotent via _watcherStarted so repeated FollowSystemDefault
+    // assignments (App bootstrap + ViewModel selection) don't spawn duplicate processes.
+    private void StartOrStopDeviceWatcher()
+    {
+        if (_deviceWatcher is null || Volatile.Read(ref _disposed) == 1)
+        {
+            return;
+        }
+
+        if (_followSystemDefault)
+        {
+            // Idempotent start: only the first transition into follow mode launches it.
+            if (Interlocked.Exchange(ref _watcherStarted, 1) == 1)
+            {
+                return;
+            }
+
+            try
+            {
+                _deviceWatcher.Start(CheckForDefaultDeviceChange);
+            }
+            catch (Exception ex)
+            {
+                // Never let a watcher launch failure break follow-default mode; the
+                // lazy re-resolve path still applies.
+                Volatile.Write(ref _watcherStarted, 0);
+                Trace.WriteLine(
+                    $"[AudioRecordingService] Default-device watcher start failed: {ex.Message}"
+                );
+            }
+        }
+        else
+        {
+            if (Interlocked.Exchange(ref _watcherStarted, 0) == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _deviceWatcher.Stop();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[AudioRecordingService] Default-device watcher stop failed: {ex.Message}"
+                );
+            }
+        }
+    }
+    // =============================================================================
+
+    // ---- Test seams -------------------------------------------------------
+    // The migration state machine (CheckForDefaultDeviceChange) is unit-tested
+    // through the injected IAudioDeviceEnumerator with NO real PortAudio stream:
+    // _stream stays null (so MigrateActiveCaptureToDevice only updates the target
+    // index/id) and RefreshPortAudioDeviceTable no-ops (PortAudio uninitialized).
+    // These seams let a test seed the "currently active" device and toggle the
+    // in-flight-recording flag without opening a native stream.
+
+    internal string? ActiveDeviceIdForTest => _activeDeviceId;
+
+    internal bool MigrationPendingForTest
+    {
+        get
+        {
+            lock (_migrationLock)
+            {
+                return _preferredDeviceMigrationPending;
+            }
+        }
+    }
+
+    // Seed the device the (notional) capture is currently bound to, as if a
+    // stream had been opened on it. Test-only.
+    internal void SetActiveDeviceIdForTest(string? deviceId, int? deviceIndex)
+    {
+        _activeDeviceId = deviceId;
+        SelectedDeviceIndex = deviceIndex;
+    }
+
+    // Simulate an in-flight recording without a native stream, so the deferral
+    // path in CheckForDefaultDeviceChange can be exercised. Test-only.
+    internal void SetRecordingForTest(bool recording)
+    {
+        Volatile.Write(ref _isRecording, recording ? 1 : 0);
+    }
+
     // Idempotent: initializes on first call only. GetInputDevices also calls
     // this; without idempotence the count would leak and Dispose would never
     // terminate PortAudio.
@@ -777,3 +1286,63 @@ public sealed record AudioInputDevice(
     bool IsDefault,
     string PersistentId
 );
+
+/// <summary>
+///     Device-enumeration seam for <see cref="AudioRecordingService" />. Abstracts
+///     the PortAudio device table so the follow-default selection policy and the
+///     migration-deferral state machine can be unit-tested without real hardware.
+///     <see cref="GetDevices" /> must report which device is the current OS default
+///     (via <see cref="AudioInputDevice.IsDefault" />).
+/// </summary>
+public interface IAudioDeviceEnumerator
+{
+    IReadOnlyList<AudioInputDevice> GetDevices();
+}
+
+/// <summary>
+///     Production enumerator backed by PortAudio's cached device table.
+///     <para>
+///         IMPORTANT: PortAudio snapshots the device list at <c>Pa_Initialize</c> and
+///         does NOT observe OS default changes until it is re-initialized. This
+///         enumerator therefore only reflects a changed default AFTER
+///         <see cref="AudioRecordingService" /> has cycled the native library
+///         (see <c>RefreshPortAudioDeviceTable</c>) — which it does at the start of
+///         <see cref="AudioRecordingService.CheckForDefaultDeviceChange" /> and only
+///         when no stream is live.
+///     </para>
+/// </summary>
+public sealed class PortAudioDeviceEnumerator : IAudioDeviceEnumerator
+{
+    public static PortAudioDeviceEnumerator Shared { get; } = new();
+
+    public IReadOnlyList<AudioInputDevice> GetDevices()
+    {
+        AudioRecordingService.EnsurePortAudioInitializedForEnumerator();
+        var result = new List<AudioInputDevice>();
+        for (var i = 0; i < PortAudio.DeviceCount; i++)
+        {
+            try
+            {
+                var info = PortAudio.GetDeviceInfo(i);
+                if (info.maxInputChannels > 0)
+                {
+                    result.Add(
+                        new AudioInputDevice(
+                            i,
+                            info.name,
+                            info.maxInputChannels,
+                            i == PortAudio.DefaultInputDevice,
+                            AudioRecordingService.GetStableDeviceId(info.name, info.maxInputChannels)
+                        )
+                    );
+                }
+            }
+            catch
+            {
+                /* ignore broken devices */
+            }
+        }
+
+        return result;
+    }
+}

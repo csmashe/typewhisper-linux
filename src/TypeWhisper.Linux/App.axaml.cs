@@ -489,6 +489,19 @@ public class App : Application
 
         try
         {
+            // Kill the pactl subscribe child process if it's still running. Audio
+            // dispose already Stop()s it; this is a belt-and-braces cleanup of the
+            // singleton in case follow-default was never active on the audio service.
+            var deviceWatcher = services.GetService<IDefaultDeviceChangeWatcher>();
+            deviceWatcher?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Default-device watcher dispose failed: {ex.Message}");
+        }
+
+        try
+        {
             var playback = services.GetService<AudioPlaybackService>();
             playback?.Dispose();
         }
@@ -608,6 +621,17 @@ public class App : Application
     {
         var configuredIndex = settings.Current.SelectedMicrophoneDevice;
         var configuredId = settings.Current.SelectedMicrophoneDeviceId;
+
+        // Follow-default (automatic): put the service into follow mode and leave the
+        // pinned index unset — the OS default is re-resolved at capture time. Persist
+        // nothing here (the sentinel is already saved).
+        if (AudioRecordingService.IsFollowSystemDefault(configuredId))
+        {
+            audio.FollowSystemDefault = true;
+            audio.SelectedDeviceIndex = null;
+            return;
+        }
+
         if (!configuredIndex.HasValue && string.IsNullOrWhiteSpace(configuredId))
         {
             return;
@@ -621,6 +645,7 @@ public class App : Application
                 return;
             }
 
+            audio.FollowSystemDefault = false;
             audio.SelectedDeviceIndex = resolved.Index;
 
             if (resolved.Index != configuredIndex || resolved.PersistentId != configuredId)

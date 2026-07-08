@@ -218,6 +218,7 @@
   "Dictation.Engine": "Engine",
   "Dictation.EnterProcessName": "Enter an app process name before adding an insertion strategy.",
   "Dictation.FixCudaPath": "Fix CUDA path",
+  "Dictation.FollowSystemDefaultMic": "Automatic (follow system default)",
   "Dictation.InputDevice": "Input device",
   "Dictation.InputDevicesAvailable": "{0} input device(s) available.",
   "Dictation.Language": "Language",

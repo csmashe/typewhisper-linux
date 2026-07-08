@@ -218,6 +218,7 @@
   "Dictation.Engine": "Движок",
   "Dictation.EnterProcessName": "Укажите имя процесса приложения перед добавлением стратегии вставки.",
   "Dictation.FixCudaPath": "Исправить путь CUDA",
+  "Dictation.FollowSystemDefaultMic": "Автоматически (следовать системному по умолчанию)",
   "Dictation.InputDevice": "Устройство ввода",
   "Dictation.InputDevicesAvailable": "Доступно устройств ввода: {0}.",
   "Dictation.Language": "Язык",
