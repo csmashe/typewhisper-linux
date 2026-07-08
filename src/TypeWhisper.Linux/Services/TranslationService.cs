@@ -54,6 +54,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         string text,
         string sourceLang,
         string targetLang,
+        LlmCallCapture? capture = null,
         CancellationToken ct = default
     )
     {
@@ -65,17 +66,57 @@ public sealed class TranslationService : ITranslationService, IDisposable
         var llmProvider = GetConfiguredTranslationProvider();
         if (llmProvider is null)
         {
+            // Local Marian ONNX inference never leaves the machine, so there is no
+            // provider call to record — the raw≠final diff already shows the change.
             return await TranslateLocalAsync(text, sourceLang, targetLang, ct);
         }
 
         var model = llmProvider.SupportedModels[0].Id;
         var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
-        return await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
+        var provenance = RecordProvenance(capture, llmProvider, model, userText);
+        var translated = await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
+        provenance?.ResponseReceived = translated;
+
+        return translated;
     }
 
     private ILlmProviderPlugin? GetConfiguredTranslationProvider()
     {
         return _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
+    }
+
+    // Mirrors PromptProcessingService.RecordProvenance for the translation call:
+    // records what is sent to the provider and returns the entry so the caller can
+    // attach the response (null when capture is disabled).
+    private LlmCallProvenance? RecordProvenance(
+        LlmCallCapture? capture,
+        ILlmProviderPlugin provider,
+        string modelId,
+        string userPrompt
+    )
+    {
+        if (capture is null)
+        {
+            return null;
+        }
+
+        var providerId = provider.GetLlmSelectionId();
+        var plugin = _pluginManager.GetPlugin(providerId);
+        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+
+        var provenance = new LlmCallProvenance
+        {
+            Stage = "Translation",
+            SystemPromptSent = TranslationSystemPrompt,
+            UserPromptSent = userPrompt,
+            ProviderName = provider.ProviderName,
+            ProviderId = providerId,
+            ModelId = modelId,
+            RanLocally = ranLocally,
+            InjectedMemoryContext = null
+        };
+        capture.Add(provenance);
+        return provenance;
     }
 
     private async Task<string> TranslateLocalAsync(

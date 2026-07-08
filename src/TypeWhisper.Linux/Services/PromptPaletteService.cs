@@ -209,7 +209,7 @@ public sealed class PromptPaletteService
         try
         {
             streamed = await pump.RunAsync(
-                _processing.ProcessStreamingAsync(action, capturedText, streamCts.Token),
+                _processing.ProcessStreamingAsync(action, capturedText, ct: streamCts.Token),
                 streamCts.Token
             );
         }
@@ -239,7 +239,7 @@ public sealed class PromptPaletteService
         // Fresh timeout so a streaming attempt that burned its budget doesn't starve the batch.
         using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(userToken);
         batchCts.CancelAfter(TimeSpan.FromSeconds(60));
-        return await _processing.ProcessAsync(action, capturedText, batchCts.Token);
+        return await _processing.ProcessAsync(action, capturedText, ct: batchCts.Token);
     }
 
     private static async Task CloseWindowAsync(PromptPaletteWindow? window)

@@ -13,7 +13,7 @@ public sealed class TransformSelectionServiceTests
             "make it concise"
         );
 
-        Assert.Contains("Return only the transformed text.", result);
+        Assert.Contains("Output ONLY the edited text", result);
         Assert.Contains("This sentence is too long.", result);
         Assert.Contains("make it concise", result);
     }

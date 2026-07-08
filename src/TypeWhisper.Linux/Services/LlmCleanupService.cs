@@ -32,6 +32,7 @@ public sealed class LlmCleanupService
         string text,
         CleanupLevel level,
         Func<string, Task>? statusCallback = null,
+        LlmCallCapture? capture = null,
         CancellationToken ct = default
     )
     {
@@ -63,7 +64,12 @@ public sealed class LlmCleanupService
         try
         {
             var prompt = CleanupService.GetLlmSystemPrompt(level);
-            var cleaned = await _promptProcessing.ProcessSystemPromptAsync(prompt, lightText, ct);
+            var cleaned = await _promptProcessing.ProcessSystemPromptAsync(
+                prompt,
+                lightText,
+                capture,
+                ct
+            );
             return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
         }
         catch (OperationCanceledException)

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 
@@ -37,7 +38,11 @@ public sealed class MemoryService
         _pluginManager = pluginManager;
     }
 
-    public async Task ExtractAndStoreAsync(string text, CancellationToken ct = default)
+    public async Task ExtractAndStoreAsync(
+        string text,
+        LlmCallCapture? capture = null,
+        CancellationToken ct = default
+    )
     {
         if (string.IsNullOrWhiteSpace(text) || text.Length < MinTextLength)
         {
@@ -73,7 +78,12 @@ public sealed class MemoryService
         {
             _lastExtraction = DateTime.UtcNow;
 
+            // Record before the call so a mid-request fault is still captured.
+            var provenance = RecordProvenance(capture, llm, model, text);
+
             var result = await llm.ProcessAsync(ExtractionPrompt, text, model, ct);
+            provenance?.ResponseReceived = result;
+
             if (
                 string.IsNullOrWhiteSpace(result)
                 || result.Trim().Equals("NONE", StringComparison.OrdinalIgnoreCase)
@@ -97,6 +107,41 @@ public sealed class MemoryService
         {
             Debug.WriteLine($"[MemoryService] extraction failed: {ex.Message}");
         }
+    }
+
+    // Mirrors PromptProcessingService.RecordProvenance for the extraction call:
+    // records that memory extraction also sent the dictation text to an LLM and
+    // returns the entry so the caller can attach the response (null when capture
+    // is disabled).
+    private LlmCallProvenance? RecordProvenance(
+        LlmCallCapture? capture,
+        ILlmProviderPlugin provider,
+        string modelId,
+        string userPrompt
+    )
+    {
+        if (capture is null)
+        {
+            return null;
+        }
+
+        var providerId = provider.GetLlmSelectionId();
+        var plugin = _pluginManager.GetPlugin(providerId);
+        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+
+        var provenance = new LlmCallProvenance
+        {
+            Stage = "Memory",
+            SystemPromptSent = ExtractionPrompt,
+            UserPromptSent = userPrompt,
+            ProviderName = provider.ProviderName,
+            ProviderId = providerId,
+            ModelId = modelId,
+            RanLocally = ranLocally,
+            InjectedMemoryContext = null
+        };
+        capture.Add(provenance);
+        return provenance;
     }
 
     public async Task<string?> GetContextAsync(string query, CancellationToken ct = default)

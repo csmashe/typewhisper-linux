@@ -16,6 +16,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
     private readonly SpeechFeedbackService _speechFeedback;
 
     [ObservableProperty]
+    private bool _captureLlmProvenance;
+
+    [ObservableProperty]
     private bool _memoryEnabled;
 
     [ObservableProperty]
@@ -170,6 +173,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
         MemoryEnabled = settings.MemoryEnabled && CanUseMemory;
         SpokenFeedbackEnabled = settings.SpokenFeedbackEnabled && CanUseSpokenFeedback;
         SaveToHistoryEnabled = settings.SaveToHistoryEnabled;
+        CaptureLlmProvenance = settings.CaptureLlmProvenance;
         SelectedSpokenFeedbackProviderId = string.IsNullOrWhiteSpace(
             settings.SpokenFeedbackProviderId
         )
@@ -275,6 +279,16 @@ public partial class AdvancedSectionViewModel : ObservableObject
         }
 
         _settings.Save(_settings.Current with { SaveToHistoryEnabled = value });
+    }
+
+    partial void OnCaptureLlmProvenanceChanged(bool value)
+    {
+        if (_settings.Current.CaptureLlmProvenance == value)
+        {
+            return;
+        }
+
+        _settings.Save(_settings.Current with { CaptureLlmProvenance = value });
     }
 
     partial void OnSelectedHistoryRetentionChanged(HistoryRetentionOption? value)

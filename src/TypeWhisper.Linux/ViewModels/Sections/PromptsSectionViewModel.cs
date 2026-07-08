@@ -10,11 +10,24 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class PromptsSectionViewModel : ObservableObject
 {
     private readonly PluginManager _pluginManager;
     private readonly IPromptActionService _prompts;
     private readonly ISettingsService _settings;
+
+    // Set while hydrating the spoken-command properties from saved settings so the
+    // generated On<Property>Changed hooks don't persist the value straight back.
+    private bool _hydratingCommandSettings;
+
+    [ObservableProperty]
+    private bool _commandModeEnabled;
+
+    [ObservableProperty]
+    private string _commandKeyphrase = AppSettings.DefaultCommandKeyphrase;
 
     [ObservableProperty]
     private string? _editHotkeyKey;
@@ -66,9 +79,15 @@ public partial class PromptsSectionViewModel : ObservableObject
         _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
         _pluginManager.PluginStateChanged += (_, _) =>
             Dispatcher.UIThread.Post(RefreshPluginOptions);
-        _settings.SettingsChanged += _ =>
-            Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(DefaultLlmProvider)));
+        _settings.SettingsChanged += value =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                OnPropertyChanged(nameof(DefaultLlmProvider));
+                OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
+                HydrateCommandSettings(value);
+            });
 
+        HydrateCommandSettings(_settings.Current);
         RefreshPluginOptions();
         RefreshActions();
     }
@@ -135,6 +154,36 @@ public partial class PromptsSectionViewModel : ObservableObject
     }
 
     /// <summary>
+    ///     Model used for spoken commands. Shares <see cref="AvailableProviders" />; the null "use
+    ///     default" option persists as no override, deferring to <see cref="DefaultLlmProvider" />.
+    /// </summary>
+    public ProviderOption? SelectedSpokenCommandProvider
+    {
+        get =>
+            AvailableProviders.FirstOrDefault(option =>
+                option.Value == _settings.Current.SpokenCommandLlmProvider)
+            ?? AvailableProviders.FirstOrDefault();
+        set
+        {
+            if (_isRefreshingProviders)
+            {
+                return;
+            }
+
+            if (string.Equals(
+                    _settings.Current.SpokenCommandLlmProvider,
+                    value?.Value,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _settings.Save(_settings.Current with { SpokenCommandLlmProvider = value?.Value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
     ///     Re-polls providers for their current model list so new server-side models
     ///     appear without a manual "Validate". The dropdown rebuilds via
     ///     <c>PluginStateChanged</c> once the fetch lands; debounce lives in
@@ -143,6 +192,58 @@ public partial class PromptsSectionViewModel : ObservableObject
     public Task RefreshProviderModelsAsync()
     {
         return _pluginManager.RefreshProviderModelsAsync();
+    }
+
+    private void HydrateCommandSettings(AppSettings settings)
+    {
+        _hydratingCommandSettings = true;
+        try
+        {
+            CommandModeEnabled = settings.CommandModeEnabled;
+            CommandKeyphrase = string.IsNullOrWhiteSpace(settings.CommandKeyphrase)
+                ? AppSettings.DefaultCommandKeyphrase
+                : settings.CommandKeyphrase;
+        }
+        finally
+        {
+            _hydratingCommandSettings = false;
+        }
+    }
+
+    partial void OnCommandModeEnabledChanged(bool value)
+    {
+        if (_hydratingCommandSettings || _settings.Current.CommandModeEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Save(_settings.Current with { CommandModeEnabled = value });
+    }
+
+    partial void OnCommandKeyphraseChanged(string value)
+    {
+        if (_hydratingCommandSettings)
+        {
+            return;
+        }
+
+        // Guard empty: an unset keyphrase would match every dictation, so fall back to the
+        // default. Normalizing re-enters this hook once with the trimmed value, which persists.
+        var normalized = string.IsNullOrWhiteSpace(value)
+            ? AppSettings.DefaultCommandKeyphrase
+            : value.Trim();
+        if (!string.Equals(normalized, value, StringComparison.Ordinal))
+        {
+            CommandKeyphrase = normalized;
+            return;
+        }
+
+        if (string.Equals(_settings.Current.CommandKeyphrase, normalized, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _settings.Save(_settings.Current with { CommandKeyphrase = normalized });
     }
 
     partial void OnSelectedActionChanged(PromptAction? value)
@@ -434,6 +535,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             ? selectedActionPlugin
             : null;
         OnPropertyChanged(nameof(SelectedEditProvider));
+        OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 

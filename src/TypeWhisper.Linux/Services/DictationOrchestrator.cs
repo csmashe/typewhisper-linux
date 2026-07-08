@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using System.Text;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.SpokenCommand;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -29,7 +31,15 @@ internal sealed record RecordingContext(
     string? StreamingModelId,
     string? StreamingLanguageHint,
     CancellationToken CancelToken
-);
+)
+{
+    /// <summary>
+    ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
+    ///     for this run (history saving or the provenance setting is off), so the
+    ///     pipeline records nothing and pays no cost.
+    /// </summary>
+    public LlmCallCapture? Capture { get; init; }
+}
 
 public sealed class DictationOrchestrator : IDisposable
 {
@@ -78,6 +88,11 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
     private CancellationTokenSource? _activeDictationCts;
+
+    // Cancels an in-flight spoken command (its LLM stream + typing). Distinct from
+    // _activeDictationCts, which only covers the recording/transcription phase and is nulled once
+    // recording stops — a command runs after that, so it needs its own Escape-reachable source.
+    private CancellationTokenSource? _activeCommandCts;
     private EventHandler? _cancelHandler;
     private volatile bool _cancelRequested;
     private bool _disposed;
@@ -395,6 +410,21 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     public async Task CancelAsync()
     {
+        // A spoken command runs after recording stops, so its cancellation source is separate from
+        // the recording CTS. Cancel it first so Escape aborts a long command mid-stream/typing.
+        var commandCts = _activeCommandCts;
+        if (commandCts is not null)
+        {
+            try
+            {
+                await commandCts.CancelAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                /* command already finished and disposed it */
+            }
+        }
+
         // Cancel the in-flight async work first so a long-running TranscribeAsync
         // or pipeline call begins unwinding immediately, even if we have to
         // wait for the toggle gate below.
@@ -1031,6 +1061,10 @@ public sealed class DictationOrchestrator : IDisposable
                 };
             }
 
+            // Keep the recorded (pre-padding) length: PadWavForFinalTranscription adds ~0.3s of
+            // silence, which would push a borderline-short silent clip past the hallucination filter's
+            // duration cutoff and let a stock "Thank you." artifact through.
+            var recordedDuration = duration;
             wav = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(wav, duration);
             duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
 
@@ -1040,7 +1074,7 @@ public sealed class DictationOrchestrator : IDisposable
 
             try
             {
-                await TranscribeAndInsertAsync(wav, path, duration, recordingContext);
+                await TranscribeAndInsertAsync(wav, path, duration, recordedDuration, recordingContext);
             }
             finally
             {
@@ -1192,10 +1226,20 @@ public sealed class DictationOrchestrator : IDisposable
         byte[] wav,
         string wavPath,
         double duration,
+        double recordedDuration,
         RecordingContext context
     )
     {
         var cancelToken = context.CancelToken;
+
+        // Attach an LLM-provenance sink only when it will actually be persisted:
+        // capture piggybacks history storage, so both toggles must be on. Left
+        // null otherwise, so the prompt chokepoint records (and costs) nothing.
+        if (_settings.Current is { SaveToHistoryEnabled: true, CaptureLlmProvenance: true })
+        {
+            context = context with { Capture = new LlmCallCapture() };
+        }
+
         var effectiveModelId =
             context.Profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
 
@@ -1372,6 +1416,8 @@ public sealed class DictationOrchestrator : IDisposable
             // Skip the no-speech guard when the preview fallback fired: the
             // streaming session captured real words, so the engine's no-speech
             // verdict on the empty batch pass is exactly what the fallback recovers.
+            // A compound boolean guard reads clearer as an if than as a switch.
+            // ReSharper disable once ConvertIfStatementToSwitchStatement
             if (
                 !usedPreviewFallback
                 && result?.NoSpeechProbability is > 0.8f
@@ -1381,6 +1427,65 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, "No speech detected.");
                 ShowFeedback(context, "No speech detected.", true);
                 PublishSessionTerminal(context.SessionId, "discarded", "No speech detected.");
+                return;
+            }
+
+            // Whisper's stock silence artifacts ("Thank you.") slip past the no-speech gate above.
+            // Scope this to engines that report a no-speech probability — it's a Whisper-family
+            // signal, and applying it when the engine returns null (as many non-Whisper plugins do)
+            // would discard short real dictations like "you" or "bye" as hallucinations. Honor the
+            // aggressive short-clip setting too, exactly as the no-speech gate above does.
+            if (!usedPreviewFallback
+                && !_settings.Current.TranscribeShortQuietClipsAggressively
+                && result?.NoSpeechProbability is not null
+                && WhisperHallucinationFilter.IsLikelyHallucination(
+                    rawText,
+                    recordedDuration,
+                    result.NoSpeechProbability))
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Discarded likely Whisper hallucination ('{rawText}', {recordedDuration:0.00}s)."
+                );
+                ReportStatus(context, "No speech detected.");
+                ShowFeedback(context, "No speech detected.", true);
+                PublishSessionTerminal(context.SessionId, "discarded", "No speech detected.");
+                return;
+            }
+
+            // Spoken command mode: a dictation that opens with the keyphrase is an
+            // instruction, not text to type. Route it to the LLM before cleanup so the
+            // command is neither mangled by post-processing nor typed literally.
+            if (
+                _settings.Current.CommandModeEnabled
+                && SpokenCommandKeyphrase.TryStrip(
+                    rawText,
+                    _settings.Current.CommandKeyphrase,
+                    out var spokenCommand
+                )
+            )
+            {
+                var outcome = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
+                // A spoken command is still a dictation the user issued: record it in
+                // history (with the LLM request/response captured on context.Capture)
+                // so it appears in the History list and Inspect panel like any other.
+                // RawText is the source the command acted on (selected text for an
+                // edit, the command itself for a create), so the raw→final diff reads
+                // "source → result".
+                if (outcome is not null && _settings.Current.SaveToHistoryEnabled)
+                {
+                    AddSpokenCommandHistoryRecord(
+                        context,
+                        outcome.SourceText,
+                        outcome.Result,
+                        duration,
+                        result,
+                        wavPath,
+                        engineProviderId,
+                        engineModelId,
+                        outcome.InsertionStatus
+                    );
+                }
+
                 return;
             }
 
@@ -1455,6 +1560,7 @@ public sealed class DictationOrchestrator : IDisposable
                                         ReportStatus(context, message);
                                         return Task.CompletedTask;
                                     },
+                                    context.Capture,
                                     token
                                 ),
                     SnippetExpander = text =>
@@ -1465,7 +1571,7 @@ public sealed class DictationOrchestrator : IDisposable
                     RequireLlmSuccess = promptAction is not null,
                     TranslationHandler = !string.IsNullOrWhiteSpace(translationTarget)
                         ? (text, source, target, token) =>
-                            _translation.TranslateAsync(text, source, target, token)
+                            _translation.TranslateAsync(text, source, target, context.Capture, token)
                         : null,
                     TranslationTarget = string.IsNullOrWhiteSpace(translationTarget)
                         ? null
@@ -1669,7 +1775,34 @@ public sealed class DictationOrchestrator : IDisposable
                 context.AppProcess
             );
 
-            // Write to history last so stats reflect the just-completed capture.
+            // Memory extraction is itself an LLM call. When provenance capture is
+            // active, run it (awaited) before writing history so its request is
+            // recorded on the entry; otherwise keep it fire-and-forget so the
+            // common path isn't delayed by the extraction round-trip.
+            if (_settings.Current.MemoryEnabled)
+            {
+                if (context.Capture is not null)
+                {
+                    try
+                    {
+                        // ReSharper disable once MethodSupportsCancellation -- best-effort memory extraction; awaited only to record its provenance before history, deliberately not tied to the recording's cancellation token (mirrors the fire-and-forget sibling below).
+                        await _memory.ExtractAndStoreAsync(finalText, context.Capture);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Extraction is best-effort; never let it fail the dictation.
+                        Trace.WriteLine($"[Dictation] memory extraction failed: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    // ReSharper disable once MethodSupportsCancellation -- fire-and-forget background memory extraction; intentionally not tied to a cancellation token.
+                    FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
+                }
+            }
+
+            // Write to history last so stats reflect the just-completed capture
+            // (and any memory-extraction provenance recorded above).
             if (_settings.Current.SaveToHistoryEnabled)
             {
                 AddHistoryRecord(
@@ -1687,12 +1820,6 @@ public sealed class DictationOrchestrator : IDisposable
                     engineProviderId,
                     engineModelId
                 );
-            }
-
-            if (_settings.Current.MemoryEnabled)
-            {
-                // ReSharper disable once MethodSupportsCancellation -- fire-and-forget background memory extraction; intentionally not tied to a cancellation token.
-                FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
             }
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
@@ -1768,15 +1895,19 @@ public sealed class DictationOrchestrator : IDisposable
             });
 
             var streamed = await pump.RunAsync(
-                _promptProcessing.ProcessStreamingAsync(promptAction, text, token),
+                _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token),
                 token);
 
             // Streaming→batch fallback: retry with the batch path when the pump
             // faulted OR yielded nothing (proxy EOF, empty 200). ReceivedAnyChunk
             // distinguishes a legitimately empty single-chunk result from a silent
             // empty stream — the single chunk is already a completed ProcessAsync call.
+            // Pass the capture on the fallback: the batch retry is a distinct call whose
+            // response is the text actually used, so it must be recorded too — otherwise
+            // the saved provenance shows the faulted/empty streaming attempt while the
+            // history FinalText is the batch response.
             var result = pump.Faulted || !pump.ReceivedAnyChunk
-                ? await _promptProcessing.ProcessAsync(promptAction, text, token)
+                ? await _promptProcessing.ProcessAsync(promptAction, text, context.Capture, token)
                 : streamed;
 
             _models.PluginManager.EventBus.Publish(
@@ -1801,6 +1932,568 @@ public sealed class DictationOrchestrator : IDisposable
             ReportStatus(context, message);
             throw;
         }
+    }
+
+    // A weak model handed a non-generative command sometimes echoes an empty container instead of
+    // refusing; never type that into the app.
+    private static bool IsTrivialCommandResult(string result)
+    {
+        var trimmed = result.Trim();
+        return trimmed is "{}" or "[]" or "\"\"" or "''" or "``" or "null";
+    }
+
+    private static string BuildCreateSystemPrompt()
+    {
+        return """
+               You carry out a spoken instruction and produce text to insert at the user's cursor.
+               The user's message is that instruction. Follow it directly and concisely, and produce
+               ONLY the resulting text — no preamble, no surrounding quotes, no explanation, and no
+               markdown code fences.
+               """;
+    }
+
+    /// <summary>
+    ///     Handles a keyphrase-prefixed spoken command: routes edit-vs-create by whether text is
+    ///     selected, then transforms the selection or generates new text, streaming the result
+    ///     straight onto the page. Escape aborts mid-flight via <see cref="_activeCommandCts" />.
+    /// </summary>
+    private async Task<SpokenCommandOutcome?> RunSpokenCommandAsync(
+        string command,
+        RecordingContext context,
+        CancellationToken cancelToken
+    )
+    {
+        // Recording's CTS is nulled and Escape disarmed by now, so give the command its own linked
+        // source and re-arm Escape so a long stream/typing pass can be cancelled.
+        using var commandCts = CancellationTokenSource.CreateLinkedTokenSource(cancelToken);
+        _activeCommandCts = commandCts;
+        _hotkey.IsCancelShortcutEnabled = true;
+        var commandToken = commandCts.Token;
+        try
+        {
+            if (!_promptProcessing.IsAnyProviderAvailable)
+            {
+                var noProvider = Localization.Loc.Instance["Command.NoProvider"];
+                ReportStatus(context, noProvider);
+                ShowFeedback(context, noProvider, true);
+                PublishSessionTerminal(context.SessionId, "failed", noProvider);
+                return null;
+            }
+
+            ReportStatus(context, Localization.Loc.Instance["Command.Thinking"]);
+
+            // Match a saved transform action by name first — pure, no side effects, safe before any
+            // clipboard probe. A matched action IS an in-place transform, so it needs a selection to
+            // operate on just as an explicit "fix this" would — UNLESS the command opens with a
+            // creation verb ("write an email to Bob" incidentally shares words with a "Write Email"
+            // prompt). That's a from-scratch request, so let it create rather than forcing a selection
+            // probe and failing with "Nothing highlighted". An explicit selection cue still wins.
+            var matchedAction = SpokenCommandActionMatcher.Match(command, CommandTransformActions());
+            var wantsSelection =
+                (matchedAction is not null && !SpokenCommandIntent.OpensWithCreationVerb(command))
+                || SpokenCommandIntent.RefersToSelection(command);
+
+            PromptAction action;
+            string input;
+            bool wrapInput;
+            if (wantsSelection)
+            {
+                // Only an edit/transform needs the selection. Capturing it synthesizes a copy, so
+                // probe here and nowhere else — a pure create command must never fire a copy keystroke
+                // at the focused app. Terminals map plain Ctrl+C to SIGINT, so the probe uses
+                // Ctrl+Shift+C there (and still can't read a TUI editor's internal selection).
+                var targetIsTerminal = TextInsertionService.IsTerminalApp(context.AppProcess);
+                var selectedText = await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal);
+                if (string.IsNullOrWhiteSpace(selectedText))
+                {
+                    // Transform intent with nothing selected has nowhere to land — hint and stop. A
+                    // matched saved action lands here too: with no selection it has nothing to work on.
+                    // Terminal TUI editors (Neovim, less, …) keep the selection internal, so the copy
+                    // probe legitimately comes back empty — say that instead of "Nothing highlighted".
+                    var nothing = targetIsTerminal
+                        ? Localization.Loc.Instance["Command.NoTerminalSelection"]
+                        : Localization.Loc.Instance["Command.NothingHighlighted"];
+                    ReportStatus(context, nothing);
+                    ShowFeedback(context, nothing, false);
+                    PublishSessionTerminal(context.SessionId, "discarded", nothing);
+                    return null;
+                }
+
+                // Matched saved action, else an ad-hoc transform of the selection. Edit wraps the
+                // selection as untrusted data.
+                action = matchedAction
+                         ?? BuildTransientCommandAction(
+                             "spoken-command-edit",
+                             TransformSelectionService.BuildTransformPrompt(selectedText, command)
+                         );
+                input = selectedText;
+                wrapInput = true;
+            }
+            else
+            {
+                // Create sends the command unwrapped as an instruction and never touches the
+                // clipboard, so it fires no Ctrl+C (SIGINT) at the focused app.
+                action = BuildTransientCommandAction(
+                    "spoken-command-create",
+                    BuildCreateSystemPrompt()
+                );
+                input = command;
+                wrapInput = false;
+            }
+
+            Trace.WriteLine(
+                $"[Command] routing wantsSelection={wantsSelection} "
+                + $"matchedSaved={matchedAction is not null} action={action.Id}"
+            );
+
+            var applyingStatus = matchedAction is not null
+                ? Localization.Loc.Instance.GetString("Command.ApplyingPrompt", matchedAction.Name)
+                : Localization.Loc.Instance["Command.ApplyingOneOff"];
+            ReportStatus(context, applyingStatus);
+
+            // Streaming types each chunk directly, so it may only run where that matches what the
+            // one-shot insert would do: auto-paste on, and either the user forced DirectTyping or an
+            // Auto target the app policy already types into (terminals, browsers, Codex). Everything
+            // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) instead
+            // generates the result in one pass and routes it through that one-shot insert.
+            var strategy = ResolveInsertionStrategy(context.AppProcess);
+            var canStreamDirectly = _settings.Current.AutoPaste
+                && (strategy is TextInsertionStrategy.DirectTyping
+                    || (strategy is TextInsertionStrategy.Auto
+                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)));
+
+            if (!canStreamDirectly)
+            {
+                var oneShot = await _promptProcessing
+                    .ProcessAsync(action, input, context.Capture, commandToken, wrapInput)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(oneShot) || IsTrivialCommandResult(oneShot))
+                {
+                    var empty = Localization.Loc.Instance["Command.NoResult"];
+                    ReportStatus(context, empty);
+                    ShowFeedback(context, empty, true);
+                    PublishSessionTerminal(context.SessionId, "failed", empty);
+                    return null;
+                }
+
+                var oneShotInsertion = await CompleteViaOneShotInsertionAsync(context, oneShot);
+                return SpokenCommandOutcomeFor(input, oneShot, oneShotInsertion);
+            }
+
+            // Keep the named StreamCommandResult: `stream.Text/TypingFailed/TypedAnything` read
+            // clearer than three loose locals and let the state test below use a property pattern.
+            // ReSharper disable once UseDeconstruction
+            var stream = await StreamCommandOntoPageAsync(
+                action,
+                input,
+                wrapInput,
+                context.Capture,
+                async () =>
+                {
+                    SetOverlayState(state =>
+                        state with
+                        {
+                            IsOverlayVisible = false,
+                            ShowFeedback = false,
+                            FeedbackText = null,
+                            LlmResponseText = null,
+                            PartialText = null
+                        }
+                    );
+                    // Re-activate the window the command was issued from before typing the first
+                    // chunk: a focus change during the LLM round-trip would otherwise send output
+                    // into whatever app is now active. Mirrors the one-shot insert's focus step and
+                    // covers the pre-type yield too (it delays as well). A false result means focus
+                    // couldn't be confirmed, so streaming aborts to the safe one-shot fallback.
+                    return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false);
+                },
+                commandToken
+            );
+
+            var result = stream.Text;
+            if (string.IsNullOrWhiteSpace(result) || IsTrivialCommandResult(result))
+            {
+                var empty = Localization.Loc.Instance["Command.NoResult"];
+                ReportStatus(context, empty);
+                ShowFeedback(context, empty, true);
+                PublishSessionTerminal(context.SessionId, "failed", empty);
+                return null;
+            }
+
+            if (stream.Faulted)
+            {
+                // The provider stream broke mid-way and any output already on the page is truncated.
+                // Report failure instead of a false success and don't publish a ready result.
+                var failed = Localization.Loc.Instance["Command.Failed"];
+                ReportStatus(context, failed);
+                ShowFeedback(context, failed, true);
+                PublishSessionTerminal(context.SessionId, "failed", failed);
+                return null;
+            }
+
+            // Sequential early-return guards read clearer here than a switch on stream.
+            // ReSharper disable once ConvertIfStatementToSwitchStatement
+            if (stream is { TypingFailed: true, TypedAnything: false })
+            {
+                // No chunk ever landed (e.g. no working injection backend): fall back to a single
+                // paste/insert of the whole result and report that outcome instead of a false success.
+                var fallbackInsertion = await CompleteViaOneShotInsertionAsync(context, result);
+                return SpokenCommandOutcomeFor(input, result, fallbackInsertion);
+            }
+
+            if (stream.TypingFailed)
+            {
+                // Some text landed, then typing broke mid-stream. A one-shot re-insert would
+                // duplicate what's already on the page, so surface the failure rather than retry.
+                var failed = Localization.Loc.Instance["Command.Failed"];
+                ReportStatus(context, failed);
+                ShowFeedback(context, failed, true);
+                PublishSessionTerminal(context.SessionId, "failed", failed);
+                return null;
+            }
+
+            var done = Localization.Loc.Instance["Command.Done"];
+            ReportStatus(context, done);
+            ShowFeedback(context, done, false);
+
+            // Terminal session record so a polling API client resolves instead of looping.
+            PublishSessionResult(
+                new DictationSessionResult(
+                    context.SessionId,
+                    "ready",
+                    result,
+                    null,
+                    null,
+                    0,
+                    null,
+                    null,
+                    done
+                )
+            );
+            _models.PluginManager.EventBus.Publish(
+                new TextInsertedEvent { Text = result, AppName = context.AppTitle }
+            );
+
+            // Streamed directly onto the page, chunk by chunk — a genuine typed insertion.
+            return new SpokenCommandOutcome(input, result, TextInsertionStatus.Typed);
+        }
+        catch (OperationCanceledException) when (commandToken.IsCancellationRequested)
+        {
+            Trace.WriteLine("[Command] Spoken command canceled by user.");
+            ReportStatus(context, "Canceled");
+            ShowFeedback(context, "Canceled", false, true);
+            PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Command] Spoken command failed: {ex}");
+            ReportStatus(context, $"Command failed: {ex.Message}");
+            ShowFeedback(context, Localization.Loc.Instance["Command.Failed"], true);
+            PublishSessionTerminal(context.SessionId, "failed", ex.Message);
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCommandCts, commandCts))
+            {
+                _activeCommandCts = null;
+            }
+
+            // Don't disarm Escape if a new recording — or a newer overlapping spoken command (its
+            // CTS is still set above) — has taken over the shortcut meanwhile.
+            if (_activeCommandCts is null && _activeDictationCts is null && !_audio.IsRecording)
+            {
+                _hotkey.IsCancelShortcutEnabled = false;
+            }
+        }
+
+        // Reached only via a catch (cancel/fail) — no savable result was produced.
+        return null;
+    }
+
+    // Result of a completed spoken command, for the history entry. SourceText is what the LLM
+    // operated on — the selected text for an edit/transform, or the command itself for a create —
+    // so it maps to the entry's RawText and the raw→final diff reads "source → result". Result is
+    // the generated/transformed text that was produced. InsertionStatus is how that result actually
+    // reached the page (typed/pasted/copied), so history records the real label instead of assuming
+    // "Typed".
+    private sealed record SpokenCommandOutcome(
+        string SourceText,
+        string Result,
+        TextInsertionStatus InsertionStatus
+    );
+
+    // Maps a one-shot / fallback insertion to a savable outcome. Only the states where the text
+    // actually reached the user (typed, pasted, or copied to the clipboard) produce a record; a
+    // failed insert (missing tool, Failed, …) returns null so a command that never landed isn't
+    // persisted as a success.
+    private static SpokenCommandOutcome? SpokenCommandOutcomeFor(
+        string source,
+        string result,
+        InsertionResult insertion
+    )
+    {
+        return insertion is InsertionResult.Pasted
+            or InsertionResult.Typed
+            or InsertionResult.CopiedToClipboard
+            ? new SpokenCommandOutcome(source, result, ToTextInsertionStatus(insertion))
+            : null;
+    }
+
+    // Outcome of streaming a spoken-command result onto the page. Text is the full accumulated LLM
+    // output (useful even when typing failed); TypingFailed marks a chunk-injection failure and
+    // TypedAnything whether any chunk landed before that failure; Faulted marks the provider stream
+    // breaking mid-way after partial output already landed, so the accumulated text is incomplete.
+    private sealed record StreamCommandResult(
+        string Text,
+        bool TypingFailed,
+        bool TypedAnything,
+        bool Faulted
+    );
+
+    // Types each delta of a spoken-command result onto the page as it streams. Buffers into modest
+    // chunks to limit ydotool invocations; onFirstType runs once, just before the first characters,
+    // and returns whether the target window is focused — a false result aborts typing so the caller
+    // re-inserts via the focus-and-fallback one-shot path instead of typing into the wrong window.
+    private async Task<StreamCommandResult> StreamCommandOntoPageAsync(
+        PromptAction action,
+        string input,
+        bool wrapInput,
+        LlmCallCapture? capture,
+        Func<Task<bool>> onFirstType,
+        CancellationToken token
+    )
+    {
+        var accumulated = new StringBuilder();
+        var buffer = new StringBuilder();
+        var firstTypeDone = false;
+        var typingFailed = false;
+        var typedAnything = false;
+        var streamFaulted = false;
+
+        try
+        {
+            await foreach (var delta in _promptProcessing
+                               .ProcessStreamingAsync(action, input, capture, token, wrapInput))
+            {
+                if (string.IsNullOrEmpty(delta))
+                {
+                    continue;
+                }
+
+                accumulated.Append(delta);
+                buffer.Append(delta);
+                // Keep accumulating the full result after a typing failure (the caller reuses it for
+                // a one-shot fallback), but stop flushing chunks that can no longer land.
+                if (buffer.Length >= 20 && !typingFailed)
+                {
+                    await FlushAsync();
+                }
+            }
+
+            // Skip the final flush when nothing has been typed yet and the whole result is empty or a
+            // trivial container ("{}"/"null") — the caller reports NoResult, so typing it is worse
+            // than nothing.
+            if (!typingFailed && !(!firstTypeDone && IsWhitespaceOrTrivialResult(accumulated.ToString())))
+            {
+                await FlushAsync();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // User hit Escape: drop the buffered tail rather than typing it, and never trigger
+            // onFirstType post-cancel (it hides the overlay and refocuses the target window).
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Command] Streaming insertion faulted: {ex.Message}");
+
+            // Key recovery off whether anything was actually TYPED, not merely accumulated: a short
+            // first delta can still be sitting unflushed in the buffer, so the page is clean and a
+            // full batch retry recovers the whole result. Flushing that buffer first would type a
+            // truncated prefix the retry can't cleanly replace. Once a chunk has landed, the visible
+            // text is a truncated prefix a retry would duplicate, so just mark the stream faulted.
+            if (typedAnything || !await TryBatchFallbackAsync())
+            {
+                streamFaulted = true;
+            }
+        }
+
+        // Streaming completed but yielded nothing (proxy EOF / empty 200) — the batch endpoint may
+        // still return the result, mirroring the prompt-action path's !ReceivedAnyChunk fallback. An
+        // empty batch here is a genuine NoResult, not a fault, so don't mark the stream faulted.
+        if (!typedAnything && !streamFaulted && accumulated.Length == 0)
+        {
+            await TryBatchFallbackAsync();
+        }
+
+        return new StreamCommandResult(accumulated.ToString(), typingFailed, typedAnything, streamFaulted);
+
+        async Task TypeAsync(string text)
+        {
+            // Once injection has failed, stop typing but let the stream keep accumulating.
+            if (typingFailed)
+            {
+                return;
+            }
+
+            if (!firstTypeDone)
+            {
+                firstTypeDone = true;
+                if (!await onFirstType().ConfigureAwait(false))
+                {
+                    // Target window couldn't be confirmed focused; typing now would land in the wrong
+                    // app. Bail so the caller re-inserts via the focus-and-fallback one-shot path.
+                    typingFailed = true;
+                    return;
+                }
+            }
+
+            if (await _textInsertion.TypeStreamChunkAsync(text).ConfigureAwait(false))
+            {
+                typedAnything = true;
+            }
+            else
+            {
+                typingFailed = true;
+            }
+        }
+
+        async Task FlushAsync()
+        {
+            if (buffer.Length == 0)
+            {
+                return;
+            }
+
+            await TypeAsync(buffer.ToString());
+            buffer.Clear();
+        }
+
+        // Runs the non-streaming endpoint and types its result. Returns whether it produced anything;
+        // callers replace the (empty or truncated) accumulated text with the batch result.
+        async Task<bool> TryBatchFallbackAsync()
+        {
+            // Pass the capture: this batch retry is a distinct LLM call whose response is
+            // what actually reaches the page and is saved as FinalText, so it must be
+            // recorded too. On this degraded path the Inspect panel then shows both the
+            // faulted/empty streaming attempt and the batch retry that produced the result,
+            // instead of a history entry whose recorded response doesn't match the inserted
+            // text (mirrors the prompt-action streaming→batch fallback).
+            var batch = await _promptProcessing.ProcessAsync(action, input, capture, token, wrapInput)
+                .ConfigureAwait(false);
+            if (string.IsNullOrEmpty(batch))
+            {
+                return false;
+            }
+
+            accumulated.Clear();
+            accumulated.Append(batch);
+            // Same guard as the streaming path: never type an empty/trivial container.
+            if (!IsWhitespaceOrTrivialResult(batch))
+            {
+                await TypeAsync(batch);
+            }
+
+            return true;
+        }
+    }
+
+    private static bool IsWhitespaceOrTrivialResult(string text)
+    {
+        return string.IsNullOrWhiteSpace(text) || IsTrivialCommandResult(text);
+    }
+
+    // Fallback when streaming typing never landed a single chunk (e.g. no injection backend):
+    // insert the whole result in one shot and map the outcome to the same completion messaging the
+    // normal insertion path uses, so a genuine failure is never reported as success.
+    private async Task<InsertionResult> CompleteViaOneShotInsertionAsync(
+        RecordingContext context,
+        string result
+    )
+    {
+        var insertion = await _textInsertion.InsertTextAsync(
+            new TextInsertionRequest(
+                result,
+                _settings.Current.AutoPaste,
+                context.WindowId,
+                context.AppProcess,
+                context.AppTitle,
+                false,
+                ResolveInsertionStrategy(context.AppProcess)
+            )
+        );
+
+        var completionMessage = insertion switch
+        {
+            InsertionResult.Pasted or InsertionResult.Typed =>
+                Localization.Loc.Instance["Command.Done"],
+            InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
+            InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+            InsertionResult.MissingPasteTool =>
+                $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
+            _ => "Text insertion failed. Command result could not be inserted."
+        };
+        var isError =
+            insertion
+                is not InsertionResult.Pasted
+                and not InsertionResult.Typed
+                and not InsertionResult.CopiedToClipboard;
+        ReportStatus(context, completionMessage);
+        ShowFeedback(context, completionMessage, isError);
+
+        // Terminal session record so a polling API client resolves instead of looping.
+        PublishSessionResult(
+            new DictationSessionResult(
+                context.SessionId,
+                isError ? "failed" : "ready",
+                isError ? string.Empty : result,
+                null,
+                null,
+                0,
+                null,
+                null,
+                completionMessage
+            )
+        );
+
+        if (
+            insertion
+            is InsertionResult.Pasted
+            or InsertionResult.Typed
+            or InsertionResult.CopiedToClipboard
+        )
+        {
+            _models.PluginManager.EventBus.Publish(
+                new TextInsertedEvent { Text = result, AppName = context.AppTitle }
+            );
+        }
+
+        return insertion;
+    }
+
+    // Saved prompt actions eligible for name matching. Action-plugin-backed actions are excluded —
+    // they route output to a plugin, not the in-place transform this flow performs.
+    private List<PromptAction> CommandTransformActions()
+    {
+        return _promptActions
+            .EnabledActions.Where(candidate =>
+                string.IsNullOrWhiteSpace(candidate.TargetActionPluginId)
+            )
+            .ToList();
+    }
+
+    // Transient prompt action for an ad-hoc spoken command, carrying the spoken-command model
+    // override (null falls through to the global default).
+    private PromptAction BuildTransientCommandAction(string id, string systemPrompt)
+    {
+        return new PromptAction
+        {
+            Id = id,
+            Name = "Spoken command",
+            SystemPrompt = systemPrompt,
+            ProviderOverride = _settings.Current.SpokenCommandLlmProvider
+        };
     }
 
     private CleanupLevel ResolveCleanupLevel(RecordingContext context, PromptAction? promptAction)
@@ -2052,6 +2745,96 @@ public sealed class DictationOrchestrator : IDisposable
                || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Builds a TranscriptionRecord pre-filled with the fields shared by both history paths
+    // (dictation and spoken command). Callers supply the path-specific values — InsertionStatus,
+    // pipeline flags, IsSpokenCommand, LlmCalls, … — via a `with` expression on the result.
+    private TranscriptionRecord BuildHistoryRecord(
+        RecordingContext context,
+        string id,
+        DateTime timestamp,
+        string rawText,
+        string finalText,
+        double duration,
+        PluginTranscriptionResult? result,
+        string wavPath,
+        string engineUsed,
+        string? modelUsed
+    )
+    {
+        var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
+        var language =
+            result?.DetectedLanguage
+            ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
+
+        return new TranscriptionRecord
+        {
+            Id = id,
+            Timestamp = timestamp,
+            RawText = rawText,
+            FinalText = finalText,
+            AppName = context.AppTitle,
+            AppProcessName = context.AppProcess,
+            AppUrl = context.AppUrl,
+            DurationSeconds = duration,
+            Language = language,
+            ProfileName = context.Profile?.Name,
+            EngineUsed = engine,
+            ModelUsed = modelUsed,
+            AudioFileName = Path.GetFileName(wavPath)
+        };
+    }
+
+    // Writes a history entry for a completed spoken command. RawText is the source
+    // text the command acted on (selected text for an edit, the command itself for a
+    // create); FinalText is the generated/transformed text that was produced, so the
+    // raw→final diff reads "source → result". InsertionStatus is the real result of the
+    // insert (typed/pasted/copied). LlmCalls carries the command's request/response
+    // (context.Capture) so the Inspect panel shows it exactly like a dictation's prompt action.
+    private void AddSpokenCommandHistoryRecord(
+        RecordingContext context,
+        string rawText,
+        string finalText,
+        double duration,
+        PluginTranscriptionResult? result,
+        string wavPath,
+        string engineUsed,
+        string? modelUsed,
+        TextInsertionStatus insertionStatus
+    )
+    {
+        try
+        {
+            var timestamp =
+                context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
+
+            _history.AddRecord(
+                BuildHistoryRecord(
+                    context,
+                    Guid.NewGuid().ToString(),
+                    timestamp,
+                    rawText,
+                    finalText,
+                    duration,
+                    result,
+                    wavPath,
+                    engineUsed,
+                    modelUsed
+                ) with
+                {
+                    InsertionStatus = insertionStatus,
+                    CleanupLevelUsed = CleanupLevel.None,
+                    PromptActionApplied = true,
+                    IsSpokenCommand = true,
+                    LlmCalls = context.Capture?.Calls ?? []
+                }
+            );
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Command] AddSpokenCommandHistoryRecord failed: {ex.Message}");
+        }
+    }
+
     private void AddHistoryRecord(
         RecordingContext context,
         string id,
@@ -2070,27 +2853,20 @@ public sealed class DictationOrchestrator : IDisposable
     {
         try
         {
-            var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
-            var language =
-                result?.DetectedLanguage
-                ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
-
             _history.AddRecord(
-                new TranscriptionRecord
+                BuildHistoryRecord(
+                    context,
+                    id,
+                    timestamp,
+                    rawText,
+                    finalText,
+                    duration,
+                    result,
+                    wavPath,
+                    engineUsed,
+                    modelUsed
+                ) with
                 {
-                    Id = id,
-                    Timestamp = timestamp,
-                    RawText = rawText,
-                    FinalText = finalText,
-                    AppName = context.AppTitle,
-                    AppProcessName = context.AppProcess,
-                    AppUrl = context.AppUrl,
-                    DurationSeconds = duration,
-                    Language = language,
-                    ProfileName = context.Profile?.Name,
-                    EngineUsed = engine,
-                    ModelUsed = modelUsed,
-                    AudioFileName = Path.GetFileName(wavPath),
                     InsertionStatus = ToTextInsertionStatus(insertion),
                     InsertionFailureReason = InsertionFailureReasonFor(insertion),
                     CleanupLevelUsed = cleanupLevel,
@@ -2113,7 +2889,8 @@ public sealed class DictationOrchestrator : IDisposable
                     TranslationApplied = WasPipelineStepChanged(
                         pipelineResult,
                         PostProcessingStepNames.Translation
-                    )
+                    ),
+                    LlmCalls = context.Capture?.Calls ?? []
                 }
             );
         }

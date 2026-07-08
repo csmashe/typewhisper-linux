@@ -30,7 +30,22 @@ public sealed record TranscriptionRecord
     public bool DictionaryCorrectionApplied { get; init; }
     public bool PromptActionApplied { get; init; }
     public bool TranslationApplied { get; init; }
+
+    /// <summary>
+    ///     True when this entry came from a spoken command (keyphrase mode) rather
+    ///     than a plain dictation. Drives the "Command" badge in History; RawText is
+    ///     then the source the command acted on and FinalText the produced result.
+    /// </summary>
+    public bool IsSpokenCommand { get; init; }
     public IReadOnlyList<CorrectionSuggestion> PendingCorrectionSuggestions { get; init; } = [];
+
+    /// <summary>
+    ///     Fine-grained provenance of each LLM call made while producing this
+    ///     entry (cleanup and/or prompt action). Empty for pre-feature records
+    ///     and for runs where provenance capture was disabled.
+    /// </summary>
+    public IReadOnlyList<LlmCallProvenance> LlmCalls { get; init; } = [];
+
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
     public int WordCount =>

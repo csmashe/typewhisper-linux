@@ -11,6 +11,8 @@ public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
 
+    public const string DefaultCommandKeyphrase = "TypeWhisper";
+
     public const string LocalModelAccelerationAuto = "auto";
     public const string LocalModelAccelerationCpu = "cpu";
     public const string LocalModelAccelerationNvidiaCuda = "nvidia-cuda";
@@ -130,6 +132,16 @@ public record AppSettings
     public string PromptPaletteHotkey { get; init; } = "";
     public string? DefaultLlmProvider { get; init; }
 
+    // Spoken commands (keyphrase command mode). When enabled, a dictation that starts
+    // with CommandKeyphrase is handed to the LLM as an instruction instead of typed.
+    // Ships disabled; the keyphrase defaults to the product name.
+    public bool CommandModeEnabled { get; init; }
+    public string CommandKeyphrase { get; init; } = DefaultCommandKeyphrase;
+
+    // LLM for ad-hoc spoken commands ("plugin:<pluginId>:<modelId>", like DefaultLlmProvider);
+    // null falls back to the default. A matched saved prompt uses that prompt's own override.
+    public string? SpokenCommandLlmProvider { get; init; }
+
     // Plugin state
     public Dictionary<string, bool> PluginEnabledState { get; init; } = new();
     public bool PluginFirstRunCompleted { get; init; }
@@ -139,6 +151,12 @@ public record AppSettings
 
     // History
     public bool SaveToHistoryEnabled { get; init; } = true;
+
+    // Opt-in (default off): persists the exact prompts, provider, and injected
+    // memory context sent to the LLM per history entry (powers the Inspect panel).
+    // Piggybacks history storage, so it only takes effect when history saving is
+    // on; off by default because full prompts are more sensitive than the transcript.
+    public bool CaptureLlmProvenance { get; init; }
 
     // Spoken feedback (TTS readback after transcription)
     public bool SpokenFeedbackEnabled { get; init; }

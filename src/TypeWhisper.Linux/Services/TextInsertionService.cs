@@ -238,24 +238,98 @@ public sealed class TextInsertionService
         return InsertionResult.Pasted;
     }
 
-    public async Task<string> CaptureSelectedTextAsync()
+    /// <summary>
+    ///     Types a chunk of streamed text directly via the platform typing backend — no clipboard,
+    ///     no per-chunk focus delay — for streaming a spoken-command result onto the page. The caller
+    ///     ensures the target holds focus.
+    /// </summary>
+    public Task<bool> TypeStreamChunkAsync(string text)
+    {
+        return _platform.TypeTextAsync(text);
+    }
+
+    /// <summary>
+    ///     Best-effort re-activates the captured target window before a streaming insertion types
+    ///     into it, so output lands in the window the command was issued from rather than whatever
+    ///     holds focus after the LLM round-trip. Mirrors the focus step <see cref="InsertTextAsync(TextInsertionRequest)" />
+    ///     performs; returns false when the target could not be confirmed focused.
+    /// </summary>
+    public Task<bool> FocusWindowAsync(string? targetWindowId)
+    {
+        return FocusTargetWindowAsync(targetWindowId);
+    }
+
+    /// <summary>
+    ///     Whether the Auto insertion policy would deliver to this target by direct typing based on
+    ///     the app alone (terminals, supported browsers, Codex windows) — independent of text content.
+    ///     Lets a streaming caller decide up front whether typing each chunk matches what the one-shot
+    ///     insert would do, or whether it must defer to the content-aware one-shot path (clipboard
+    ///     paste for GUI targets, ASCII-safety for unknown ones).
+    /// </summary>
+    public static bool AppPrefersDirectTyping(string? processName, string? windowTitle)
+    {
+        return ShouldTypeDirectly(processName, windowTitle);
+    }
+
+    // A single synthesized Ctrl+C can be dropped by the compositor or the app; retry a few times.
+    private const int CopyProbeAttempts = 3;
+
+    public async Task<string> CaptureSelectedTextAsync(bool targetIsTerminal = false)
+    {
+        // No PRIMARY-selection fallback: after an edit types over the selection PRIMARY holds a stale
+        // leftover, so a failed copy probe means empty. targetIsTerminal switches the probe to
+        // Ctrl+Shift+C — a plain Ctrl+C in a terminal is SIGINT, not copy, so it captures nothing and
+        // would interrupt whatever is running there.
+        var captured = await ProbeSelectionViaCopyAsync(targetIsTerminal);
+        return string.IsNullOrWhiteSpace(captured) ? "" : captured;
+    }
+
+    private async Task<string> ProbeSelectionViaCopyAsync(bool targetIsTerminal)
     {
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
 
-        if (!await _platform.SendCopyAsync())
+        // Only prime a sentinel when the clipboard already holds text we can detect against and
+        // restore: a null read means it's empty or non-text (an image / file list) we must not
+        // clobber. Skipping it there is safe — a no-op copy leaves the read empty anyway. The
+        // sentinel only earns its keep against stale text, which a copy with no selection would
+        // otherwise leave intact and misread.
+        var useSentinel = previousClipboard is not null;
+        var sentinel = $"⁣TW-SEL-PROBE-{Guid.NewGuid():N}";
+        if (useSentinel)
         {
-            return "";
+            await _platform.SetClipboardTextAsync(sentinel);
         }
 
-        await _platform.DelayAsync(TimeSpan.FromMilliseconds(150));
-        var selectedText = await _platform.TryGetClipboardTextAsync() ?? "";
-
-        if (previousClipboard is not null)
+        var afterCopy = "";
+        for (var attempt = 1; attempt <= CopyProbeAttempts; attempt++)
         {
-            await _platform.SetClipboardTextAsync(previousClipboard);
+            if (!await _platform.SendCopyAsync(targetIsTerminal))
+            {
+                // No usable injection backend — retrying won't help.
+                break;
+            }
+
+            await _platform.DelayAsync(TimeSpan.FromMilliseconds(150));
+            afterCopy = await _platform.TryGetClipboardTextAsync() ?? "";
+
+            // With a sentinel, a real selection copied when the clipboard diverges from it.
+            // Without one, any non-empty read is the selection.
+            var gotSelection = useSentinel
+                ? !string.Equals(afterCopy, sentinel, StringComparison.Ordinal)
+                : afterCopy.Length > 0;
+            if (gotSelection)
+            {
+                break;
+            }
         }
 
-        return selectedText;
+        if (!useSentinel)
+        {
+            return afterCopy;
+        }
+
+        await _platform.SetClipboardTextAsync(previousClipboard!);
+        return string.Equals(afterCopy, sentinel, StringComparison.Ordinal) ? "" : afterCopy;
     }
 
     private async Task<bool> FocusTargetWindowAsync(string? targetWindowId)
@@ -380,7 +454,7 @@ public sealed class TextInsertionService
         return ContainsCodex(processName)
                || ContainsCodex(windowTitle)
                || ShouldTypeBrowserDirectly(processName, windowTitle)
-               || IsTerminalProcess(processName);
+               || IsTerminalApp(processName);
 
         static bool ContainsCodex(string? value)
         {
@@ -402,45 +476,50 @@ public sealed class TextInsertionService
                        || title.Contains("Gmail", StringComparison.OrdinalIgnoreCase)
                    );
         }
+    }
 
-        // Terminals bind Ctrl+V to readline quoted-insert, not paste. Direct typing is used
-        // instead. Substring match on "terminal" (not suffix) is intentional: GNOME/MATE use
-        // a client-server model so the process is "gnome-terminal-server", and Linux truncates
-        // /proc/pid/comm to 15 bytes, yielding "gnome-terminal-" — contains "terminal", but
-        // doesn't end with it. The trailing `EndsWith("term")` catches xfce4-terminal etc.
-        static bool IsTerminalProcess(string? value)
+    /// <summary>
+    ///     Whether the target process is a terminal emulator. Terminals bind Ctrl+V to
+    ///     readline quoted-insert (not paste) and map plain Ctrl+C to SIGINT (copy is
+    ///     Ctrl+Shift+C), so both text insertion and selection-capture must be
+    ///     terminal-aware. Substring match on "terminal" (not suffix) is intentional:
+    ///     GNOME/MATE use a client-server model so the process is "gnome-terminal-server",
+    ///     and Linux truncates /proc/pid/comm to 15 bytes, yielding "gnome-terminal-" —
+    ///     contains "terminal" but doesn't end with it. The trailing `EndsWith("term")`
+    ///     catches xfce4-terminal etc.
+    /// </summary>
+    public static bool IsTerminalApp(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
         {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return false;
-            }
-
-            var process = ProcessNameNormalizer.Normalize(value);
-            if (
-                process.Equals("kitty", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("gnome-terminal", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("konsole", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("alacritty", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("wezterm", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("xterm", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("tilix", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("ghostty", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("foot", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("ptyxis", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("terminator", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("warp", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("hyper", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("st", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("urxvt", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("rxvt", StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return true;
-            }
-
-            return process.Contains("terminal", StringComparison.OrdinalIgnoreCase)
-                   || process.EndsWith("term", StringComparison.OrdinalIgnoreCase);
+            return false;
         }
+
+        var process = ProcessNameNormalizer.Normalize(processName);
+        if (
+            process.Equals("kitty", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("gnome-terminal", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("konsole", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("alacritty", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("wezterm", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("xterm", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("tilix", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("ghostty", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("foot", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("ptyxis", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("terminator", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("warp", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("hyper", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("st", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("urxvt", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("rxvt", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return true;
+        }
+
+        return process.Contains("terminal", StringComparison.OrdinalIgnoreCase)
+               || process.EndsWith("term", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -507,7 +586,12 @@ internal interface ITextInsertionPlatform
     Task<bool> ActivateWindowAsync(string windowId);
     Task<bool> SendPasteAsync();
     Task<bool> TypeTextAsync(string text);
-    Task<bool> SendCopyAsync();
+
+    /// <summary>
+    ///     Synthesizes a copy. When <paramref name="useTerminalShortcut" /> is true,
+    ///     sends Ctrl+Shift+C (terminals map plain Ctrl+C to SIGINT); otherwise Ctrl+C.
+    /// </summary>
+    Task<bool> SendCopyAsync(bool useTerminalShortcut);
     Task<bool> SendEnterAsync();
 }
 
@@ -801,14 +885,20 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         };
     }
 
-    public async Task<bool> SendCopyAsync()
+    public async Task<bool> SendCopyAsync(bool useTerminalShortcut)
     {
         return await WalkChainAsync(async backend =>
             backend switch
             {
-                InputBackend.Wtype => await RunWtypeAsync("-M", "ctrl", "c", "-m", "ctrl"),
-                InputBackend.Xdotool => await SendModifiedKeyAsync("Control_L", "c"),
-                InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.CopyArgs()),
+                InputBackend.Wtype => useTerminalShortcut
+                    ? await RunWtypeAsync("-M", "ctrl", "-M", "shift", "c", "-m", "shift", "-m", "ctrl")
+                    : await RunWtypeAsync("-M", "ctrl", "c", "-m", "ctrl"),
+                InputBackend.Xdotool => useTerminalShortcut
+                    ? await SendModifiedKeyAsync(["Control_L", "Shift_L"], "c")
+                    : await SendModifiedKeyAsync("Control_L", "c"),
+                InputBackend.Ydotool => await RunYdotoolAsync(
+                    useTerminalShortcut ? YdotoolBackend.TerminalCopyArgs() : YdotoolBackend.CopyArgs()
+                ),
                 _ => false
             }
         );
@@ -939,25 +1029,49 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         return chain;
     }
 
-    private async Task<bool> SendModifiedKeyAsync(string modifier, string key)
+    private Task<bool> SendModifiedKeyAsync(string modifier, string key)
     {
-        var keyDown =
-            await RunWithEnv("xdotool", ["keydown", "--clearmodifiers", modifier], null)
-            == 0;
+        return SendModifiedKeyAsync([modifier], key);
+    }
+
+    // Holds every modifier down (in order), taps the key, then releases the
+    // modifiers in reverse — so Ctrl+Shift+C etc. arrive as a real chord. Only
+    // modifiers that actually went down are released, so a failed keydown never
+    // leaves a stuck modifier.
+    private async Task<bool> SendModifiedKeyAsync(IReadOnlyList<string> modifiers, string key)
+    {
+        var pressed = new List<string>(modifiers.Count);
+        var allDown = true;
+        foreach (var modifier in modifiers)
+        {
+            if (await RunWithEnv("xdotool", ["keydown", "--clearmodifiers", modifier], null) == 0)
+            {
+                pressed.Add(modifier);
+            }
+            else
+            {
+                allDown = false;
+                break;
+            }
+        }
+
         var keySent = false;
         try
         {
-            if (keyDown)
+            if (allDown)
             {
                 keySent = await RunWithEnv("xdotool", ["key", key], null) == 0;
             }
         }
         finally
         {
-            await RunWithEnv("xdotool", ["keyup", modifier], null);
+            for (var i = pressed.Count - 1; i >= 0; i--)
+            {
+                await RunWithEnv("xdotool", ["keyup", pressed[i]], null);
+            }
         }
 
-        return keyDown && keySent;
+        return allDown && keySent;
     }
 
     private static bool IsCommandAvailable(string command)
