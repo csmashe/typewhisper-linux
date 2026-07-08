@@ -26,11 +26,8 @@ public sealed record PipelineOptions
     /// <summary>Applies app-aware formatting to text. Params: text, processName.</summary>
     public Func<string, string?, string>? AppFormatter { get; init; }
 
-    /// <summary>Global number normalization setting. Per-request overrides can supersede this.</summary>
+    /// <summary>Global number normalization setting.</summary>
     public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
-
-    /// <summary>Per-request override for spoken number normalization.</summary>
-    public bool? NormalizeNumbersOverride { get; init; }
 
     /// <summary>Transcription task used to choose normalization languages.</summary>
     public TranscriptionTask TranscriptionTask { get; init; } = TranscriptionTask.Transcribe;

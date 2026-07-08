@@ -164,8 +164,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         options.DetectedLanguage,
                         options.ConfiguredLanguage,
                         options.ConfiguredLanguageCandidates,
-                        options.TranscriptionNumberNormalizationEnabled,
-                        options.NormalizeNumbersOverride
+                        options.TranscriptionNumberNormalizationEnabled
                     )
                 )
             )

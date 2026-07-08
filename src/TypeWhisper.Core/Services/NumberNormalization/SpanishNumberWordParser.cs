@@ -229,12 +229,17 @@ internal static class SpanishNumberWordParser
         return (digits, index);
     }
 
+    // The bare numeral "uno" always normalizes to 1; only the article forms "un"/"una" are gated
+    // by allowArticleOne, because they double as the indefinite article ("un coche") and would
+    // corrupt ordinary prose if converted outside a number context.
+    private static readonly HashSet<string> s_articleOneWords = new(StringComparer.Ordinal) { "un", "una" };
+
     private static int? UnitValue(string word, bool allowArticleOne)
     {
         if (!s_unitValues.TryGetValue(word, out var value))
             return null;
 
-        if (value == 1 && !allowArticleOne)
+        if (value == 1 && !allowArticleOne && s_articleOneWords.Contains(word))
             return null;
 
         return value;

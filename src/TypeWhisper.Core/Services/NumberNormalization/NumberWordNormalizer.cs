@@ -102,8 +102,15 @@ public static class NumberWordNormalizer
         if (previous < 0 || tokens[previous].IsWord)
             return false;
 
+        // Tokenize groups a digit and its trailing whitespace into one Other token (e.g. "2 "),
+        // so the final char is whitespace. Scan back past trailing whitespace to the last
+        // meaningful character before deciding whether a digit immediately precedes the word.
         var text = tokens[previous].Text;
-        return text.Length > 0 && char.IsDigit(text[^1]);
+        var lastNonWhitespace = text.Length - 1;
+        while (lastNonWhitespace >= 0 && char.IsWhiteSpace(text[lastNonWhitespace]))
+            lastNonWhitespace--;
+
+        return lastNonWhitespace >= 0 && char.IsDigit(text[lastNonWhitespace]);
     }
 
     private static List<WordCandidate> WordCandidates(int index, IReadOnlyList<Token> tokens)

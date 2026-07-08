@@ -375,12 +375,11 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
-    public async Task ProcessAsync_NumberNormalizationOverrideFalse_PreservesWords()
+    public async Task ProcessAsync_NumberNormalizationGloballyDisabled_PreservesWords()
     {
         var options = new PipelineOptions
         {
-            TranscriptionNumberNormalizationEnabled = true,
-            NormalizeNumbersOverride = false,
+            TranscriptionNumberNormalizationEnabled = false,
             DetectedLanguage = "en"
         };
 
@@ -390,12 +389,11 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
-    public async Task ProcessAsync_NumberNormalizationOverrideTrue_WinsOverGlobalOff()
+    public async Task ProcessAsync_NumberNormalizationGloballyEnabled_NormalizesWords()
     {
         var options = new PipelineOptions
         {
-            TranscriptionNumberNormalizationEnabled = false,
-            NormalizeNumbersOverride = true,
+            TranscriptionNumberNormalizationEnabled = true,
             DetectedLanguage = "en"
         };
 

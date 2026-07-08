@@ -104,6 +104,35 @@ public class NumberWordNormalizerTests
     }
 
     [Fact]
+    public void Normalize_ScaleWordFollowingDigit_IsNotNormalized()
+    {
+        // The digit already carries the count; treating the trailing scale word as a standalone
+        // number would corrupt already-digit text (e.g. "2 mil" -> "2 1000"). The digit and its
+        // trailing whitespace share one Other token, so FollowsDigit must scan past that space.
+        Assert.Equal("2 mil", NumberWordNormalizer.Normalize("2 mil", "es"));
+        Assert.Equal("2 millones", NumberWordNormalizer.Normalize("2 millones", "es"));
+        Assert.Equal("2 tausend", NumberWordNormalizer.Normalize("2 tausend", "de"));
+        Assert.Equal("2 millionen", NumberWordNormalizer.Normalize("2 millionen", "de"));
+    }
+
+    [Fact]
+    public void Normalize_SpanishStandaloneUno_ReturnsDigit()
+    {
+        Assert.Equal("1", NumberWordNormalizer.Normalize("uno", "es"));
+        Assert.Equal("tengo 1", NumberWordNormalizer.Normalize("tengo uno", "es"));
+    }
+
+    [Fact]
+    public void Normalize_SpanishArticleForms_KeepArticleBehavior()
+    {
+        // "un"/"una" double as the indefinite article and must not convert in ordinary prose,
+        // yet still normalize inside clear number constructs (e.g. "un millón").
+        Assert.Equal("tengo un coche", NumberWordNormalizer.Normalize("tengo un coche", "es"));
+        Assert.Equal("tengo una casa", NumberWordNormalizer.Normalize("tengo una casa", "es"));
+        Assert.Equal("1000000 de filas", NumberWordNormalizer.Normalize("un millón de filas", "es"));
+    }
+
+    [Fact]
     public void Normalize_UnsupportedLanguage_IsNoOp()
     {
         var result = NumberWordNormalizer.Normalize("twenty three", "it");
