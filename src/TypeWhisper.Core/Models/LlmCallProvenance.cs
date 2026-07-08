@@ -12,7 +12,7 @@ namespace TypeWhisper.Core.Models;
 /// </summary>
 public sealed record LlmCallProvenance
 {
-    /// <summary>Which pipeline stage issued the call: "Cleanup" or "PromptAction".</summary>
+    /// <summary>Which pipeline stage issued the call: "Cleanup", "PromptAction", "Translation", or "Memory".</summary>
     public required string Stage { get; init; }
 
     /// <summary>The final system prompt sent to the provider (memory context already appended).</summary>

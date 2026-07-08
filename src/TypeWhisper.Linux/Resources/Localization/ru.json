@@ -366,6 +366,7 @@
   "History.GroupThisWeek": "На этой неделе",
   "History.GroupToday": "Сегодня",
   "History.GroupYesterday": "Вчера",
+  "History.Inspect.CaptureOff": "Захват промптов LLM отключён — включите его в разделе «Дополнительно», чтобы записывать промпты для новых диктовок.",
   "History.Inspect.FinalText": "Итоговый текст",
   "History.Inspect.InjectedContext": "Внедрённый контекст памяти",
   "History.Inspect.NoLlmCalls": "Для этого диктанта вызовы LLM не записаны.",

@@ -483,7 +483,7 @@
                                                                         </ItemsControl.ItemTemplate>
                                                                     </ItemsControl>
 
-                                                                    <TextBlock Text="{loc:Str History.Inspect.NoLlmCalls}"
+                                                                    <TextBlock Text="{Binding NoLlmCallsMessage}"
                                                                                FontSize="12"
                                                                                Foreground="#8A9AAE"
                                                                                TextWrapping="Wrap"

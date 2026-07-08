@@ -136,12 +136,10 @@ public record AppSettings
     // History
     public bool SaveToHistoryEnabled { get; init; } = true;
 
-    // Persist the exact system/user prompt, provider, and injected memory context
-    // sent to the LLM for each history entry (powers the Inspect panel). Storage
-    // piggybacks history retention, so this only has an effect when history saving
-    // is on. Opt-in (default off): capturing full prompts + injected memory context
-    // is more sensitive than the plain transcript, so it requires an explicit choice
-    // rather than silently expanding what upgraded users already persist.
+    // Opt-in (default off): persists the exact prompts, provider, and injected
+    // memory context sent to the LLM per history entry (powers the Inspect panel).
+    // Piggybacks history storage, so it only takes effect when history saving is
+    // on; off by default because full prompts are more sensitive than the transcript.
     public bool CaptureLlmProvenance { get; init; }
 
     // Spoken feedback (TTS readback after transcription)

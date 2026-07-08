@@ -112,12 +112,10 @@ public sealed class MemoryService
         }
     }
 
-    // Mirrors PromptProcessingService.RecordProvenance: records the extraction
-    // request so the history Inspect panel can show that memory extraction also
-    // sent the dictation text to an LLM, and returns it so the caller can attach
-    // the response (null when capture is disabled). RanLocally defaults to network
-    // (false) when the plugin can't be resolved, so we never falsely claim
-    // on-device.
+    // Mirrors PromptProcessingService.RecordProvenance for the extraction call:
+    // records that memory extraction also sent the dictation text to an LLM and
+    // returns the entry so the caller can attach the response (null when capture
+    // is disabled).
     private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
         ILlmProviderPlugin provider,

@@ -72,6 +72,11 @@ public partial class HistorySectionViewModel : ObservableObject
 
     public bool ShowTimeline => !IsLoading && HasVisibleRecords;
     public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
+
+    // Exposed to entry rows so the Inspect panel can explain an empty prompt list as
+    // "capture is off" (and point at the setting) rather than implying the LLM simply
+    // wasn't used.
+    public bool CaptureLlmProvenanceEnabled => _settings.Current.CaptureLlmProvenance;
     public bool HasVisibleRecords => Groups.Any(group => group.Entries.Count > 0);
     public bool HasMore => _shownCount < _filtered.Count;
 
@@ -491,6 +496,13 @@ public partial class HistoryRecordRow : ObservableObject
         IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
 
     public bool HasLlmCalls => Record.LlmCalls.Count > 0;
+
+    // Distinguishes "capture is off" (guide the user to the setting) from "capture is
+    // on but this entry genuinely made no LLM call" (e.g. a raw dictation).
+    public string NoLlmCallsMessage =>
+        _owner.CaptureLlmProvenanceEnabled
+            ? Loc.Instance["History.Inspect.NoLlmCalls"]
+            : Loc.Instance["History.Inspect.CaptureOff"];
 
     public bool ShowRawVsFinal =>
         !string.Equals(Record.RawText, Record.FinalText, StringComparison.Ordinal);

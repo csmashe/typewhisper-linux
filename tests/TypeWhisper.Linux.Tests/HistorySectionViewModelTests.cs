@@ -123,7 +123,10 @@ public sealed class HistorySectionViewModelTests : IDisposable
         return new DictionaryService(Path.Join(_tempDir, "dictionary.json"));
     }
 
-    private SettingsService CreateSettingsService(bool autoAddCorrections = false)
+    private SettingsService CreateSettingsService(
+        bool autoAddCorrections = false,
+        bool captureProvenance = false
+    )
     {
         var settings = new SettingsService(
             Path.Join(_tempDir, $"settings-{Guid.NewGuid():N}.json")
@@ -131,7 +134,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
         settings.Save(
             AppSettings.Default with
             {
-                AutoAddDictionaryCorrections = autoAddCorrections
+                AutoAddDictionaryCorrections = autoAddCorrections,
+                CaptureLlmProvenance = captureProvenance
             }
         );
         return settings;
@@ -265,6 +269,29 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.False(diffRow.HasLlmCalls);
         Assert.True(diffRow.ShowRawVsFinal);
         Assert.True(diffRow.HasInspectorContent);
+    }
+
+    [Fact]
+    public void NoLlmCallsMessage_GuidesToSetting_WhenProvenanceCaptureOff()
+    {
+        var history = CreateHistoryService();
+        var dictionary = CreateDictionaryService();
+        var record = CreateRecord("final text", raw: "raw text"); // no LLM calls
+        history.AddRecord(record);
+
+        // Capture off: point the user at the setting instead of implying no LLM ran.
+        var offRow = new HistoryRecordRow(
+            record,
+            CreateViewModel(history, dictionary, CreateSettingsService(captureProvenance: false))
+        );
+        Assert.Equal(Loc.Instance["History.Inspect.CaptureOff"], offRow.NoLlmCallsMessage);
+
+        // Capture on: the entry genuinely made no LLM call.
+        var onRow = new HistoryRecordRow(
+            record,
+            CreateViewModel(history, dictionary, CreateSettingsService(captureProvenance: true))
+        );
+        Assert.Equal(Loc.Instance["History.Inspect.NoLlmCalls"], onRow.NoLlmCallsMessage);
     }
 
     [Fact]

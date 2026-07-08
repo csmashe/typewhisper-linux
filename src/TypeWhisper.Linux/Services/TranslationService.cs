@@ -88,11 +88,9 @@ public sealed class TranslationService : ITranslationService, IDisposable
         return _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
     }
 
-    // Mirrors PromptProcessingService.RecordProvenance: records exactly what the
-    // translation call sends to the provider and returns it so the caller can
-    // attach the response (null when capture is disabled). RanLocally defaults to
-    // network (false) when the plugin can't be resolved, so we never falsely claim
-    // on-device.
+    // Mirrors PromptProcessingService.RecordProvenance for the translation call:
+    // records what is sent to the provider and returns the entry so the caller can
+    // attach the response (null when capture is disabled).
     private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
         ILlmProviderPlugin provider,

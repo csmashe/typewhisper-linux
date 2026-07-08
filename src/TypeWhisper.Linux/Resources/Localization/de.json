@@ -366,6 +366,7 @@
   "History.GroupThisWeek": "Diese Woche",
   "History.GroupToday": "Heute",
   "History.GroupYesterday": "Gestern",
+  "History.Inspect.CaptureOff": "Die LLM-Prompt-Erfassung ist deaktiviert – aktivieren Sie sie in den erweiterten Einstellungen, um Prompts für neue Diktate aufzuzeichnen.",
   "History.Inspect.FinalText": "Endtext",
   "History.Inspect.InjectedContext": "Eingefügter Speicherkontext",
   "History.Inspect.NoLlmCalls": "Für dieses Diktat wurden keine LLM-Aufrufe aufgezeichnet.",

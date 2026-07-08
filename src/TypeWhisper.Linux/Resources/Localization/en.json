@@ -366,6 +366,7 @@
   "History.GroupThisWeek": "This Week",
   "History.GroupToday": "Today",
   "History.GroupYesterday": "Yesterday",
+  "History.Inspect.CaptureOff": "LLM prompt capture is off — enable it in Advanced settings to record prompts for new dictations.",
   "History.Inspect.FinalText": "Final text",
   "History.Inspect.InjectedContext": "Injected memory context",
   "History.Inspect.NoLlmCalls": "No LLM calls were recorded for this dictation.",
