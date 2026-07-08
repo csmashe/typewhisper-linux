@@ -1457,7 +1457,24 @@ public sealed class DictationOrchestrator : IDisposable
                 )
             )
             {
-                await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
+                var spokenResult = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
+                // A spoken command is still a dictation the user issued: record it in
+                // history (with the LLM request/response captured on context.Capture)
+                // so it appears in the History list and Inspect panel like any other.
+                if (spokenResult is not null && _settings.Current.SaveToHistoryEnabled)
+                {
+                    AddSpokenCommandHistoryRecord(
+                        context,
+                        spokenCommand,
+                        spokenResult,
+                        duration,
+                        result,
+                        wavPath,
+                        engineProviderId,
+                        engineModelId
+                    );
+                }
+
                 return;
             }
 
@@ -1915,7 +1932,7 @@ public sealed class DictationOrchestrator : IDisposable
     ///     selected, then transforms the selection or generates new text, streaming the result
     ///     straight onto the page. Escape aborts mid-flight via <see cref="_activeCommandCts" />.
     /// </summary>
-    private async Task RunSpokenCommandAsync(
+    private async Task<string?> RunSpokenCommandAsync(
         string command,
         RecordingContext context,
         CancellationToken cancelToken
@@ -1935,7 +1952,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, noProvider);
                 ShowFeedback(context, noProvider, true);
                 PublishSessionTerminal(context.SessionId, "failed", noProvider);
-                return;
+                return null;
             }
 
             ReportStatus(context, Localization.Loc.Instance["Command.Thinking"]);
@@ -1974,7 +1991,7 @@ public sealed class DictationOrchestrator : IDisposable
                     ReportStatus(context, nothing);
                     ShowFeedback(context, nothing, false);
                     PublishSessionTerminal(context.SessionId, "discarded", nothing);
-                    return;
+                    return null;
                 }
 
                 // Matched saved action, else an ad-hoc transform of the selection. Edit wraps the
@@ -2023,7 +2040,7 @@ public sealed class DictationOrchestrator : IDisposable
             if (!canStreamDirectly)
             {
                 var oneShot = await _promptProcessing
-                    .ProcessAsync(action, input, ct: commandToken, wrapInput: wrapInput)
+                    .ProcessAsync(action, input, context.Capture, commandToken, wrapInput)
                     .ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(oneShot) || IsTrivialCommandResult(oneShot))
                 {
@@ -2031,11 +2048,11 @@ public sealed class DictationOrchestrator : IDisposable
                     ReportStatus(context, empty);
                     ShowFeedback(context, empty, true);
                     PublishSessionTerminal(context.SessionId, "failed", empty);
-                    return;
+                    return null;
                 }
 
                 await CompleteViaOneShotInsertionAsync(context, oneShot);
-                return;
+                return oneShot;
             }
 
             // Keep the named StreamCommandResult: `stream.Text/TypingFailed/TypedAnything` read
@@ -2045,6 +2062,7 @@ public sealed class DictationOrchestrator : IDisposable
                 action,
                 input,
                 wrapInput,
+                context.Capture,
                 async () =>
                 {
                     SetOverlayState(state =>
@@ -2074,7 +2092,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, empty);
                 ShowFeedback(context, empty, true);
                 PublishSessionTerminal(context.SessionId, "failed", empty);
-                return;
+                return null;
             }
 
             if (stream.Faulted)
@@ -2085,7 +2103,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, failed);
                 ShowFeedback(context, failed, true);
                 PublishSessionTerminal(context.SessionId, "failed", failed);
-                return;
+                return null;
             }
 
             // Sequential early-return guards read clearer here than a switch on stream.
@@ -2095,7 +2113,7 @@ public sealed class DictationOrchestrator : IDisposable
                 // No chunk ever landed (e.g. no working injection backend): fall back to a single
                 // paste/insert of the whole result and report that outcome instead of a false success.
                 await CompleteViaOneShotInsertionAsync(context, result);
-                return;
+                return result;
             }
 
             if (stream.TypingFailed)
@@ -2106,7 +2124,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, failed);
                 ShowFeedback(context, failed, true);
                 PublishSessionTerminal(context.SessionId, "failed", failed);
-                return;
+                return null;
             }
 
             var done = Localization.Loc.Instance["Command.Done"];
@@ -2130,6 +2148,8 @@ public sealed class DictationOrchestrator : IDisposable
             _models.PluginManager.EventBus.Publish(
                 new TextInsertedEvent { Text = result, AppName = context.AppTitle }
             );
+
+            return result;
         }
         catch (OperationCanceledException) when (commandToken.IsCancellationRequested)
         {
@@ -2159,6 +2179,9 @@ public sealed class DictationOrchestrator : IDisposable
                 _hotkey.IsCancelShortcutEnabled = false;
             }
         }
+
+        // Reached only via a catch (cancel/fail) — no savable result was produced.
+        return null;
     }
 
     // Outcome of streaming a spoken-command result onto the page. Text is the full accumulated LLM
@@ -2180,6 +2203,7 @@ public sealed class DictationOrchestrator : IDisposable
         PromptAction action,
         string input,
         bool wrapInput,
+        LlmCallCapture? capture,
         Func<Task<bool>> onFirstType,
         CancellationToken token
     )
@@ -2194,7 +2218,7 @@ public sealed class DictationOrchestrator : IDisposable
         try
         {
             await foreach (var delta in _promptProcessing
-                               .ProcessStreamingAsync(action, input, ct: token, wrapInput: wrapInput))
+                               .ProcessStreamingAsync(action, input, capture, token, wrapInput))
             {
                 if (string.IsNullOrEmpty(delta))
                 {
@@ -2295,7 +2319,10 @@ public sealed class DictationOrchestrator : IDisposable
         // callers replace the (empty or truncated) accumulated text with the batch result.
         async Task<bool> TryBatchFallbackAsync()
         {
-            var batch = await _promptProcessing.ProcessAsync(action, input, ct: token, wrapInput: wrapInput)
+            // Null capture: the streaming attempt above already recorded this call's
+            // provenance before yielding, so re-running as a batch must not add a
+            // second entry (mirrors the prompt-action streaming→batch fallback).
+            var batch = await _promptProcessing.ProcessAsync(action, input, null, token, wrapInput)
                 .ConfigureAwait(false);
             if (string.IsNullOrEmpty(batch))
             {
@@ -2632,6 +2659,59 @@ public sealed class DictationOrchestrator : IDisposable
                || name.Contains("bluetooth", StringComparison.OrdinalIgnoreCase)
                || name.Contains("bluez", StringComparison.OrdinalIgnoreCase)
                || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Writes a history entry for a completed spoken command. RawText is the spoken
+    // instruction; FinalText is the generated/transformed text that was produced.
+    // LlmCalls carries the command's request/response (context.Capture) so the
+    // Inspect panel shows it exactly like a dictation's prompt action.
+    private void AddSpokenCommandHistoryRecord(
+        RecordingContext context,
+        string command,
+        string finalText,
+        double duration,
+        PluginTranscriptionResult? result,
+        string wavPath,
+        string engineUsed,
+        string? modelUsed
+    )
+    {
+        try
+        {
+            var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
+            var language =
+                result?.DetectedLanguage
+                ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
+            var timestamp =
+                context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
+
+            _history.AddRecord(
+                new TranscriptionRecord
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Timestamp = timestamp,
+                    RawText = command,
+                    FinalText = finalText,
+                    AppName = context.AppTitle,
+                    AppProcessName = context.AppProcess,
+                    AppUrl = context.AppUrl,
+                    DurationSeconds = duration,
+                    Language = language,
+                    ProfileName = context.Profile?.Name,
+                    EngineUsed = engine,
+                    ModelUsed = modelUsed,
+                    AudioFileName = Path.GetFileName(wavPath),
+                    InsertionStatus = TextInsertionStatus.Typed,
+                    CleanupLevelUsed = CleanupLevel.None,
+                    PromptActionApplied = true,
+                    LlmCalls = context.Capture?.Calls ?? []
+                }
+            );
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Command] AddSpokenCommandHistoryRecord failed: {ex.Message}");
+        }
     }
 
     private void AddHistoryRecord(
