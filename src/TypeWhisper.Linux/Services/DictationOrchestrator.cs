@@ -1915,15 +1915,21 @@ public sealed class DictationOrchestrator : IDisposable
             bool wrapInput;
             if (wantsSelection)
             {
-                // Only an edit/transform needs the selection, and capturing it synthesizes Ctrl+C —
-                // which is SIGINT in a terminal. So probe the clipboard here and nowhere else; a
-                // pure create command must never fire a copy keystroke at the focused app.
-                var selectedText = await _textInsertion.CaptureSelectedTextAsync();
+                // Only an edit/transform needs the selection. Capturing it synthesizes a copy, so
+                // probe here and nowhere else — a pure create command must never fire a copy keystroke
+                // at the focused app. Terminals map plain Ctrl+C to SIGINT, so the probe uses
+                // Ctrl+Shift+C there (and still can't read a TUI editor's internal selection).
+                var targetIsTerminal = TextInsertionService.IsTerminalApp(context.AppProcess);
+                var selectedText = await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal);
                 if (string.IsNullOrWhiteSpace(selectedText))
                 {
                     // Transform intent with nothing selected has nowhere to land — hint and stop. A
                     // matched saved action lands here too: with no selection it has nothing to work on.
-                    var nothing = Localization.Loc.Instance["Command.NothingHighlighted"];
+                    // Terminal TUI editors (Neovim, less, …) keep the selection internal, so the copy
+                    // probe legitimately comes back empty — say that instead of "Nothing highlighted".
+                    var nothing = targetIsTerminal
+                        ? Localization.Loc.Instance["Command.NoTerminalSelection"]
+                        : Localization.Loc.Instance["Command.NothingHighlighted"];
                     ReportStatus(context, nothing);
                     ShowFeedback(context, nothing, false);
                     PublishSessionTerminal(context.SessionId, "discarded", nothing);

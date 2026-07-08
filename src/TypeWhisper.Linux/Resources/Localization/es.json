@@ -84,6 +84,7 @@
   "Command.Failed": "El comando falló.",
   "Command.NoProvider": "No hay proveedor de IA configurado para comandos",
   "Command.NoResult": "El comando no produjo texto.",
+  "Command.NoTerminalSelection": "No se pudo leer la selección: los editores de terminal como Neovim la mantienen interna",
   "Command.NothingHighlighted": "No hay nada seleccionado para editar",
   "Command.Thinking": "Pensando…",
   "Common.Add": "Añadir",

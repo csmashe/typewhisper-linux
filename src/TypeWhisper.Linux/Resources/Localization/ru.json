@@ -84,6 +84,7 @@
   "Command.Failed": "Не удалось выполнить команду.",
   "Command.NoProvider": "Не настроен ИИ-провайдер для команд",
   "Command.NoResult": "Команда не вернула текст.",
+  "Command.NoTerminalSelection": "Не удалось получить выделение — терминальные редакторы, такие как Neovim, хранят его внутри",
   "Command.NothingHighlighted": "Ничего не выделено для редактирования",
   "Command.Thinking": "Думаю…",
   "Common.Add": "Добавить",

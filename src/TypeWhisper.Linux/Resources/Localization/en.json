@@ -84,6 +84,7 @@
   "Command.Failed": "Command failed.",
   "Command.NoProvider": "No AI provider configured for commands",
   "Command.NoResult": "The command produced no text.",
+  "Command.NoTerminalSelection": "Couldn't read the selection — terminal editors like Neovim keep it internal",
   "Command.NothingHighlighted": "Nothing highlighted to edit",
   "Command.Thinking": "Thinking…",
   "Common.Add": "Add",

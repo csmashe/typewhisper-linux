@@ -452,6 +452,44 @@ public sealed class TextInsertionServiceTests
 
         Assert.Equal("the selected text", captured);
         Assert.Equal("previous", platform.Clipboard);
+        // GUI targets copy with plain Ctrl+C.
+        Assert.False(platform.LastCopyUsedTerminalShortcut);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_uses_terminal_copy_shortcut_for_terminal_targets()
+    {
+        // Terminals map plain Ctrl+C to SIGINT, so the probe must use Ctrl+Shift+C there.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the selected text"
+        };
+        var sut = new TextInsertionService(platform);
+
+        var captured = await sut.CaptureSelectedTextAsync(targetIsTerminal: true);
+
+        Assert.Equal("the selected text", captured);
+        Assert.True(platform.LastCopyUsedTerminalShortcut);
+    }
+
+    [Theory]
+    [InlineData("ghostty")]
+    [InlineData("gnome-terminal-")]
+    [InlineData("konsole")]
+    [InlineData("xfce4-terminal")]
+    public void IsTerminalApp_detects_terminals(string process)
+    {
+        Assert.True(TextInsertionService.IsTerminalApp(process));
+    }
+
+    [Theory]
+    [InlineData("firefox")]
+    [InlineData("code")]
+    [InlineData(null)]
+    public void IsTerminalApp_rejects_non_terminals(string? process)
+    {
+        Assert.False(TextInsertionService.IsTerminalApp(process));
     }
 
     [Fact]
@@ -702,7 +740,8 @@ public sealed class TextInsertionServiceTests
 
         Assert.False(platform.IsPasteAvailable);
         Assert.False(await platform.SendPasteAsync());
-        Assert.False(await platform.SendCopyAsync());
+        Assert.False(await platform.SendCopyAsync(false));
+        Assert.False(await platform.SendCopyAsync(true));
         Assert.False(await platform.SendEnterAsync());
         Assert.False(await platform.TypeTextAsync("anything"));
         Assert.False(await platform.ActivateWindowAsync("123"));
@@ -1313,8 +1352,11 @@ public sealed class TextInsertionServiceTests
         public int CopyLandsOnAttempt { get; init; }
         public int CopyAttemptCount { get; private set; }
 
-        public Task<bool> SendCopyAsync()
+        public bool LastCopyUsedTerminalShortcut { get; private set; }
+
+        public Task<bool> SendCopyAsync(bool useTerminalShortcut = false)
         {
+            LastCopyUsedTerminalShortcut = useTerminalShortcut;
             CopyAttemptCount++;
             if (CopySucceeds && SelectionText is not null && CopyAttemptCount >= CopyLandsOnAttempt)
             {

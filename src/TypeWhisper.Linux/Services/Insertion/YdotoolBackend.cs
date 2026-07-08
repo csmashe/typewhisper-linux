@@ -52,6 +52,15 @@ internal static class YdotoolBackend
         return ["key", "--key-delay", KeyEventDelayMs, $"{LeftCtrlKey}:1", $"{CKey}:1", $"{CKey}:0", $"{LeftCtrlKey}:0"];
     }
 
+    /// <summary>
+    ///     Ctrl+Shift+C — the copy shortcut in terminal emulators, which map plain
+    ///     Ctrl+C to SIGINT. Press ctrl, press shift, tap c, release shift, release ctrl.
+    /// </summary>
+    public static IReadOnlyList<string> TerminalCopyArgs()
+    {
+        return ["key", "--key-delay", KeyEventDelayMs, $"{LeftCtrlKey}:1", $"{LeftShiftKey}:1", $"{CKey}:1", $"{CKey}:0", $"{LeftShiftKey}:0", $"{LeftCtrlKey}:0"];
+    }
+
     public static IReadOnlyList<string> EnterArgs()
     {
         return ["key", $"{EnterKey}:1", $"{EnterKey}:0"];

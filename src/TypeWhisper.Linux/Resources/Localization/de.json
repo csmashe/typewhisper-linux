@@ -84,6 +84,7 @@
   "Command.Failed": "Befehl fehlgeschlagen.",
   "Command.NoProvider": "Kein KI-Anbieter für Befehle konfiguriert",
   "Command.NoResult": "Der Befehl hat keinen Text erzeugt.",
+  "Command.NoTerminalSelection": "Auswahl konnte nicht gelesen werden – Terminal-Editoren wie Neovim behalten sie intern",
   "Command.NothingHighlighted": "Nichts markiert zum Bearbeiten",
   "Command.Thinking": "Denke nach…",
   "Common.Add": "Hinzufügen",
