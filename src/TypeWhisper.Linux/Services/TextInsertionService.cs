@@ -288,12 +288,11 @@ public sealed class TextInsertionService
     {
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
 
-        // Only prime a sentinel when the clipboard already holds *text* we can detect against and
-        // faithfully restore. A null read means the clipboard is empty or holds non-text data
-        // (an image / file list) we must not clobber — priming would erase it. Skipping the
-        // sentinel there is safe: a no-op copy leaves the text read empty, so there's no phantom
-        // selection to guard against anyway. The sentinel only earns its keep against *stale
-        // text*, which a copy with no selection would otherwise leave intact and misread.
+        // Only prime a sentinel when the clipboard already holds text we can detect against and
+        // restore: a null read means it's empty or non-text (an image / file list) we must not
+        // clobber. Skipping it there is safe — a no-op copy leaves the read empty anyway. The
+        // sentinel only earns its keep against stale text, which a copy with no selection would
+        // otherwise leave intact and misread.
         var useSentinel = previousClipboard is not null;
         var sentinel = $"⁣TW-SEL-PROBE-{Guid.NewGuid():N}";
         if (useSentinel)

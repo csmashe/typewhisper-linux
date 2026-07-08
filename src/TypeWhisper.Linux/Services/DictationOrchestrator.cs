@@ -1968,12 +1968,11 @@ public sealed class DictationOrchestrator : IDisposable
                 : Localization.Loc.Instance["Command.ApplyingOneOff"];
             ReportStatus(context, applyingStatus);
 
-            // Streaming types each chunk directly, so it may only run where direct typing is exactly
-            // what the one-shot insert would do: auto-paste on, and either the user forced DirectTyping
-            // or an Auto target the app-level policy already types into (terminals, browsers, Codex).
-            // Everything else — auto-paste off (copy-only), explicit clipboard-paste/copy-only, or an
-            // Auto GUI/unknown target (where the one-shot pastes, or types only ASCII-safe content) —
-            // must instead generate the result in one pass and route it through that one-shot insert.
+            // Streaming types each chunk directly, so it may only run where that matches what the
+            // one-shot insert would do: auto-paste on, and either the user forced DirectTyping or an
+            // Auto target the app policy already types into (terminals, browsers, Codex). Everything
+            // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) instead
+            // generates the result in one pass and routes it through that one-shot insert.
             var strategy = ResolveInsertionStrategy(context.AppProcess);
             var canStreamDirectly = _settings.Current.AutoPaste
                 && (strategy is TextInsertionStrategy.DirectTyping

@@ -49,11 +49,9 @@ public static class SpokenCommandActionMatcher
                 commandTokens.Any(commandToken => TokensSimilar(nameToken, commandToken)));
 
             // A lone-word name matched anywhere is too weak: a create command that merely mentions the
-            // word ("draft an email to Bob") would hijack an "Email" action and force the edit branch.
-            // Require a single-word name to lead the command, where a named invocation puts it; a
+            // word ("draft an email to Bob") would hijack an "Email" action. Require a single-word name
+            // to lead the command (skipping politeness fillers first, mirroring SpokenCommandIntent); a
             // multi-word name needing every word present is already specific enough to match anywhere.
-            // Skip leading politeness fillers first so "please email this…" still reads as leading,
-            // mirroring SpokenCommandIntent.
             if (nameTokens.Count == 1)
             {
                 var lead = commandTokens

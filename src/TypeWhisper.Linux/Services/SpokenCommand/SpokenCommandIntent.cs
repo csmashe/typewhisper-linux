@@ -2,19 +2,11 @@ namespace TypeWhisper.Linux.Services.SpokenCommand;
 
 /// <summary>
 ///     Decides whether a spoken command edits the current selection ("shorten this", "translate to
-///     spanish") rather than creating new text from scratch ("write a haiku about coffee"). Two
-///     decisions ride on this:
-///     <list type="bullet">
-///         <item>whether we fire a synthesized Ctrl+C probe at the focused app to read its selection —
-///             Ctrl+C is SIGINT in a terminal, so a false positive on a create command can interrupt a
-///             running process;</item>
-///         <item>when nothing is selected, whether the command errors with "Nothing highlighted"
-///             instead of generating new text — so a false positive bounces a legitimate create
-///             command with a bogus error.</item>
-///     </list>
-///     Because false positives are costly, referent pronouns only count when they appear early in the
-///     command (where an edit target is normally named), while explicit selection phrases and a leading
-///     transform verb are trusted anywhere / on their own.
+///     spanish") or creates new text from scratch ("write a haiku about coffee"). A false positive is
+///     costly: an edit fires a synthesized Ctrl+C probe at the focused app (SIGINT in a terminal), and
+///     with nothing selected it bounces a legitimate create command with a "Nothing highlighted" error.
+///     So referent pronouns only count early in the command (where an edit target is normally named),
+///     while explicit selection phrases and a leading transform verb are trusted anywhere.
 /// </summary>
 public static class SpokenCommandIntent
 {
