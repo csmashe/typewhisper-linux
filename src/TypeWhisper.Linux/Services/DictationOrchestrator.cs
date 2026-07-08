@@ -1457,16 +1457,19 @@ public sealed class DictationOrchestrator : IDisposable
                 )
             )
             {
-                var spokenResult = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
+                var outcome = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
                 // A spoken command is still a dictation the user issued: record it in
                 // history (with the LLM request/response captured on context.Capture)
                 // so it appears in the History list and Inspect panel like any other.
-                if (spokenResult is not null && _settings.Current.SaveToHistoryEnabled)
+                // RawText is the source the command acted on (selected text for an
+                // edit, the command itself for a create), so the raw→final diff reads
+                // "source → result".
+                if (outcome is not null && _settings.Current.SaveToHistoryEnabled)
                 {
                     AddSpokenCommandHistoryRecord(
                         context,
-                        spokenCommand,
-                        spokenResult,
+                        outcome.SourceText,
+                        outcome.Result,
                         duration,
                         result,
                         wavPath,
@@ -1932,7 +1935,7 @@ public sealed class DictationOrchestrator : IDisposable
     ///     selected, then transforms the selection or generates new text, streaming the result
     ///     straight onto the page. Escape aborts mid-flight via <see cref="_activeCommandCts" />.
     /// </summary>
-    private async Task<string?> RunSpokenCommandAsync(
+    private async Task<SpokenCommandOutcome?> RunSpokenCommandAsync(
         string command,
         RecordingContext context,
         CancellationToken cancelToken
@@ -2052,7 +2055,7 @@ public sealed class DictationOrchestrator : IDisposable
                 }
 
                 await CompleteViaOneShotInsertionAsync(context, oneShot);
-                return oneShot;
+                return new SpokenCommandOutcome(input, oneShot);
             }
 
             // Keep the named StreamCommandResult: `stream.Text/TypingFailed/TypedAnything` read
@@ -2113,7 +2116,7 @@ public sealed class DictationOrchestrator : IDisposable
                 // No chunk ever landed (e.g. no working injection backend): fall back to a single
                 // paste/insert of the whole result and report that outcome instead of a false success.
                 await CompleteViaOneShotInsertionAsync(context, result);
-                return result;
+                return new SpokenCommandOutcome(input, result);
             }
 
             if (stream.TypingFailed)
@@ -2149,7 +2152,7 @@ public sealed class DictationOrchestrator : IDisposable
                 new TextInsertedEvent { Text = result, AppName = context.AppTitle }
             );
 
-            return result;
+            return new SpokenCommandOutcome(input, result);
         }
         catch (OperationCanceledException) when (commandToken.IsCancellationRequested)
         {
@@ -2183,6 +2186,12 @@ public sealed class DictationOrchestrator : IDisposable
         // Reached only via a catch (cancel/fail) — no savable result was produced.
         return null;
     }
+
+    // Result of a completed spoken command, for the history entry. SourceText is what the LLM
+    // operated on — the selected text for an edit/transform, or the command itself for a create —
+    // so it maps to the entry's RawText and the raw→final diff reads "source → result". Result is
+    // the generated/transformed text that was produced.
+    private sealed record SpokenCommandOutcome(string SourceText, string Result);
 
     // Outcome of streaming a spoken-command result onto the page. Text is the full accumulated LLM
     // output (useful even when typing failed); TypingFailed marks a chunk-injection failure and
@@ -2661,13 +2670,15 @@ public sealed class DictationOrchestrator : IDisposable
                || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
     }
 
-    // Writes a history entry for a completed spoken command. RawText is the spoken
-    // instruction; FinalText is the generated/transformed text that was produced.
-    // LlmCalls carries the command's request/response (context.Capture) so the
-    // Inspect panel shows it exactly like a dictation's prompt action.
+    // Writes a history entry for a completed spoken command. RawText is the source
+    // text the command acted on (selected text for an edit, the command itself for a
+    // create); FinalText is the generated/transformed text that was produced, so the
+    // raw→final diff reads "source → result". LlmCalls carries the command's
+    // request/response (context.Capture) so the Inspect panel shows it exactly like a
+    // dictation's prompt action.
     private void AddSpokenCommandHistoryRecord(
         RecordingContext context,
-        string command,
+        string rawText,
         string finalText,
         double duration,
         PluginTranscriptionResult? result,
@@ -2690,7 +2701,7 @@ public sealed class DictationOrchestrator : IDisposable
                 {
                     Id = Guid.NewGuid().ToString(),
                     Timestamp = timestamp,
-                    RawText = command,
+                    RawText = rawText,
                     FinalText = finalText,
                     AppName = context.AppTitle,
                     AppProcessName = context.AppProcess,
