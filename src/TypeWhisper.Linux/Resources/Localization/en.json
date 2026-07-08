@@ -248,6 +248,8 @@
   "Dictation.NoHomeDirectory": "Could not find your home directory.",
   "Dictation.NoInputDevices": "No input devices detected.",
   "Dictation.NoModelLoaded": "No model loaded",
+  "Dictation.NormalizeNumbers": "Normalize spoken numbers to digits",
+  "Dictation.NormalizeNumbersHint": "Converts spoken numbers like twenty three or dreiundzwanzig into digits before insertion and export.",
   "Dictation.OnlineBatchLivePreview": "Online batch live preview",
   "Dictation.OnlineBatchLivePreviewHint": "Also run repeated online transcription calls while recording for providers without real-time streaming.",
   "Dictation.PactlUnavailable": "Unavailable: pactl is not installed on this system.",

@@ -126,7 +126,12 @@ public sealed class FileTranscriptionProcessor(
                 VocabularyBooster = currentSettings.VocabularyBoostingEnabled
                     ? vocabularyBoosting.Apply
                     : null,
-                DictionaryCorrector = dictionary.ApplyCorrections
+                DictionaryCorrector = dictionary.ApplyCorrections,
+                TranscriptionTask = task,
+                DetectedLanguage = result.DetectedLanguage,
+                ConfiguredLanguage = language,
+                TranscriptionNumberNormalizationEnabled =
+                    currentSettings.TranscriptionNumberNormalizationEnabled
             },
             cancellationToken
         );

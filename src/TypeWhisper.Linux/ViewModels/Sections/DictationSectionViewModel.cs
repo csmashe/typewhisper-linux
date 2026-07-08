@@ -162,6 +162,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _transcribeShortQuietClipsAggressively;
 
     [ObservableProperty]
+    private bool _transcriptionNumberNormalizationEnabled = true;
+
+    [ObservableProperty]
     private string? _translationTargetLanguage;
 
     [ObservableProperty]
@@ -649,6 +652,7 @@ public partial class DictationSectionViewModel : ObservableObject
         WhisperModeEnabled = settings.WhisperModeEnabled;
         SoundFeedbackEnabled = settings.SoundFeedbackEnabled && CanUseSoundFeedback;
         TranscribeShortQuietClipsAggressively = settings.TranscribeShortQuietClipsAggressively;
+        TranscriptionNumberNormalizationEnabled = settings.TranscriptionNumberNormalizationEnabled;
         SilenceAutoStopEnabled = settings.SilenceAutoStopEnabled;
         SilenceAutoStopSeconds = settings.SilenceAutoStopSeconds;
         AudioDuckingEnabled = settings.AudioDuckingEnabled && CanUseAudioDucking;
@@ -1400,6 +1404,11 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnTranscribeShortQuietClipsAggressivelyChanged(bool value)
     {
         _settings.Save(_settings.Current with { TranscribeShortQuietClipsAggressively = value });
+    }
+
+    partial void OnTranscriptionNumberNormalizationEnabledChanged(bool value)
+    {
+        _settings.Save(_settings.Current with { TranscriptionNumberNormalizationEnabled = value });
     }
 
     partial void OnSilenceAutoStopEnabledChanged(bool value)

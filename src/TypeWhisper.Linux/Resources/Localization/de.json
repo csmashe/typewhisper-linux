@@ -248,6 +248,8 @@
   "Dictation.NoHomeDirectory": "Ihr Home-Verzeichnis konnte nicht gefunden werden.",
   "Dictation.NoInputDevices": "Keine Eingabegeräte erkannt.",
   "Dictation.NoModelLoaded": "Kein Modell geladen",
+  "Dictation.NormalizeNumbers": "Gesprochene Zahlen in Ziffern umwandeln",
+  "Dictation.NormalizeNumbersHint": "Wandelt gesprochene Zahlen wie twenty three oder dreiundzwanzig vor dem Einfügen und Exportieren in Ziffern um.",
   "Dictation.OnlineBatchLivePreview": "Online-Batch-Vorschau",
   "Dictation.OnlineBatchLivePreviewHint": "Führt bei Providern ohne echtes Echtzeit-Streaming während der Aufnahme wiederholte Online-Transkriptionsaufrufe aus.",
   "Dictation.PactlUnavailable": "Nicht verfügbar: pactl ist auf diesem System nicht installiert.",

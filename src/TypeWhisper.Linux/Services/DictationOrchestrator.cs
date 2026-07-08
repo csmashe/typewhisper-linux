@@ -1571,6 +1571,12 @@ public sealed class DictationOrchestrator : IDisposable
                         : translationTarget,
                     EffectiveSourceLanguage = languageHint,
                     DetectedLanguage = result?.DetectedLanguage,
+                    TranscriptionTask = translate
+                        ? TranscriptionTask.Translate
+                        : TranscriptionTask.Transcribe,
+                    ConfiguredLanguage = languageHint,
+                    TranscriptionNumberNormalizationEnabled =
+                        _settings.Current.TranscriptionNumberNormalizationEnabled,
                     PluginPostProcessors = pluginProcessors,
                     StatusCallback = status =>
                     {

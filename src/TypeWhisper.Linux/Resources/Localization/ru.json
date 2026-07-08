@@ -248,6 +248,8 @@
   "Dictation.NoHomeDirectory": "Не удалось найти ваш домашний каталог.",
   "Dictation.NoInputDevices": "Устройства ввода не обнаружены.",
   "Dictation.NoModelLoaded": "Модель не загружена",
+  "Dictation.NormalizeNumbers": "Преобразовывать произнесённые числа в цифры",
+  "Dictation.NormalizeNumbersHint": "Преобразует произнесённые числа, например twenty three или dreiundzwanzig, в цифры перед вставкой и экспортом.",
   "Dictation.OnlineBatchLivePreview": "Онлайн-предпросмотр пакетной транскрипции",
   "Dictation.OnlineBatchLivePreviewHint": "Также выполнять повторные онлайн-запросы транскрипции во время записи для провайдеров без потоковой передачи в реальном времени.",
   "Dictation.PactlUnavailable": "Недоступно: pactl не установлен в этой системе.",
