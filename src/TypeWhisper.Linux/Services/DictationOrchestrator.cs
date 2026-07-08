@@ -1474,7 +1474,8 @@ public sealed class DictationOrchestrator : IDisposable
                         result,
                         wavPath,
                         engineProviderId,
-                        engineModelId
+                        engineModelId,
+                        outcome.InsertionStatus
                     );
                 }
 
@@ -1765,6 +1766,7 @@ public sealed class DictationOrchestrator : IDisposable
                 {
                     try
                     {
+                        // ReSharper disable once MethodSupportsCancellation -- best-effort memory extraction; awaited only to record its provenance before history, deliberately not tied to the recording's cancellation token (mirrors the fire-and-forget sibling below).
                         await _memory.ExtractAndStoreAsync(finalText, context.Capture);
                     }
                     catch (Exception ex)
@@ -2054,8 +2056,8 @@ public sealed class DictationOrchestrator : IDisposable
                     return null;
                 }
 
-                await CompleteViaOneShotInsertionAsync(context, oneShot);
-                return new SpokenCommandOutcome(input, oneShot);
+                var oneShotInsertion = await CompleteViaOneShotInsertionAsync(context, oneShot);
+                return SpokenCommandOutcomeFor(input, oneShot, oneShotInsertion);
             }
 
             // Keep the named StreamCommandResult: `stream.Text/TypingFailed/TypedAnything` read
@@ -2115,8 +2117,8 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 // No chunk ever landed (e.g. no working injection backend): fall back to a single
                 // paste/insert of the whole result and report that outcome instead of a false success.
-                await CompleteViaOneShotInsertionAsync(context, result);
-                return new SpokenCommandOutcome(input, result);
+                var fallbackInsertion = await CompleteViaOneShotInsertionAsync(context, result);
+                return SpokenCommandOutcomeFor(input, result, fallbackInsertion);
             }
 
             if (stream.TypingFailed)
@@ -2152,7 +2154,8 @@ public sealed class DictationOrchestrator : IDisposable
                 new TextInsertedEvent { Text = result, AppName = context.AppTitle }
             );
 
-            return new SpokenCommandOutcome(input, result);
+            // Streamed directly onto the page, chunk by chunk — a genuine typed insertion.
+            return new SpokenCommandOutcome(input, result, TextInsertionStatus.Typed);
         }
         catch (OperationCanceledException) when (commandToken.IsCancellationRequested)
         {
@@ -2190,8 +2193,31 @@ public sealed class DictationOrchestrator : IDisposable
     // Result of a completed spoken command, for the history entry. SourceText is what the LLM
     // operated on — the selected text for an edit/transform, or the command itself for a create —
     // so it maps to the entry's RawText and the raw→final diff reads "source → result". Result is
-    // the generated/transformed text that was produced.
-    private sealed record SpokenCommandOutcome(string SourceText, string Result);
+    // the generated/transformed text that was produced. InsertionStatus is how that result actually
+    // reached the page (typed/pasted/copied), so history records the real label instead of assuming
+    // "Typed".
+    private sealed record SpokenCommandOutcome(
+        string SourceText,
+        string Result,
+        TextInsertionStatus InsertionStatus
+    );
+
+    // Maps a one-shot / fallback insertion to a savable outcome. Only the states where the text
+    // actually reached the user (typed, pasted, or copied to the clipboard) produce a record; a
+    // failed insert (missing tool, Failed, …) returns null so a command that never landed isn't
+    // persisted as a success.
+    private static SpokenCommandOutcome? SpokenCommandOutcomeFor(
+        string source,
+        string result,
+        InsertionResult insertion
+    )
+    {
+        return insertion is InsertionResult.Pasted
+            or InsertionResult.Typed
+            or InsertionResult.CopiedToClipboard
+            ? new SpokenCommandOutcome(source, result, ToTextInsertionStatus(insertion))
+            : null;
+    }
 
     // Outcome of streaming a spoken-command result onto the page. Text is the full accumulated LLM
     // output (useful even when typing failed); TypingFailed marks a chunk-injection failure and
@@ -2358,7 +2384,10 @@ public sealed class DictationOrchestrator : IDisposable
     // Fallback when streaming typing never landed a single chunk (e.g. no injection backend):
     // insert the whole result in one shot and map the outcome to the same completion messaging the
     // normal insertion path uses, so a genuine failure is never reported as success.
-    private async Task CompleteViaOneShotInsertionAsync(RecordingContext context, string result)
+    private async Task<InsertionResult> CompleteViaOneShotInsertionAsync(
+        RecordingContext context,
+        string result
+    )
     {
         var insertion = await _textInsertion.InsertTextAsync(
             new TextInsertionRequest(
@@ -2416,6 +2445,8 @@ public sealed class DictationOrchestrator : IDisposable
                 new TextInsertedEvent { Text = result, AppName = context.AppTitle }
             );
         }
+
+        return insertion;
     }
 
     // Saved prompt actions eligible for name matching. Action-plugin-backed actions are excluded —
@@ -2670,14 +2701,13 @@ public sealed class DictationOrchestrator : IDisposable
                || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
     }
 
-    // Writes a history entry for a completed spoken command. RawText is the source
-    // text the command acted on (selected text for an edit, the command itself for a
-    // create); FinalText is the generated/transformed text that was produced, so the
-    // raw→final diff reads "source → result". LlmCalls carries the command's
-    // request/response (context.Capture) so the Inspect panel shows it exactly like a
-    // dictation's prompt action.
-    private void AddSpokenCommandHistoryRecord(
+    // Builds a TranscriptionRecord pre-filled with the fields shared by both history paths
+    // (dictation and spoken command). Callers supply the path-specific values — InsertionStatus,
+    // pipeline flags, IsSpokenCommand, LlmCalls, … — via a `with` expression on the result.
+    private TranscriptionRecord BuildHistoryRecord(
         RecordingContext context,
+        string id,
+        DateTime timestamp,
         string rawText,
         string finalText,
         double duration,
@@ -2687,32 +2717,67 @@ public sealed class DictationOrchestrator : IDisposable
         string? modelUsed
     )
     {
+        var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
+        var language =
+            result?.DetectedLanguage
+            ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
+
+        return new TranscriptionRecord
+        {
+            Id = id,
+            Timestamp = timestamp,
+            RawText = rawText,
+            FinalText = finalText,
+            AppName = context.AppTitle,
+            AppProcessName = context.AppProcess,
+            AppUrl = context.AppUrl,
+            DurationSeconds = duration,
+            Language = language,
+            ProfileName = context.Profile?.Name,
+            EngineUsed = engine,
+            ModelUsed = modelUsed,
+            AudioFileName = Path.GetFileName(wavPath)
+        };
+    }
+
+    // Writes a history entry for a completed spoken command. RawText is the source
+    // text the command acted on (selected text for an edit, the command itself for a
+    // create); FinalText is the generated/transformed text that was produced, so the
+    // raw→final diff reads "source → result". InsertionStatus is the real result of the
+    // insert (typed/pasted/copied). LlmCalls carries the command's request/response
+    // (context.Capture) so the Inspect panel shows it exactly like a dictation's prompt action.
+    private void AddSpokenCommandHistoryRecord(
+        RecordingContext context,
+        string rawText,
+        string finalText,
+        double duration,
+        PluginTranscriptionResult? result,
+        string wavPath,
+        string engineUsed,
+        string? modelUsed,
+        TextInsertionStatus insertionStatus
+    )
+    {
         try
         {
-            var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
-            var language =
-                result?.DetectedLanguage
-                ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
             var timestamp =
                 context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
 
             _history.AddRecord(
-                new TranscriptionRecord
+                BuildHistoryRecord(
+                    context,
+                    Guid.NewGuid().ToString(),
+                    timestamp,
+                    rawText,
+                    finalText,
+                    duration,
+                    result,
+                    wavPath,
+                    engineUsed,
+                    modelUsed
+                ) with
                 {
-                    Id = Guid.NewGuid().ToString(),
-                    Timestamp = timestamp,
-                    RawText = rawText,
-                    FinalText = finalText,
-                    AppName = context.AppTitle,
-                    AppProcessName = context.AppProcess,
-                    AppUrl = context.AppUrl,
-                    DurationSeconds = duration,
-                    Language = language,
-                    ProfileName = context.Profile?.Name,
-                    EngineUsed = engine,
-                    ModelUsed = modelUsed,
-                    AudioFileName = Path.GetFileName(wavPath),
-                    InsertionStatus = TextInsertionStatus.Typed,
+                    InsertionStatus = insertionStatus,
                     CleanupLevelUsed = CleanupLevel.None,
                     PromptActionApplied = true,
                     IsSpokenCommand = true,
@@ -2744,27 +2809,20 @@ public sealed class DictationOrchestrator : IDisposable
     {
         try
         {
-            var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
-            var language =
-                result?.DetectedLanguage
-                ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
-
             _history.AddRecord(
-                new TranscriptionRecord
+                BuildHistoryRecord(
+                    context,
+                    id,
+                    timestamp,
+                    rawText,
+                    finalText,
+                    duration,
+                    result,
+                    wavPath,
+                    engineUsed,
+                    modelUsed
+                ) with
                 {
-                    Id = id,
-                    Timestamp = timestamp,
-                    RawText = rawText,
-                    FinalText = finalText,
-                    AppName = context.AppTitle,
-                    AppProcessName = context.AppProcess,
-                    AppUrl = context.AppUrl,
-                    DurationSeconds = duration,
-                    Language = language,
-                    ProfileName = context.Profile?.Name,
-                    EngineUsed = engine,
-                    ModelUsed = modelUsed,
-                    AudioFileName = Path.GetFileName(wavPath),
                     InsertionStatus = ToTextInsertionStatus(insertion),
                     InsertionFailureReason = InsertionFailureReasonFor(insertion),
                     CleanupLevelUsed = cleanupLevel,
