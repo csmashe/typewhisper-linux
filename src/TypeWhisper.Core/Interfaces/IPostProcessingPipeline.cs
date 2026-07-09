@@ -1,3 +1,5 @@
+using TypeWhisper.Core.Models;
+
 namespace TypeWhisper.Core.Interfaces;
 
 /// <summary>
@@ -23,6 +25,18 @@ public sealed record PipelineOptions
 {
     /// <summary>Applies app-aware formatting to text. Params: text, processName.</summary>
     public Func<string, string?, string>? AppFormatter { get; init; }
+
+    /// <summary>Global number normalization setting.</summary>
+    public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
+
+    /// <summary>Transcription task used to choose normalization languages.</summary>
+    public TranscriptionTask TranscriptionTask { get; init; } = TranscriptionTask.Transcribe;
+
+    /// <summary>Configured input language, such as "en", "de", or "auto".</summary>
+    public string? ConfiguredLanguage { get; init; }
+
+    /// <summary>Configured language hint candidates used when detected language does not normalize.</summary>
+    public IReadOnlyList<string> ConfiguredLanguageCandidates { get; init; } = [];
 
     /// <summary>Process name of the target app for formatting.</summary>
     public string? TargetProcessName { get; init; }
@@ -106,6 +120,7 @@ public static class PostProcessingStepNames
 {
     public const string SpokenCommands = "SpokenCommands";
     public const string SpokenPunctuation = "SpokenPunctuation";
+    public const string NumberNormalization = "NumberNormalization";
     public const string Formatting = "Formatting";
     public const string Cleanup = "Cleanup";
     public const string Llm = "LLM";

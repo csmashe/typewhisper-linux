@@ -605,7 +605,13 @@ public sealed class HttpApiService : IDisposable
                 VocabularyBooster = settings.VocabularyBoostingEnabled
                     ? _vocabularyBoosting.Apply
                     : null,
-                DictionaryCorrector = _dictionary.ApplyCorrections
+                DictionaryCorrector = _dictionary.ApplyCorrections,
+                TranscriptionTask = opts.Task,
+                DetectedLanguage = result.DetectedLanguage,
+                ConfiguredLanguage = language,
+                ConfiguredLanguageCandidates = opts.LanguageHints,
+                TranscriptionNumberNormalizationEnabled =
+                    settings.TranscriptionNumberNormalizationEnabled
             },
             ct
         );

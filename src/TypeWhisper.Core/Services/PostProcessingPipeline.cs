@@ -1,19 +1,21 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Services.NumberNormalization;
 
 namespace TypeWhisper.Core.Services;
 
 /// <summary>
 ///     Priority-based post-processing pipeline. Steps run in ascending priority order:
-///     SpokenCommands=50, SpokenPunctuation=60, Formatting=150, Cleanup=250,
-///     LLM=300, Snippets=500, VocabularyBoosting=550, Dictionary=600, Translation=900.
+///     SpokenCommands=50, SpokenPunctuation=60, NumberNormalization=100, Formatting=150,
+///     Cleanup=250, LLM=300, Snippets=500, VocabularyBoosting=550, Dictionary=600, Translation=900.
 ///     Plugin post-processors insert at their own declared priority.
 /// </summary>
 public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
 {
     private const int SpokenCommandsPriority = 50;
     private const int SpokenPunctuationPriority = 60;
+    private const int NumberNormalizationPriority = 100;
     private const int FormattingPriority = 150;
     private const int CleanupPriority = 250;
     private const int LlmPriority = 300;
@@ -149,6 +151,25 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
+        // Spoken numbers ("twenty three") become digits ("23") after spoken command/punctuation
+        // handling and before app formatting. Runs deterministically instead of relying on the LLM.
+        steps.Add(
+            (
+                NumberNormalizationPriority,
+                PostProcessingStepNames.NumberNormalization,
+                (text, _) => Task.FromResult(
+                    TranscriptionNumberNormalizationService.NormalizeText(
+                        text,
+                        options.TranscriptionTask,
+                        options.DetectedLanguage,
+                        options.ConfiguredLanguage,
+                        options.ConfiguredLanguageCandidates,
+                        options.TranscriptionNumberNormalizationEnabled
+                    )
+                )
+            )
+        );
+
         if (options.AppFormatter is not null)
         {
             var processName = options.TargetProcessName;
@@ -265,8 +286,10 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
-        steps.Sort((a, b) => a.Item1.CompareTo(b.Item1));
-        return steps;
+        // Stable order by priority: List.Sort is unstable, so a plugin sharing a built-in
+        // priority (e.g. 100) could run before or after the built-in step nondeterministically.
+        // OrderBy is a stable sort, so equal priorities keep insertion order (built-ins first).
+        return steps.OrderBy(static step => step.Item1).ToList();
     }
 
     // STT renders spoken commands inconsistently ("new line", "New Line.", "newline") and
