@@ -218,6 +218,7 @@
   "Dictation.Engine": "Motor",
   "Dictation.EnterProcessName": "Introduce el nombre del proceso de una app antes de añadir una estrategia de inserción.",
   "Dictation.FixCudaPath": "Reparar la ruta de CUDA",
+  "Dictation.FollowSystemDefaultMic": "Automático (seguir el predeterminado del sistema)",
   "Dictation.InputDevice": "Dispositivo de entrada",
   "Dictation.InputDevicesAvailable": "{0} dispositivo(s) de entrada disponible(s).",
   "Dictation.Language": "Idioma",

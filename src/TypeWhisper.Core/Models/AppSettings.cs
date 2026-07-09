@@ -13,6 +13,16 @@ public record AppSettings
 
     public const string DefaultCommandKeyphrase = "TypeWhisper";
 
+    /// <summary>
+    ///     Sentinel stored in <see cref="SelectedMicrophoneDeviceId" /> when the user
+    ///     opts to follow the system default capture device instead of pinning a
+    ///     specific microphone. Chosen to never collide with a real PortAudio device
+    ///     id (which is "name|channels"): the leading control marker is not part of
+    ///     any device name. When this is set, <see cref="SelectedMicrophoneDevice" />
+    ///     is ignored and the current OS default is resolved at capture time.
+    /// </summary>
+    public const string FollowSystemDefaultMicrophoneId = "follow-system-default";
+
     public const string LocalModelAccelerationAuto = "auto";
     public const string LocalModelAccelerationCpu = "cpu";
     public const string LocalModelAccelerationNvidiaCuda = "nvidia-cuda";

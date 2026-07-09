@@ -579,20 +579,52 @@ public partial class DictationSectionViewModel : ObservableObject
     private void RefreshDevices()
     {
         Devices.Clear();
+        // "Automatic (follow system default)" sits at the top so a user who once
+        // pinned a device can opt back into auto-follow; it's a synthetic entry
+        // whose PersistentId is the follow-default sentinel (Index -1).
+        Devices.Add(
+            AudioRecordingService.CreateFollowSystemDefaultOption(
+                Loc.Instance["Dictation.FollowSystemDefaultMic"]
+            )
+        );
         foreach (var d in AudioRecordingService.GetInputDevices())
         {
             Devices.Add(d);
         }
 
-        SelectedDevice = _audio.ResolveConfiguredDevice(
+        SelectedDevice = ResolveSelectedDeviceOption(
             _settings.Current.SelectedMicrophoneDevice,
             _settings.Current.SelectedMicrophoneDeviceId
         );
 
+        // Devices always contains at least the synthetic follow-default entry, so
+        // count the real input devices when reporting availability.
+        var realDeviceCount = Devices.Count(d => d.Index >= 0);
         MicrophoneStatus =
-            Devices.Count == 0
+            realDeviceCount == 0
                 ? Loc.Instance["Dictation.NoInputDevices"]
-                : Loc.Instance.GetString("Dictation.InputDevicesAvailable", Devices.Count);
+                : Loc.Instance.GetString("Dictation.InputDevicesAvailable", realDeviceCount);
+    }
+
+    // Map the persisted selection to an item in the Devices collection so the
+    // ComboBox highlights it. The follow-default sentinel maps to the synthetic
+    // top entry; anything else resolves to a concrete device via the service.
+    private AudioInputDevice? ResolveSelectedDeviceOption(int? index, string? deviceId)
+    {
+        if (AudioRecordingService.IsFollowSystemDefault(deviceId))
+        {
+            return Devices.FirstOrDefault(d => d.Index < 0) ?? Devices.FirstOrDefault();
+        }
+
+        var resolved = _audio.ResolveConfiguredDevice(index, deviceId);
+        if (resolved is null)
+        {
+            return null;
+        }
+
+        // Return the instance actually in Devices (reference equality drives the
+        // ComboBox highlight) rather than the freshly built one from the service.
+        return Devices.FirstOrDefault(d => d.PersistentId == resolved.PersistentId) ?? resolved;
     }
 
     private void RefreshModels()
@@ -655,7 +687,7 @@ public partial class DictationSectionViewModel : ObservableObject
         AudioDuckingLevel = settings.AudioDuckingLevel;
         PauseMediaDuringRecording = settings.PauseMediaDuringRecording && CanUseMediaPause;
 
-        SelectedDevice = _audio.ResolveConfiguredDevice(
+        SelectedDevice = ResolveSelectedDeviceOption(
             settings.SelectedMicrophoneDevice,
             settings.SelectedMicrophoneDeviceId
         );
@@ -1261,6 +1293,23 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
+        if (AudioRecordingService.IsFollowSystemDefault(value.PersistentId))
+        {
+            // Auto-follow: persist the sentinel, clear any pinned index, and put the
+            // service into follow-default mode so it re-resolves the OS default.
+            _audio.FollowSystemDefault = true;
+            _audio.SelectedDeviceIndex = null;
+            _settings.Save(
+                _settings.Current with
+                {
+                    SelectedMicrophoneDevice = null,
+                    SelectedMicrophoneDeviceId = AppSettings.FollowSystemDefaultMicrophoneId
+                }
+            );
+            return;
+        }
+
+        _audio.FollowSystemDefault = false;
         _audio.SelectedDeviceIndex = value.Index;
         _settings.Save(
             _settings.Current with
