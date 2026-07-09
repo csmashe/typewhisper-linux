@@ -239,10 +239,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = false
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = false;
         sut.SetActiveDeviceIdForTest("A|1", 0);
 
         devices.SetDefault("B|1");
@@ -258,10 +256,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("A|1", 0);
 
         devices.SetDefault("B|1");
@@ -278,10 +274,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("A|1", 0);
 
         sut.CheckForDefaultDeviceChange();
@@ -296,10 +290,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("A|1", 0);
         sut.SetRecordingForTest(true);
 
@@ -318,10 +310,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("A|1", 0);
         sut.SetRecordingForTest(true);
 
@@ -344,10 +334,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("A|1", 0);
         sut.SetRecordingForTest(true);
 
@@ -374,10 +362,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("A|1", 0);
         sut.SetRecordingForTest(true);
 
@@ -403,10 +389,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("A|1", 0);
         // Idle (not recording) → RefreshPortAudioDeviceTable reports a fresh table.
         sut.SetMigrationPendingForTest(true);
@@ -425,10 +409,8 @@ public sealed class AudioRecordingServiceMigrationTests
         var devices = new FakeAudioDeviceEnumerator(
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
-        using var sut = new AudioRecordingService(deviceEnumerator: devices)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("B|1", 1);
 
         // Same devices, reordered indices, "B" is now the default at index 0.

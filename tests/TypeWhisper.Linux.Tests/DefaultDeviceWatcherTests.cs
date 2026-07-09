@@ -8,19 +8,19 @@ namespace TypeWhisper.Linux.Tests;
 // exercised deterministically, with no real pactl process and no wall-clock sleeps.
 public sealed class DefaultDeviceChangeDispatcherTests
 {
-    private static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan s_debounce = TimeSpan.FromMilliseconds(300);
 
     [Fact]
     public void Signal_FiresCallbackOnce_AfterDebounceElapses()
     {
         var time = new ManualTimeProvider();
         var fired = 0;
-        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, Debounce, time);
+        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, s_debounce, time);
 
         sut.Signal();
         Assert.Equal(0, fired); // Not yet — the debounce window hasn't elapsed.
 
-        time.Advance(Debounce);
+        time.Advance(s_debounce);
         Assert.Equal(1, fired);
     }
 
@@ -29,7 +29,7 @@ public sealed class DefaultDeviceChangeDispatcherTests
     {
         var time = new ManualTimeProvider();
         var fired = 0;
-        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, Debounce, time);
+        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, s_debounce, time);
 
         // A burst of events (PipeWire emits several server events per default switch)
         // each within the window: the deadline keeps getting pushed out.
@@ -41,7 +41,7 @@ public sealed class DefaultDeviceChangeDispatcherTests
         time.Advance(TimeSpan.FromMilliseconds(100));
         Assert.Equal(0, fired); // Still coalescing — never idle for a full window.
 
-        time.Advance(Debounce);
+        time.Advance(s_debounce);
         Assert.Equal(1, fired); // Exactly one callback for the whole burst.
     }
 
@@ -50,15 +50,15 @@ public sealed class DefaultDeviceChangeDispatcherTests
     {
         var time = new ManualTimeProvider();
         var fired = 0;
-        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, Debounce, time);
+        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, s_debounce, time);
 
         sut.Signal();
-        time.Advance(Debounce);
+        time.Advance(s_debounce);
         Assert.Equal(1, fired);
 
         // A later, separate change is its own coalesced callback.
         sut.Signal();
-        time.Advance(Debounce);
+        time.Advance(s_debounce);
         Assert.Equal(2, fired);
     }
 
@@ -67,13 +67,17 @@ public sealed class DefaultDeviceChangeDispatcherTests
     {
         var time = new ManualTimeProvider();
         var fired = 0;
-        var sut = new DefaultDeviceChangeDispatcher(() => fired++, Debounce, time);
+        // `using` guarantees cleanup even if Signal() throws before the explicit Dispose().
+        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, s_debounce, time);
 
         sut.Signal();
+        // Explicit Dispose() is the behavior under test (it must run before the timer would
+        // fire); Dispose() is idempotent, so the scope-end call is a harmless no-op.
+        // ReSharper disable once DisposeOnUsingVariable
         sut.Dispose();
 
         // The armed timer must not fire after disposal.
-        time.Advance(Debounce);
+        time.Advance(s_debounce);
         Assert.Equal(0, fired);
     }
 
@@ -82,11 +86,14 @@ public sealed class DefaultDeviceChangeDispatcherTests
     {
         var time = new ManualTimeProvider();
         var fired = 0;
-        var sut = new DefaultDeviceChangeDispatcher(() => fired++, Debounce, time);
+        // `using` adds cleanup-on-throw safety; the explicit Dispose() below is the setup
+        // under test (a Signal after Dispose must be a no-op).
+        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, s_debounce, time);
+        // ReSharper disable once DisposeOnUsingVariable
         sut.Dispose();
 
         sut.Signal();
-        time.Advance(Debounce);
+        time.Advance(s_debounce);
         Assert.Equal(0, fired);
     }
 
@@ -96,14 +103,14 @@ public sealed class DefaultDeviceChangeDispatcherTests
         var time = new ManualTimeProvider();
         using var sut = new DefaultDeviceChangeDispatcher(
             () => throw new InvalidOperationException("boom"),
-            Debounce,
+            s_debounce,
             time
         );
 
         sut.Signal();
         // A throwing callback must be swallowed (it runs on the timer thread); the
         // manual timer surfaces it synchronously here, so assert it does not escape.
-        var ex = Record.Exception(() => time.Advance(Debounce));
+        var ex = Record.Exception(() => time.Advance(s_debounce));
         Assert.Null(ex);
     }
 
@@ -116,7 +123,7 @@ public sealed class DefaultDeviceChangeDispatcherTests
         // still fires exactly once — for the NEWEST deadline — honoring the debounce.
         var time = new DeferredFireTimeProvider();
         var fired = 0;
-        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, Debounce, time);
+        using var sut = new DefaultDeviceChangeDispatcher(() => fired++, s_debounce, time);
 
         // gen 1: arm the timer, then let its due time elapse so its callback is DISPATCHED
         // (captured as pending) but not yet executed.
@@ -205,10 +212,8 @@ public sealed class DefaultDeviceWatcherFallbackTests
             new FakeDevice(0, "A", 1, isDefault: true),
             new FakeDevice(1, "B", 1, isDefault: false));
         var watcher = new FakeDefaultDeviceChangeWatcher();
-        using var sut = new AudioRecordingService(deviceEnumerator: devices, deviceWatcher: watcher)
-        {
-            FollowSystemDefault = true
-        };
+        using var sut = new AudioRecordingService(deviceEnumerator: devices, deviceWatcher: watcher);
+        sut.FollowSystemDefault = true;
         sut.SetActiveDeviceIdForTest("A|1", 0);
 
         // The OS default moved to B; firing the watcher runs CheckForDefaultDeviceChange
@@ -229,6 +234,9 @@ public sealed class DefaultDeviceWatcherFallbackTests
             new FakeDevice(0, "A", 1, isDefault: true));
         using var sut = new AudioRecordingService(deviceEnumerator: devices);
 
+        // Record.Exception invokes the closure synchronously, before `sut` is disposed at
+        // scope end, so the captured `sut` is never accessed after disposal.
+        // ReSharper disable once AccessToDisposedClosure
         var ex = Record.Exception(() => sut.FollowSystemDefault = true);
         Assert.Null(ex);
     }
@@ -240,6 +248,9 @@ public sealed class DefaultDeviceWatcherFallbackTests
         // Start must be a graceful no-op (no child process spawned) and never throw.
         using var sut = new PactlDefaultDeviceWatcher(isPactlAvailable: () => false);
 
+        // Record.Exception invokes the closure synchronously, before `sut` is disposed at
+        // scope end, so the captured `sut` is never accessed after disposal.
+        // ReSharper disable once AccessToDisposedClosure
         var ex = Record.Exception(() => sut.Start(() => { }));
         Assert.Null(ex);
     }
@@ -267,6 +278,9 @@ public sealed class DefaultDeviceWatcherFallbackTests
         // running" and never restarted. Here each fake subscription returns one relevant
         // line then EOF, ending the loop; Start() must be able to spin up a second one.
         var starts = 0;
+        // Factory is kept next to where it is wired into the watcher below rather than
+        // moved after the asserts; define-before-use reads more clearly for this seam.
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement
         PactlSubscription Factory()
         {
             starts++;
@@ -280,12 +294,16 @@ public sealed class DefaultDeviceWatcherFallbackTests
 
         sut.Start(() => { });
         // The first run's read loop hits EOF and self-tears-down: wait until it clears.
+        // WaitUntil runs the closure synchronously (spin-wait) before `sut` is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         WaitUntil(() => !sut.IsRunningForTest);
         Assert.Equal(1, starts);
 
         // A second Start() must NOT be rejected as "already running" — it spawns a fresh
         // subscription because the first run cleared its state on exit.
         sut.Start(() => { });
+        // Synchronous spin-wait again; captured `sut` is not accessed after disposal.
+        // ReSharper disable once AccessToDisposedClosure
         WaitUntil(() => !sut.IsRunningForTest);
         Assert.Equal(2, starts);
     }
@@ -382,6 +400,9 @@ internal sealed class ManualTimeProvider : TimeProvider
 
         public void MaybeFire(long nowTicks)
         {
+            // Single guarded action; inverting to a guard clause would only negate a
+            // positive pattern-match (`is { } due`) for no readability gain in this tiny body.
+            // ReSharper disable once InvertIf
             if (_dueTicks is { } due && nowTicks >= due)
             {
                 // One-shot in this suite: disarm before firing (the callback may re-arm).
@@ -389,8 +410,6 @@ internal sealed class ManualTimeProvider : TimeProvider
                 callback(state);
             }
         }
-
-        public bool Dispose(WaitHandle notifyObject) => throw new NotSupportedException();
 
         public void Dispose()
         {
@@ -481,8 +500,6 @@ internal sealed class DeferredFireTimeProvider : TimeProvider
             _armed = false;
             pending.Add(() => callback(state));
         }
-
-        public bool Dispose(WaitHandle notifyObject) => throw new NotSupportedException();
 
         public void Dispose()
         {

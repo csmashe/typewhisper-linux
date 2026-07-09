@@ -67,6 +67,10 @@ public sealed class DefaultDeviceChangeDispatcher : IDisposable
     // preserving the "exactly one callback per settled burst" contract.
     private long _firedGeneration;
 
+    /// <summary>
+    ///     Creates a dispatcher that coalesces bursts of raw change signals into a single
+    ///     debounced callback fired once the burst settles.
+    /// </summary>
     /// <param name="onChanged">Invoked once per coalesced burst of signals.</param>
     /// <param name="debounce">
     ///     Window over which a burst of raw signals is coalesced into a single

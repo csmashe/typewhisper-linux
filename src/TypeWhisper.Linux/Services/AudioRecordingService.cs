@@ -401,6 +401,9 @@ public sealed class AudioRecordingService : IDisposable
             }
         }
 
+        // Parallel to the by-id guard above; inverting would duplicate the
+        // ResolveSystemDefault fallback and break this symmetric resolve chain.
+        // ReSharper disable once InvertIf
         if (preferredIndex.HasValue)
         {
             var byIndex = devices.FirstOrDefault(d => d.Index == preferredIndex.Value);
@@ -1089,6 +1092,9 @@ public sealed class AudioRecordingService : IDisposable
 
         try
         {
+            // Compact "if reopen failed, handle it" guard (one level of nesting); inverting
+            // would push an early return into the try for no readability gain.
+            // ReSharper disable once InvertIf
             if (!EnsureInputStreamStarted())
             {
                 Trace.WriteLine(
@@ -1140,48 +1146,12 @@ public sealed class AudioRecordingService : IDisposable
                 return false;
             }
 
-            if (s_paInitCount <= 0)
-            {
-                // Not initialized yet; the next EnsurePortAudioInitialized (called by the
-                // enumerator) will read a fresh table anyway, so there is nothing cached
-                // to refresh and the resulting reading is NOT stale.
-                return true;
-            }
-
-            try
-            {
-                PortAudio.Terminate();
-
-                // From here PortAudio is terminated: s_paInitCount must NOT stay positive
-                // unless a matching Initialize() succeeds, otherwise the next
-                // EnsurePortAudioInitialized() would see a positive count and skip the
-                // re-init, leaving the library terminated-but-"initialized" (unusable).
-                s_paInitCount = 0;
-
-                PortAudio.Initialize();
-                s_paInitCount = 1;
-            }
-            catch (Exception ex)
-            {
-                // Best-effort refresh: if the cycle fails, fall back to the stale table
-                // and try to restore a usable init state. s_paInitCount now reflects
-                // actual PortAudio state: 0 if Terminate() ran but Initialize() has not
-                // yet succeeded (so a later EnsurePortAudioInitialized() recovers), or
-                // still 1 if Terminate() itself threw before changing state.
-                Trace.WriteLine(
-                    $"[AudioRecordingService] PortAudio device-table refresh failed: {ex.Message}"
-                );
-                try
-                {
-                    PortAudio.Initialize();
-                    s_paInitCount = 1;
-                }
-                catch
-                {
-                    // Leave s_paInitCount as set above (0 after a successful Terminate);
-                    // a later EnsurePortAudioInitialized() then retries the init.
-                }
-            }
+            // Delegate the actual Terminate()+Initialize() cycle (and the s_paInitCount
+            // mutation it implies) to the static lifetime helper, so the process-global
+            // init counter is only ever written by static methods — matching
+            // EnsurePortAudioInitialized/TerminatePortAudioIfInitialized rather than being
+            // poked directly from this instance method.
+            CyclePortAudioDeviceTableLocked();
         }
 
         // Reached only when the refresh was attempted (not skipped for a live stream):
@@ -1189,6 +1159,58 @@ public sealed class AudioRecordingService : IDisposable
         // best-effort failure path the library was re-initialized against the current OS
         // state, so the table is not stale in the sense that matters for migration.
         return true;
+    }
+
+    // Terminate()+Initialize() cycle that refreshes PortAudio's device-table snapshot
+    // (captured at Pa_Initialize; it does not otherwise observe OS default changes).
+    // Kept static and s_paInitLock-guarded so the process-global s_paInitCount is only
+    // ever mutated by the static lifetime helpers, never written directly from an instance
+    // method. CONTRACT: the caller MUST already hold s_paInitLock and have verified no
+    // stream is live (see RefreshPortAudioDeviceTable).
+    private static void CyclePortAudioDeviceTableLocked()
+    {
+        if (s_paInitCount <= 0)
+        {
+            // Not initialized yet; the next EnsurePortAudioInitialized (called by the
+            // enumerator) will read a fresh table anyway, so there is nothing cached
+            // to refresh and the resulting reading is NOT stale.
+            return;
+        }
+
+        try
+        {
+            PortAudio.Terminate();
+
+            // From here PortAudio is terminated: s_paInitCount must NOT stay positive
+            // unless a matching Initialize() succeeds, otherwise the next
+            // EnsurePortAudioInitialized() would see a positive count and skip the
+            // re-init, leaving the library terminated-but-"initialized" (unusable).
+            s_paInitCount = 0;
+
+            PortAudio.Initialize();
+            s_paInitCount = 1;
+        }
+        catch (Exception ex)
+        {
+            // Best-effort refresh: if the cycle fails, fall back to the stale table
+            // and try to restore a usable init state. s_paInitCount now reflects
+            // actual PortAudio state: 0 if Terminate() ran but Initialize() has not
+            // yet succeeded (so a later EnsurePortAudioInitialized() recovers), or
+            // still 1 if Terminate() itself threw before changing state.
+            Trace.WriteLine(
+                $"[AudioRecordingService] PortAudio device-table refresh failed: {ex.Message}"
+            );
+            try
+            {
+                PortAudio.Initialize();
+                s_paInitCount = 1;
+            }
+            catch
+            {
+                // Leave s_paInitCount as set above (0 after a successful Terminate);
+                // a later EnsurePortAudioInitialized() then retries the init.
+            }
+        }
     }
 
     // ======================= RUNTIME DEFAULT-DEVICE WATCHER =======================
@@ -1270,6 +1292,10 @@ public sealed class AudioRecordingService : IDisposable
     // These seams let a test seed the "currently active" device and toggle the
     // in-flight-recording flag without opening a native stream.
 
+    // _activeDeviceId is production capture state (written by ResolveSelectedDeviceIndex,
+    // MigrateActiveCaptureToDevice, etc.); this is only a read-only TEST seam over it.
+    // Merging into an auto-property would route production writes through a ...ForTest name.
+    // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter
     internal string? ActiveDeviceIdForTest => _activeDeviceId;
 
     internal bool MigrationPendingForTest
