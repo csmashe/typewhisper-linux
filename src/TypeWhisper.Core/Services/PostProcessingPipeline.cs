@@ -79,12 +79,8 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         ex.Message
                     )
                 );
-                if (name == PostProcessingStepNames.Llm && options.RequireLlmSuccess)
-                {
-                    throw;
-                }
-
-                if (name == PostProcessingStepNames.Translation && options.RequireTranslationSuccess)
+                if ((name == PostProcessingStepNames.Llm && options.RequireLlmSuccess)
+                    || (name == PostProcessingStepNames.Translation && options.RequireTranslationSuccess))
                 {
                     throw;
                 }
