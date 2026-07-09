@@ -37,6 +37,15 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
+        if (options.RequireTranslationSuccess
+            && (options.TranslationHandler is null
+                || string.IsNullOrWhiteSpace(options.TranslationTarget)))
+        {
+            throw new InvalidOperationException(
+                "Required translation is not configured."
+            );
+        }
+
         var steps = BuildSteps(options);
         var text = rawText;
         var stepResults = new List<PostProcessingStepResult>();
@@ -72,7 +81,8 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         ex.Message
                     )
                 );
-                if (name == PostProcessingStepNames.Llm && options.RequireLlmSuccess)
+                if ((name == PostProcessingStepNames.Llm && options.RequireLlmSuccess)
+                    || (name == PostProcessingStepNames.Translation && options.RequireTranslationSuccess))
                 {
                     throw;
                 }

@@ -1569,6 +1569,7 @@ public sealed class DictationOrchestrator : IDisposable
                     TranslationTarget = string.IsNullOrWhiteSpace(translationTarget)
                         ? null
                         : translationTarget,
+                    RequireTranslationSuccess = !string.IsNullOrWhiteSpace(translationTarget),
                     EffectiveSourceLanguage = languageHint,
                     DetectedLanguage = result?.DetectedLanguage,
                     TranscriptionTask = translate
