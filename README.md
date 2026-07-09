@@ -8,7 +8,7 @@ Speech-to-text and AI text processing for the Linux desktop. This repository is 
 
 If the TypeWhisper project releases an official Linux version, or if this port is merged into the main TypeWhisper branch, I plan to use the upstream Linux version instead. Until then, this branch exists as a practical Linux port adapted around Avalonia, Linux desktop services, and Linux-friendly install and startup behavior.
 
-Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary and snippet post-processing, and run prompt-based AI text actions through plugins.
+Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary, snippet, and spoken-number post-processing, and run prompt-based AI text actions through plugins.
 
 ## Documentation
 
@@ -72,7 +72,7 @@ dotnet run --project src/TypeWhisper.Linux
 To install a clickable launcher and icon for the current user (publishes self-contained, bundles the Linux plugins, and registers a `.desktop` entry):
 
 ```bash
-./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove
+./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove (keeps your data; add --purge to delete it too)
 ```
 
 ## Project Layout
