@@ -353,7 +353,9 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, plugin.PluginId, plugin);
         var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
         var vm = new PluginsSectionViewModel(manager);
-        var row = vm.PluginGroups.SelectMany(g => g.Plugins).Single(p => p.Id == plugin.PluginId);
+        var row = vm.EnabledGroups.Concat(vm.DisabledGroups)
+            .SelectMany(g => g.Plugins)
+            .Single(p => p.Id == plugin.PluginId);
         return (vm, row, plugin);
     }
 
