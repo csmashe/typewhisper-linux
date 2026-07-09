@@ -212,7 +212,22 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
         catch (Exception ex)
         {
-            LogOnce($"AT-SPI text read failed: {ex.Message}");
+            // Reading the focused field is best-effort: many targets simply don't implement the
+            // AT-SPI Text interface (terminals, TUIs, Claude Code), or the accessible disappears
+            // between the focus signal and the read. Those surface as benign D-Bus errors and mean
+            // "can't learn from this app" — not a TypeWhisper fault — so keep them out of the
+            // user-facing error log (Trace only). Genuinely unexpected failures still log once.
+            if (IsExpectedUnreadableTarget(ex))
+            {
+                Trace.WriteLine(
+                    $"[AtSpiEventClient] AT-SPI text read skipped (target has no readable text): {ex.Message}"
+                );
+            }
+            else
+            {
+                LogOnce($"AT-SPI text read failed: {ex.Message}");
+            }
+
             return null;
         }
     }
@@ -482,6 +497,38 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
 
         return await conn.CallMethodAsync(message, s_readString).ConfigureAwait(false);
+    }
+
+    // The D-Bus error name leads the reply exception's message, e.g.
+    // "org.freedesktop.DBus.Error.InvalidArgs: No such interface ...". These names are stable
+    // wire-protocol constants (not localized), so a prefix match on the guarded exception is safe.
+    private static readonly string[] s_benignReadErrorNames =
+    [
+        "org.freedesktop.DBus.Error.InvalidArgs", // element has no Text interface
+        "org.freedesktop.DBus.Error.UnknownObject", // accessible vanished after focus
+        "org.freedesktop.DBus.Error.UnknownInterface",
+        "org.freedesktop.DBus.Error.UnknownMethod",
+        "org.freedesktop.DBus.Error.ServiceUnknown", // app's a11y bridge went away
+        "org.freedesktop.DBus.Error.NoReply", // app busy / not responding
+        "org.freedesktop.DBus.Error.Disconnected"
+    ];
+
+    // AT-SPI text reads run against whatever third-party app holds focus, so failure is expected,
+    // not exceptional: terminals / TUIs / Claude Code don't implement org.a11y.atspi.Text, and an
+    // accessible can vanish between the focus signal and the read. Tmds surfaces these as
+    // DBusErrorReplyException; the well-known "not readable / gone / unresponsive" names are benign.
+    private static bool IsExpectedUnreadableTarget(Exception ex)
+    {
+        if (ex is not DBusErrorReplyException)
+        {
+            return false;
+        }
+
+        var message = ex.Message;
+        return Array.Exists(
+            s_benignReadErrorNames,
+            name => message.StartsWith(name, StringComparison.Ordinal)
+        );
     }
 
     private void LogOnce(string message)
