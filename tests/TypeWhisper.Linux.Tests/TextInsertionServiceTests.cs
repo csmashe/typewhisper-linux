@@ -1,5 +1,7 @@
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.Linux.Services.Insertion;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -32,7 +34,8 @@ public sealed class TextInsertionServiceTests
             Clipboard = "previous",
             PasteSucceeds = false
         };
-        var sut = new TextInsertionService(platform);
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
 
         var result = await sut.InsertTextAsync("new text");
 
@@ -40,6 +43,10 @@ public sealed class TextInsertionServiceTests
         Assert.Equal("new text", platform.Clipboard);
         Assert.True(platform.PasteSent);
         Assert.Equal(3, platform.PasteAttemptCount);
+        // The pre-armed watch is dropped unconsulted when the paste never went out.
+        Assert.NotNull(confirmation.LastWatch);
+        Assert.False(confirmation.LastWatch.WaitCalled);
+        Assert.True(confirmation.LastWatch.Disposed);
     }
 
     [Fact]
@@ -57,6 +64,287 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.Equal("previous", platform.Clipboard);
         Assert.Equal(3, platform.PasteAttemptCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_verifies_clipboard_serves_before_paste_and_retries_read()
+    {
+        // wl-copy's serving child isn't up yet: the first verify read still returns the
+        // OLD clipboard. The bounded verify loop must retry the read (not the write) and
+        // proceed once the clipboard serves the new text.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot of the user's clipboard
+                    "previous", // verify attempt 1 — wl-copy not serving yet
+                    "new text" // verify attempt 2 — serving
+                ]
+            )
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(1, platform.PasteAttemptCount);
+        // One inter-attempt verify delay ran; no second clipboard write was needed
+        // before the paste (initial set + post-paste restore only).
+        Assert.Contains(TimeSpan.FromMilliseconds(40), platform.Delays);
+        Assert.Equal(2, platform.SetClipboardCount);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_verify_failure_resets_clipboard_once_then_proceeds()
+    {
+        // The whole first verify pass fails (wl-copy died before serving); the one
+        // re-set + re-verify recovers and the paste still goes out.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot
+                    "previous", "previous", "previous", "previous", // verify pass 1 — all stale
+                    "new text" // verify pass 2 after the re-set — serving
+                ]
+            )
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(1, platform.PasteAttemptCount);
+        // initial set + one verify re-set + post-paste restore
+        Assert.Equal(3, platform.SetClipboardCount);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_verify_never_serves_skips_paste_and_falls_back_to_clipboard()
+    {
+        // A silently broken wl-copy means Ctrl+V would paste the user's stale previous
+        // clipboard. The verify gate must swallow the paste entirely and report the
+        // clipboard fallback instead.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot
+                    "previous", "previous", "previous", "previous", // verify pass 1
+                    "previous", "previous", "previous", "previous" // verify pass 2 after re-set
+                ]
+            )
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        // initial set + the single re-set retry — no restore write after the fallback
+        Assert.Equal(2, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_confirmed_paste_restores_immediately_without_floor_delay()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.NotNull(confirmation.LastWatch);
+        Assert.True(confirmation.LastWatch.WaitCalled);
+        Assert.True(confirmation.LastWatch.Disposed);
+        Assert.Equal("previous", platform.Clipboard);
+        // Positive confirmation must skip the fixed restore floor entirely.
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(600), platform.Delays);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_arms_paste_watch_before_sending_ctrl_v()
+    {
+        // Regression guard for the timing bug: the confirmer used to subscribe inside
+        // the restore step — AFTER Ctrl+V — so the paste's text-changed had already
+        // fired unobserved and every restore burned the full confirmation timeout.
+        var order = new List<string>();
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            OnPasteSent = () => order.Add("ctrl-v")
+        };
+        var confirmation = new FakePasteConfirmationSource
+        {
+            Result = true,
+            OnBeginWatch = () => order.Add("begin-watch")
+        };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(new[] { "begin-watch", "ctrl-v" }, order);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_text_changed_during_paste_is_latched_and_confirms_immediately()
+    {
+        // End-to-end through the real AtSpiPasteConfirmation: the target's text-changed
+        // arrives while Ctrl+V is being processed — before the restore step ever awaits
+        // the watch. The pre-armed watch must have latched it, so the restore confirms
+        // instantly instead of waiting out the timeout and then floor-delaying anyway.
+        var client = new FakeAtSpiEventClient();
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        platform.OnPasteSent = () =>
+            client.RaiseTextChanged(new AtSpiElementRef(":1.7", "/org/a11y/atspi/accessible/42"));
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: new AtSpiPasteConfirmation(client)
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(600), platform.Delays);
+        // The disposed watch left no dangling subscription on the client.
+        Assert.False(client.HasTextChangedSubscribers);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_without_confirmer_uses_floor_delay_then_restores()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Contains(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_indeterminate_confirmation_uses_floor_delay_then_restores()
+    {
+        // The confirmer is wired but AT-SPI is idle (feature off) — BeginWatch returns
+        // null, and the restore must behave exactly like the pre-existing fixed-delay path.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var confirmation = new FakePasteConfirmationSource { SourceNotRunning = true };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(confirmation.BeginWatchCalled);
+        Assert.Null(confirmation.LastWatch);
+        Assert.Contains(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_watch_timeout_uses_floor_delay_then_restores()
+    {
+        // AT-SPI is running but the target never emitted text-changed within the
+        // confirmation window — indeterminate, so the floor delay still applies.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = null };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.NotNull(confirmation.LastWatch);
+        Assert.True(confirmation.LastWatch.WaitCalled);
+        Assert.Equal(TimeSpan.FromSeconds(2), confirmation.LastWatch.LastTimeout);
+        Assert.True(confirmation.LastWatch.Disposed);
+        Assert.Contains(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_skips_restore_when_clipboard_no_longer_holds_our_text()
+    {
+        // Between Ctrl+V and the restore the user copied something themselves —
+        // restoring the old snapshot now would clobber their newer copy.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot
+                    "new text", // verify — serving
+                    "user copied meanwhile" // ownership check before restore
+                ]
+            )
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        // No restore write happened: only the initial set.
+        Assert.Equal(1, platform.SetClipboardCount);
+        Assert.Equal("new text", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_null_previous_clipboard_skips_wait_and_restore()
+    {
+        // Nothing to restore means no restore write can cut off the in-flight paste —
+        // the service must return without awaiting the watch or delaying, but must
+        // still dispose the pre-armed watch so its subscription doesn't leak.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            PasteSucceeds = true
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.NotNull(confirmation.LastWatch);
+        Assert.False(confirmation.LastWatch.WaitCalled);
+        Assert.True(confirmation.LastWatch.Disposed);
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("new text", platform.Clipboard);
     }
 
     [Fact]
@@ -1291,6 +1579,16 @@ public sealed class TextInsertionServiceTests
         public string? SelectionText { get; init; }
         public bool CopySucceeds { get; init; } = true;
 
+        // When non-null, each TryGetClipboardTextAsync dequeues the next scripted read
+        // (models wl-paste racing wl-copy: reads that lag behind what was just set).
+        // An exhausted queue falls back to the live Clipboard value.
+        public Queue<string?>? ClipboardReadResults { get; init; }
+        public int SetClipboardCount { get; private set; }
+
+        // Every DelayAsync is recorded so tests can assert which waits ran
+        // (e.g. the 500 ms restore floor must be skipped on a confirmed paste).
+        public List<TimeSpan> Delays { get; } = [];
+
         public bool IsClipboardSetAvailable => ClipboardSetAvailable;
 
         public bool IsPasteAvailable => PasteAvailable;
@@ -1303,17 +1601,21 @@ public sealed class TextInsertionServiceTests
 
         public Task<string?> TryGetClipboardTextAsync()
         {
-            return Task.FromResult(Clipboard);
+            return Task.FromResult(
+                ClipboardReadResults is { Count: > 0 } ? ClipboardReadResults.Dequeue() : Clipboard
+            );
         }
 
         public Task<bool> SetClipboardTextAsync(string text)
         {
+            SetClipboardCount++;
             Clipboard = text;
             return Task.FromResult(true);
         }
 
         public Task DelayAsync(TimeSpan delay)
         {
+            Delays.Add(delay);
             return Task.CompletedTask;
         }
 
@@ -1332,10 +1634,16 @@ public sealed class TextInsertionServiceTests
             return Task.FromResult(ActivateSucceeds);
         }
 
+        // Invoked on every SendPasteAsync — lets tests record ordering relative to the
+        // paste keystroke (the confirmation watch must be armed before it) or raise an
+        // AT-SPI event "during" the paste.
+        public Action? OnPasteSent { get; set; }
+
         public Task<bool> SendPasteAsync()
         {
             PasteSent = true;
             PasteAttemptCount++;
+            OnPasteSent?.Invoke();
             return Task.FromResult(
                 PasteResults?.Count > 0 ? PasteResults.Dequeue() : PasteSucceeds
             );
@@ -1370,6 +1678,106 @@ public sealed class TextInsertionServiceTests
         {
             EnterSent = true;
             return Task.FromResult(true);
+        }
+    }
+
+    private sealed class FakePasteConfirmationSource : IPasteConfirmationSource
+    {
+        // Scripted outcome of the vended watch: true = insertion observed; null =
+        // indeterminate (window elapsed). Never false — mirrors the contract.
+        public bool? Result { get; init; }
+
+        // When true, BeginWatch returns null — models the AT-SPI client not running.
+        public bool SourceNotRunning { get; init; }
+
+        // Invoked from BeginWatch so ordering tests can record when arming happened
+        // relative to the platform's paste call.
+        public Action? OnBeginWatch { get; init; }
+
+        public bool BeginWatchCalled { get; private set; }
+        public FakePasteWatch? LastWatch { get; private set; }
+
+        public bool? HasFocusedElement { get; init; }
+
+        public IPasteWatch? BeginWatch()
+        {
+            BeginWatchCalled = true;
+            OnBeginWatch?.Invoke();
+            if (SourceNotRunning)
+            {
+                return null;
+            }
+
+            LastWatch = new FakePasteWatch { Result = Result };
+            return LastWatch;
+        }
+    }
+
+    private sealed class FakePasteWatch : IPasteWatch
+    {
+        public bool? Result { get; init; }
+        public bool WaitCalled { get; private set; }
+        public bool Disposed { get; private set; }
+        public TimeSpan LastTimeout { get; private set; }
+
+        public Task<bool?> WaitAsync(TimeSpan timeout, CancellationToken ct)
+        {
+            WaitCalled = true;
+            LastTimeout = timeout;
+            return Task.FromResult(Result);
+        }
+
+        public void Dispose()
+        {
+            Disposed = true;
+        }
+    }
+
+    /// <summary>
+    ///     Minimal AT-SPI client fake for driving the real <see cref="AtSpiPasteConfirmation" />:
+    ///     always reports running and lets a test raise <see cref="TextChanged" /> at a
+    ///     chosen moment (e.g. mid-paste, before the restore step awaits the watch).
+    /// </summary>
+    private sealed class FakeAtSpiEventClient : IAtSpiEventClient
+    {
+        // Interface-required; the paste confirmer never subscribes to focus changes.
+        public event Action<AtSpiElementRef>? FocusChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public event Action<AtSpiElementRef>? TextChanged;
+
+        public AtSpiElementRef? CurrentFocusedElement => null;
+
+        public bool IsRunning => true;
+
+        public bool HasTextChangedSubscribers => TextChanged is not null;
+
+        public Task<bool> EnsureStartedAsync()
+        {
+            return Task.FromResult(true);
+        }
+
+        public Task StopAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        public Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)
+        {
+            return Task.FromResult<bool?>(null);
+        }
+
+        public void RaiseTextChanged(AtSpiElementRef element)
+        {
+            TextChanged?.Invoke(element);
         }
     }
 }

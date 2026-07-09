@@ -69,7 +69,27 @@ public sealed class TextInsertionService
     // ~600 ms delay matches what OpenWhispr landed after the same race.
     private static readonly TimeSpan s_clipboardRestoreDelayKde = TimeSpan.FromMilliseconds(600);
     private static readonly TimeSpan s_pasteRetryDelay = TimeSpan.FromMilliseconds(75);
+
+    // Pre-paste readiness: wl-copy forks a child to own the selection, and until that
+    // child is actually serving, GTK's async Ctrl+V read finds nothing (or the user's
+    // stale previous clipboard when wl-copy silently died) and inserts nothing. Verify
+    // the clipboard serves OUR text before sending the keystroke — happy path is a
+    // single ~20-50 ms read; the retry delay only accrues while the serve is late.
+    private const int ClipboardVerifyAttempts = 4;
+    private static readonly TimeSpan s_clipboardVerifyRetryDelay = TimeSpan.FromMilliseconds(40);
+
+    // How long the event-driven restore waits for a positive "text landed" signal
+    // before falling back to the fixed floor delay above.
+    private static readonly TimeSpan s_pasteConfirmTimeout = TimeSpan.FromSeconds(2);
+
+    // Env-gated per-paste diagnostics (TW_PASTE_DIAG=1): verify attempts, restore
+    // gate (confirmed vs floor) + elapsed, and whether AT-SPI knew a focused element
+    // at Ctrl+V time — the signal that would justify a future pre-paste focus gate.
+    private static readonly bool s_pasteDiagEnabled =
+        Environment.GetEnvironmentVariable("TW_PASTE_DIAG") == "1";
+
     private readonly IErrorLogService? _errorLog;
+    private readonly IPasteConfirmationSource? _pasteConfirmation;
 
     private readonly ITextInsertionPlatform _platform;
 
@@ -88,19 +108,22 @@ public sealed class TextInsertionService
     // without this the singleton's chain is frozen at startup and ydotool changes need a restart.
     public TextInsertionService(
         IErrorLogService errorLog,
-        SystemCommandAvailabilityService commands
+        SystemCommandAvailabilityService commands,
+        IPasteConfirmationSource? pasteConfirmation = null
     )
-        : this(new LinuxTextInsertionPlatform(commands), errorLog)
+        : this(new LinuxTextInsertionPlatform(commands), errorLog, pasteConfirmation)
     {
     }
 
     internal TextInsertionService(
         ITextInsertionPlatform platform,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IPasteConfirmationSource? pasteConfirmation = null
     )
     {
         _platform = platform;
         _errorLog = errorLog;
+        _pasteConfirmation = pasteConfirmation;
     }
 
     /// <summary>
@@ -221,8 +244,32 @@ public sealed class TextInsertionService
             return InsertionResult.CopiedToClipboard;
         }
 
+        if (!await VerifyClipboardServesAsync(text))
+        {
+            LogInsertionFallback(
+                "Auto paste fell back to clipboard: the clipboard never served the dictated text, "
+                + "so Ctrl+V was not sent (it would have pasted nothing or stale content)."
+            );
+            return InsertionResult.CopiedToClipboard;
+        }
+
+        if (s_pasteDiagEnabled)
+        {
+            var focusKnown = _pasteConfirmation?.HasFocusedElement;
+            PasteDiag(
+                $"focused element known at Ctrl+V: {focusKnown?.ToString() ?? "n/a (AT-SPI not running)"}"
+            );
+        }
+
+        // Arm the confirmation watch BEFORE the keystroke: the target's text-changed
+        // fires while Ctrl+V is being processed, so a subscription made in the restore
+        // step (after the paste) misses it every time and waits out the full timeout.
+        var pasteWatch = _pasteConfirmation?.BeginWatch();
+
         if (!await TrySendPasteAsync())
         {
+            pasteWatch?.Dispose();
+
             // Prefer the platform's diagnostic (e.g. "compositor unsupported")
             // over the generic retries-exhausted reason.
             if (LastFailureReason == InsertionFailureReason.None)
@@ -241,7 +288,9 @@ public sealed class TextInsertionService
             LogInsertionFallback("Auto paste sent Ctrl+V, but Enter could not be sent.");
         }
 
-        await RestorePreviousClipboardAsync(previousClipboard);
+        // Awaited inline (not fire-and-forget) so rapid consecutive dictations stay
+        // serialized: the next insertion's clipboard snapshot must not race this restore.
+        await RestorePreviousClipboardAsync(text, previousClipboard, pasteWatch);
         return InsertionResult.Pasted;
     }
 
@@ -353,22 +402,119 @@ public sealed class TextInsertionService
         return focusRequested || _platform.GetActiveWindowId() == targetWindowId;
     }
 
-    private async Task RestorePreviousClipboardAsync(string? previousClipboard)
+    /// <summary>
+    ///     Confirms the clipboard actually serves <paramref name="expected" /> before we
+    ///     send Ctrl+V, with one clipboard re-set + re-verify when the first pass fails
+    ///     (wl-copy occasionally dies before its serving child takes over the selection).
+    /// </summary>
+    private async Task<bool> VerifyClipboardServesAsync(string expected)
     {
-        var delay = _platform.IsKdePlasma ? s_clipboardRestoreDelayKde : s_clipboardRestoreDelayDefault;
-        await _platform.DelayAsync(delay);
+        if (await WaitForClipboardToServeAsync(expected))
+        {
+            return true;
+        }
+
+        PasteDiag("clipboard verify exhausted; re-setting clipboard once");
+        return await _platform.SetClipboardTextAsync(expected)
+               && await WaitForClipboardToServeAsync(expected);
+    }
+
+    private async Task<bool> WaitForClipboardToServeAsync(string expected)
+    {
+        for (var attempt = 0; attempt < ClipboardVerifyAttempts; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await _platform.DelayAsync(s_clipboardVerifyRetryDelay);
+            }
+
+            // wl-paste may append a trailing newline the write never had — compare
+            // content modulo that, matching the ownership check in the restore below.
+            var read = await _platform.TryGetClipboardTextAsync();
+            if (
+                read is not null
+                && string.Equals(
+                    read.TrimEnd('\n'),
+                    expected.TrimEnd('\n'),
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                PasteDiag($"clipboard verified serving on attempt {attempt + 1}");
+                return true;
+            }
+        }
+
+        PasteDiag($"clipboard verify failed after {ClipboardVerifyAttempts} attempts");
+        return false;
+    }
+
+    private async Task RestorePreviousClipboardAsync(
+        string pastedText,
+        string? previousClipboard,
+        IPasteWatch? watch
+    )
+    {
         if (previousClipboard is null)
         {
+            // Nothing to restore — no restore write can cut off the in-flight paste,
+            // so there is nothing to wait for either. Still drop the watch armed
+            // before Ctrl+V: its event subscription must not outlive the insertion.
+            watch?.Dispose();
             return;
         }
 
-        try
+        using (watch)
         {
-            await _platform.SetClipboardTextAsync(previousClipboard);
-        }
-        catch
-        {
-            /* best effort restore */
+            var stopwatch = s_pasteDiagEnabled ? Stopwatch.StartNew() : null;
+
+            // Event-driven gate: a positive "text landed" signal means the target has read
+            // the clipboard, so restoring now cannot cut off the transfer. The watch was
+            // armed before the keystroke, so a text-changed that already fired is latched
+            // and confirms instantly. Indeterminate (no watch — confirmer absent or AT-SPI
+            // idle — or no event within the window) falls back to the fixed floor delay
+            // that previously bounded this race on its own.
+            var confirmed =
+                watch is not null
+                && await watch.WaitAsync(s_pasteConfirmTimeout, CancellationToken.None) == true;
+            if (!confirmed)
+            {
+                await _platform.DelayAsync(
+                    _platform.IsKdePlasma
+                        ? s_clipboardRestoreDelayKde
+                        : s_clipboardRestoreDelayDefault
+                );
+            }
+
+            PasteDiag(
+                $"restore gate: {(confirmed ? "confirmed" : "floor")} after {stopwatch?.ElapsedMilliseconds ?? 0} ms"
+            );
+
+            // Ownership check: only restore when the clipboard still holds OUR text —
+            // content equality, not identity, since Wayland re-serves can differ by a
+            // trailing newline. If another app replaced it meanwhile, restoring would
+            // clobber the user's newer copy.
+            var current = await _platform.TryGetClipboardTextAsync();
+            if (
+                current is not null
+                && !string.Equals(
+                    current.TrimEnd('\n'),
+                    pastedText.TrimEnd('\n'),
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                return;
+            }
+
+            try
+            {
+                await _platform.SetClipboardTextAsync(previousClipboard);
+            }
+            catch
+            {
+                /* best effort restore */
+            }
         }
     }
 
@@ -552,6 +698,18 @@ public sealed class TextInsertionService
         }
 
         return true;
+    }
+
+    /// <summary>
+    ///     Env-gated (TW_PASTE_DIAG=1) per-paste diagnostic trace. Off by default so the
+    ///     hot path stays silent; used to validate the paste-readiness fix in the field.
+    /// </summary>
+    private static void PasteDiag(string message)
+    {
+        if (s_pasteDiagEnabled)
+        {
+            Trace.WriteLine($"[PasteDiag] {message}");
+        }
     }
 
     private void LogInsertionFallback(string message)

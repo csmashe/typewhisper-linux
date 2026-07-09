@@ -28,6 +28,15 @@ public interface IAtSpiEventClient
     AtSpiElementRef? CurrentFocusedElement { get; }
 
     /// <summary>
+    ///     <c>true</c> while the client holds a live a11y-bus connection with listeners
+    ///     registered (a successful <see cref="EnsureStartedAsync" /> not yet undone by
+    ///     <see cref="StopAsync" />). Read-only — never connects; consumers that must not
+    ///     start the listeners themselves (privacy/consent lives with the feature toggle)
+    ///     check this instead of calling <see cref="EnsureStartedAsync" />.
+    /// </summary>
+    bool IsRunning { get; }
+
+    /// <summary>
     ///     Connects to the a11y bus and registers event listeners on first call.
     ///     Returns <c>true</c> when the bus is reachable and listeners are live,
     ///     <c>false</c> when AT-SPI is unavailable (headless/minimal/remote sessions).

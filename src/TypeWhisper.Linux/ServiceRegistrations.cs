@@ -85,6 +85,10 @@ internal static class ServiceRegistrations
         // learning service arms a tracking window after each qualifying insertion.
         services.AddSingleton<AtSpiEventClient>();
         services.AddSingleton<IAtSpiEventClient>(sp => sp.GetRequiredService<AtSpiEventClient>());
+        // Event-driven paste confirmation for TextInsertionService's clipboard restore.
+        // Read-only over the AT-SPI client: it never starts the listeners itself, so the
+        // insertion path is unchanged unless correction learning already turned them on.
+        services.AddSingleton<IPasteConfirmationSource, AtSpiPasteConfirmation>();
         services.AddSingleton<TargetAppCorrectionLearningService>();
         services.AddSingleton<ActiveWindowService>();
         services.AddSingleton<IActiveWindowService>(sp =>
@@ -113,7 +117,11 @@ internal static class ServiceRegistrations
         services.AddSingleton<IDeShortcutWriter, HyprlandShortcutWriter>();
         services.AddSingleton<IDeShortcutWriter, SwayShortcutWriter>();
 
-        services.AddSingleton<TextInsertionService>();
+        services.AddSingleton(sp => new TextInsertionService(
+            sp.GetRequiredService<IErrorLogService>(),
+            sp.GetRequiredService<SystemCommandAvailabilityService>(),
+            sp.GetRequiredService<IPasteConfirmationSource>()
+        ));
         services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<InputAccessSetupHelper>();
         services.AddSingleton<BrowserAccessibilitySetupHelper>();

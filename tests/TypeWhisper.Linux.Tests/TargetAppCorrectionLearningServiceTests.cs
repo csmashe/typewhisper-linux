@@ -593,6 +593,8 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         public event Action<AtSpiElementRef>? FocusChanged;
         public event Action<AtSpiElementRef>? TextChanged;
 
+        public bool IsRunning { get; private set; }
+
         public async Task<bool> EnsureStartedAsync()
         {
             EnsureStartedCalls++;
@@ -601,12 +603,14 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
                 await StartGate.Task.ConfigureAwait(false);
             }
 
+            IsRunning = Available;
             return Available;
         }
 
         public Task StopAsync()
         {
             StopCalls++;
+            IsRunning = false;
             return Task.CompletedTask;
         }
 

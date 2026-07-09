@@ -125,6 +125,8 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
+    public bool IsRunning => _available;
+
     public async Task<bool> EnsureStartedAsync()
     {
         if (_started)
