@@ -199,7 +199,7 @@ public sealed class TextInsertionServiceTests
         var result = await sut.InsertTextAsync("new text");
 
         Assert.Equal(InsertionResult.Pasted, result);
-        Assert.Equal(new[] { "begin-watch", "ctrl-v" }, order);
+        Assert.Equal(["begin-watch", "ctrl-v"], order);
     }
 
     [Fact]
@@ -213,10 +213,10 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
+            OnPasteSent = () =>
+                client.RaiseTextChanged(new AtSpiElementRef(":1.7", "/org/a11y/atspi/accessible/42"))
         };
-        platform.OnPasteSent = () =>
-            client.RaiseTextChanged(new AtSpiElementRef(":1.7", "/org/a11y/atspi/accessible/42"));
         var sut = new TextInsertionService(
             platform,
             pasteConfirmation: new AtSpiPasteConfirmation(client)
@@ -1637,7 +1637,7 @@ public sealed class TextInsertionServiceTests
         // Invoked on every SendPasteAsync — lets tests record ordering relative to the
         // paste keystroke (the confirmation watch must be armed before it) or raise an
         // AT-SPI event "during" the paste.
-        public Action? OnPasteSent { get; set; }
+        public Action? OnPasteSent { get; init; }
 
         public Task<bool> SendPasteAsync()
         {
@@ -1697,6 +1697,8 @@ public sealed class TextInsertionServiceTests
         public bool BeginWatchCalled { get; private set; }
         public FakePasteWatch? LastWatch { get; private set; }
 
+        // ReSharper disable once UnusedAutoPropertyAccessor.Local — configurable surface mirroring
+        // the fake's other init properties and IPasteConfirmationSource; no test sets it yet.
         public bool? HasFocusedElement { get; init; }
 
         public IPasteWatch? BeginWatch()

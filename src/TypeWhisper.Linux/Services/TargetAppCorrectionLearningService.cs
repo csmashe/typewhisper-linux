@@ -361,6 +361,117 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         return previous[b.Length];
     }
 
+    // Separates an edit already learned earlier in this armed session from a genuinely new one. A
+    // frozen baseline makes a later commit re-diff the ORIGINAL insertion, so once
+    // "kharrington -> Carrington" is known, fixing an adjacent word comes back fused as
+    // "Chris kharrington -> Curris Carrington"; this drops the settled part and keeps only the new
+    // edit. Absent any settled word the suggestion is returned intact, so a genuine phrase or
+    // merge/split fix (e.g. "type whisper" -> "TypeWhisper") is never speculatively broken up.
+    private static List<(string Original, string Replacement)> SplitAtLearnedWords(
+        CorrectionSuggestion suggestion,
+        Dictionary<string, string> learned
+    )
+    {
+        var originals = suggestion.Original.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var replacements = suggestion.Replacement.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        // Drop anchor words from the START/END of the span. Done for ANY token counts (front pairs
+        // with front, back with back), so a settled prior edit next to an otherwise unalignable
+        // merge/split fix is removed instead of fusing into it — and any unchanged connector it
+        // exposes at the new edge (e.g. "type whisper in" -> "TypeWhisper in") is trimmed too.
+        var startO = 0;
+        var startR = 0;
+        var endO = originals.Length - 1;
+        var endR = replacements.Length - 1;
+        while (startO <= endO && startR <= endR && IsAnchor(originals[startO], replacements[startR]))
+        {
+            startO++;
+            startR++;
+        }
+
+        while (endO >= startO && endR >= startR && IsAnchor(originals[endO], replacements[endR]))
+        {
+            endO--;
+            endR--;
+        }
+
+        var remOriginals = originals[startO..(endO + 1)];
+        var remReplacements = replacements[startR..(endR + 1)];
+
+        // Only an equal-length multi-word remainder can be aligned position-by-position; a word
+        // merge/split (unequal counts) or a single word is returned whole, minus any no-op the edge
+        // trim may have left behind.
+        if (remOriginals.Length < 2 || remOriginals.Length != remReplacements.Length)
+        {
+            var original = string.Join(' ', remOriginals);
+            var replacement = string.Join(' ', remReplacements);
+            return original.Length > 0
+                && replacement.Length > 0
+                && !string.Equals(original, replacement, StringComparison.Ordinal)
+                    ? [(original, replacement)]
+                    : [];
+        }
+
+        // Split the remainder into segments at any interior already-learned word. Each segment is
+        // emitted as ONE atomic correction after trimming unchanged connector words off its ends
+        // (interior ones are kept, so "kubernets in cluster" -> "Kubernetes in clusters" stays
+        // whole). With no learned word inside, the remainder is a single segment.
+        var result = new List<(string, string)>();
+        var i = 0;
+        while (i < remOriginals.Length)
+        {
+            if (IsSettled(remOriginals[i], remReplacements[i]))
+            {
+                i++;
+                continue;
+            }
+
+            var start = i;
+            while (i < remOriginals.Length && !IsSettled(remOriginals[i], remReplacements[i]))
+            {
+                i++;
+            }
+
+            var lo = start;
+            var hi = i - 1;
+            while (lo <= hi && IsUnchanged(lo))
+            {
+                lo++;
+            }
+
+            while (hi >= lo && IsUnchanged(hi))
+            {
+                hi--;
+            }
+
+            if (lo <= hi)
+            {
+                result.Add(
+                    (
+                        string.Join(' ', remOriginals[lo..(hi + 1)]),
+                        string.Join(' ', remReplacements[lo..(hi + 1)])
+                    )
+                );
+            }
+        }
+
+        return result;
+
+        bool IsSettled(string original, string replacement) =>
+            learned.TryGetValue(original, out var known)
+            && string.Equals(known, replacement, StringComparison.Ordinal);
+
+        // An edge token that is not part of a new edit: either already learned this session, or a
+        // truly unchanged connector (Ordinal, so a case-only change still counts as an edit).
+        bool IsAnchor(string original, string replacement) =>
+            IsSettled(original, replacement)
+            || string.Equals(original, replacement, StringComparison.Ordinal);
+
+        // A truly unchanged token: a diff anchor, never part of a correction.
+        bool IsUnchanged(int index) =>
+            string.Equals(remOriginals[index], remReplacements[index], StringComparison.Ordinal);
+    }
+
     /// <summary>
     ///     Pure gate for whether a dictation insertion should arm target-app learning:
     ///     the feature is on, the text went into the field directly (typed or pasted — not
@@ -591,13 +702,19 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 finalText
             );
             foreach (var suggestion in suggestions)
+            // De-fuse any edit already learned this session from the genuinely new one (see
+            // SplitAtLearnedWords) before applying the gates below.
+            foreach (var (original, replacement) in SplitAtLearnedWords(
+                         suggestion,
+                         state.LearnedByOriginal
+                     ))
             {
                 // Silent auto-learn holds a higher bar than the review-first history flow: only
                 // persist when the replacement is a plausible recognition/spelling fix of the
                 // original. CorrectionSuggestionService only rejects majority rewrites once the
                 // total token count exceeds 3, so without this a short "call mom" -> "email dad"
                 // change of intent would be silently learned as a correction.
-                if (!IsLikelyRecognitionFix(suggestion.Original, suggestion.Replacement))
+                if (!IsLikelyRecognitionFix(original, replacement))
                 {
                     // Redact the raw strings: they can contain sensitive target-app text.
                     Trace.WriteLine(
@@ -606,12 +723,12 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                     continue;
                 }
 
-                if (state.LearnedByOriginal.TryGetValue(suggestion.Original, out var previous))
+                if (state.LearnedByOriginal.TryGetValue(original, out var previous))
                 {
                     // Identical to what we already learned this session — skip so a non-final
                     // idle commit followed by an identical final commit doesn't inflate
                     // TimesCorrected/UsageCount.
-                    if (string.Equals(previous, suggestion.Replacement, StringComparison.Ordinal))
+                    if (string.Equals(previous, replacement, StringComparison.Ordinal))
                     {
                         continue;
                     }
@@ -619,7 +736,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                     // The user kept typing words after the correction was already complete, so
                     // the diff now appends them to the replacement (e.g. "Kubernetes" then
                     // "Kubernetes now"). Keep the earlier, correct value rather than widen it.
-                    if (IsWidening(previous, suggestion.Replacement))
+                    if (IsWidening(previous, replacement))
                     {
                         Trace.WriteLine(
                             "[TargetAppLearning] Ignoring widened replacement (kept earlier value)."
@@ -628,8 +745,8 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                     }
                 }
 
-                _dictionary.LearnCorrection(suggestion.Original, suggestion.Replacement);
-                state.LearnedByOriginal[suggestion.Original] = suggestion.Replacement;
+                _dictionary.LearnCorrection(original, replacement);
+                state.LearnedByOriginal[original] = replacement;
                 Trace.WriteLine("[TargetAppLearning] Learned a correction from a target-app edit.");
             }
         }

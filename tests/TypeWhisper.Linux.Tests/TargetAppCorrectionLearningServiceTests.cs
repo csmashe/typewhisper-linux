@@ -220,6 +220,235 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Arm_TwoAdjacentWordsCorrectedInSequence_LearnsThemSeparately()
+    {
+        // Regression: fix one misrecognized name (an idle commit learns it), then fix the adjacent
+        // name. The second commit re-diffs the unchanged baseline, so BOTH words now differ from it
+        // — without per-word splitting they fused into one "Chris kharrington" -> "Curris
+        // Carrington" entry.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(
+            client,
+            new FakeSettingsService(
+                AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
+            ),
+            idleCommitDelay: TimeSpan.FromMilliseconds(50)
+        );
+
+        client.TextToReturn = "Kim Chris kharrington Quinn";
+        await service.ArmAsync("Kim Chris kharrington Quinn");
+
+        // Fix the second name first; an idle commit learns kharrington -> Carrington.
+        client.TextToReturn = "Kim Chris Carrington Quinn";
+        client.RaiseText(s_field);
+        await AwaitScheduledCommit(service);
+        Assert.Equal("Carrington", Assert.Single(_dictionary.GetCorrections()).Replacement);
+
+        // Now fix the first name and move on. The diff against the original baseline shows both
+        // names changed, but only the genuinely new edit should be learned.
+        client.TextToReturn = "Kim Curris Carrington Quinn";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherField);
+        await AwaitCommit(service);
+
+        var corrections = _dictionary.GetCorrections();
+        Assert.Equal(2, corrections.Count);
+        Assert.Contains(corrections, c => c is { Original: "Chris", Replacement: "Curris" });
+        Assert.Contains(corrections, c => c is { Original: "kharrington", Replacement: "Carrington" });
+        // The fused multi-word entry must never be created.
+        Assert.DoesNotContain(corrections, c => c.Original.Contains(' '));
+    }
+
+    [Fact]
+    public async Task Arm_LearnedAndNewEditSeparatedByUnchangedWord_LearnsOnlyTheNewWord()
+    {
+        // After an idle commit learns kharrington -> Carrington, the user fixes a second word with
+        // an UNCHANGED word ("in") between them. The re-diff spans all three, but the unchanged
+        // anchor must be dropped: we learn smyth -> Smith, not "in smyth" -> "in Smith", and never
+        // a no-op "in" -> "in".
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(
+            client,
+            new FakeSettingsService(
+                AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
+            ),
+            idleCommitDelay: TimeSpan.FromMilliseconds(50)
+        );
+
+        client.TextToReturn = "please note kharrington in smyth right here";
+        await service.ArmAsync("please note kharrington in smyth right here");
+
+        client.TextToReturn = "please note Carrington in smyth right here";
+        client.RaiseText(s_field);
+        await AwaitScheduledCommit(service);
+        Assert.Equal("Carrington", Assert.Single(_dictionary.GetCorrections()).Replacement);
+
+        client.TextToReturn = "please note Carrington in Smith right here";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherField);
+        await AwaitCommit(service);
+
+        var corrections = _dictionary.GetCorrections();
+        Assert.Equal(2, corrections.Count);
+        Assert.Contains(corrections, c => c is { Original: "kharrington", Replacement: "Carrington" });
+        Assert.Contains(corrections, c => c is { Original: "smyth", Replacement: "Smith" });
+        Assert.DoesNotContain(corrections, c => c.Original.Contains(' '));
+        Assert.DoesNotContain(corrections, c => c.Original == c.Replacement);
+    }
+
+    [Fact]
+    public async Task Arm_MergeFixAdjacentToLearnedWord_DropsLearnedWordFromPhrase()
+    {
+        // After an idle commit learns kharrington -> Carrington, the user makes an adjacent
+        // merge/split fix ("type whisper" -> "TypeWhisper"). The re-diff fuses them into unequal
+        // token counts; the settled word must still be trimmed off the edge so we learn the clean
+        // merge, not "type whisper kharrington" -> "TypeWhisper Carrington".
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(
+            client,
+            new FakeSettingsService(
+                AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
+            ),
+            idleCommitDelay: TimeSpan.FromMilliseconds(50)
+        );
+
+        client.TextToReturn = "please open type whisper kharrington now thanks";
+        await service.ArmAsync("please open type whisper kharrington now thanks");
+
+        client.TextToReturn = "please open type whisper Carrington now thanks";
+        client.RaiseText(s_field);
+        await AwaitScheduledCommit(service);
+        Assert.Equal("Carrington", Assert.Single(_dictionary.GetCorrections()).Replacement);
+
+        client.TextToReturn = "please open TypeWhisper Carrington now thanks";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherField);
+        await AwaitCommit(service);
+
+        var corrections = _dictionary.GetCorrections();
+        Assert.Equal(2, corrections.Count);
+        Assert.Contains(corrections, c => c is { Original: "kharrington", Replacement: "Carrington" });
+        Assert.Contains(corrections, c => c is { Original: "type whisper", Replacement: "TypeWhisper" });
+    }
+
+    [Fact]
+    public async Task Arm_MergeFixSeparatedFromLearnedWordByConnector_TrimsConnector()
+    {
+        // Like the merge/split case, but an unchanged connector ("in") sits between the merge fix
+        // and the learned edge word. Trimming the learned word exposes that connector at the edge
+        // of an unequal remainder; it must be trimmed too, so we learn the clean
+        // "type whisper" -> "TypeWhisper", not "type whisper in" -> "TypeWhisper in".
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(
+            client,
+            new FakeSettingsService(
+                AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
+            ),
+            idleCommitDelay: TimeSpan.FromMilliseconds(50)
+        );
+
+        client.TextToReturn = "please open type whisper in kharrington now thanks";
+        await service.ArmAsync("please open type whisper in kharrington now thanks");
+
+        client.TextToReturn = "please open type whisper in Carrington now thanks";
+        client.RaiseText(s_field);
+        await AwaitScheduledCommit(service);
+        Assert.Equal("Carrington", Assert.Single(_dictionary.GetCorrections()).Replacement);
+
+        client.TextToReturn = "please open TypeWhisper in Carrington now thanks";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherField);
+        await AwaitCommit(service);
+
+        var corrections = _dictionary.GetCorrections();
+        Assert.Equal(2, corrections.Count);
+        Assert.Contains(corrections, c => c is { Original: "kharrington", Replacement: "Carrington" });
+        Assert.Contains(corrections, c => c is { Original: "type whisper", Replacement: "TypeWhisper" });
+    }
+
+    [Fact]
+    public async Task Arm_EqualLengthPhraseEdit_LearnsWholePhrase_NotSplitWords()
+    {
+        // A same-length multi-word edit with no prior session learning must stay one atomic phrase
+        // correction. Splitting it into per-word rules would let a phrase fix silently rewrite
+        // unrelated future text (e.g. a stray "kubernets" or "cluster").
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "deploy kubernets cluster";
+        await service.ArmAsync("deploy kubernets cluster");
+
+        client.TextToReturn = "deploy Kubernetes clusters";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherField);
+        await AwaitCommit(service);
+
+        var correction = Assert.Single(_dictionary.GetCorrections());
+        Assert.Equal("kubernets cluster", correction.Original);
+        Assert.Equal("Kubernetes clusters", correction.Replacement);
+    }
+
+    [Fact]
+    public async Task Arm_PhraseEditWithUnchangedConnector_LearnsWholePhrase()
+    {
+        // Same as above but with an unchanged connector word ("in") inside the changed span and no
+        // prior session learning. The connector must NOT act as a split point: the whole phrase is
+        // learned atomically, never as per-word rules like "cluster" -> "clusters".
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "we deploy kubernets in cluster now";
+        await service.ArmAsync("we deploy kubernets in cluster now");
+
+        client.TextToReturn = "we deploy Kubernetes in clusters now";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherField);
+        await AwaitCommit(service);
+
+        var correction = Assert.Single(_dictionary.GetCorrections());
+        Assert.Equal("kubernets in cluster", correction.Original);
+        Assert.Equal("Kubernetes in clusters", correction.Replacement);
+    }
+
+    [Fact]
+    public async Task Arm_LearnedWordAdjacentToFreshPhrase_KeepsPhraseAtomic()
+    {
+        // A learned word (kharrington -> Carrington) is de-fused off the span, but the adjacent NEW
+        // edit is itself a phrase with an unchanged connector ("in"). De-fusing must not also split
+        // that phrase: we learn kharrington -> Carrington plus the atomic phrase, never per-word
+        // "kubernets" -> "Kubernetes" / "cluster" -> "clusters".
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(
+            client,
+            new FakeSettingsService(
+                AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
+            ),
+            idleCommitDelay: TimeSpan.FromMilliseconds(50)
+        );
+
+        client.TextToReturn = "the note about kharrington kubernets in cluster is here";
+        await service.ArmAsync("the note about kharrington kubernets in cluster is here");
+
+        client.TextToReturn = "the note about Carrington kubernets in cluster is here";
+        client.RaiseText(s_field);
+        await AwaitScheduledCommit(service);
+        Assert.Equal("Carrington", Assert.Single(_dictionary.GetCorrections()).Replacement);
+
+        client.TextToReturn = "the note about Carrington Kubernetes in clusters is here";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherField);
+        await AwaitCommit(service);
+
+        var corrections = _dictionary.GetCorrections();
+        Assert.Equal(2, corrections.Count);
+        Assert.Contains(corrections, c => c is { Original: "kharrington", Replacement: "Carrington" });
+        Assert.Contains(
+            corrections,
+            c => c is { Original: "kubernets in cluster", Replacement: "Kubernetes in clusters" }
+        );
+    }
+
+    [Fact]
     public async Task Arm_DisabledDuringStartup_DoesNotReadTargetText()
     {
         // The user disables the feature while ArmAsync is still awaiting EnsureStartedAsync.
