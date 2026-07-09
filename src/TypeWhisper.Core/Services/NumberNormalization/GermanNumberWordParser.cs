@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 
 namespace TypeWhisper.Core.Services.NumberNormalization;
 
@@ -142,16 +143,16 @@ internal static class GermanNumberWordParser
 
     private static (string Digits, int NextIndex) ParseDecimalDigits(IReadOnlyList<string> words, int startIndex)
     {
-        var digits = "";
+        var digits = new StringBuilder();
         var index = startIndex;
 
         while (index < words.Count && DigitValue(words[index]) is { } digit)
         {
-            digits += digit.ToString(CultureInfo.InvariantCulture);
+            digits.Append(digit.ToString(CultureInfo.InvariantCulture));
             index++;
         }
 
-        return (digits, index);
+        return (digits.ToString(), index);
     }
 
     private static int? ParseCompound(string word, bool allowArticleOne)

@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 
 namespace TypeWhisper.Core.Services.NumberNormalization;
 
@@ -156,18 +157,18 @@ internal static class EnglishNumberWordParser
 
     private static (string Digits, int NextIndex) ParseDecimalDigits(IReadOnlyList<string> words, int startIndex)
     {
-        var digits = "";
+        var digits = new StringBuilder();
         var index = startIndex;
 
         while (index < words.Count &&
                s_unitValues.TryGetValue(words[index], out var digit) &&
                digit is >= 0 and <= 9)
         {
-            digits += digit.ToString(CultureInfo.InvariantCulture);
+            digits.Append(digit.ToString(CultureInfo.InvariantCulture));
             index++;
         }
 
-        return (digits, index);
+        return (digits.ToString(), index);
     }
 
     private static int? SmallNumberValue(string word) =>

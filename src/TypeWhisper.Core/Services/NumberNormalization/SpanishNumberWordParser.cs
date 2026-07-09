@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 
 namespace TypeWhisper.Core.Services.NumberNormalization;
 
@@ -217,16 +218,16 @@ internal static class SpanishNumberWordParser
 
     private static (string Digits, int NextIndex) ParseDecimalDigits(IReadOnlyList<string> words, int startIndex)
     {
-        var digits = "";
+        var digits = new StringBuilder();
         var index = startIndex;
 
         while (index < words.Count && UnitValue(words[index], true) is { } digit)
         {
-            digits += digit.ToString(CultureInfo.InvariantCulture);
+            digits.Append(digit.ToString(CultureInfo.InvariantCulture));
             index++;
         }
 
-        return (digits, index);
+        return (digits.ToString(), index);
     }
 
     // The bare numeral "uno" always normalizes to 1; only the article forms "un"/"una" are gated
