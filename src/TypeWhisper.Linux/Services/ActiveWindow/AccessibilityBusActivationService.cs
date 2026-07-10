@@ -21,12 +21,17 @@ public interface IAccessibilityBusActivation
     Task<bool?> IsActivatedAsync(CancellationToken ct = default);
 
     /// <summary>
-    ///     Sets <c>org.a11y.Status.IsEnabled</c> (and <c>ScreenReaderEnabled</c>, which
-    ///     Chromium/Electron also key off) on the session bus. Where a GSettings/dconf backend
-    ///     is present the a11y launcher mirrors these to
+    ///     Sets <c>org.a11y.Status.IsEnabled</c> on the session bus. Where a GSettings/dconf
+    ///     backend is present the a11y launcher mirrors it to
     ///     <c>org.gnome.desktop.interface toolkit-accessibility</c>, so the change can persist
     ///     across sessions rather than resetting at logout. Returns <c>true</c> when the write
     ///     succeeded.
+    ///     <para>
+    ///         Deliberately never touches <c>ScreenReaderEnabled</c>: GNOME mirrors that one to
+    ///         <c>org.gnome.desktop.a11y.applications screen-reader-enabled</c>, which LAUNCHES
+    ///         the Orca screen reader and makes the whole desktop speak. Chromium reads only
+    ///         <c>IsEnabled</c>, and Qt accepts either, so <c>IsEnabled</c> alone is sufficient.
+    ///     </para>
     /// </summary>
     Task<bool> SetActivatedAsync(bool enabled, CancellationToken ct = default);
 }
@@ -72,23 +77,12 @@ public sealed class AccessibilityBusActivationService : IAccessibilityBusActivat
         return text.EndsWith("false", StringComparison.OrdinalIgnoreCase) ? false : null;
     }
 
-    public async Task<bool> SetActivatedAsync(bool enabled, CancellationToken ct = default)
+    public Task<bool> SetActivatedAsync(bool enabled, CancellationToken ct = default)
     {
-        // IsEnabled is the flag Chromium/Qt/Firefox gate their a11y tree on; ScreenReaderEnabled
-        // is set alongside it because some Chromium builds check that one instead. The result of
-        // the primary write is what we report; the secondary is best-effort.
-        var ok = await SetPropertyAsync("IsEnabled", enabled, ct).ConfigureAwait(false);
-
-        // When enabling, only mirror to ScreenReaderEnabled if the primary gate actually took:
-        // turning the screen-reader flag on by itself does nothing useful and would leave
-        // orphaned global state we just reported as failed. When disabling, always clear it so
-        // nothing is left behind.
-        if (ok || !enabled)
-        {
-            await SetPropertyAsync("ScreenReaderEnabled", enabled, ct).ConfigureAwait(false);
-        }
-
-        return ok;
+        // IsEnabled is the flag Chromium/Qt/Firefox gate their a11y tree on, and the ONLY
+        // property we write. Never set ScreenReaderEnabled here — GNOME mirrors it into the
+        // screen-reader-enabled gsettings key, which launches Orca and makes the desktop speak.
+        return SetPropertyAsync("IsEnabled", enabled, ct);
     }
 
     private async Task<bool> SetPropertyAsync(string property, bool value, CancellationToken ct)

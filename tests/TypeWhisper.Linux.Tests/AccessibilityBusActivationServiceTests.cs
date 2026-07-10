@@ -53,7 +53,7 @@ public sealed class AccessibilityBusActivationServiceTests
     }
 
     [Fact]
-    public async Task SetActivatedAsync_true_sets_both_flags_true()
+    public async Task SetActivatedAsync_true_sets_only_IsEnabled()
     {
         var runner = new FakeProcessRunner();
         var service = new AccessibilityBusActivationService(runner);
@@ -61,22 +61,32 @@ public sealed class AccessibilityBusActivationServiceTests
         var ok = await service.SetActivatedAsync(true);
 
         Assert.True(ok);
-        var setCalls = runner
-            .Invocations.Where(i => i.FileName == "busctl" && i.Args.Contains("set-property"))
-            .ToList();
-        Assert.Equal(2, setCalls.Count);
-        Assert.Contains(
-            setCalls,
-            c => c.Args.Contains("IsEnabled") && c.Args[^2] == "b" && c.Args[^1] == "true"
+        var setCall = Assert.Single(
+            runner.Invocations,
+            i => i.FileName == "busctl" && i.Args.Contains("set-property")
         );
-        Assert.Contains(
-            setCalls,
-            c => c.Args.Contains("ScreenReaderEnabled") && c.Args[^1] == "true"
-        );
+        Assert.Contains("IsEnabled", setCall.Args);
+        Assert.Equal("b", setCall.Args[^2]);
+        Assert.Equal("true", setCall.Args[^1]);
     }
 
     [Fact]
-    public async Task SetActivatedAsync_false_sets_flags_false()
+    public async Task SetActivatedAsync_never_touches_ScreenReaderEnabled()
+    {
+        // GNOME mirrors ScreenReaderEnabled into the screen-reader-enabled gsettings key,
+        // which LAUNCHES Orca and makes the whole desktop speak. Regression guard: this
+        // service must never write that property, in either direction.
+        var runner = new FakeProcessRunner();
+        var service = new AccessibilityBusActivationService(runner);
+
+        await service.SetActivatedAsync(true);
+        await service.SetActivatedAsync(false);
+
+        Assert.DoesNotContain(runner.Invocations, i => i.Args.Contains("ScreenReaderEnabled"));
+    }
+
+    [Fact]
+    public async Task SetActivatedAsync_false_sets_IsEnabled_false()
     {
         var runner = new FakeProcessRunner();
         var service = new AccessibilityBusActivationService(runner);
@@ -90,7 +100,7 @@ public sealed class AccessibilityBusActivationServiceTests
     }
 
     [Fact]
-    public async Task SetActivatedAsync_reports_failure_when_primary_write_fails()
+    public async Task SetActivatedAsync_reports_failure_when_write_fails()
     {
         var runner = new FakeProcessRunner();
         runner.FailWhen((_, args) => args.Contains("set-property") && args.Contains("IsEnabled"));
@@ -98,21 +108,4 @@ public sealed class AccessibilityBusActivationServiceTests
 
         Assert.False(await service.SetActivatedAsync(true));
     }
-
-    [Fact]
-    public async Task SetActivatedAsync_true_skips_screen_reader_write_when_primary_write_fails()
-    {
-        // ScreenReaderEnabled alone is useless and would orphan global state we reported as failed.
-        var runner = new FakeProcessRunner();
-        runner.FailWhen((_, args) => args.Contains("set-property") && args.Contains("IsEnabled"));
-        var service = new AccessibilityBusActivationService(runner);
-
-        await service.SetActivatedAsync(true);
-
-        Assert.DoesNotContain(
-            runner.Invocations,
-            i => i.Args.Contains("set-property") && i.Args.Contains("ScreenReaderEnabled")
-        );
-    }
-
 }
