@@ -93,16 +93,6 @@ public sealed class TextInsertionService
 
     private readonly ITextInsertionPlatform _platform;
 
-    public TextInsertionService()
-        : this(new LinuxTextInsertionPlatform())
-    {
-    }
-
-    public TextInsertionService(IErrorLogService errorLog)
-        : this(new LinuxTextInsertionPlatform(), errorLog)
-    {
-    }
-
     // DI-preferred ctor: passes the shared SystemCommandAvailabilityService so the platform
     // subscribes to snapshot refreshes and rebuilds its chain live after ydotool setup —
     // without this the singleton's chain is frozen at startup and ydotool changes need a restart.
@@ -432,17 +422,19 @@ public sealed class TextInsertionService
             // content modulo that, matching the ownership check in the restore below.
             var read = await _platform.TryGetClipboardTextAsync();
             if (
-                read is not null
-                && string.Equals(
+                read is null
+                || !string.Equals(
                     read.TrimEnd('\n'),
                     expected.TrimEnd('\n'),
                     StringComparison.Ordinal
                 )
             )
             {
-                PasteDiag($"clipboard verified serving on attempt {attempt + 1}");
-                return true;
+                continue;
             }
+
+            PasteDiag($"clipboard verified serving on attempt {attempt + 1}");
+            return true;
         }
 
         PasteDiag($"clipboard verify failed after {ClipboardVerifyAttempts} attempts");
@@ -785,15 +777,6 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private HashSet<InputBackend> _disabled = [];
 
     private LinuxCapabilitySnapshot _snapshot;
-
-    public LinuxTextInsertionPlatform()
-        : this(
-            new SystemCommandAvailabilityService(),
-            DefaultProcessRunnerWithEnv,
-            DefaultProcessRunnerWithStderr
-        )
-    {
-    }
 
     public LinuxTextInsertionPlatform(SystemCommandAvailabilityService commands)
         : this(commands, DefaultProcessRunnerWithEnv, DefaultProcessRunnerWithStderr)

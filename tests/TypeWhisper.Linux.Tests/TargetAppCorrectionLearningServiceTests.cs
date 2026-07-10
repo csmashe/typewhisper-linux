@@ -209,6 +209,35 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Arm_FocusedPasswordField_DoesNotFallBackToSibling()
+    {
+        // The dictation landed in a password field, but a same-app sibling happens to contain
+        // the same text. Falling back to it would leak password-derived text into learned
+        // corrections, so the whole arm must abort — and no field text may ever be read.
+        var password = new AtSpiElementRef("app", "/password");
+        var sibling = new AtSpiElementRef("app", "/sibling");
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = password,
+            PasswordProvider = e => e.Equals(password),
+            TextProvider = _ => "hunter2"
+        };
+        client.RecentFocusedElements.AddRange([password, sibling]);
+        using var service = CreateService(client, enabled: true);
+
+        await service.ArmAsync("hunter2");
+
+        // Not armed: an edit in the sibling must not be learned, and no text was ever read.
+        client.TextProvider = e => e.Equals(sibling) ? "hunter2 corrected" : "hunter2";
+        client.RaiseText(sibling);
+        client.RaiseFocus(s_otherAppField);
+
+        Assert.Null(service.LastCommitTask);
+        Assert.Empty(_dictionary.GetCorrections());
+        Assert.Equal(0, client.TextReadCalls);
+    }
+
+    [Fact]
     public async Task Arm_PasswordRoleIndeterminate_FailsClosed_LearnsNothing()
     {
         // The role read could not be determined (null). A privacy boundary must fail closed:
@@ -894,6 +923,10 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // Per-element text for candidate-fallback tests; when null, TextToReturn is used
         // for every element.
         public Func<AtSpiElementRef, string?>? TextProvider { get; set; }
+
+        // Per-element password verdict for candidate-fallback tests; when null, PasswordResult
+        // is used for every element.
+        public Func<AtSpiElementRef, bool?>? PasswordProvider { get; init; }
         public AtSpiElementRef? CurrentFocusedElement { get; set; }
         public List<AtSpiElementRef> RecentFocusedElements { get; } = [];
         public int EnsureStartedCalls { get; private set; }
@@ -941,7 +974,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         public Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)
         {
-            return Task.FromResult(PasswordResult);
+            return Task.FromResult(PasswordProvider is not null ? PasswordProvider(element) : PasswordResult);
         }
 
         public void RaiseFocus(AtSpiElementRef element)

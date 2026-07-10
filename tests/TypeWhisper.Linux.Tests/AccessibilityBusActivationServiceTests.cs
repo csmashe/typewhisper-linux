@@ -94,10 +94,26 @@ public sealed class AccessibilityBusActivationServiceTests
     public async Task SetActivatedAsync_reports_failure_when_primary_write_fails()
     {
         var runner = new FakeProcessRunner();
-        runner.FailWhen((file, args) => args.Contains("set-property") && args.Contains("IsEnabled"));
+        runner.FailWhen((_, args) => args.Contains("set-property") && args.Contains("IsEnabled"));
         var service = new AccessibilityBusActivationService(runner);
 
         Assert.False(await service.SetActivatedAsync(true));
+    }
+
+    [Fact]
+    public async Task SetActivatedAsync_true_skips_screen_reader_write_when_primary_write_fails()
+    {
+        // ScreenReaderEnabled alone is useless and would orphan global state we reported as failed.
+        var runner = new FakeProcessRunner();
+        runner.FailWhen((_, args) => args.Contains("set-property") && args.Contains("IsEnabled"));
+        var service = new AccessibilityBusActivationService(runner);
+
+        await service.SetActivatedAsync(true);
+
+        Assert.DoesNotContain(
+            runner.Invocations,
+            i => i.Args.Contains("set-property") && i.Args.Contains("ScreenReaderEnabled")
+        );
     }
 
     [Fact]

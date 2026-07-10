@@ -27,8 +27,11 @@ public interface IAccessibilityBusActivation
 
     /// <summary>
     ///     Sets <c>org.a11y.Status.IsEnabled</c> (and <c>ScreenReaderEnabled</c>, which
-    ///     Chromium/Electron also key off) on the session bus. Runtime-only — the value
-    ///     resets at logout. Returns <c>true</c> when the write succeeded.
+    ///     Chromium/Electron also key off) on the session bus. Where a GSettings/dconf backend
+    ///     is present the a11y launcher mirrors these to
+    ///     <c>org.gnome.desktop.interface toolkit-accessibility</c>, so the change can persist
+    ///     across sessions rather than resetting at logout. Returns <c>true</c> when the write
+    ///     succeeded.
     /// </summary>
     Task<bool> SetActivatedAsync(bool enabled, CancellationToken ct = default);
 }
@@ -87,7 +90,16 @@ public sealed class AccessibilityBusActivationService : IAccessibilityBusActivat
         // is set alongside it because some Chromium builds check that one instead. The result of
         // the primary write is what we report; the secondary is best-effort.
         var ok = await SetPropertyAsync("IsEnabled", enabled, ct).ConfigureAwait(false);
-        await SetPropertyAsync("ScreenReaderEnabled", enabled, ct).ConfigureAwait(false);
+
+        // When enabling, only mirror to ScreenReaderEnabled if the primary gate actually took:
+        // turning the screen-reader flag on by itself does nothing useful and would leave
+        // orphaned global state we just reported as failed. When disabling, always clear it so
+        // nothing is left behind.
+        if (ok || !enabled)
+        {
+            await SetPropertyAsync("ScreenReaderEnabled", enabled, ct).ConfigureAwait(false);
+        }
+
         return ok;
     }
 

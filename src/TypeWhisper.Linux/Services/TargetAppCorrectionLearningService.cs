@@ -214,6 +214,19 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             return;
         }
 
+        // If the field the dictation actually landed in is itself a password field, abort the
+        // whole arm — do not fall back to same-app siblings below. The inserted text IS the
+        // secret, and a sibling that happened to contain it would leak password-derived text
+        // into learned corrections. (An indeterminate role is not treated as a password here;
+        // it still falls through and is failed-closed per candidate during the read below.)
+        var focusedPassword = await _client.IsPasswordFieldAsync(element).ConfigureAwait(false);
+        if (focusedPassword == true)
+        {
+            Trace.WriteLine("[TargetAppLearning] Focused element is a password field; skipping.");
+            Disarm();
+            return;
+        }
+
         // Some apps (LibreOffice Writer) flap the AT-SPI focused state between the caret's
         // text widget and a structural pane with no readable text, so the newest focused
         // element is not always the one the dictation landed in. Try it first, then fall back
@@ -251,8 +264,9 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         AtSpiElementRef? anchored = null;
         // Fail closed per candidate: only read text from elements positively known to be a
         // non-password role — null (role unreadable) counts as unsafe. Verdicts are cached so
-        // retry attempts don't re-issue role reads.
-        var safeToRead = new Dictionary<AtSpiElementRef, bool>();
+        // retry attempts don't re-issue role reads; the focused element's verdict is already
+        // known from the password guard above.
+        var safeToRead = new Dictionary<AtSpiElementRef, bool> { [element] = focusedPassword == false };
         for (var attempt = 0; attempt < 3 && anchored is null; attempt++)
         {
             if (attempt > 0)

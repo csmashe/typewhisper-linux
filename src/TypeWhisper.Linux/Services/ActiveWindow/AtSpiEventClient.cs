@@ -84,7 +84,6 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     private AtSpiElementRef? _currentFocused;
     private DBusConnection? _connection;
-    private bool _available;
     private bool _disposed;
     private bool _loggedUnavailable;
     private bool _started;
@@ -141,13 +140,13 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
-    public bool IsRunning => _available;
+    public bool IsRunning { get; private set; }
 
     public async Task<bool> EnsureStartedAsync()
     {
         if (_started)
         {
-            return _available;
+            return IsRunning;
         }
 
         await _startGate.WaitAsync().ConfigureAwait(false);
@@ -155,11 +154,11 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         {
             if (_started)
             {
-                return _available;
+                return IsRunning;
             }
 
             var started = await TryStartAsync().ConfigureAwait(false);
-            _available = started;
+            IsRunning = started;
             // Only cache success. On failure TryStartAsync has already torn down any partial
             // connection, so leaving _started false lets a later call retry (e.g. the a11y bus
             // became available, or a transient connect error cleared).
@@ -194,7 +193,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             // Reset so the next EnsureStartedAsync reconnects fresh rather than returning
             // the stale cached availability.
             _started = false;
-            _available = false;
+            IsRunning = false;
 
             lock (_focusLock)
             {

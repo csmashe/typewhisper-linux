@@ -18,6 +18,7 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 // ReSharper disable UnusedParameterInPartialMethod
 public partial class DictationSectionViewModel : ObservableObject
 {
+    // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym (a + 11 letters + y) mirroring the org.a11y.Bus service name; ReSharper's camelCase splitter mis-reads "11y" and wants the non-standard "a11YBus".
     private readonly IAccessibilityBusActivation _a11yBus;
     private readonly AudioRecordingService _audio;
     private readonly SystemCommandAvailabilityService _commands;
@@ -71,8 +72,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
     // True only when TypeWhisper turned the bridge on this session. Gates the Remove action so
     // we never offer to disable a session-global accessibility flag a screen reader or other
-    // tool enabled. The flag resets at logout, so ownership is deliberately not persisted —
-    // after an app restart we simply stop offering removal rather than risk a false claim.
+    // tool enabled. Ownership is deliberately not persisted: the flag is dconf-backed and can
+    // survive a restart, and another tool may have changed it while we were closed, so after a
+    // restart we stop offering removal rather than risk a false claim.
     private bool _bridgeEnabledByThisApp;
 
     [ObservableProperty]
@@ -193,6 +195,7 @@ public partial class DictationSectionViewModel : ObservableObject
         ISettingsService settings,
         PluginManager pluginManager,
         SystemCommandAvailabilityService commands,
+        // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus
     )
     {
@@ -1356,8 +1359,8 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 
     // Turns the session-bus accessibility bridge on so Electron/Chromium/Qt apps expose their
-    // text to correction learning. Runtime-only (resets at logout); an already-running target
-    // app must be restarted to pick it up, which the status message calls out.
+    // text to correction learning. An already-running target app must be restarted to pick it
+    // up, which the status message calls out.
     [RelayCommand]
     private Task EnableAccessibilityBridge()
     {
@@ -1372,12 +1375,34 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private async Task ToggleAccessibilityBridgeAsync(bool enable)
     {
-        var ok = await _a11yBus.SetActivatedAsync(enable);
-        if (ok)
+        bool ok;
+        if (enable)
         {
-            // Remember we own the bridge only after a successful enable; a successful remove
-            // clears ownership. See ShowAccessibilityBridgeRemove for why this gates the button.
-            _bridgeEnabledByThisApp = enable;
+            // Flip the bridge on only when we can confirm it is currently off. AccessibilityBridgeActivated
+            // is read asynchronously and defaults to false, so the Enable button can be showing over a
+            // bridge a screen reader already turned on — blindly re-writing would re-assert persistent
+            // global accessibility flags we won't offer a Remove for, leaving no in-app undo. So we no-op
+            // an already-on bridge, fail an indeterminate read, and claim ownership only on a flip we made.
+            var current = await _a11yBus.IsActivatedAsync();
+            if (current == false)
+            {
+                ok = await _a11yBus.SetActivatedAsync(true);
+                _bridgeEnabledByThisApp = ok;
+            }
+            else
+            {
+                ok = current == true;
+            }
+        }
+        else
+        {
+            ok = await _a11yBus.SetActivatedAsync(false);
+            if (ok)
+            {
+                // A successful remove always clears ownership. See ShowAccessibilityBridgeRemove
+                // for why this gates the button.
+                _bridgeEnabledByThisApp = false;
+            }
         }
 
         await RefreshAccessibilityBridgeStateAsync();
