@@ -183,7 +183,7 @@
   "Dictation.AutoLearnCorrectionsHint": "When you edit a history item, clear phrase-level suggestions can be learned immediately.",
   "Dictation.TargetAppCorrectionLearning": "Learn corrections from other apps",
   "Dictation.TargetAppCorrectionLearningHint": "When you type over a dictated word in another app to fix it, TypeWhisper silently learns the correction and applies it to future dictations. Reads the focused text field; off by default.",
-  "Dictation.A11yBridgeSetupExplanation": "You're on Hyprland, which doesn't enable the accessibility bridge that lets apps expose their text. Correction learning needs it. Enable it below, then restart the app you want to learn from — Electron apps like VS Code only pick it up when they launch.",
+  "Dictation.A11yBridgeSetupExplanation": "Your desktop session hasn't enabled the accessibility bridge that lets apps expose their text. Correction learning needs it for Chromium/Electron apps like VS Code and for Qt apps. Enable it below, then restart the app you want to learn from — those apps only pick it up when they launch.",
   "Dictation.A11yBridgeEnableButton": "Enable accessibility bridge",
   "Dictation.A11yBridgeRemoveExplanation": "The accessibility bridge is enabled. It activates accessibility for all apps, which adds a small overhead. You can remove it if you stop using correction learning.",
   "Dictation.A11yBridgeRemoveButton": "Remove accessibility bridge",

@@ -63,9 +63,13 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _targetAppCorrectionLearningEnabled;
 
     // Reflects org.a11y.Status.IsEnabled on the session bus. Drives which of the
-    // Hyprland accessibility-bridge buttons (enable vs remove) is shown.
+    // accessibility-bridge buttons (enable vs remove) is shown.
     [ObservableProperty]
     private bool _accessibilityBridgeActivated;
+
+    // Set once the flag has been successfully read from the session bus; until then neither
+    // bridge button is offered (a toggle on an unreadable bus could only fail).
+    private bool _accessibilityBridgeStateKnown;
 
     [ObservableProperty]
     private string _accessibilityBridgeStatus = "";
@@ -252,8 +256,8 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshDevices();
         RefreshFromSettings(_settings.Current);
 
-        // Read the current accessibility-bridge flag so the Hyprland enable/remove button
-        // reflects reality on first paint (Hyprland-only; the call no-ops elsewhere).
+        // Read the current accessibility-bridge flag so the enable/remove button reflects
+        // reality on first paint.
         _ = RefreshAccessibilityBridgeStateAsync();
     }
 
@@ -328,18 +332,20 @@ public partial class DictationSectionViewModel : ObservableObject
     public string SoundFeedbackUnavailableReason =>
         Loc.Instance["Dictation.AudioPlayerUnavailable"];
 
-    // Hyprland doesn't enable the accessibility bridge that lets apps expose their text, so
-    // correction learning can't read them until it's turned on. Offer the enable button only
-    // when the feature is on and the bridge is off; offer removal only when WE turned it on
-    // this session — the flag is session-global, so a screen reader or other tool may have
-    // enabled it and we must never present a button that disables their accessibility.
+    // Most desktops (GNOME through 50, Hyprland/wlroots) leave the session accessibility
+    // flag off, and Chromium/Electron and Qt apps won't expose their text to correction
+    // learning until it's on. Offer the enable button only when the feature is on, the flag
+    // was positively read as off (never on systems where it can't be read — the click would
+    // just fail), and offer removal only when WE turned it on this session — the flag is
+    // session-global, so a screen reader or other tool may have enabled it and we must never
+    // present a button that disables their accessibility.
     public bool ShowAccessibilityBridgeSetup =>
-        _a11yBus.IsHyprlandSession
+        _accessibilityBridgeStateKnown
         && TargetAppCorrectionLearningEnabled
         && !AccessibilityBridgeActivated;
 
     public bool ShowAccessibilityBridgeRemove =>
-        _a11yBus.IsHyprlandSession && AccessibilityBridgeActivated && _bridgeEnabledByThisApp;
+        AccessibilityBridgeActivated && _bridgeEnabledByThisApp;
 
     public bool CanDeleteSelectedModel =>
         SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
@@ -1416,15 +1422,17 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private async Task RefreshAccessibilityBridgeStateAsync()
     {
-        if (!_a11yBus.IsHyprlandSession)
-        {
-            return;
-        }
-
         var activated = await _a11yBus.IsActivatedAsync();
         if (activated is { } value)
         {
-            Dispatcher.UIThread.Post(() => AccessibilityBridgeActivated = value);
+            Dispatcher.UIThread.Post(() =>
+            {
+                _accessibilityBridgeStateKnown = true;
+                AccessibilityBridgeActivated = value;
+                // The activated setter only notifies on a change; the state-known flip alone
+                // (false -> false read) must still reveal the setup panel.
+                OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
+            });
         }
     }
 

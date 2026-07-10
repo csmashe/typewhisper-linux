@@ -183,7 +183,7 @@
   "Dictation.AutoLearnCorrectionsHint": "Cuando editas un elemento del historial, las sugerencias claras a nivel de frase pueden aprenderse de inmediato.",
   "Dictation.TargetAppCorrectionLearning": "Aprender correcciones de otras apps",
   "Dictation.TargetAppCorrectionLearningHint": "Cuando escribes sobre una palabra dictada en otra app para corregirla, TypeWhisper aprende la corrección de forma silenciosa y la aplica a los dictados futuros. Lee el campo de texto enfocado; desactivado de forma predeterminada.",
-  "Dictation.A11yBridgeSetupExplanation": "Estás en Hyprland, que no activa el puente de accesibilidad que permite a las apps exponer su texto. El aprendizaje de correcciones lo necesita. Actívalo abajo y luego reinicia la app de la que quieres aprender: las apps de Electron como VS Code solo lo detectan al iniciarse.",
+  "Dictation.A11yBridgeSetupExplanation": "Tu sesión de escritorio no ha activado el puente de accesibilidad que permite a las apps exponer su texto. El aprendizaje de correcciones lo necesita para apps de Chromium/Electron como VS Code y para apps de Qt. Actívalo abajo y luego reinicia la app de la que quieres aprender: esas apps solo lo detectan al iniciarse.",
   "Dictation.A11yBridgeEnableButton": "Activar puente de accesibilidad",
   "Dictation.A11yBridgeRemoveExplanation": "El puente de accesibilidad está activado. Activa la accesibilidad para todas las apps, lo que añade una pequeña sobrecarga. Puedes quitarlo si dejas de usar el aprendizaje de correcciones.",
   "Dictation.A11yBridgeRemoveButton": "Quitar puente de accesibilidad",

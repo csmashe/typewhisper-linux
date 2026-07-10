@@ -421,8 +421,9 @@
                                               HorizontalAlignment="Right" />
                             </Grid>
 
-                            <!-- Hyprland only: the accessibility bridge is off, so correction
-                                 learning can't read other apps until the user enables it. -->
+                            <!-- The session accessibility flag is off, so Chromium/Electron
+                                 and Qt apps won't expose text to correction learning until
+                                 the user enables it. -->
                             <Border IsVisible="{Binding ShowAccessibilityBridgeSetup}"
                                     Background="#14D6B45F"
                                     BorderBrush="#33D6B45F"
@@ -440,8 +441,8 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- Hyprland only: the bridge is on (we or the user turned it on);
-                                 offer to remove it. -->
+                            <!-- The bridge is on and this app turned it on; offer to remove
+                                 it. -->
                             <Border IsVisible="{Binding ShowAccessibilityBridgeRemove}"
                                     Background="#0FFFFFFF"
                                     BorderBrush="#1AFFFFFF"

@@ -4,21 +4,16 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
 ///     Reads and toggles the session-bus accessibility activation flag
-///     (<c>org.a11y.Status.IsEnabled</c>). Chromium/Electron and Qt apps only build and
-///     publish their accessibility tree when this flag is <c>true</c>; GNOME/Cinnamon set
-///     it at login, but bare wlroots sessions (Hyprland) leave it <c>false</c>, so those
-///     apps expose no readable text and target-app correction learning silently no-ops.
-///     Behind an interface so the settings ViewModel can be unit-tested with a fake.
+///     (<c>org.a11y.Status.IsEnabled</c>). GTK apps expose their accessibility tree
+///     unconditionally, but Chromium/Electron (VS Code) and Qt apps only build theirs when
+///     this flag is <c>true</c> at app launch — and most desktops leave it <c>false</c> by
+///     default (GNOME through 50 mirrors the gsettings <c>toolkit-accessibility</c> key,
+///     whose default is false; bare wlroots sessions like Hyprland set nothing at all), so
+///     those apps expose no readable text and target-app correction learning silently
+///     no-ops. Behind an interface so the settings ViewModel can be unit-tested with a fake.
 /// </summary>
 public interface IAccessibilityBusActivation
 {
-    /// <summary>
-    ///     <c>true</c> on a Hyprland session — where the accessibility bridge is not managed
-    ///     by the desktop, so TypeWhisper offers to toggle it. Other desktops either manage it
-    ///     themselves (GNOME/Cinnamon) or are out of scope, so the setup UI stays hidden there.
-    /// </summary>
-    bool IsHyprlandSession { get; }
-
     /// <summary>
     ///     Reads <c>org.a11y.Status.IsEnabled</c> from the session bus. Returns <c>null</c>
     ///     when the value can't be determined (busctl missing, bus unreachable, unparsable).
@@ -50,13 +45,6 @@ public sealed class AccessibilityBusActivationService : IAccessibilityBusActivat
     {
         _processRunner = processRunner;
     }
-
-    public bool IsHyprlandSession =>
-        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE"))
-        || (Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP") ?? string.Empty).Contains(
-            "Hyprland",
-            StringComparison.OrdinalIgnoreCase
-        );
 
     public async Task<bool?> IsActivatedAsync(CancellationToken ct = default)
     {

@@ -5,8 +5,7 @@ namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
 ///     Covers <see cref="AccessibilityBusActivationService" />: parsing the busctl
-///     get-property output, issuing the correct set-property calls, failure handling,
-///     and Hyprland session detection.
+///     get-property output, issuing the correct set-property calls, and failure handling.
 /// </summary>
 public sealed class AccessibilityBusActivationServiceTests
 {
@@ -116,41 +115,4 @@ public sealed class AccessibilityBusActivationServiceTests
         );
     }
 
-    [Fact]
-    public void IsHyprlandSession_true_when_instance_signature_present()
-    {
-        var sig = Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE");
-        var desktop = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
-        try
-        {
-            Environment.SetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE", "abc123");
-            Environment.SetEnvironmentVariable("XDG_CURRENT_DESKTOP", "");
-            var service = new AccessibilityBusActivationService(new FakeProcessRunner());
-            Assert.True(service.IsHyprlandSession);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE", sig);
-            Environment.SetEnvironmentVariable("XDG_CURRENT_DESKTOP", desktop);
-        }
-    }
-
-    [Fact]
-    public void IsHyprlandSession_false_on_gnome()
-    {
-        var sig = Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE");
-        var desktop = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
-        try
-        {
-            Environment.SetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE", null);
-            Environment.SetEnvironmentVariable("XDG_CURRENT_DESKTOP", "GNOME");
-            var service = new AccessibilityBusActivationService(new FakeProcessRunner());
-            Assert.False(service.IsHyprlandSession);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE", sig);
-            Environment.SetEnvironmentVariable("XDG_CURRENT_DESKTOP", desktop);
-        }
-    }
 }
