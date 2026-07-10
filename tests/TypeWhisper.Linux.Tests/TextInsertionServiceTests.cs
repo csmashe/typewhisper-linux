@@ -1760,6 +1760,11 @@ public sealed class TextInsertionServiceTests
             return [];
         }
 
+        public Task PokeAccessibilityTreesAsync()
+        {
+            return Task.CompletedTask;
+        }
+
         public bool HasTextChangedSubscribers => TextChanged is not null;
 
         public Task<bool> EnsureStartedAsync()

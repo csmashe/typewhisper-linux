@@ -197,20 +197,29 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
 
         EnsureSubscribed();
 
+        // Re-check opt-out after EnsureStartedAsync: the user could have disabled the feature
+        // while it was connecting. Disable runs StopAsync on a separate gate and does not
+        // serialize with this fire-and-forget arm, so we must not do further accessibility
+        // work after opt-out. (Re-checked again immediately before the text read below.)
+        if (IsOptedOut())
+        {
+            Disarm();
+            return;
+        }
+
+        // Unlock any Chromium/Electron app that joined the a11y bus since the client started
+        // (their tree stays a stub until poked — see PokeAccessibilityTreesAsync). Runs after
+        // the opt-out re-check above so a disable mid-connect stops this cross-app sweep, but
+        // before the focused-element check below so a late app that exposes no focused node
+        // yet — the bootstrap case this sweep exists for — is still unlocked for its next arm.
+        // Fire-and-forget: the unlock takes effect for the NEXT dictation into that app;
+        // holding this arm for it would delay every arm for a rare first-contact case.
+        _ = _client.PokeAccessibilityTreesAsync();
+
         var focused = _client.CurrentFocusedElement;
         if (focused is not { IsValid: true } element)
         {
             Trace.WriteLine("[TargetAppLearning] No focused AT-SPI element to track; skipping.");
-            return;
-        }
-
-        // Re-check opt-out after EnsureStartedAsync: the user could have disabled the feature
-        // while it was connecting. Disable runs StopAsync on a separate gate and does not
-        // serialize with this fire-and-forget arm, so we must not do further accessibility
-        // reads after opt-out. (Re-checked again immediately before the text read below.)
-        if (IsOptedOut())
-        {
-            Disarm();
             return;
         }
 
@@ -576,6 +585,17 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 if (await _client.EnsureStartedAsync().ConfigureAwait(false))
                 {
                     EnsureSubscribed();
+
+                    // Unlock already-running Chromium/Electron apps now that the feature is on
+                    // (their tree stays a stub until poked — see PokeAccessibilityTreesAsync).
+                    // Re-check consent after the connect await: a disable during EnsureStartedAsync
+                    // is queued behind _listenGate and runs its teardown next, so we must not
+                    // launch the cross-app sweep once the setting has flipped off. Later arms
+                    // re-poke any app that joined the bus after this.
+                    if (!_disposed && _settings.Current.TargetAppCorrectionLearningEnabled)
+                    {
+                        _ = _client.PokeAccessibilityTreesAsync();
+                    }
                 }
                 else
                 {

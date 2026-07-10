@@ -139,6 +139,20 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Arm_PokesAccessibilityTrees_ToUnlockChromiumApps()
+    {
+        // Chromium/Electron apps expose a stub tree until an AT touches it; every arm must
+        // fire the unlock sweep so apps launched after the client started become readable.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "hello world";
+        await service.ArmAsync("hello world");
+
+        Assert.True(client.PokeCalls >= 1);
+    }
+
+    [Fact]
     public async Task Arm_FocusOutWithoutEdit_LearnsNothing()
     {
         var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
@@ -964,6 +978,14 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         public IReadOnlyList<AtSpiElementRef> GetRecentFocusedElements()
         {
             return [.. RecentFocusedElements];
+        }
+
+        public int PokeCalls { get; private set; }
+
+        public Task PokeAccessibilityTreesAsync()
+        {
+            PokeCalls++;
+            return Task.CompletedTask;
         }
 
         public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)

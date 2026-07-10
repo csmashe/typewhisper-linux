@@ -77,4 +77,14 @@ public interface IAtSpiEventClient
     ///     — this guards a privacy boundary, so "unknown" must never be read as "safe".
     /// </summary>
     Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element);
+
+    /// <summary>
+    ///     Best-effort sweep over the applications on the a11y bus, touching each unseen
+    ///     app's tree once (Accessible.GetAttributes/GetRelationSet). Chromium/Electron apps
+    ///     expose only a stub tree until an assistive tool makes such a call — it is their
+    ///     "someone is reading me" signal — so this unlocks their text for correction
+    ///     learning. Harmless no-op for other toolkits; per-app failures are swallowed.
+    ///     No-op when the client is not connected.
+    /// </summary>
+    Task PokeAccessibilityTreesAsync();
 }

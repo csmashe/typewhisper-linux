@@ -74,12 +74,12 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty]
     private string _accessibilityBridgeStatus = "";
 
-    // True only when TypeWhisper turned the bridge on this session. Gates the Remove action so
-    // we never offer to disable a session-global accessibility flag a screen reader or other
-    // tool enabled. Ownership is deliberately not persisted: the flag is dconf-backed and can
-    // survive a restart, and another tool may have changed it while we were closed, so after a
-    // restart we stop offering removal rather than risk a false claim.
-    private bool _bridgeEnabledByThisApp;
+    // Ownership of the bridge flag (did TypeWhisper turn it on?) lives in persisted settings
+    // (AppSettings.AccessibilityBridgeEnabledByApp) so the Remove button survives app
+    // restarts — the flag itself is dconf-backed on GNOME and outlives the session, so a
+    // session-only memory would strand users with no in-app undo. Removal is still never
+    // offered for a flag some other tool (screen reader) enabled: only a flip WE made while
+    // it read as off records ownership.
 
     [ObservableProperty]
     private bool _autoPaste;
@@ -345,7 +345,7 @@ public partial class DictationSectionViewModel : ObservableObject
         && !AccessibilityBridgeActivated;
 
     public bool ShowAccessibilityBridgeRemove =>
-        AccessibilityBridgeActivated && _bridgeEnabledByThisApp;
+        AccessibilityBridgeActivated && _settings.Current.AccessibilityBridgeEnabledByApp;
 
     public bool CanDeleteSelectedModel =>
         SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
@@ -717,6 +717,9 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
         OnPropertyChanged(nameof(SelectedAccelerationOption));
         OnPropertyChanged(nameof(AccelerationStatusText));
+        // Remove-button visibility reads AccessibilityBridgeEnabledByApp from settings, so a
+        // reload (e.g. backup restore) must re-notify it or the button can go stale.
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
         RefreshModelState();
     }
 
@@ -1393,7 +1396,12 @@ public partial class DictationSectionViewModel : ObservableObject
             if (current == false)
             {
                 ok = await _a11yBus.SetActivatedAsync(true);
-                _bridgeEnabledByThisApp = ok;
+                if (ok)
+                {
+                    _settings.Save(
+                        _settings.Current with { AccessibilityBridgeEnabledByApp = true }
+                    );
+                }
             }
             else
             {
@@ -1407,7 +1415,9 @@ public partial class DictationSectionViewModel : ObservableObject
             {
                 // A successful remove always clears ownership. See ShowAccessibilityBridgeRemove
                 // for why this gates the button.
-                _bridgeEnabledByThisApp = false;
+                _settings.Save(
+                    _settings.Current with { AccessibilityBridgeEnabledByApp = false }
+                );
             }
         }
 

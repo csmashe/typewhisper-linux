@@ -31,6 +31,11 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private const string RegistryBusName = "org.a11y.atspi.Registry";
     private const string RegistryPath = "/org/a11y/atspi/registry";
     private const string RegistryInterface = "org.a11y.atspi.Registry";
+    private const string RegistryRootPath = "/org/a11y/atspi/accessible/root";
+
+    // How many top-level children (windows) of each application root get the Chromium
+    // unlock poke; one window is the normal case, a few more cover multi-window apps.
+    private const int MaxPokedChildren = 4;
 
     private const string EventObjectInterface = "org.a11y.atspi.Event.Object";
     private const string TextInterface = "org.a11y.atspi.Text";
@@ -58,6 +63,24 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private static readonly MessageValueReader<uint> s_readUInt32 =
         static (m, _) => m.GetBodyReader().ReadUInt32();
 
+    // Reads a D-Bus a(so) array — the (unique bus name, object path) pairs the registry
+    // and Accessible.GetChildren return.
+    private static readonly MessageValueReader<List<AtSpiElementRef>> s_readElementRefArray =
+        static (m, _) =>
+        {
+            var reader = m.GetBodyReader();
+            var list = new List<AtSpiElementRef>();
+            var end = reader.ReadArrayStart(DBusType.Struct);
+            while (reader.HasNext(end))
+            {
+                var bus = reader.ReadString();
+                var path = reader.ReadObjectPath().ToString();
+                list.Add(new AtSpiElementRef(bus, path));
+            }
+
+            return list;
+        };
+
     // Reads the leading (detail: string, detail1: int) of an AT-SPI event body
     // (full signature "siiv(so)"); the source element is taken from the message
     // header (sender + path), matching how libatspi/pyatspi derive event.source.
@@ -81,6 +104,10 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     // Bounded most-recent-first focus history behind _focusLock; see GetRecentFocusedElements.
     private readonly List<AtSpiElementRef> _recentFocused = [];
+
+    // Unique bus names already sent the Chromium web-content unlock poke on the current
+    // connection (unique names are never recycled within a bus lifetime). Behind _focusLock.
+    private readonly HashSet<string> _pokedApps = [];
 
     private AtSpiElementRef? _currentFocused;
     private DBusConnection? _connection;
@@ -199,6 +226,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             {
                 _currentFocused = null;
                 _recentFocused.Clear();
+                // Unique names may outlive our connection, but a fresh connection re-pokes
+                // cheaply and correctly (apps keep their unlocked state anyway).
+                _pokedApps.Clear();
             }
         }
         finally
@@ -281,6 +311,149 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             // indeterminate so the caller skips rather than risk reading a password field.
             return null;
         }
+    }
+
+    public async Task PokeAccessibilityTreesAsync()
+    {
+        var conn = _connection;
+        if (conn is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var apps = await GetChildrenAsync(conn, RegistryBusName, RegistryRootPath)
+                .ConfigureAwait(false);
+            foreach (var app in apps)
+            {
+                bool alreadyPoked;
+                lock (_focusLock)
+                {
+                    alreadyPoked = !_pokedApps.Add(app.BusName);
+                }
+
+                if (alreadyPoked)
+                {
+                    continue;
+                }
+
+                // Fire-and-forget per app: a hung target must not stall the sweep. The
+                // optimistic Add above dedupes concurrent sweeps; on failure we un-mark the
+                // app so a later arm retries it — a transient D-Bus error must never leave an
+                // app permanently skipped with its tree still locked.
+                _ = PokeAppAndTrackAsync(conn, app);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[AtSpiEventClient] a11y app enumeration for poke failed: {ex.Message}");
+        }
+    }
+
+    private async Task PokeAppAndTrackAsync(DBusConnection conn, AtSpiElementRef appRoot)
+    {
+        if (!await PokeAppAsync(conn, appRoot).ConfigureAwait(false))
+        {
+            lock (_focusLock)
+            {
+                _pokedApps.Remove(appRoot.BusName);
+            }
+        }
+    }
+
+    // Chromium/Electron apps join the a11y bus (when org.a11y.Status.IsEnabled was true at
+    // their launch) but expose only their application root and toplevel window until an
+    // assistive tool calls GetAttributes or GetRelationSet on one of their nodes — that call
+    // is Chromium's "a screen reader is actually reading me" signal and switches the web
+    // content (editor) tree on. Touch the app root and its first few children; results are
+    // discarded, only the calls matter. Harmless no-op for every other toolkit. Each node/call
+    // is isolated (see TouchElementAsync), so one unavailable member or defunct child never
+    // skips the rest. Returns false only when nothing reached the app at all, so the caller can
+    // un-mark it for a later retry; a partial success still counts as poked.
+    private static async Task<bool> PokeAppAsync(DBusConnection conn, AtSpiElementRef appRoot)
+    {
+        var anyTouched = await TouchElementAsync(conn, appRoot).ConfigureAwait(false);
+
+        List<AtSpiElementRef> children;
+        try
+        {
+            children = await GetChildrenAsync(conn, appRoot.BusName, appRoot.ObjectPath)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // The app may have exited or not expose GetChildren; the root touch above may
+            // still have unlocked it, so report whatever it achieved.
+            Trace.WriteLine(
+                $"[AtSpiEventClient] a11y child enumeration of {appRoot.BusName} failed: {ex.Message}"
+            );
+            return anyTouched;
+        }
+
+        foreach (var child in children.Take(MaxPokedChildren))
+        {
+            anyTouched |= await TouchElementAsync(conn, child).ConfigureAwait(false);
+        }
+
+        return anyTouched;
+    }
+
+    // Issues both Chromium unlock triggers (GetAttributes, GetRelationSet) on one node,
+    // independently: one being unavailable or failing must not skip the other. Returns true if
+    // at least one call succeeded.
+    private static async Task<bool> TouchElementAsync(DBusConnection conn, AtSpiElementRef element)
+    {
+        var touched = false;
+        foreach (var member in (string[])["GetAttributes", "GetRelationSet"])
+        {
+            try
+            {
+                MessageBuffer message;
+                using (var writer = conn.GetMessageWriter())
+                {
+                    writer.WriteMethodCallHeader(
+                        destination: element.BusName,
+                        path: element.ObjectPath,
+                        @interface: AccessibleInterface,
+                        member: member
+                    );
+                    message = writer.CreateMessage();
+                }
+
+                await conn.CallMethodAsync(message).ConfigureAwait(false);
+                touched = true;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[AtSpiEventClient] a11y {member} on {element.BusName} failed: {ex.Message}"
+                );
+            }
+        }
+
+        return touched;
+    }
+
+    private static async Task<List<AtSpiElementRef>> GetChildrenAsync(
+        DBusConnection conn,
+        string busName,
+        string objectPath
+    )
+    {
+        MessageBuffer message;
+        using (var writer = conn.GetMessageWriter())
+        {
+            writer.WriteMethodCallHeader(
+                destination: busName,
+                path: objectPath,
+                @interface: AccessibleInterface,
+                member: "GetChildren"
+            );
+            message = writer.CreateMessage();
+        }
+
+        return await conn.CallMethodAsync(message, s_readElementRefArray).ConfigureAwait(false);
     }
 
     private async Task<bool> TryStartAsync()
