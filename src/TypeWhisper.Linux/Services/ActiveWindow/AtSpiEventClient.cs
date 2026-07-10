@@ -40,6 +40,11 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private const string FocusedStateName = "focused";
     private const int StateGained = 1;
 
+    // LibreOffice Writer alternates focus between the caret paragraph and the document's
+    // root pane, so two entries would suffice there; a few more absorb apps that flap
+    // across additional structural nodes.
+    private const int RecentFocusCapacity = 8;
+
     // AtspiRole.PASSWORD_TEXT — confirmed against the existing extractor's role numbering
     // (ROLE_FRAME = 23) which shares the same AtspiRole enum.
     private const uint RolePasswordText = 40;
@@ -73,6 +78,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private readonly IErrorLogService _errorLog;
     private readonly Lock _focusLock = new();
     private readonly SemaphoreSlim _startGate = new(1, 1);
+
+    // Bounded most-recent-first focus history behind _focusLock; see GetRecentFocusedElements.
+    private readonly List<AtSpiElementRef> _recentFocused = [];
 
     private AtSpiElementRef? _currentFocused;
     private DBusConnection? _connection;
@@ -122,6 +130,14 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             {
                 return _currentFocused;
             }
+        }
+    }
+
+    public IReadOnlyList<AtSpiElementRef> GetRecentFocusedElements()
+    {
+        lock (_focusLock)
+        {
+            return [.. _recentFocused];
         }
     }
 
@@ -183,6 +199,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             lock (_focusLock)
             {
                 _currentFocused = null;
+                _recentFocused.Clear();
             }
         }
         finally
@@ -371,6 +388,12 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         lock (_focusLock)
         {
             _currentFocused = element;
+            _recentFocused.Remove(element);
+            _recentFocused.Insert(0, element);
+            if (_recentFocused.Count > RecentFocusCapacity)
+            {
+                _recentFocused.RemoveAt(RecentFocusCapacity);
+            }
         }
 
         // A subscriber throwing here runs on the D-Bus dispatch thread and would fault the

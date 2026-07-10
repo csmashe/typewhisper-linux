@@ -16,7 +16,11 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 {
     private static readonly AtSpiElementRef s_field = new("app", "/field/1");
-    private static readonly AtSpiElementRef s_otherField = new("app", "/field/2");
+
+    // A field in a DIFFERENT application: focus moving here ends tracking. Same-app focus
+    // changes deliberately do not (LibreOffice Writer re-asserts focus on structural panes
+    // while the user is still editing the armed field).
+    private static readonly AtSpiElementRef s_otherAppField = new("other-app", "/field/2");
 
     private readonly string _dictionaryPath =
         Path.Join(Path.GetTempPath(), $"tw-dict-{Guid.NewGuid():N}.json");
@@ -50,7 +54,83 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         client.RaiseText(s_field);
 
         // ...then moves focus away, which commits the edit.
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        var correction = Assert.Single(_dictionary.GetCorrections());
+        Assert.Equal("kubernets", correction.Original);
+        Assert.Equal("Kubernetes", correction.Replacement);
+    }
+
+    [Fact]
+    public async Task Arm_FallsBackToRecentSameAppElement_WhenFocusedElementHasNoText()
+    {
+        // LibreOffice Writer: the document's root pane (no Text interface) is the most
+        // recent focused element, while the caret paragraph the dictation landed in sits
+        // one entry back in the focus history.
+        var pane = new AtSpiElementRef("app", "/pane");
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = pane,
+            TextProvider = e => e.Equals(s_field) ? "I deployed to kubernets today" : null
+        };
+        client.RecentFocusedElements.AddRange([pane, s_field]);
+        using var service = CreateService(client, enabled: true);
+
+        await service.ArmAsync("I deployed to kubernets today");
+
+        client.TextProvider = e => e.Equals(s_field) ? "I deployed to Kubernetes today" : null;
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        var correction = Assert.Single(_dictionary.GetCorrections());
+        Assert.Equal("kubernets", correction.Original);
+        Assert.Equal("Kubernetes", correction.Replacement);
+    }
+
+    [Fact]
+    public async Task Arm_IgnoresRecentElementsFromOtherApps()
+    {
+        // The fallback must never read a stale field that belongs to a different
+        // application, even if that field happens to contain the inserted text.
+        var pane = new AtSpiElementRef("app", "/pane");
+        var foreignField = new AtSpiElementRef("foreign-app", "/field/1");
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = pane,
+            TextProvider = e => e.Equals(foreignField) ? "hello world" : null
+        };
+        client.RecentFocusedElements.AddRange([pane, foreignField]);
+        using var service = CreateService(client, enabled: true);
+
+        await service.ArmAsync("hello world");
+
+        // Arming skipped, so an edit in the foreign field must not be learned.
+        client.TextProvider = e => e.Equals(foreignField) ? "hello there world" : null;
+        client.RaiseText(foreignField);
+        client.RaiseFocus(s_otherAppField);
+
+        Assert.Null(service.LastCommitTask);
+        Assert.Empty(_dictionary.GetCorrections());
+    }
+
+    [Fact]
+    public async Task SameAppFocusChange_DoesNotEndTracking()
+    {
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "I deployed to kubernets today";
+        await service.ArmAsync("I deployed to kubernets today");
+
+        // LibreOffice Writer re-asserts focus on the document's root pane between
+        // keystrokes; that must not end tracking of the armed paragraph.
+        client.RaiseFocus(new AtSpiElementRef("app", "/pane"));
+
+        client.TextToReturn = "I deployed to Kubernetes today";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var correction = Assert.Single(_dictionary.GetCorrections());
@@ -68,7 +148,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         await service.ArmAsync("hello world");
 
         // Focus leaves without any text-changed event — nothing to learn.
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
 
         Assert.Null(service.LastCommitTask);
         Assert.Empty(_dictionary.GetCorrections());
@@ -86,7 +166,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // A wholesale rewrite is rejected by CorrectionSuggestionService's safety gates.
         client.TextToReturn = "please send a concise status update instead";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         Assert.Empty(_dictionary.GetCorrections());
@@ -120,7 +200,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "hunter3";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
 
         Assert.Null(service.LastCommitTask);
         Assert.Empty(_dictionary.GetCorrections());
@@ -159,7 +239,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "Kubernetes";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var correction = Assert.Single(_dictionary.GetCorrections());
@@ -180,7 +260,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "email dad";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         Assert.Empty(_dictionary.GetCorrections());
@@ -211,7 +291,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // "Kubernetes now" would widen the replacement — the guard must keep the earlier value.
         client.TextToReturn = "Kubernetes now";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var correction = Assert.Single(_dictionary.GetCorrections());
@@ -248,7 +328,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // names changed, but only the genuinely new edit should be learned.
         client.TextToReturn = "Kim Curris Carrington Quinn";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var corrections = _dictionary.GetCorrections();
@@ -285,7 +365,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "please note Carrington in Smith right here";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var corrections = _dictionary.GetCorrections();
@@ -322,7 +402,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "please open TypeWhisper Carrington now thanks";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var corrections = _dictionary.GetCorrections();
@@ -357,7 +437,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "please open TypeWhisper in Carrington now thanks";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var corrections = _dictionary.GetCorrections();
@@ -380,7 +460,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "deploy Kubernetes clusters";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var correction = Assert.Single(_dictionary.GetCorrections());
@@ -402,7 +482,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "we deploy Kubernetes in clusters now";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var correction = Assert.Single(_dictionary.GetCorrections());
@@ -436,7 +516,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         client.TextToReturn = "the note about Carrington Kubernetes in clusters is here";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var corrections = _dictionary.GetCorrections();
@@ -556,7 +636,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // The user finishes the word and moves on: the final commit re-diffs and overwrites.
         client.TextToReturn = "I deployed to Kubernetes today";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var correction = Assert.Single(_dictionary.GetCorrections());
@@ -584,7 +664,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         client.RaiseText(s_field);
         await AwaitScheduledCommit(service);
 
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         var entry = Assert.Single(
@@ -643,7 +723,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // A subsequent edit + focus-out must not learn anything.
         client.TextToReturn = "I deployed to Kubernetes today";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
 
         Assert.Null(service.LastCommitTask);
         Assert.Empty(_dictionary.GetCorrections());
@@ -672,7 +752,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         settings.Save(AppSettings.Default with { TargetAppCorrectionLearningEnabled = false });
 
         // Focus-out schedules a final commit; the opt-out guard must stop it before the read.
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
         await AwaitCommit(service);
 
         Assert.Equal(1, client.TextReadCalls); // no second read after opt-out
@@ -709,7 +789,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // A later edit + focus-out on the (never-armed) field learns nothing.
         client.TextToReturn = "I deployed to Kubernetes today";
         client.RaiseText(s_field);
-        client.RaiseFocus(s_otherField);
+        client.RaiseFocus(s_otherAppField);
 
         Assert.Null(service.LastCommitTask);
         Assert.Empty(_dictionary.GetCorrections());
@@ -810,7 +890,12 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // null models a role read that could not be determined (fail-closed path).
         public bool? PasswordResult { get; init; } = false;
         public string? TextToReturn { get; set; }
+
+        // Per-element text for candidate-fallback tests; when null, TextToReturn is used
+        // for every element.
+        public Func<AtSpiElementRef, string?>? TextProvider { get; set; }
         public AtSpiElementRef? CurrentFocusedElement { get; set; }
+        public List<AtSpiElementRef> RecentFocusedElements { get; } = [];
         public int EnsureStartedCalls { get; private set; }
         public int TextReadCalls { get; private set; }
         public int StopCalls { get; private set; }
@@ -843,10 +928,15 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
             return Task.CompletedTask;
         }
 
+        public IReadOnlyList<AtSpiElementRef> GetRecentFocusedElements()
+        {
+            return [.. RecentFocusedElements];
+        }
+
         public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)
         {
             TextReadCalls++;
-            return Task.FromResult(TextToReturn);
+            return Task.FromResult(TextProvider is not null ? TextProvider(element) : TextToReturn);
         }
 
         public Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)

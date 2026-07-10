@@ -28,6 +28,15 @@ public interface IAtSpiEventClient
     AtSpiElementRef? CurrentFocusedElement { get; }
 
     /// <summary>
+    ///     Snapshot of distinct recently focused elements, most recent first (the head is
+    ///     <see cref="CurrentFocusedElement" />), bounded to a handful of entries. Some apps
+    ///     (LibreOffice Writer) flap the focused state between the caret's text widget and a
+    ///     structural pane that exposes no text, so the most recent element is not always the
+    ///     readable one — consumers can fall back through this history.
+    /// </summary>
+    IReadOnlyList<AtSpiElementRef> GetRecentFocusedElements();
+
+    /// <summary>
     ///     <c>true</c> while the client holds a live a11y-bus connection with listeners
     ///     registered (a successful <see cref="EnsureStartedAsync" /> not yet undone by
     ///     <see cref="StopAsync" />). Read-only — never connects; consumers that must not

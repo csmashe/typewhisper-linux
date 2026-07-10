@@ -1755,6 +1755,11 @@ public sealed class TextInsertionServiceTests
 
         public bool IsRunning => true;
 
+        public IReadOnlyList<AtSpiElementRef> GetRecentFocusedElements()
+        {
+            return [];
+        }
+
         public bool HasTextChangedSubscribers => TextChanged is not null;
 
         public Task<bool> EnsureStartedAsync()

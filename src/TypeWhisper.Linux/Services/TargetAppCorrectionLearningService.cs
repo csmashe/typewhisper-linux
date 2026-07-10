@@ -30,6 +30,11 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     // field can hold pre-existing surrounding text around the dictated span.
     private const int MaxTrackedTextLength = 8192;
 
+    // How many recently focused same-app elements ArmAsync probes when the newest focused
+    // element can't be anchored. Two covers LibreOffice Writer's paragraph/root-pane flap;
+    // a couple more absorb apps that flap across additional structural nodes.
+    private const int MaxArmCandidates = 4;
+
     // Defaults for the timing seams below. Kept as instance fields (not static readonly) so
     // unit tests can shrink them via the internal constructor without waiting real seconds.
 
@@ -209,15 +214,28 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             return;
         }
 
-        // Fail closed: skip unless the element is positively a non-password role. A null
-        // (indeterminate) result means the role could not be read — never read text then.
-        if (await _client.IsPasswordFieldAsync(element).ConfigureAwait(false) != false)
+        // Some apps (LibreOffice Writer) flap the AT-SPI focused state between the caret's
+        // text widget and a structural pane with no readable text, so the newest focused
+        // element is not always the one the dictation landed in. Try it first, then fall back
+        // through recently focused elements of the same application; the anchoring check
+        // below (the candidate must contain the just-inserted text) is what keeps a stale
+        // sibling from being armed.
+        var candidates = new List<AtSpiElementRef> { element };
+        foreach (var recent in _client.GetRecentFocusedElements())
         {
-            Trace.WriteLine(
-                "[TargetAppLearning] Element is a password field or its role is unknown; skipping."
-            );
-            Disarm();
-            return;
+            if (candidates.Count == MaxArmCandidates)
+            {
+                break;
+            }
+
+            if (
+                recent.IsValid
+                && string.Equals(recent.BusName, element.BusName, StringComparison.Ordinal)
+                && !candidates.Contains(recent)
+            )
+            {
+                candidates.Add(recent);
+            }
         }
 
         // Confirm the field actually contains the text we just inserted before anchoring on
@@ -230,45 +248,58 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         // than the MaxTrackedTextLength read clamp will honestly skip here (the edit past the
         // clamp would be invisible to us anyway).
         string? baseline = null;
-        var anchored = false;
-        for (var attempt = 0; attempt < 3; attempt++)
+        AtSpiElementRef? anchored = null;
+        // Fail closed per candidate: only read text from elements positively known to be a
+        // non-password role — null (role unreadable) counts as unsafe. Verdicts are cached so
+        // retry attempts don't re-issue role reads.
+        var safeToRead = new Dictionary<AtSpiElementRef, bool>();
+        for (var attempt = 0; attempt < 3 && anchored is null; attempt++)
         {
             if (attempt > 0)
             {
                 await Task.Delay(_baselineRetryDelay).ConfigureAwait(false);
             }
 
-            // Re-check opt-out immediately before every text read: a disable during the
-            // password read or a retry delay must stop us reading the target app's text.
-            if (IsOptedOut())
+            foreach (var candidate in candidates)
             {
-                Disarm();
-                return;
-            }
+                // Re-check opt-out immediately before every accessibility read: a disable
+                // during a role read or a retry delay must stop us reading the target app.
+                if (IsOptedOut())
+                {
+                    Disarm();
+                    return;
+                }
 
-            var read = await _client.TryReadTextAsync(element, MaxTrackedTextLength)
-                .ConfigureAwait(false);
-            if (read is null)
-            {
-                continue;
-            }
+                if (!safeToRead.TryGetValue(candidate, out var safe))
+                {
+                    safe =
+                        await _client.IsPasswordFieldAsync(candidate).ConfigureAwait(false)
+                        == false;
+                    safeToRead[candidate] = safe;
+                }
 
-            // Keep the most recent successful read as the candidate baseline.
-            baseline = read;
-            // Positive break reads clearer than a trailing `continue` at the loop tail, which
-            // would skip nothing since the loop re-iterates anyway. Keep found -> anchor -> break.
-            // ReSharper disable once InvertIf
-            if (ContainsCollapsed(read, insertedText))
-            {
-                anchored = true;
+                if (!safe)
+                {
+                    continue;
+                }
+
+                var read = await _client.TryReadTextAsync(candidate, MaxTrackedTextLength)
+                    .ConfigureAwait(false);
+                if (read is null || !ContainsCollapsed(read, insertedText))
+                {
+                    continue;
+                }
+
+                baseline = read;
+                anchored = candidate;
                 break;
             }
         }
 
-        if (!anchored || baseline is null)
+        if (anchored is not { } anchoredElement || baseline is null)
         {
             Trace.WriteLine(
-                "[TargetAppLearning] Baseline could not be anchored to the inserted text; skipping."
+                "[TargetAppLearning] No focused element could be anchored to the inserted text; skipping."
             );
             Disarm();
             return;
@@ -278,7 +309,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         {
             StopTimers();
             var generation = unchecked(++_armGeneration);
-            _armed = new ArmedState(element, baseline, generation);
+            _armed = new ArmedState(anchoredElement, baseline, generation);
             _timeoutTimer = new Timer(
                 static state =>
                 {
@@ -596,15 +627,26 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     {
         lock (_gate)
         {
-            if (_armed is null || _armed.Element.Equals(element))
+            if (
+                _armed is null
+                || string.Equals(
+                    element.BusName,
+                    _armed.Element.BusName,
+                    StringComparison.Ordinal
+                )
+            )
             {
-                // Not tracking, or focus merely re-asserted on the same element.
+                // Not tracking, or focus stayed inside the same application. Same-app focus
+                // changes never end tracking because some apps (LibreOffice Writer) re-assert
+                // focus on structural panes between keystrokes while the user is still editing
+                // the armed field; a genuine move to another field of the same app is covered
+                // by the idle and timeout commits (text-changed matching stays element-exact).
                 return;
             }
         }
 
-        // Focus left the armed element: a FINAL commit — it learns the edit if there was one
-        // and otherwise cleanly disarms.
+        // Focus left the application that owns the armed element: a FINAL commit — it learns
+        // the edit if there was one and otherwise cleanly disarms.
         CommitInBackground(final: true);
     }
 
