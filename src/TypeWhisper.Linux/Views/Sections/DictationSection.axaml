@@ -405,20 +405,66 @@
 
                     <Border Grid.Row="6"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="{loc:Str Dictation.TargetAppCorrectionLearning}"
-                                           Classes="row-label" />
-                                <TextBlock
-                                    Text="{loc:Str Dictation.TargetAppCorrectionLearningHint}"
-                                    FontSize="11"
-                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                            <ToggleSwitch Grid.Column="1"
-                                          IsChecked="{Binding TargetAppCorrectionLearningEnabled}"
-                                          HorizontalAlignment="Right" />
-                        </Grid>
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{loc:Str Dictation.TargetAppCorrectionLearning}"
+                                               Classes="row-label" />
+                                    <TextBlock
+                                        Text="{loc:Str Dictation.TargetAppCorrectionLearningHint}"
+                                        FontSize="11"
+                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ToggleSwitch Grid.Column="1"
+                                              IsChecked="{Binding TargetAppCorrectionLearningEnabled}"
+                                              HorizontalAlignment="Right" />
+                            </Grid>
+
+                            <!-- Hyprland only: the accessibility bridge is off, so correction
+                                 learning can't read other apps until the user enables it. -->
+                            <Border IsVisible="{Binding ShowAccessibilityBridgeSetup}"
+                                    Background="#14D6B45F"
+                                    BorderBrush="#33D6B45F"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    Padding="14,12">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="{loc:Str Dictation.A11yBridgeSetupExplanation}"
+                                               FontSize="12"
+                                               Foreground="#E4C475"
+                                               TextWrapping="Wrap" />
+                                    <Button Content="{loc:Str Dictation.A11yBridgeEnableButton}"
+                                            Command="{Binding EnableAccessibilityBridgeCommand}"
+                                            HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Hyprland only: the bridge is on (we or the user turned it on);
+                                 offer to remove it. -->
+                            <Border IsVisible="{Binding ShowAccessibilityBridgeRemove}"
+                                    Background="#0FFFFFFF"
+                                    BorderBrush="#1AFFFFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    Padding="14,12">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="{loc:Str Dictation.A11yBridgeRemoveExplanation}"
+                                               FontSize="12"
+                                               Foreground="#8A9AAE"
+                                               TextWrapping="Wrap" />
+                                    <Button Content="{loc:Str Dictation.A11yBridgeRemoveButton}"
+                                            Command="{Binding RemoveAccessibilityBridgeCommand}"
+                                            HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="{Binding AccessibilityBridgeStatus}"
+                                       FontSize="12"
+                                       Foreground="#8A9AAE"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding AccessibilityBridgeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
                     </Border>
 
                     <Border Grid.Row="7"

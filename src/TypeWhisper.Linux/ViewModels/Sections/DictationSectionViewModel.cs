@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
@@ -17,6 +18,7 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 // ReSharper disable UnusedParameterInPartialMethod
 public partial class DictationSectionViewModel : ObservableObject
 {
+    private readonly IAccessibilityBusActivation _a11yBus;
     private readonly AudioRecordingService _audio;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly DictationOrchestrator _dictation;
@@ -58,6 +60,20 @@ public partial class DictationSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _targetAppCorrectionLearningEnabled;
+
+    // Reflects org.a11y.Status.IsEnabled on the session bus. Drives which of the
+    // Hyprland accessibility-bridge buttons (enable vs remove) is shown.
+    [ObservableProperty]
+    private bool _accessibilityBridgeActivated;
+
+    [ObservableProperty]
+    private string _accessibilityBridgeStatus = "";
+
+    // True only when TypeWhisper turned the bridge on this session. Gates the Remove action so
+    // we never offer to disable a session-global accessibility flag a screen reader or other
+    // tool enabled. The flag resets at logout, so ownership is deliberately not persisted —
+    // after an app restart we simply stop offering removal rather than risk a false claim.
+    private bool _bridgeEnabledByThisApp;
 
     [ObservableProperty]
     private bool _autoPaste;
@@ -176,7 +192,8 @@ public partial class DictationSectionViewModel : ObservableObject
         AudioRecordingService audio,
         ISettingsService settings,
         PluginManager pluginManager,
-        SystemCommandAvailabilityService commands
+        SystemCommandAvailabilityService commands,
+        IAccessibilityBusActivation a11yBus
     )
     {
         _dictation = dictation;
@@ -185,6 +202,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings = settings;
         _pluginManager = pluginManager;
         _commands = commands;
+        _a11yBus = a11yBus;
         // Unload the active local model before moving its files so the source
         // path isn't held open during migration.
         _modelStorage = new LocalModelStorageService(_settings, () => _models.UnloadModel());
@@ -230,6 +248,10 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshModels();
         RefreshDevices();
         RefreshFromSettings(_settings.Current);
+
+        // Read the current accessibility-bridge flag so the Hyprland enable/remove button
+        // reflects reality on first paint (Hyprland-only; the call no-ops elsewhere).
+        _ = RefreshAccessibilityBridgeStateAsync();
     }
 
     public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
@@ -302,6 +324,19 @@ public partial class DictationSectionViewModel : ObservableObject
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string SoundFeedbackUnavailableReason =>
         Loc.Instance["Dictation.AudioPlayerUnavailable"];
+
+    // Hyprland doesn't enable the accessibility bridge that lets apps expose their text, so
+    // correction learning can't read them until it's turned on. Offer the enable button only
+    // when the feature is on and the bridge is off; offer removal only when WE turned it on
+    // this session — the flag is session-global, so a screen reader or other tool may have
+    // enabled it and we must never present a button that disables their accessibility.
+    public bool ShowAccessibilityBridgeSetup =>
+        _a11yBus.IsHyprlandSession
+        && TargetAppCorrectionLearningEnabled
+        && !AccessibilityBridgeActivated;
+
+    public bool ShowAccessibilityBridgeRemove =>
+        _a11yBus.IsHyprlandSession && AccessibilityBridgeActivated && _bridgeEnabledByThisApp;
 
     public bool CanDeleteSelectedModel =>
         SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
@@ -1305,6 +1340,67 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnTargetAppCorrectionLearningEnabledChanged(bool value)
     {
         _settings.Save(_settings.Current with { TargetAppCorrectionLearningEnabled = value });
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
+        // Re-read the live flag when the feature is switched on so the enable button appears
+        // if the bridge isn't active yet.
+        if (value)
+        {
+            _ = RefreshAccessibilityBridgeStateAsync();
+        }
+    }
+
+    partial void OnAccessibilityBridgeActivatedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
+    }
+
+    // Turns the session-bus accessibility bridge on so Electron/Chromium/Qt apps expose their
+    // text to correction learning. Runtime-only (resets at logout); an already-running target
+    // app must be restarted to pick it up, which the status message calls out.
+    [RelayCommand]
+    private Task EnableAccessibilityBridge()
+    {
+        return ToggleAccessibilityBridgeAsync(true);
+    }
+
+    [RelayCommand]
+    private Task RemoveAccessibilityBridge()
+    {
+        return ToggleAccessibilityBridgeAsync(false);
+    }
+
+    private async Task ToggleAccessibilityBridgeAsync(bool enable)
+    {
+        var ok = await _a11yBus.SetActivatedAsync(enable);
+        if (ok)
+        {
+            // Remember we own the bridge only after a successful enable; a successful remove
+            // clears ownership. See ShowAccessibilityBridgeRemove for why this gates the button.
+            _bridgeEnabledByThisApp = enable;
+        }
+
+        await RefreshAccessibilityBridgeStateAsync();
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
+        AccessibilityBridgeStatus = ok
+            ? Loc.Instance[
+                enable ? "Dictation.A11yBridgeEnabledStatus" : "Dictation.A11yBridgeRemovedStatus"
+            ]
+            : Loc.Instance["Dictation.A11yBridgeActionFailed"];
+    }
+
+    private async Task RefreshAccessibilityBridgeStateAsync()
+    {
+        if (!_a11yBus.IsHyprlandSession)
+        {
+            return;
+        }
+
+        var activated = await _a11yBus.IsActivatedAsync();
+        if (activated is { } value)
+        {
+            Dispatcher.UIThread.Post(() => AccessibilityBridgeActivated = value);
+        }
     }
 
     partial void OnLiveTranscriptionEnabledChanged(bool value)

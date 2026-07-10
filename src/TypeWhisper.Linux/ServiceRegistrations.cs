@@ -90,6 +90,10 @@ internal static class ServiceRegistrations
         // insertion path is unchanged unless correction learning already turned them on.
         services.AddSingleton<IPasteConfirmationSource, AtSpiPasteConfirmation>();
         services.AddSingleton<TargetAppCorrectionLearningService>();
+        // Toggles the session-bus accessibility flag (org.a11y.Status.IsEnabled) so
+        // Chromium/Electron/Qt apps expose text on Hyprland; surfaced as a button in the
+        // Dictation settings when target-app correction learning is enabled.
+        services.AddSingleton<IAccessibilityBusActivation, AccessibilityBusActivationService>();
         services.AddSingleton<ActiveWindowService>();
         services.AddSingleton<IActiveWindowService>(sp =>
             sp.GetRequiredService<ActiveWindowService>()
