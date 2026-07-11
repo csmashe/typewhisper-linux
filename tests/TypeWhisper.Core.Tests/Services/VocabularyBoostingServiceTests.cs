@@ -273,6 +273,21 @@ public class VocabularyBoostingServiceTests
             throw new NotSupportedException();
         }
 
+        public IReadOnlyList<LearnedDictionaryCorrection> LearnCorrections(
+            IEnumerable<CorrectionSuggestion> suggestions,
+            IReadOnlySet<string>? replaceableEntryIds = null
+        )
+        {
+            throw new NotSupportedException();
+        }
+
+        public void UndoLearnedCorrections(
+            IEnumerable<LearnedDictionaryCorrection> learnedCorrections
+        )
+        {
+            throw new NotSupportedException();
+        }
+
         public void ActivatePack(TermPack pack)
         {
             throw new NotSupportedException();

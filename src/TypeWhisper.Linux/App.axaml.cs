@@ -152,6 +152,22 @@ public class App : Application
             overlay.Initialize();
             BootTrace.Stage("overlay.Initialize");
 
+            // Surface silently-learned target-app corrections with an Undo. On desktop
+            // environments this is a dedicated toast window placed beside the corrected element;
+            // on tiling WMs the overlay/toast is the wrong primitive, so it goes out as a desktop
+            // notification instead — each surface subscribes only in its own environment, so
+            // exactly one owns CorrectionsLearned and it's never double-shown. Both marshal the
+            // background commit event onto the UI thread internally. When the feature is off the
+            // event never fires — neither starts anything on its own.
+            if (DesktopDetector.UsesNotificationRecordingIndicator())
+            {
+                services.GetRequiredService<LearnedCorrectionsNotificationService>().Initialize();
+            }
+            else
+            {
+                services.GetRequiredService<LearnedCorrectionsToastController>().Initialize();
+            }
+
             // On tiling window managers the overlay is suppressed (it's the wrong
             // primitive there); recording is surfaced via a desktop notification
             // instead. No-op on desktop environments, which keep the overlay.

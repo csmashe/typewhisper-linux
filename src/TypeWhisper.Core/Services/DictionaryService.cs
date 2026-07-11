@@ -429,6 +429,14 @@ public sealed partial class DictionaryService : IDictionaryService
 
             if (existing is not null)
             {
+                // A user-authored or imported mapping always wins over silent auto-learning:
+                // overwriting it would turn one observed edit into a replacement the user
+                // explicitly configured differently, with no notice.
+                if (existing.Source is DictionaryEntrySource.Manual or DictionaryEntrySource.Import)
+                {
+                    return;
+                }
+
                 var idx = newCache.FindIndex(e => e.Id == existing.Id);
                 if (idx >= 0)
                 {
@@ -462,6 +470,152 @@ public sealed partial class DictionaryService : IDictionaryService
         }
 
         EntriesChanged?.Invoke();
+    }
+
+    public IReadOnlyList<LearnedDictionaryCorrection> LearnCorrections(
+        IEnumerable<CorrectionSuggestion> suggestions,
+        IReadOnlySet<string>? replaceableEntryIds = null
+    )
+    {
+        EnsureCacheLoaded();
+
+        var learned = new List<LearnedDictionaryCorrection>();
+        var changed = false;
+
+        lock (_gate)
+        {
+            var newCache = new List<DictionaryEntry>(_cache);
+
+            // First occurrence of an original within one batch wins; later ones are dropped.
+            var seenOriginals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var suggestion in suggestions)
+            {
+                var original = suggestion.Original.Trim();
+                var replacement = suggestion.Replacement.Trim();
+
+                if (original.Length == 0
+                    || replacement.Length == 0
+                    || string.Equals(original, replacement, StringComparison.OrdinalIgnoreCase)
+                    || !IsSafeAutomaticallyLearnedToken(original)
+                    || !IsSafeAutomaticallyLearnedToken(replacement)
+                    || !seenOriginals.Add(original))
+                {
+                    continue;
+                }
+
+                var existing = newCache.FirstOrDefault(e =>
+                    e.EntryType == DictionaryEntryType.Correction
+                    && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
+                );
+
+                if (existing is not null)
+                {
+                    // The only entries we may overwrite are the session-created ones the caller is
+                    // self-healing (idle then final commit of the same utterance). Every other
+                    // existing correction is left as-is, regardless of source.
+                    if (replaceableEntryIds is null || !replaceableEntryIds.Contains(existing.Id))
+                    {
+                        continue;
+                    }
+
+                    var idx = newCache.FindIndex(e => e.Id == existing.Id);
+                    if (idx < 0)
+                    {
+                        continue;
+                    }
+
+                    var updated = existing with
+                    {
+                        Replacement = replacement,
+                        TimesCorrected = existing.TimesCorrected + 1,
+                        LastCorrectedAt = DateTime.UtcNow
+                    };
+                    newCache[idx] = updated;
+                    learned.Add(
+                        new LearnedDictionaryCorrection(updated.Id, updated.Original, replacement)
+                    );
+                    changed = true;
+                    continue;
+                }
+
+                var entry = new DictionaryEntry
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    EntryType = DictionaryEntryType.Correction,
+                    Original = original,
+                    Replacement = replacement,
+                    TimesCorrected = 1,
+                    LastCorrectedAt = DateTime.UtcNow,
+                    Source = DictionaryEntrySource.AutoLearned
+                };
+                newCache.Add(entry);
+                learned.Add(new LearnedDictionaryCorrection(entry.Id, entry.Original, replacement));
+                changed = true;
+            }
+
+            if (changed)
+            {
+                SaveToDisk(newCache);
+                _cache = newCache;
+            }
+        }
+
+        if (changed)
+        {
+            EntriesChanged?.Invoke();
+        }
+
+        return learned;
+    }
+
+    public void UndoLearnedCorrections(IEnumerable<LearnedDictionaryCorrection> learnedCorrections)
+    {
+        EnsureCacheLoaded();
+
+        var learnedIds = learnedCorrections
+            .Select(c => c.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        if (learnedIds.Count == 0)
+        {
+            return;
+        }
+
+        bool removed;
+        lock (_gate)
+        {
+            var newCache = _cache
+                .Where(e => e.EntryType != DictionaryEntryType.Correction
+                    || !learnedIds.Contains(e.Id))
+                .ToList();
+            removed = newCache.Count != _cache.Count;
+
+            if (removed)
+            {
+                SaveToDisk(newCache);
+                _cache = newCache;
+            }
+        }
+
+        if (removed)
+        {
+            EntriesChanged?.Invoke();
+        }
+    }
+
+    // Guards silent auto-learning against picking up punctuation-fenced or multi-word fragments:
+    // the first and last chars must be alphanumeric and the interior only letters/digits/hyphen/apostrophe.
+    private static bool IsSafeAutomaticallyLearnedToken(string token)
+    {
+        if (token.Length == 0
+            || !char.IsLetterOrDigit(token[0])
+            || !char.IsLetterOrDigit(token[^1]))
+        {
+            return false;
+        }
+
+        return token.All(static c =>
+            char.IsLetterOrDigit(c) || c == '-' || c == '\'');
     }
 
     public void ActivatePack(TermPack pack)

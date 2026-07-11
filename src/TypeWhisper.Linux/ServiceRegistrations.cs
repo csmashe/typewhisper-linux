@@ -184,10 +184,17 @@ internal static class ServiceRegistrations
 
         // Tiling WM recording indicator (desktop notification instead of overlay; no-op on DEs).
         services.AddSingleton<RecordingNotificationService>();
+        // Tiling WM learned-corrections feedback: same suppressed-overlay situation as above,
+        // so the "Learned X → Y" toast + Undo is delivered as a desktop notification instead.
+        services.AddSingleton<LearnedCorrectionsNotificationService>();
+        // Desktop-environment learned-corrections feedback: a dedicated toast window placed
+        // beside the corrected element (inert on tiling WMs, which use the notification above).
+        services.AddSingleton<LearnedCorrectionsToastController>();
 
         // Avalonia windows
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();
+        services.AddSingleton<LearnedCorrectionToastWindow>();
         services.AddTransient<PromptPaletteWindow>();
         services.AddTransient<RecentTranscriptionsPaletteWindow>();
         services.AddTransient<WelcomeWizard>();

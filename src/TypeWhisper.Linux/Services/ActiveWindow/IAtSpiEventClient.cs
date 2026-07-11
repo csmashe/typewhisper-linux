@@ -11,6 +11,15 @@ public readonly record struct AtSpiElementRef(string BusName, string ObjectPath)
 }
 
 /// <summary>
+///     Screen-coordinate bounding box of an accessible element, as reported by
+///     org.a11y.atspi.Component.GetExtents with ATSPI_COORD_TYPE_SCREEN: <see cref="X" />/
+///     <see cref="Y" /> are the top-left corner in global screen pixels, <see cref="Width" />/
+///     <see cref="Height" /> its size. Used to place the learned-corrections toast beside the
+///     element the correction came from.
+/// </summary>
+public readonly record struct AtSpiScreenRect(int X, int Y, int Width, int Height);
+
+/// <summary>
 ///     Event-driven view of the AT-SPI accessibility bus: a persistent connection
 ///     that surfaces focus/text-edit signals and one-shot text reads, without any
 ///     polling or per-read subprocess. Behind an interface so the correction-learning
@@ -54,6 +63,19 @@ public interface IAtSpiEventClient
     Task<bool> EnsureStartedAsync();
 
     /// <summary>
+    ///     Acquires a reference-counted lease on <c>object:text-changed</c> registration:
+    ///     while at least one lease is held, the registry is told an AT wants text-changed
+    ///     events, which is what makes on-demand toolkits (GTK) actually emit them. The first
+    ///     lease registers, the last one disposed deregisters, so a session with nothing
+    ///     tracking imposes no text-event traffic on every GTK app (a registered listener
+    ///     makes terminals emit an event per output line — an accessibility-bus flood).
+    ///     Dispose the returned handle when text events are no longer needed; disposing twice
+    ///     is a no-op. Safe to call before <see cref="EnsureStartedAsync" /> — the lease is
+    ///     honored the moment a connection is (re)established.
+    /// </summary>
+    IDisposable AcquireTextChangedEvents();
+
+    /// <summary>
     ///     Tears down the event subscriptions and the a11y-bus connection and resets state
     ///     so a later <see cref="EnsureStartedAsync" /> reconnects fresh. Called when the
     ///     user disables the feature so the process stops receiving a11y event traffic.
@@ -77,6 +99,15 @@ public interface IAtSpiEventClient
     ///     — this guards a privacy boundary, so "unknown" must never be read as "safe".
     /// </summary>
     Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element);
+
+    /// <summary>
+    ///     Best-effort read of an element's on-screen bounding box via
+    ///     org.a11y.atspi.Component.GetExtents (screen coordinates). Returns <c>null</c> when the
+    ///     element doesn't implement the Component interface, the read fails, or the client isn't
+    ///     connected. Used only to position feedback UI, so any failure is non-fatal — the caller
+    ///     falls back to a fixed on-screen spot.
+    /// </summary>
+    Task<AtSpiScreenRect?> TryGetScreenExtentsAsync(AtSpiElementRef element);
 
     /// <summary>
     ///     Best-effort sweep over the applications on the a11y bus, touching each unseen

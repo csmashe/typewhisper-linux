@@ -230,6 +230,33 @@ public sealed class TextInsertionServiceTests
         Assert.DoesNotContain(TimeSpan.FromMilliseconds(600), platform.Delays);
         // The disposed watch left no dangling subscription on the client.
         Assert.False(client.HasTextChangedSubscribers);
+        // ...and released the text-changed registration lease it held for the paste window.
+        Assert.Equal(1, client.AcquireCount);
+        Assert.Equal(0, client.ActiveAcquisitions);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_paste_watch_acquires_and_releases_text_changed_lease()
+    {
+        // The paste watch holds a text-changed registration lease for the paste window (so a
+        // paste with no armed field still observes text-changed) and must release it on Dispose,
+        // exactly once — a leaked lease would reinstate the standing a11y flood.
+        var client = new FakeAtSpiEventClient();
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: new AtSpiPasteConfirmation(client)
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(1, client.AcquireCount);
+        Assert.Equal(0, client.ActiveAcquisitions);
     }
 
     [Fact]
@@ -1767,6 +1794,19 @@ public sealed class TextInsertionServiceTests
 
         public bool HasTextChangedSubscribers => TextChanged is not null;
 
+        // Total AcquireTextChangedEvents calls and how many leases remain undisposed. The paste
+        // watch must acquire in its constructor and release in Dispose, so ActiveAcquisitions
+        // returns to 0 once the watch is disposed.
+        public int AcquireCount { get; private set; }
+        public int ActiveAcquisitions { get; private set; }
+
+        public IDisposable AcquireTextChangedEvents()
+        {
+            AcquireCount++;
+            ActiveAcquisitions++;
+            return new Lease(this);
+        }
+
         public Task<bool> EnsureStartedAsync()
         {
             return Task.FromResult(true);
@@ -1787,9 +1827,31 @@ public sealed class TextInsertionServiceTests
             return Task.FromResult<bool?>(null);
         }
 
+        public Task<AtSpiScreenRect?> TryGetScreenExtentsAsync(AtSpiElementRef element)
+        {
+            return Task.FromResult<AtSpiScreenRect?>(null);
+        }
+
         public void RaiseTextChanged(AtSpiElementRef element)
         {
             TextChanged?.Invoke(element);
+        }
+
+        // Idempotent, mirroring the real handle.
+        private sealed class Lease(FakeAtSpiEventClient owner) : IDisposable
+        {
+            private bool _disposed;
+
+            public void Dispose()
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _disposed = true;
+                owner.ActiveAcquisitions--;
+            }
         }
     }
 }

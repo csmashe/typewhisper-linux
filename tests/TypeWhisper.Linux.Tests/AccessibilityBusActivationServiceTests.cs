@@ -108,4 +108,39 @@ public sealed class AccessibilityBusActivationServiceTests
 
         Assert.False(await service.SetActivatedAsync(true));
     }
+
+    private static bool IsGetScreenReader(string file, IReadOnlyList<string> args) =>
+        file == "busctl"
+        && args.Contains("get-property")
+        && args.Contains("ScreenReaderEnabled");
+
+    [Fact]
+    public async Task IsScreenReaderActiveAsync_parses_true()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(IsGetScreenReader, "b true\n");
+        var service = new AccessibilityBusActivationService(runner);
+
+        Assert.Equal(true, await service.IsScreenReaderActiveAsync());
+    }
+
+    [Fact]
+    public async Task IsScreenReaderActiveAsync_parses_false()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(IsGetScreenReader, "b false\n");
+        var service = new AccessibilityBusActivationService(runner);
+
+        Assert.Equal(false, await service.IsScreenReaderActiveAsync());
+    }
+
+    [Fact]
+    public async Task IsScreenReaderActiveAsync_returns_null_when_command_fails()
+    {
+        var runner = new FakeProcessRunner();
+        runner.FailWhen(IsGetScreenReader, "bus unreachable");
+        var service = new AccessibilityBusActivationService(runner);
+
+        Assert.Null(await service.IsScreenReaderActiveAsync());
+    }
 }

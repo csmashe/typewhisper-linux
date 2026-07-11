@@ -41,16 +41,31 @@ public sealed class AtSpiPasteConfirmation : IPasteConfirmationSource
     {
         private readonly IAtSpiEventClient _client;
 
+        // The application (unique bus name) holding focus when the watch was armed — i.e.
+        // where the paste is about to land. Null when no focus is known; then any app's
+        // event has to count.
+        private readonly string? _targetBusName;
+
         private readonly TaskCompletionSource<bool> _textChanged = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
 
+        // Keeps AT-SPI object:text-changed registered with the registry for the life of the watch.
+        // The correction-learning feature registers it only while a field is armed, so without our
+        // own lease a paste with no armed field would observe no text-changed at all.
+        private readonly IDisposable _textEventsLease;
+
         internal AtSpiPasteWatch(IAtSpiEventClient client)
         {
             _client = client;
-            // Subscribed here — before the caller sends Ctrl+V — so the paste's
-            // text-changed can never fire unobserved; one that arrives before
-            // WaitAsync latches in the TCS and the later await completes instantly.
+            _targetBusName = client.CurrentFocusedElement?.BusName;
+            // Acquire the text-changed lease and subscribe here — before the caller sends Ctrl+V —
+            // so the paste's text-changed can never fire unobserved; one that arrives before
+            // WaitAsync latches in the TCS and the later await completes instantly. The registry
+            // RegisterEvent this triggers is fire-and-forget: its propagation is fast relative to
+            // the clipboard staging that follows the keystroke, and if the very first event still
+            // races ahead of it, the watch simply degrades to the existing timeout fallback.
+            _textEventsLease = client.AcquireTextChangedEvents();
             _client.TextChanged += OnTextChanged;
         }
 
@@ -80,16 +95,27 @@ public sealed class AtSpiPasteConfirmation : IPasteConfirmationSource
         public void Dispose()
         {
             _client.TextChanged -= OnTextChanged;
+            // Release the text-changed lease alongside the unsubscribe: once no watch (and no
+            // armed field) holds it, the registration is dropped so idle GTK apps stop emitting.
+            _textEventsLease.Dispose();
         }
 
-        // First TextChanged from ANY element counts. Do not match against
-        // CurrentFocusedElement and do not read the text back: focus events sometimes
-        // yield containers without the Text interface (the `No such interface
-        // "org.a11y.atspi.Text"` failure), and the text-changed source object routinely
-        // differs from the focus object.
-        private void OnTextChanged(AtSpiElementRef _)
+        // First TextChanged from the TARGET APPLICATION counts — matched by unique bus
+        // name, never by element: the text-changed source object routinely differs from
+        // the focus object (containers, sibling widgets), but it always belongs to the
+        // same app connection. Without the app match, a background app's text event (an
+        // arriving chat message, a ticking log view) would falsely confirm the paste and
+        // restore the clipboard before the real target consumed it. When no focused app
+        // was known at arm time, fall back to any-app (indeterminate targets).
+        private void OnTextChanged(AtSpiElementRef element)
         {
-            _textChanged.TrySetResult(true);
+            if (
+                _targetBusName is null
+                || string.Equals(element.BusName, _targetBusName, StringComparison.Ordinal)
+            )
+            {
+                _textChanged.TrySetResult(true);
+            }
         }
     }
 }

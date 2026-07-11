@@ -60,6 +60,20 @@ public interface IDictionaryService
     /// <summary>Records a user-confirmed correction so the same mistake is auto-fixed next time.</summary>
     void LearnCorrection(string original, string replacement);
 
+    /// <summary>
+    ///     Silently learns a batch of corrections. New, safe originals are added; an existing
+    ///     entry is only ever updated when its id is listed in <paramref name="replaceableEntryIds" />
+    ///     (session-created entries the caller is self-healing) — every other existing entry is left
+    ///     untouched regardless of source. Returns the entries added or updated so they can be undone.
+    /// </summary>
+    IReadOnlyList<LearnedDictionaryCorrection> LearnCorrections(
+        IEnumerable<CorrectionSuggestion> suggestions,
+        IReadOnlySet<string>? replaceableEntryIds = null
+    );
+
+    /// <summary>Removes correction entries by id (used to undo a learned batch); safe if some no longer exist.</summary>
+    void UndoLearnedCorrections(IEnumerable<LearnedDictionaryCorrection> learnedCorrections);
+
     /// <summary>Adds the term pack's entries; idempotent, so re-activating an active pack is a no-op.</summary>
     void ActivatePack(TermPack pack);
 

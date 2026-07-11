@@ -21,6 +21,15 @@ public interface IAccessibilityBusActivation
     Task<bool?> IsActivatedAsync(CancellationToken ct = default);
 
     /// <summary>
+    ///     Reads <c>org.a11y.Status.ScreenReaderEnabled</c> (read-only — see
+    ///     <see cref="SetActivatedAsync" /> for why it is never written). <c>true</c> means a
+    ///     screen reader (Orca) is or was active this session and may rely on the
+    ///     accessibility flag, so removal must be refused. <c>null</c> = indeterminate;
+    ///     callers should fail closed.
+    /// </summary>
+    Task<bool?> IsScreenReaderActiveAsync(CancellationToken ct = default);
+
+    /// <summary>
     ///     Sets <c>org.a11y.Status.IsEnabled</c> on the session bus. Where a GSettings/dconf
     ///     backend is present the a11y launcher mirrors it to
     ///     <c>org.gnome.desktop.interface toolkit-accessibility</c>, so the change can persist
@@ -51,12 +60,22 @@ public sealed class AccessibilityBusActivationService : IAccessibilityBusActivat
         _processRunner = processRunner;
     }
 
-    public async Task<bool?> IsActivatedAsync(CancellationToken ct = default)
+    public Task<bool?> IsActivatedAsync(CancellationToken ct = default)
+    {
+        return ReadBoolPropertyAsync("IsEnabled", ct);
+    }
+
+    public Task<bool?> IsScreenReaderActiveAsync(CancellationToken ct = default)
+    {
+        return ReadBoolPropertyAsync("ScreenReaderEnabled", ct);
+    }
+
+    private async Task<bool?> ReadBoolPropertyAsync(string property, CancellationToken ct)
     {
         var result = await _processRunner
             .RunAsync(
                 "busctl",
-                ["--user", "get-property", BusName, ObjectPath, StatusInterface, "IsEnabled"],
+                ["--user", "get-property", BusName, ObjectPath, StatusInterface, property],
                 timeout: s_timeout,
                 ct: ct
             )

@@ -1410,6 +1410,19 @@ public partial class DictationSectionViewModel : ObservableObject
         }
         else
         {
+            // Ownership only proves TypeWhisper originally enabled the flag — a screen
+            // reader (Orca) may have started SINCE and rely on session accessibility staying
+            // on. Refuse the removal while ScreenReaderEnabled reads true, and fail closed
+            // on an indeterminate read (an unreadable bus would fail the remove write too).
+            if (await _a11yBus.IsScreenReaderActiveAsync() != false)
+            {
+                await RefreshAccessibilityBridgeStateAsync();
+                AccessibilityBridgeStatus = Loc.Instance[
+                    "Dictation.A11yBridgeRemoveBlockedScreenReader"
+                ];
+                return;
+            }
+
             ok = await _a11yBus.SetActivatedAsync(false);
             if (ok)
             {

@@ -39,11 +39,28 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     private const string EventObjectInterface = "org.a11y.atspi.Event.Object";
     private const string TextInterface = "org.a11y.atspi.Text";
+    private const string ComponentInterface = "org.a11y.atspi.Component";
     private const string AccessibleInterface = "org.a11y.atspi.Accessible";
     private const string PropertiesInterface = "org.freedesktop.DBus.Properties";
 
+    // ATSPI_COORD_TYPE_SCREEN: GetExtents returns the element's box in global screen pixels
+    // (not window- or parent-relative), which is what we need to place the toast beside it.
+    private const uint CoordTypeScreen = 0;
+
     private const string FocusedStateName = "focused";
     private const int StateGained = 1;
+
+    // AT-SPI event names driven through RegisterEvent/DeregisterEvent. focused is registered
+    // permanently (focus tracking must run before any dictation arms); text-changed is
+    // registered on demand only while a holder needs it — see AcquireTextChangedEvents.
+    private const string FocusedEventName = "object:state-changed:focused";
+    private const string TextChangedEventName = "object:text-changed";
+
+    // A failed text-changed register/deregister leaves the tracked state unknown; retry a few times
+    // with a short delay so a FINAL deregister (refcount back to 0, no following lease edge to
+    // re-drive it) still converges rather than stranding the GTK text-event flood on.
+    private const int MaxTextEventReconcileAttempts = 4;
+    private static readonly TimeSpan s_textEventRetryDelay = TimeSpan.FromSeconds(1);
 
     // LibreOffice Writer alternates focus between the caret paragraph and the document's
     // root pane, so two entries would suffice there; a few more absorb apps that flap
@@ -54,6 +71,13 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // (ROLE_FRAME = 23) which shares the same AtspiRole enum.
     private const uint RolePasswordText = 40;
 
+    // One-shot calls target arbitrary third-party apps, and a hung target (stopped process,
+    // busy main loop) would otherwise pin the awaiting task forever — Tmds.DBus 0.92 applies
+    // no timeout of its own — stalling the serialized commit chain with it. WaitAsync leaves
+    // the pending reply entry behind until the reply or a disconnect arrives; that is
+    // bounded and far preferable to an unbounded stall.
+    private static readonly TimeSpan s_callTimeout = TimeSpan.FromSeconds(4);
+
     private static readonly MessageValueReader<string> s_readString =
         static (m, _) => m.GetBodyReader().ReadString();
 
@@ -62,6 +86,21 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     private static readonly MessageValueReader<uint> s_readUInt32 =
         static (m, _) => m.GetBodyReader().ReadUInt32();
+
+    // GetExtents' reply body is a single D-Bus struct "(iiii)" = (x, y, width, height) in screen
+    // pixels. AlignStruct() advances to the 8-byte struct boundary (a no-op when the struct leads
+    // the body, but correct regardless) before the four Int32 members are read in order.
+    private static readonly MessageValueReader<AtSpiScreenRect> s_readExtents =
+        static (m, _) =>
+        {
+            var reader = m.GetBodyReader();
+            reader.AlignStruct();
+            var x = reader.ReadInt32();
+            var y = reader.ReadInt32();
+            var width = reader.ReadInt32();
+            var height = reader.ReadInt32();
+            return new AtSpiScreenRect(x, y, width, height);
+        };
 
     // Reads a D-Bus a(so) array — the (unique bus name, object path) pairs the registry
     // and Accessible.GetChildren return.
@@ -79,6 +118,37 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             }
 
             return list;
+        };
+
+    // Reads GetRegisteredEvents' a(ss) reply — (registrant unique name, event type) pairs. Used to
+    // check whether a DeregisterEvent actually removed our text-changed listener (some registryd
+    // versions acknowledge the call without removing it).
+    private static readonly MessageValueReader<List<(string Sender, string EventType)>>
+        s_readRegisteredEvents =
+            static (m, _) =>
+            {
+                var reader = m.GetBodyReader();
+                var list = new List<(string, string)>();
+                var end = reader.ReadArrayStart(DBusType.Struct);
+                while (reader.HasNext(end))
+                {
+                    var sender = reader.ReadString();
+                    var eventType = reader.ReadString();
+                    list.Add((sender, eventType));
+                }
+
+                return list;
+            };
+
+    // Reads a NameOwnerChanged body (s name, s oldOwner, s newOwner); only the new owner
+    // matters (empty = the name went away, non-empty = a new registryd took over).
+    private static readonly MessageValueReader<string> s_readNameOwnerChanged =
+        static (m, _) =>
+        {
+            var reader = m.GetBodyReader();
+            reader.ReadString(); // name (already filtered by Arg0)
+            reader.ReadString(); // old owner
+            return reader.ReadString();
         };
 
     // Reads the leading (detail: string, detail1: int) of an AT-SPI event body
@@ -102,6 +172,32 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private readonly Lock _focusLock = new();
     private readonly SemaphoreSlim _startGate = new(1, 1);
 
+    // Guards _textChangedRefCount and _textChangedRegistered. A dedicated lock (not _focusLock) so
+    // an acquire/release from a commit or paste path never contends with the focus-event fast path
+    // on the dispatch thread.
+    private readonly Lock _textEventLock = new();
+
+    // Serializes the registry register/deregister of text-changed. Every edge (lease acquire /
+    // release, reconnect, registryd restart) drives state through the single reconciler under this
+    // gate, so transitions apply in one last-write-wins order — never as reversed fire-and-forget
+    // D-Bus calls that could leave events off while a lease is live, or on with none live. See
+    // ReconcileTextChangedAsync.
+    private readonly SemaphoreSlim _textEventReconcileGate = new(1, 1);
+
+    // Number of live AcquireTextChangedEvents leases. >0 means "object:text-changed" must be
+    // registered with the registry whenever we hold a connection; 0 means it must not be. The
+    // count OUTLIVES a StopAsync/reconnect (holders still expect events after a reconnect), so
+    // the reconciler re-registers text-changed exactly when this is >0.
+    private int _textChangedRefCount;
+
+    // What the reconciler last drove the CURRENT connection to: true/false = known
+    // registered/deregistered, null = UNKNOWN (a RegisterEvent/DeregisterEvent failed or timed out).
+    // Guarded by _textEventLock; set false when the connection is torn down or a restarted registryd
+    // forgets our registration. A known value keeps a steady-state paste cycle (refcount 1→2→1) a
+    // no-op; null forces the next reconcile to re-drive, so a failure is retried and a timed-out-
+    // then-succeeded call can't strand events on with no lease live.
+    private bool? _textChangedRegistered;
+
     // Bounded most-recent-first focus history behind _focusLock; see GetRecentFocusedElements.
     private readonly List<AtSpiElementRef> _recentFocused = [];
 
@@ -116,6 +212,11 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private bool _started;
     private IDisposable? _stateSubscription;
     private IDisposable? _textSubscription;
+    private IDisposable? _registryOwnerSubscription;
+
+    // 1 once a signal observer reported a fatal connection error and a reset was scheduled;
+    // back to 0 when a fresh connection starts. Ensures one reset per dead connection.
+    private int _resetScheduled;
 
     public AtSpiEventClient(IErrorLogService errorLog)
     {
@@ -135,6 +236,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         {
             _stateSubscription?.Dispose();
             _textSubscription?.Dispose();
+            _registryOwnerSubscription?.Dispose();
             _connection?.Dispose();
         }
         catch
@@ -198,6 +300,173 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
+    public IDisposable AcquireTextChangedEvents()
+    {
+        lock (_textEventLock)
+        {
+            _textChangedRefCount++;
+        }
+
+        // Fire-and-forget: registration must not block the caller (arm/paste paths are
+        // latency-sensitive). The reconciler serializes this against every other edge and reads
+        // the live refcount when it runs, so concurrent acquire/release can't be applied out of
+        // order; a failure is benign (the registry drops our registrations on disconnect and a
+        // missed one only degrades to the consumer's own timeout fallback).
+        _ = ReconcileTextChangedAsync();
+
+        return new TextChangedLease(this);
+    }
+
+    // Releases one text-changed lease. Idempotent per handle: the handle guards its own
+    // double-dispose, so this runs at most once per acquire.
+    private void ReleaseTextChangedEvents()
+    {
+        lock (_textEventLock)
+        {
+            if (_textChangedRefCount == 0)
+            {
+                // Defensive: a correct handle disposes exactly once, but never underflow.
+                return;
+            }
+
+            _textChangedRefCount--;
+        }
+
+        _ = ReconcileTextChangedAsync();
+    }
+
+    // Drives the registry's text-changed registration to match the live lease count. Serialized on
+    // _textEventReconcileGate so acquire/release edges, reconnects and registryd restarts apply
+    // strictly in order: whichever reconcile runs last observes the final refcount and leaves the
+    // registration matching it. _textChangedRegistered makes an unchanged desired state a no-op.
+    private async Task ReconcileTextChangedAsync(int attempt = 0)
+    {
+        bool failed;
+        await _textEventReconcileGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            bool desired;
+            DBusConnection? conn;
+            lock (_textEventLock)
+            {
+                desired = _textChangedRefCount > 0;
+                conn = _connection;
+                if (conn is null || _textChangedRegistered == desired)
+                {
+                    // No connection yet (TryStartAsync registers from the refcount on connect), or
+                    // the registration is KNOWN to already match what we want. A null (unknown)
+                    // state never equals desired, so a prior failure always re-drives here.
+                    return;
+                }
+            }
+
+            bool? outcome;
+            if (desired)
+            {
+                outcome = await RegisterTextChangedAsync(conn).ConfigureAwait(false)
+                    ? true
+                    : (bool?)null;
+            }
+            else if (await DeregisterTextChangedAsync(conn).ConfigureAwait(false))
+            {
+                // Trust-but-verify: an AT-SPI Registry v2 registryd (at-spi2-core 2.60.4) ACKs
+                // DeregisterEvent without actually removing the listener. Re-read the registry for
+                // the real state, so a no-op deregister is recorded as still-registered and the next
+                // acquire skips re-registering — otherwise a duplicate stacks on every lease cycle,
+                // recreating the text-event flood this path exists to prevent.
+                try
+                {
+                    outcome = await IsTextChangedRegisteredAsync(conn).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[AtSpiEventClient] deregister verify failed: {ex.Message}");
+                    outcome = null;
+                }
+            }
+            else
+            {
+                outcome = null;
+            }
+
+            lock (_textEventLock)
+            {
+                // Record the real state; null (a call failed / couldn't verify) re-drives next edge.
+                // Never assume a register/deregister took effect (see _textChangedRegistered).
+                if (ReferenceEquals(_connection, conn))
+                {
+                    _textChangedRegistered = outcome;
+                }
+            }
+
+            // Retry only when the state is genuinely unknown. A verified v2 no-op deregister is a
+            // KNOWN "still registered" state, not a failure — retrying could never remove it.
+            failed = outcome is null;
+        }
+        finally
+        {
+            _textEventReconcileGate.Release();
+        }
+
+        if (failed && attempt + 1 < MaxTextEventReconcileAttempts && !_disposed)
+        {
+            _ = RetryReconcileTextChangedAsync(attempt + 1);
+        }
+    }
+
+    // A register/deregister failed, leaving the state unknown. A later lease edge would re-drive it,
+    // but the final deregister may have none, so retry after a short delay to guarantee convergence
+    // (its own failure schedules the next attempt, up to MaxTextEventReconcileAttempts).
+    private async Task RetryReconcileTextChangedAsync(int attempt)
+    {
+        try
+        {
+            await Task.Delay(s_textEventRetryDelay).ConfigureAwait(false);
+            if (!_disposed)
+            {
+                await ReconcileTextChangedAsync(attempt).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[AtSpiEventClient] text-changed reconcile retry failed: {ex.Message}"
+            );
+        }
+    }
+
+    private static async Task<bool> RegisterTextChangedAsync(DBusConnection conn)
+    {
+        try
+        {
+            await RegisterEventAsync(conn, TextChangedEventName).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[AtSpiEventClient] text-changed RegisterEvent failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static async Task<bool> DeregisterTextChangedAsync(DBusConnection conn)
+    {
+        try
+        {
+            await DeregisterEventAsync(conn, TextChangedEventName).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // Benign: registryd also drops our registrations when this connection disconnects,
+            // so a failed deregister just means it happens slightly later or on disconnect.
+            Trace.WriteLine(
+                $"[AtSpiEventClient] text-changed DeregisterEvent failed: {ex.Message}"
+            );
+            return false;
+        }
+    }
+
     public async Task StopAsync()
     {
         await _startGate.WaitAsync().ConfigureAwait(false);
@@ -207,6 +476,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             {
                 _stateSubscription?.Dispose();
                 _textSubscription?.Dispose();
+                _registryOwnerSubscription?.Dispose();
                 _connection?.Dispose();
             }
             catch
@@ -216,6 +486,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
             _stateSubscription = null;
             _textSubscription = null;
+            _registryOwnerSubscription = null;
             _connection = null;
             // Reset so the next EnsureStartedAsync reconnects fresh rather than returning
             // the stale cached availability.
@@ -229,6 +500,16 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 // Unique names may outlive our connection, but a fresh connection re-pokes
                 // cheaply and correctly (apps keep their unlocked state anyway).
                 _pokedApps.Clear();
+            }
+
+            // Deliberately NOT touching _textChangedRefCount: the registration dies with the
+            // connection, but holders still exist and expect events after a reconnect, so the
+            // next EnsureStartedAsync/TryStartAsync re-registers text-changed when the count > 0.
+            // Do clear _textChangedRegistered: this connection's registration is gone, so the next
+            // connect must re-drive it from the surviving refcount rather than treat it as applied.
+            lock (_textEventLock)
+            {
+                _textChangedRegistered = false;
             }
         }
         finally
@@ -302,13 +583,53 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 message = writer.CreateMessage();
             }
 
-            var role = await conn.CallMethodAsync(message, s_readUInt32).ConfigureAwait(false);
+            var role = await conn.CallMethodAsync(message, s_readUInt32)
+                .WaitAsync(s_callTimeout)
+                .ConfigureAwait(false);
             return role == RolePasswordText;
         }
         catch
         {
             // Role read failed (denied / transient / toolkit without a reliable role). Return
             // indeterminate so the caller skips rather than risk reading a password field.
+            return null;
+        }
+    }
+
+    public async Task<AtSpiScreenRect?> TryGetScreenExtentsAsync(AtSpiElementRef element)
+    {
+        var conn = _connection;
+        if (conn is null || !element.IsValid)
+        {
+            return null;
+        }
+
+        try
+        {
+            MessageBuffer message;
+            using (var writer = conn.GetMessageWriter())
+            {
+                writer.WriteMethodCallHeader(
+                    destination: element.BusName,
+                    path: element.ObjectPath,
+                    @interface: ComponentInterface,
+                    member: "GetExtents",
+                    signature: "u"
+                );
+                writer.WriteUInt32(CoordTypeScreen);
+                message = writer.CreateMessage();
+            }
+
+            return await conn.CallMethodAsync(message, s_readExtents)
+                .WaitAsync(s_callTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Extents are only for positioning feedback UI: many targets don't implement the
+            // Component interface (or the accessible vanished), and the caller falls back to a
+            // fixed on-screen spot — so keep every failure out of the error log (Trace only).
+            Trace.WriteLine($"[AtSpiEventClient] GetExtents failed: {ex.Message}");
             return null;
         }
     }
@@ -391,6 +712,8 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             return anyTouched;
         }
 
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the body awaits a D-Bus call per
+        // child and OR-accumulates; that isn't a pure query and can't be a LINQ expression.
         foreach (var child in children.Take(MaxPokedChildren))
         {
             anyTouched |= await TouchElementAsync(conn, child).ConfigureAwait(false);
@@ -421,7 +744,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                     message = writer.CreateMessage();
                 }
 
-                await conn.CallMethodAsync(message).ConfigureAwait(false);
+                await conn.CallMethodAsync(message).WaitAsync(s_callTimeout).ConfigureAwait(false);
                 touched = true;
             }
             catch (Exception ex)
@@ -453,7 +776,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             message = writer.CreateMessage();
         }
 
-        return await conn.CallMethodAsync(message, s_readElementRefArray).ConfigureAwait(false);
+        return await conn.CallMethodAsync(message, s_readElementRefArray)
+            .WaitAsync(s_callTimeout)
+            .ConfigureAwait(false);
     }
 
     private async Task<bool> TryStartAsync()
@@ -502,10 +827,47 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 emitOnCapturedContext: false
             ).ConfigureAwait(false);
 
-            // Tell registryd which events have listeners so toolkits that gate
-            // event emission on demand (GTK) actually broadcast them.
-            await RegisterEventAsync(conn, "object:state-changed:focused").ConfigureAwait(false);
-            await RegisterEventAsync(conn, "object:text-changed").ConfigureAwait(false);
+            // Our RegisterEvent state lives inside registryd, and registryd can be replaced
+            // mid-session (the a11y bus broker force-disconnects it under event-flood quota
+            // pressure and D-Bus activation spawns a fresh instance with an empty listener
+            // table — observed live). Watch the registry name's owner and re-register with
+            // every new incarnation, exactly like GTK's own bridge does.
+            _registryOwnerSubscription = await conn.AddMatchAsync(
+                new MatchRule
+                {
+                    Type = MessageType.Signal,
+                    Sender = "org.freedesktop.DBus",
+                    Interface = "org.freedesktop.DBus",
+                    Member = "NameOwnerChanged",
+                    Arg0 = RegistryBusName
+                },
+                s_readNameOwnerChanged,
+                HandleRegistryOwnerChanged,
+                ObserverFlags.None,
+                emitOnCapturedContext: false
+            ).ConfigureAwait(false);
+
+            // Tell registryd which events have listeners so toolkits that gate event emission on
+            // demand (GTK) actually broadcast them. focused is permanent (focus tracking must run
+            // before any dictation arms). text-changed is registered ONLY when a lease is live: a
+            // standing text-changed registration makes every GTK app emit an event per text
+            // mutation (terminals: one per output line), which floods the a11y bus — so it is
+            // gated on the refcount, which survives reconnects and reflects live holders here.
+            await RegisterEventAsync(conn, FocusedEventName).ConfigureAwait(false);
+
+            // Fresh connection: registryd holds none of our registrations. Drive text-changed from
+            // the live lease count through the same serialized reconciler the leases use, so a
+            // concurrent acquire/release can't race this initial registration.
+            lock (_textEventLock)
+            {
+                _textChangedRegistered = false;
+            }
+
+            await ReconcileTextChangedAsync().ConfigureAwait(false);
+
+            // Fresh connection: re-arm the one-reset-per-connection guard so a later
+            // disconnect of THIS connection schedules its own reconnect.
+            Interlocked.Exchange(ref _resetScheduled, 0);
 
             return true;
         }
@@ -519,6 +881,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             {
                 _stateSubscription?.Dispose();
                 _textSubscription?.Dispose();
+                _registryOwnerSubscription?.Dispose();
                 _connection?.Dispose();
             }
             catch
@@ -528,6 +891,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
             _stateSubscription = null;
             _textSubscription = null;
+            _registryOwnerSubscription = null;
             _connection = null;
             return false;
         }
@@ -536,10 +900,11 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private void HandleStateChanged(Exception? exception, AtSpiSignal signal, object? readerState, object? handlerState)
     {
         // Only successful reads carry a signal. On error/disconnect the observer is invoked
-        // with a non-null exception and a default value; skip those rather than acting on an
-        // empty AtSpiSignal.
+        // with a non-null exception and a default value; schedule a reconnect rather than
+        // acting on an empty AtSpiSignal.
         if (exception is not null)
         {
+            OnObserverError(exception);
             return;
         }
 
@@ -584,6 +949,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     {
         if (exception is not null)
         {
+            OnObserverError(exception);
             return;
         }
 
@@ -603,9 +969,103 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
+    private void HandleRegistryOwnerChanged(
+        Exception? exception,
+        string newOwner,
+        object? readerState,
+        object? handlerState
+    )
+    {
+        if (exception is not null)
+        {
+            OnObserverError(exception);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(newOwner))
+        {
+            // The name is momentarily unowned (old registryd gone); the replacement's
+            // takeover fires this signal again with a real owner.
+            return;
+        }
+
+        var conn = _connection;
+        if (conn is null)
+        {
+            return;
+        }
+
+        Trace.WriteLine(
+            "[AtSpiEventClient] a11y registry restarted; re-registering event listeners."
+        );
+        _ = ReRegisterEventsAsync(conn);
+    }
+
+    // Instance (not static) so it can read the live lease count: a restarted registryd has an
+    // empty listener table, so focused must ALWAYS be re-registered, but text-changed only when a
+    // lease is currently held — re-registering it unconditionally would reinstate the flood.
+    private async Task ReRegisterEventsAsync(DBusConnection conn)
+    {
+        try
+        {
+            await RegisterEventAsync(conn, FocusedEventName).ConfigureAwait(false);
+
+            // The restarted registryd came up with an empty listener table, so it has forgotten our
+            // text-changed registration regardless of what we last drove. Clear the flag and
+            // reconcile so a live lease re-registers (and no lease stays a stale no-op).
+            lock (_textEventLock)
+            {
+                _textChangedRegistered = false;
+            }
+
+            await ReconcileTextChangedAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[AtSpiEventClient] re-register after registry restart failed: {ex.Message}"
+            );
+        }
+    }
+
+    // An observer exception is per-connection-fatal (bus daemon restart, socket closed).
+    // Without a reset, _started stays true and EnsureStartedAsync returns the dead
+    // connection forever — an a11y-bus restart would permanently kill the feature. Reset
+    // once; the next EnsureStartedAsync (next dictation arm) reconnects and re-registers.
+    private void OnObserverError(Exception exception)
+    {
+        if (_disposed || Interlocked.Exchange(ref _resetScheduled, 1) == 1)
+        {
+            return;
+        }
+
+        Trace.WriteLine(
+            $"[AtSpiEventClient] a11y bus connection lost ({exception.Message}); scheduling reconnect."
+        );
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await StopAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Resetting a dead connection is best-effort and must not throw.
+            }
+        });
+    }
+
     // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's PascalCase splitter mis-reads "11y".
     private async Task<string?> ResolveA11yBusAddressAsync()
     {
+        // Standard override honored by libatspi and Qt; takes precedence over the
+        // org.a11y.Bus lookup (test rigs, nested/remote sessions).
+        var overrideAddress = Environment.GetEnvironmentVariable("AT_SPI_BUS_ADDRESS");
+        if (!string.IsNullOrWhiteSpace(overrideAddress))
+        {
+            return overrideAddress;
+        }
+
         try
         {
             var session = DBusConnection.Session;
@@ -621,7 +1081,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 message = writer.CreateMessage();
             }
 
-            return await session.CallMethodAsync(message, s_readString).ConfigureAwait(false);
+            return await session.CallMethodAsync(message, s_readString)
+                .WaitAsync(s_callTimeout)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -646,7 +1108,67 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             message = writer.CreateMessage();
         }
 
-        await conn.CallMethodAsync(message).ConfigureAwait(false);
+        await conn.CallMethodAsync(message).WaitAsync(s_callTimeout).ConfigureAwait(false);
+    }
+
+    // A single "s" arg (event only) mirrors what we registered with. NOTE: this reply is not proof
+    // of removal — AT-SPI Registry v2 (at-spi2-core 2.60.4) ACKs it without removing the listener,
+    // so callers verify via IsTextChangedRegisteredAsync rather than trusting the reply.
+    private static async Task DeregisterEventAsync(DBusConnection conn, string eventName)
+    {
+        MessageBuffer message;
+        using (var writer = conn.GetMessageWriter())
+        {
+            writer.WriteMethodCallHeader(
+                destination: RegistryBusName,
+                path: RegistryPath,
+                @interface: RegistryInterface,
+                member: "DeregisterEvent",
+                signature: "s"
+            );
+            writer.WriteString(eventName);
+            message = writer.CreateMessage();
+        }
+
+        await conn.CallMethodAsync(message).WaitAsync(s_callTimeout).ConfigureAwait(false);
+    }
+
+    // True when the registry still lists a text-changed registration for THIS connection. Lets the
+    // reconciler detect a registryd that ACKs DeregisterEvent without removing it (AT-SPI Registry
+    // v2) and stop re-registering, which would otherwise stack a duplicate on every lease cycle.
+    private static async Task<bool> IsTextChangedRegisteredAsync(DBusConnection conn)
+    {
+        var me = conn.UniqueName;
+        if (string.IsNullOrEmpty(me))
+        {
+            return false;
+        }
+
+        var events = await GetRegisteredEventsAsync(conn).ConfigureAwait(false);
+        return events.Any(e =>
+            string.Equals(e.Sender, me, StringComparison.Ordinal)
+            && e.EventType.Contains("TextChanged", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static async Task<List<(string Sender, string EventType)>> GetRegisteredEventsAsync(
+        DBusConnection conn
+    )
+    {
+        MessageBuffer message;
+        using (var writer = conn.GetMessageWriter())
+        {
+            writer.WriteMethodCallHeader(
+                destination: RegistryBusName,
+                path: RegistryPath,
+                @interface: RegistryInterface,
+                member: "GetRegisteredEvents"
+            );
+            message = writer.CreateMessage();
+        }
+
+        return await conn.CallMethodAsync(message, s_readRegisteredEvents)
+            .WaitAsync(s_callTimeout)
+            .ConfigureAwait(false);
     }
 
     private static async Task<int> GetCharacterCountAsync(DBusConnection conn, AtSpiElementRef element)
@@ -666,7 +1188,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             message = writer.CreateMessage();
         }
 
-        return await conn.CallMethodAsync(message, s_readVariantInt32).ConfigureAwait(false);
+        return await conn.CallMethodAsync(message, s_readVariantInt32)
+            .WaitAsync(s_callTimeout)
+            .ConfigureAwait(false);
     }
 
     private static async Task<string?> GetTextAsync(
@@ -691,7 +1215,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             message = writer.CreateMessage();
         }
 
-        return await conn.CallMethodAsync(message, s_readString).ConfigureAwait(false);
+        return await conn.CallMethodAsync(message, s_readString)
+            .WaitAsync(s_callTimeout)
+            .ConfigureAwait(false);
     }
 
     // The D-Bus error name leads the reply exception's message, e.g.
@@ -714,6 +1240,13 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // DBusErrorReplyException; the well-known "not readable / gone / unresponsive" names are benign.
     private static bool IsExpectedUnreadableTarget(Exception ex)
     {
+        // A call timeout (WaitAsync) means the target app is hung or too busy to answer —
+        // "can't learn from this app right now", not a TypeWhisper fault.
+        if (ex is TimeoutException)
+        {
+            return true;
+        }
+
         if (ex is not DBusErrorReplyException)
         {
             return false;
@@ -739,4 +1272,20 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     }
 
     private readonly record struct AtSpiSignal(string Sender, string Path, string Detail, int Detail1);
+
+    // Handle returned by AcquireTextChangedEvents. Idempotent: only the first Dispose releases the
+    // underlying lease, so a caller (or a double-dispose from finalization patterns) can't drive
+    // the refcount negative or deregister twice. Interlocked keeps that guarantee thread-safe.
+    private sealed class TextChangedLease(AtSpiEventClient owner) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+            {
+                owner.ReleaseTextChangedEvents();
+            }
+        }
+    }
 }

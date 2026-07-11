@@ -7,13 +7,24 @@ using TypeWhisper.Linux.Services.ActiveWindow;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
+///     A batch of corrections learned from a single target-app edit, plus the on-screen box of
+///     the element they came from (when it could be read). <see cref="SourceExtents" /> lets a
+///     feedback surface place its toast beside the corrected element instead of at a fixed spot;
+///     it is <c>null</c> when the element doesn't expose extents (native-Wayland apps often can't).
+/// </summary>
+public sealed record LearnedCorrectionsBatch(
+    IReadOnlyList<LearnedDictionaryCorrection> Corrections,
+    AtSpiScreenRect? SourceExtents
+);
+
+/// <summary>
 ///     Wispr-Flow-style silent correction learning from the target app. After a
 ///     dictation inserts text, <see cref="ArmAsync" /> anchors a baseline read of the
 ///     focused field and opens a bounded tracking window. If the user then types over a
 ///     word to fix it and moves on (focus leaves the field, or a short idle after edits),
-///     the final field text is diffed against the baseline through
-///     <see cref="CorrectionSuggestionService" /> and any high-confidence result is
-///     silently persisted via <see cref="IDictionaryService.LearnCorrection" /> — no toast,
+///     the edit is confined to the dictated span, diffed through
+///     <see cref="CorrectionSuggestionService" />, and any high-confidence result is
+///     silently persisted via <see cref="IDictionaryService.LearnCorrections" /> — no toast,
 ///     no prompt. Learned entries are reviewable/removable in Settings → Dictionary.
 ///     <para>
 ///         The AT-SPI plumbing lives behind <see cref="IAtSpiEventClient" />, so the
@@ -72,6 +83,10 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     // ignored if they fire after a re-arm/disarm (a disposed timer's callback can still be
     // queued), so a stale idle/timeout can never commit or disarm a newer armed session.
     private int _armGeneration;
+
+    // Incremented at every ArmAsync ENTRY (successful or not) — see the ordering comment in
+    // ArmAsync. Distinct from _armGeneration, which only advances on successful installs.
+    private int _armEntrySequence;
     private bool _disposed;
     private Timer? _idleTimer;
     private bool _initialized;
@@ -130,6 +145,14 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         _baselineRetryDelay = baselineRetryDelay;
     }
 
+    /// <summary>
+    ///     Raised after a commit that added or updated at least one dictionary entry, carrying
+    ///     exactly the list the dictionary returned plus the source element's on-screen box (when
+    ///     readable). Fired outside any lock and isolated per handler. A follow-up UI task
+    ///     subscribes to surface what was silently learned beside the corrected element.
+    /// </summary>
+    public event Action<LearnedCorrectionsBatch>? CorrectionsLearned;
+
     public void Dispose()
     {
         if (_disposed)
@@ -149,7 +172,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         lock (_gate)
         {
             StopTimers();
-            _armed = null;
+            DropArmed();
         }
     }
 
@@ -189,6 +212,12 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             return;
         }
 
+        // Arms are fire-and-forget and can complete out of order: a slow arm from an older
+        // dictation (retry delays, slow role/text reads) must neither install its stale
+        // state over a newer dictation's nor disarm the newer session on its failure paths.
+        // Only the most recently entered arm may touch the armed state.
+        var armSequence = Interlocked.Increment(ref _armEntrySequence);
+
         if (!await _client.EnsureStartedAsync().ConfigureAwait(false))
         {
             LogSkipOnce("AT-SPI unavailable; target-app correction learning inactive.");
@@ -203,7 +232,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         // work after opt-out. (Re-checked again immediately before the text read below.)
         if (IsOptedOut())
         {
-            Disarm();
+            DisarmIfCurrent(armSequence);
             return;
         }
 
@@ -223,16 +252,19 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             return;
         }
 
-        // If the field the dictation actually landed in is itself a password field, abort the
-        // whole arm — do not fall back to same-app siblings below. The inserted text IS the
-        // secret, and a sibling that happened to contain it would leak password-derived text
-        // into learned corrections. (An indeterminate role is not treated as a password here;
-        // it still falls through and is failed-closed per candidate during the read below.)
+        // The field the dictation actually landed in must be POSITIVELY non-password before
+        // anything else happens — a password focused element aborts the whole arm (no
+        // same-app sibling fallback: the inserted text IS the secret, and apps can mirror
+        // password text into a visible sibling via "show password", which would anchor and
+        // leak it), and an indeterminate role fails closed the same way because it could be
+        // exactly that password field.
         var focusedPassword = await _client.IsPasswordFieldAsync(element).ConfigureAwait(false);
-        if (focusedPassword == true)
+        if (focusedPassword != false)
         {
-            Trace.WriteLine("[TargetAppLearning] Focused element is a password field; skipping.");
-            Disarm();
+            Trace.WriteLine(
+                "[TargetAppLearning] Focused element is a password field or its role is unknown; skipping."
+            );
+            DisarmIfCurrent(armSequence);
             return;
         }
 
@@ -289,7 +321,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 // during a role read or a retry delay must stop us reading the target app.
                 if (IsOptedOut())
                 {
-                    Disarm();
+                    DisarmIfCurrent(armSequence);
                     return;
                 }
 
@@ -324,15 +356,33 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             Trace.WriteLine(
                 "[TargetAppLearning] No focused element could be anchored to the inserted text; skipping."
             );
-            Disarm();
+            DisarmIfCurrent(armSequence);
             return;
         }
 
         lock (_gate)
         {
+            if (Volatile.Read(ref _armEntrySequence) != armSequence)
+            {
+                // A newer dictation's arm entered while this one was reading; its state wins.
+                return;
+            }
+
             StopTimers();
+            // Drop any state a previous arm left behind, disposing its text-events lease before we
+            // acquire a fresh one — a re-arm replacing an older armed session must not leak it.
+            DropArmed();
             var generation = unchecked(++_armGeneration);
-            _armed = new ArmedState(anchoredElement, baseline, generation);
+            // Acquire the text-changed lease now that we are committed to installing this state:
+            // ArmedState owns it and releases it on every drop path (DropArmed). This is what keeps
+            // AT-SPI text events registered only while a window is actually being tracked.
+            _armed = new ArmedState(
+                anchoredElement,
+                baseline,
+                insertedText,
+                generation,
+                _client.AcquireTextChangedEvents()
+            );
             _timeoutTimer = new Timer(
                 static state =>
                 {
@@ -358,6 +408,33 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     private static string CollapseWhitespace(string text)
     {
         return string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    // Counts occurrences of needle in haystack under the same case/whitespace-insensitive matching
+    // ArmAsync anchors with (collapse runs of whitespace, ignore case), stepping by one so
+    // overlapping copies still count. Used to reject an ambiguous baseline before span extraction.
+    private static int CountNormalizedOccurrences(string haystack, string needle)
+    {
+        var collapsedHaystack = CollapseWhitespace(haystack);
+        var collapsedNeedle = CollapseWhitespace(needle);
+        if (collapsedNeedle.Length == 0)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        var index = collapsedHaystack.IndexOf(collapsedNeedle, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            count++;
+            index = collapsedHaystack.IndexOf(
+                collapsedNeedle,
+                index + 1,
+                StringComparison.OrdinalIgnoreCase
+            );
+        }
+
+        return count;
     }
 
     // A learned pair must share at least this fraction of characters (1 - normalized edit
@@ -423,7 +500,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     // merge/split fix (e.g. "type whisper" -> "TypeWhisper") is never speculatively broken up.
     private static List<(string Original, string Replacement)> SplitAtLearnedWords(
         CorrectionSuggestion suggestion,
-        Dictionary<string, string> learned
+        Dictionary<string, LearnedEntry> learned
     )
     {
         var originals = suggestion.Original.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -513,7 +590,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
 
         bool IsSettled(string original, string replacement) =>
             learned.TryGetValue(original, out var known)
-            && string.Equals(known, replacement, StringComparison.Ordinal);
+            && string.Equals(known.Replacement, replacement, StringComparison.Ordinal);
 
         // An edge token that is not part of a new edit: either already learned this session, or a
         // truly unchanged connector (Ordinal, so a case-only change still counts as an edit).
@@ -713,26 +790,30 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 return;
             }
 
-            if (state is null || !state.Edited)
+            if (state is null)
             {
-                // Inverting to `if (!final) return;` would duplicate the return and split the
-                // cleanup; conditional-cleanup-then-return is clearer here.
-                // ReSharper disable once InvertIf
-                if (final)
-                {
-                    // Nothing to learn; drop the armed state and stop the timers.
-                    _armed = null;
-                    StopTimers();
-                }
+                return;
+            }
 
+            // Idle (non-final) commits only run once a text-changed event actually flagged an edit;
+            // without one there is nothing new to read. A FINAL commit (focus-out/timeout) always
+            // reads the field even when no event arrived — event registration is best-effort and can
+            // lag the arm, so this read is the fallback that still catches an edit no event
+            // reported. CommitAsync diffs against the baseline, so a field that truly didn't change
+            // simply learns nothing.
+            if (!state.Edited && !final)
+            {
                 return;
             }
 
             if (final)
             {
-                // Final commits disarm and stop timers up front; the ArmedState snapshot is
-                // then touched only inside the serialized commit chain below.
-                _armed = null;
+                // Final commits disarm and stop timers up front; the ArmedState snapshot is then
+                // touched only inside the serialized commit chain below. DropArmed releases the
+                // text-events lease — the tracking window is over and CommitAsync does a one-shot
+                // read, not event-driven tracking; the captured `state` local keeps the snapshot
+                // alive for that read.
+                DropArmed();
                 StopTimers();
             }
 
@@ -757,10 +838,20 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 return;
             }
 
-            // Re-check opt-out immediately before the text read: a disable between queueing this
-            // commit and running it must stop us reading the target app's text (mirrors ArmAsync,
-            // which re-checks before every read). Without this, disabling in that gap still lets
-            // one more accessibility read (and potentially a learn) slip through.
+            // Re-check the role right before the final read: up to the whole tracking window
+            // has passed since arming, and the element can have become a password field in
+            // that time (role flip, or the toolkit recycling the object path for a new
+            // widget). Fail closed on indeterminate, mirroring the arm-time guard.
+            if (await _client.IsPasswordFieldAsync(state.Element).ConfigureAwait(false) != false)
+            {
+                Trace.WriteLine(
+                    "[TargetAppLearning] Element is no longer positively non-password at commit; dropping."
+                );
+                return;
+            }
+
+            // The role read above awaited: a disable during it isn't serialized with this commit,
+            // so re-check before reading the field text — never read a target field after opt-out.
             if (IsOptedOut())
             {
                 return;
@@ -773,10 +864,26 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 return;
             }
 
+            // Confine the diff to the dictated span: find the inserted text inside the baseline
+            // and read back only the segment the user edited in place. Diffing the whole field
+            // (baseline vs finalText) would learn an unrelated edit elsewhere in the document as
+            // a "correction" of the dictation. The extraction is EXACT (Ordinal), while ArmAsync
+            // anchors with a whitespace/case-tolerant match — so if the app transformed the
+            // inserted text (e.g. autocapitalize) the span won't be found and nothing is learned.
+            // That is the safe direction; do not weaken the matching to close that gap.
+            var editedSpan = ExtractEditedInsertedText(state.InsertedText, state.Baseline, finalText);
+            if (editedSpan is null
+                || string.Equals(state.InsertedText, editedSpan, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             var suggestions = CorrectionSuggestionService.GenerateSuggestions(
-                state.Baseline,
-                finalText
+                state.InsertedText,
+                editedSpan
             );
+
+            var batch = new List<CorrectionSuggestion>();
             foreach (var suggestion in suggestions)
             // De-fuse any edit already learned this session from the genuinely new one (see
             // SplitAtLearnedWords) before applying the gates below.
@@ -803,8 +910,8 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 {
                     // Identical to what we already learned this session — skip so a non-final
                     // idle commit followed by an identical final commit doesn't inflate
-                    // TimesCorrected/UsageCount.
-                    if (string.Equals(previous, replacement, StringComparison.Ordinal))
+                    // TimesCorrected.
+                    if (string.Equals(previous.Replacement, replacement, StringComparison.Ordinal))
                     {
                         continue;
                     }
@@ -812,7 +919,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                     // The user kept typing words after the correction was already complete, so
                     // the diff now appends them to the replacement (e.g. "Kubernetes" then
                     // "Kubernetes now"). Keep the earlier, correct value rather than widen it.
-                    if (IsWidening(previous, replacement))
+                    if (IsWidening(previous.Replacement, replacement))
                     {
                         Trace.WriteLine(
                             "[TargetAppLearning] Ignoring widened replacement (kept earlier value)."
@@ -821,10 +928,49 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                     }
                 }
 
-                _dictionary.LearnCorrection(original, replacement);
-                state.LearnedByOriginal[original] = replacement;
-                Trace.WriteLine("[TargetAppLearning] Learned a correction from a target-app edit.");
+                batch.Add(new CorrectionSuggestion(original, replacement));
             }
+
+            if (batch.Count == 0)
+            {
+                return;
+            }
+
+            // Entries this session already created are the only ones the dictionary may overwrite
+            // (the idle→final self-heal); every other existing correction is left untouched.
+            var replaceableIds = state.LearnedByOriginal.Values
+                .Select(e => e.Id)
+                .ToHashSet(StringComparer.Ordinal);
+
+            // Final consent gate before persisting: the text read awaited too, so an opt-out that
+            // landed while it was pending must stop the write. No await follows, so this closes the
+            // window down to nothing.
+            if (IsOptedOut())
+            {
+                return;
+            }
+
+            var learned = _dictionary.LearnCorrections(batch, replaceableIds);
+            if (learned.Count == 0)
+            {
+                // The dictionary rejected every pair (unsafe token, existing non-session entry):
+                // record nothing as learned so a later commit doesn't treat it as settled.
+                return;
+            }
+
+            foreach (var entry in learned)
+            {
+                state.LearnedByOriginal[entry.Original] =
+                    new LearnedEntry(entry.Id, entry.Replacement);
+            }
+
+            Trace.WriteLine("[TargetAppLearning] Learned corrections from a target-app edit.");
+
+            // Best-effort: fetch the corrected element's on-screen box so the feedback surface can
+            // place its toast beside it. A null result (no Component interface, native-Wayland junk,
+            // read failure) just falls back to a fixed spot downstream — never blocks the event.
+            var extents = await _client.TryGetScreenExtentsAsync(state.Element).ConfigureAwait(false);
+            RaiseCorrectionsLearned(new LearnedCorrectionsBatch(learned, extents));
         }
         catch (Exception ex)
         {
@@ -832,20 +978,119 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         }
     }
 
-    private void Disarm()
+    // Confines the diff to the dictated span: locate the inserted text within the baseline and
+    // read back only the segment that changed in place. Requires exactly one occurrence of
+    // insertedText in the baseline under the SAME case/whitespace-insensitive matching ArmAsync
+    // anchored with (a second copy is ambiguous — we can't tell which was the dictation — so
+    // nothing is learned). For that sole occurrence the baseline's prefix must still start the
+    // final text and its suffix must still end it; the edited middle is returned.
+    private static string? ExtractEditedInsertedText(
+        string insertedText,
+        string baseline,
+        string finalText
+    )
     {
-        _ = TakeArmed();
+        if (insertedText.Length == 0)
+        {
+            return null;
+        }
+
+        // Reject a baseline holding the inserted text more than once under ArmAsync's own
+        // case/whitespace-insensitive matching — else a pre-existing copy differing only in
+        // case/spacing slips past an Ordinal check (baseline "form Form": editing the first copy to
+        // "from" would mis-learn "form" -> "from"). Bailing is the safe direction.
+        if (CountNormalizedOccurrences(baseline, insertedText) != 1)
+        {
+            return null;
+        }
+
+        var start = baseline.IndexOf(insertedText, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            // The sole normalized occurrence was transformed (e.g. autocapitalized), so there is no
+            // exact span to read back — learn nothing rather than guess.
+            return null;
+        }
+
+        var prefix = baseline[..start];
+        var suffix = baseline[(start + insertedText.Length)..];
+        if (finalText.StartsWith(prefix, StringComparison.Ordinal)
+            && finalText.EndsWith(suffix, StringComparison.Ordinal)
+            && finalText.Length >= prefix.Length + suffix.Length)
+        {
+            return suffix.Length == 0
+                ? finalText[prefix.Length..]
+                : finalText[prefix.Length..^suffix.Length];
+        }
+
+        return null;
     }
 
-    private ArmedState? TakeArmed()
+    // Test seam: fires CorrectionsLearned exactly as a commit would (no source extents, as a
+    // native-Wayland app would report), so feedback-surface tests can drive the event without
+    // staging a full arm→commit flow.
+    internal void RaiseCorrectionsLearnedForTest(IReadOnlyList<LearnedDictionaryCorrection> learned)
+    {
+        RaiseCorrectionsLearned(new LearnedCorrectionsBatch(learned, SourceExtents: null));
+    }
+
+    // Isolates each handler so one throwing subscriber can't break the others or the commit.
+    private void RaiseCorrectionsLearned(LearnedCorrectionsBatch batch)
+    {
+        if (CorrectionsLearned is not { } handler)
+        {
+            return;
+        }
+
+        foreach (var subscriber in handler.GetInvocationList().Cast<Action<LearnedCorrectionsBatch>>())
+        {
+            try
+            {
+                subscriber(batch);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[TargetAppLearning] CorrectionsLearned handler threw: {ex.Message}");
+            }
+        }
+    }
+
+    private void Disarm()
     {
         lock (_gate)
         {
-            var state = _armed;
-            _armed = null;
+            DropArmed();
             StopTimers();
-            return state;
         }
+    }
+
+    // Failure-path disarm for ArmAsync: only the most recently entered arm may clear the
+    // armed state — a stale arm's cleanup must not tear down a newer session it lost to. The
+    // sequence check must run under _gate: a newer arm increments the sequence and installs its
+    // state under the same lock, so checking outside it lets a preempted stale cleanup pass the
+    // check and then dispose the newer arm (and its text-changed lease) once it acquires the gate.
+    private void DisarmIfCurrent(int armSequence)
+    {
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _armEntrySequence) != armSequence)
+            {
+                return;
+            }
+
+            DropArmed();
+            StopTimers();
+        }
+    }
+
+    // Clears _armed and disposes the state it held (releasing its text-changed lease so the
+    // AT-SPI registration drops once nothing is armed). The single choke point for discarding an
+    // armed state: every path that drops _armed routes through here so the lease can never leak
+    // and silently reinstate the permanent text-event flood. Caller must hold _gate.
+    private void DropArmed()
+    {
+        _armed?.Dispose();
+        _armed = null;
     }
 
     // Caller must hold _gate.
@@ -875,18 +1120,44 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         int Generation
     );
 
-    private sealed class ArmedState(AtSpiElementRef element, string baseline, int generation)
+    private sealed class ArmedState(
+        AtSpiElementRef element,
+        string baseline,
+        string insertedText,
+        int generation,
+        IDisposable textEventsLease
+    ) : IDisposable
     {
+        // Lease keeping AT-SPI text-changed events registered while this window is armed. It is
+        // released (deregistering the event with the registry when this was the last holder) when
+        // the armed state is dropped — see DropArmed, which disposes every state it discards.
+        // ReSharper disable once ReplaceWithPrimaryConstructorParameter -- keep an explicit named
+        // field: it documents the held lease and matches how this record projects its other ctor
+        // params into named members (Element/Baseline/... below).
+        private readonly IDisposable _textEventsLease = textEventsLease;
+
         public AtSpiElementRef Element { get; } = element;
         public string Baseline { get; } = baseline;
+
+        // The text this dictation inserted, exactly as anchored. Commit confines the diff to
+        // this span within the field so an unrelated edit elsewhere in the document is not
+        // learned as a correction of the dictation.
+        public string InsertedText { get; } = insertedText;
         public int Generation { get; } = generation;
         public bool Edited { get; set; }
 
-        // The last replacement persisted for each original during this armed session. Lets a
-        // later commit refine an earlier partial (overwrite) while ignoring identical repeats
-        // (no count inflation) and widenings (trailing words the user kept typing). Touched
-        // only inside the serialized commit chain, so it needs no synchronization of its own.
-        public Dictionary<string, string> LearnedByOriginal { get; } =
+        // What we persisted for each original during this armed session: the last replacement
+        // (to ignore identical repeats and widenings) plus the dictionary entry id we created
+        // (so an idle→final self-heal overwrites the SAME entry rather than adding a new one).
+        // Touched only inside the serialized commit chain, so it needs no synchronization.
+        public Dictionary<string, LearnedEntry> LearnedByOriginal { get; } =
             new(StringComparer.OrdinalIgnoreCase);
+
+        public void Dispose()
+        {
+            _textEventsLease.Dispose();
+        }
     }
+
+    private readonly record struct LearnedEntry(string Id, string Replacement);
 }
